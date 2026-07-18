@@ -26,7 +26,7 @@
     <td>{{ c.address|default:"—" }}</td>
     <td>
       {% if c.balance > 0 %}<span class="late">{{ c.balance|usd }} qarz</span>
-      {% elif c.balance < 0 %}<span style="color:var(--green,#16a34a);font-weight:700">{{ c.balance|usd }} avans</span>
+      {% elif c.balance < 0 %}<span class="avans">{{ c.balance|usd }} avans</span>
       {% else %}—{% endif %}
     </td>
     <td class="row-actions">

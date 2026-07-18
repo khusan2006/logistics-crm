@@ -1389,6 +1389,9 @@ ul.errorlist li::before { content: "⚠ "; }
 .legend-item--debt .lg-label small { font-size: 11px; color: var(--text-faint); font-weight: 400; }
 .legend-item--debt strong { font-variant-numeric: tabular-nums; align-self: flex-start; }
 .overdue-mark { color: var(--danger); font-size: 8px; vertical-align: middle; font-style: normal; }
+/* Money balance emphasis, reused across customer/debt/sale views */
+.late { color: var(--danger); font-weight: 700; }
+.avans { color: var(--success); font-weight: 700; }
 
 /* Horizontal bars (top products / clients) */
 .hbars { display: flex; flex-direction: column; gap: 15px; }
