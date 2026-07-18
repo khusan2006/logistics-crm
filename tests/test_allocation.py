@@ -141,3 +141,47 @@ def test_per_sale_and_per_payment_allocation_invariants(db):
     assert s1_alloc <= s1.net_total
     assert s2_alloc <= s2.net_total
     assert payment_alloc <= payment.amount
+
+
+def test_picks_ignore_unknown_sale_id(db):
+    """A bogus/stale pick id is skipped (no 500); the leftover still FIFOs onto
+    the customer's real outstanding sale."""
+    customer = _customer()
+    lot = _lot()
+    real = _sale(customer, lot, "2000", "1.00", "2026-07-17")
+    payment = _payment(customer, "2000")
+
+    # pick a non-existent sale id — must not raise
+    leftover = allocate_customer_payment(payment, picks=[(999999, Decimal("2000"))])
+
+    assert leftover == Decimal("0")
+    real.refresh_from_db()
+    assert real.remaining == Decimal("0")  # FIFO covered the real sale
+    assert not PaymentAllocation.objects.filter(sale_id=999999).exists()
+
+
+def test_edit_payment_decrease_reallocates(admin_client, db):
+    """Editing a payment DOWN clears the stale over-cap allocation and re-allocates
+    to the smaller amount (clear-and-recompute)."""
+    from django.db.models import Sum
+
+    customer = _customer()
+    lot = _lot()
+    sale = _sale(customer, lot, "3000", "1.00", "2026-07-17")
+    payment = _payment(customer, "3000")
+    allocate_customer_payment(payment)
+    assert PaymentAllocation.objects.filter(payment=payment).aggregate(s=Sum("amount"))["s"] == Decimal("3000.00")
+
+    resp = admin_client.post(f"/customer-payments/{payment.pk}/edit/", {
+        "customer": customer.pk, "date": "2026-07-20", "currency": "usd",
+        "amount": "1000", "exchange_rate": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 302
+
+    payment.refresh_from_db()
+    sale.refresh_from_db()
+    alloc = PaymentAllocation.objects.filter(payment=payment).aggregate(s=Sum("amount"))["s"] or Decimal("0")
+    assert payment.amount == Decimal("1000.00")
+    assert alloc == Decimal("1000.00")           # stale $3,000 allocation dropped
+    assert alloc <= payment.amount               # invariant holds after decrease
+    assert sale.remaining == Decimal("2000.00")

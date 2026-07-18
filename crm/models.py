@@ -436,7 +436,11 @@ def allocate_customer_payment(payment, picks=None):
     with transaction.atomic():
         if picks:
             for sale_id, amt in picks:
-                sale = Sale.objects.get(pk=sale_id, customer=payment.customer)
+                # Fail safe: a stale or tampered pick id (deleted sale, or one
+                # belonging to another customer) is skipped, not fatal.
+                sale = Sale.objects.filter(pk=sale_id, customer=payment.customer).first()
+                if sale is None:
+                    continue
                 amt = min(Decimal(amt), sale.remaining, remaining)
                 if amt > 0:
                     PaymentAllocation.objects.create(payment=payment, sale=sale, amount=amt)
