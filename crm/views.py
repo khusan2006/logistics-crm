@@ -3,12 +3,13 @@ from django.core.paginator import Paginator
 from django.db.models import Max, ProtectedError, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts.decorators import role_required
 from accounts.models import User
 
-from .forms import ContractForm, PartnerForm, ShipmentStatusForm, SupplierPaymentForm
-from .models import AuditLog, Contract, Partner, ShipmentStatus, SupplierPayment
+from .forms import ContractForm, PartnerForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm
+from .models import AuditLog, Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
 from .utils import form_reload, form_response, form_success, render_confirm
 
 
@@ -307,3 +308,81 @@ def status_move(request, pk):
                     f"Holat tartibi o'zgartirildi: {status.name}",
                 )
     return redirect("status_list")
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_list(request):
+    q = request.GET.get("q", "").strip()
+    status_id = request.GET.get("status", "")
+    shipments = Shipment.objects.select_related("contract__partner", "status")
+    if q:
+        shipments = shipments.filter(
+            Q(transport__icontains=q) | Q(container__icontains=q)
+            | Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q))
+    if status_id:
+        shipments = shipments.filter(status_id=status_id)
+    page = Paginator(shipments, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/shipment_list.html", {
+        "page": page, "q": q, "status_id": status_id,
+        "statuses": ShipmentStatus.objects.all(),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def shipment_create(request):
+    form = ShipmentForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            shipment = form.save(commit=False)
+            shipment.created_by = request.user
+            if shipment.status.is_arrival:
+                shipment.arrived = timezone.localdate()
+            shipment.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Yuk", shipment.pk,
+                f"Yangi yuk: {shipment.contract.brand} · {shipment.kg} kg",
+            )
+            messages.success(request, "Yuk qo'shildi")
+            return form_success(request, reverse("shipment_list"))
+        return form_response(request, form, "Yangi yuk", invalid=True)
+    return form_response(request, form, "Yangi yuk")
+
+
+@role_required(User.Role.ADMIN)
+def shipment_edit(request, pk):
+    shipment = get_object_or_404(Shipment, pk=pk)
+    form = ShipmentForm(request.POST or None, instance=shipment)
+    title = "Yukni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                f"Yuk tahrirlandi: {shipment.contract.brand} · {shipment.kg} kg",
+            )
+            messages.success(request, "Yuk yangilandi")
+            return form_reload(request, reverse("shipment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def shipment_delete(request, pk):
+    shipment = get_object_or_404(Shipment, pk=pk)
+    if request.method == "POST":
+        label = f"{shipment.contract.brand} · {shipment.kg} kg"
+        try:
+            shipment.delete()
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Yuk", pk, f"Yuk o'chirildi: {label}")
+            messages.success(request, "Yuk o'chirildi")
+        except ProtectedError:
+            messages.error(request, "Yukka bog'liq ma'lumot bor — o'chirib bo'lmaydi")
+        return form_reload(request, reverse("shipment_list"))
+    return render_confirm(
+        request,
+        "Yukni o'chirish",
+        f"“{shipment.contract.brand} · {shipment.kg} kg” yuki o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="shipment_list",
+    )

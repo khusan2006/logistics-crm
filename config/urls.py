@@ -28,4 +28,8 @@ urlpatterns = [
     path("statuses/<int:pk>/edit/", crm_views.status_edit, name="status_edit"),
     path("statuses/<int:pk>/delete/", crm_views.status_delete, name="status_delete"),
     path("statuses/<int:pk>/move/", crm_views.status_move, name="status_move"),
+    path("shipments/", crm_views.shipment_list, name="shipment_list"),
+    path("shipments/new/", crm_views.shipment_create, name="shipment_create"),
+    path("shipments/<int:pk>/edit/", crm_views.shipment_edit, name="shipment_edit"),
+    path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
 ]

@@ -179,3 +179,46 @@ class SupplierPayment(models.Model):
 
     def __str__(self):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
+
+
+class Shipment(models.Model):
+    """Yuk: one load moving under a contract. Once it reaches the arrival status
+    (arrived date set) it doubles as a warehouse lot in Phase 2."""
+
+    contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
+                                 related_name="shipments", verbose_name="Kelishuv")
+    kg = models.DecimalField("Yuborilgan kg", max_digits=12, decimal_places=3)
+    status = models.ForeignKey(ShipmentStatus, on_delete=models.PROTECT,
+                               related_name="shipments", verbose_name="Holat")
+    sent = models.DateField("Jo'natilgan sana", null=True, blank=True)
+    eta = models.DateField("Taxminiy kelish", null=True, blank=True)
+    arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
+    transport = models.CharField("Transport raqami", max_length=50, blank=True)
+    container = models.CharField("Konteyner raqami", max_length=50, blank=True)
+    note = models.TextField("Izoh", blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="shipments",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Yuk"
+        verbose_name_plural = "Yuklar"
+
+    @property
+    def is_overdue(self):
+        return self.arrived is None and self.eta is not None and self.eta < timezone.localdate()
+
+    @property
+    def days_late(self):
+        return (timezone.localdate() - self.eta).days if self.is_overdue else 0
+
+    @property
+    def days_left(self):
+        if self.arrived or not self.eta:
+            return None
+        return (self.eta - timezone.localdate()).days
+
+    def __str__(self):
+        return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"

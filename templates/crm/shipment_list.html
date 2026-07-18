@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Yuklar · GranulaLog{% endblock %}
+{% block topbar_title %}Yuklar{% endblock %}
+{% if user.is_admin_role %}
+{% block fab %}<a class="fab" href="{% url 'shipment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yuk qo'shish</a>{% endblock %}
+{% endif %}
+{% block content %}
+
+<form method="get" class="searchbar" role="search" data-live-search>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Transport, konteyner, marka yoki hamkor bo'yicha qidirish…" autocomplete="off" aria-label="Yuk qidirish">
+    {% if q %}<a href="?{% if status_id %}status={{ status_id }}{% endif %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+  <select name="status" onchange="this.form.submit()" aria-label="Holat bo'yicha filtr">
+    <option value="">Barcha holatlar</option>
+    {% for st in statuses %}
+    <option value="{{ st.pk }}" {% if status_id == st.pk|stringformat:"s" %}selected{% endif %}>{{ st.name }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">#ID / Kelishuv</th>
+    <th>Hamkor</th>
+    <th>Marka</th>
+    <th>Kg</th>
+    <th>Holat</th>
+    <th>Transport/Konteyner</th>
+    <th>Jo'natilgan</th>
+    <th>Kelish</th>
+    {% if user.is_admin_role %}<th></th>{% endif %}
+  </tr>
+  {% for s in page %}
+  <tr>
+    <td class="sticky-col">#{{ s.pk }} / #{{ s.contract_id }}</td>
+    <td>{{ s.contract.partner.name }}</td>
+    <td>{{ s.contract.brand }}</td>
+    <td>{{ s.kg }}</td>
+    <td><span class="badge badge-neutral">{{ s.status.name }}</span></td>
+    <td>{{ s.transport|default:"—" }} / {{ s.container|default:"—" }}</td>
+    <td>{{ s.sent|default:"—" }}</td>
+    <td>
+      {% if s.arrived %}
+        <span class="daybadge soon">Yetib kelgan</span>
+      {% elif s.is_overdue %}
+        <span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
+      {% elif s.days_left is not None %}
+        <span class="daybadge">{{ s.days_left }} kun qoldi</span>
+      {% else %}
+        —
+      {% endif %}
+    </td>
+    {% if user.is_admin_role %}
+    <td class="row-actions">
+      <a class="icon-action act-edit" href="{% url 'shipment_edit' s.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'shipment_delete' s.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </a>
+    </td>
+    {% endif %}
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Yuklar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+{% endif %}
+{% endblock %}

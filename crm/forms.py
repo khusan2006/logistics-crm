@@ -2,7 +2,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
 
-from .models import Contract, Currency, Partner, ShipmentStatus, SupplierPayment
+from .models import Contract, Currency, Partner, Shipment, ShipmentStatus, SupplierPayment
 
 
 class PartnerForm(forms.ModelForm):
@@ -65,6 +65,43 @@ class MoneyEntryFormMixin:
         else:
             cleaned["amount_original"] = amount
             cleaned["exchange_rate"] = Decimal("0")
+        return cleaned
+
+
+class ShipmentForm(forms.ModelForm):
+    class Meta:
+        model = Shipment
+        fields = ["contract", "kg", "status", "sent", "eta", "transport", "container", "note"]
+        widgets = {
+            "sent": forms.DateInput(attrs={"type": "date"}),
+            "eta": forms.DateInput(attrs={"type": "date"}),
+            "note": forms.Textarea(attrs={"rows": 2}),
+        }
+
+    def clean_container(self):
+        container = (self.cleaned_data.get("container") or "").strip()
+        if container:
+            clash = Shipment.objects.filter(container__iexact=container)
+            if self.instance.pk:
+                clash = clash.exclude(pk=self.instance.pk)
+            if clash.exists():
+                raise forms.ValidationError("Bu konteyner raqami avval kiritilgan")
+        return container
+
+    def clean(self):
+        cleaned = super().clean()
+        contract, kg = cleaned.get("contract"), cleaned.get("kg")
+        sent, eta = cleaned.get("sent"), cleaned.get("eta")
+        if kg is not None and kg <= 0:
+            self.add_error("kg", "Kg musbat bo'lishi kerak")
+        if contract and kg is not None and kg > 0:
+            left = contract.remaining_kg
+            if self.instance.pk and self.instance.contract_id == contract.pk:
+                left += self.instance.kg
+            if kg > left:
+                self.add_error("kg", f"Yuk miqdori qolgan kg dan oshmasligi kerak ({left} kg)")
+        if sent and eta and eta < sent:
+            self.add_error("eta", "Kelish sanasi jo'natish sanasidan oldin bo'la olmaydi")
         return cleaned
 
 
