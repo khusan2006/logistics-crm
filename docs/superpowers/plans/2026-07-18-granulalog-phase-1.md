@@ -358,7 +358,13 @@ Run: `.venv/bin/pytest tests/test_audit.py -v` — Expected: PASS.
 - Test: `tests/test_partners.py`
 
 **Interfaces:**
-- Produces: `Partner(name, phone, city, note, created_at)`; URLs `partner_list`, `partner_create`, `partner_edit`, `partner_delete`; form-view convention used by ALL later CRUD tasks: GET renders `crm/form.html` (`{"form", "title"}`), POST saves + `AuditLog.record` + redirect to the list; delete renders `crm/confirm_delete.html` then POSTs.
+- Produces: `Partner(name, phone, city, note, created_at)`; URLs `partner_list`, `partner_create`, `partner_edit`, `partner_delete`; the **modal CRUD convention used by ALL later CRUD tasks**, via helpers in `crm/utils.py` (adopted from client-crm during Task 3):
+  - `create` view: GET → `form_response(request, form, title)`; invalid POST → `form_response(request, form, title, invalid=True)`; valid POST → save + `AuditLog.record(...)` + `messages.success(...)` + `form_success(request, reverse("<list>"))`.
+  - `edit` view: same, but valid POST returns `form_reload(request, reverse("<list>"))` (in-place action; the opener page reloads).
+  - `delete` view: GET → `render_confirm(request, title, message, "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="<list>")`; POST → try delete (catch `ProtectedError` → error message) + `form_reload(request, reverse("<list>"))`.
+  - Helpers: `is_ajax`, `form_response(...modal_template="_modal.html")` (AJAX → `_modal.html` partial 200/422, else full `crm/form.html`), `form_success` (AJAX → 204 + `X-Redirect`, else redirect), `form_reload` (AJAX → 204, else redirect), `render_confirm` (AJAX → `_confirm_modal.html`, else `crm/confirm.html`; takes `cancel_url_name`).
+  - Templates: `_modal.html`, `_confirm_modal.html` (top-level), `crm/form.html`, `crm/confirm.html`. The base template's `data-modal` JS fetches with `X-Requested-With: XMLHttpRequest` and injects the partial. Every CRUD list uses `data-modal` links for create/edit/delete.
+  - Each CRUD test set must include modal-path tests: AJAX GET returns the partial (has `modal-head`, no `<html`); AJAX valid POST returns 204 + `X-Redirect`; AJAX invalid POST returns 422 + partial.
 
 - [ ] **Step 1: Write the failing test**
 
