@@ -10,3 +10,4 @@ test_db.sqlite3
 staticfiles/
 .pytest_cache/
 test-results/
+dev.sqlite3
