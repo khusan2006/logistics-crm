@@ -59,8 +59,40 @@
 </div>
 
 <div class="card">
-  <h3 style="margin-top: 0;">Qaytarishlar</h3>
-  <p class="muted">Hali qaytarish funksiyasi qo'shilmagan.</p>
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <h3 style="margin: 0;">Qaytarishlar</h3>
+    <a class="btn" href="{% url 'return_create' %}?sale={{ sale.pk }}" data-modal>+ Qaytarish</a>
+  </div>
+  {% if sale.returns.all %}
+  <div class="table-wrap">
+    <table>
+      <tr>
+        <th>Sana</th>
+        <th>Kg</th>
+        <th>Narx</th>
+        <th>Summa</th>
+        <th>Restock?</th>
+        <th>Izoh</th>
+        <th></th>
+      </tr>
+      {% for r in sale.returns.all %}
+      <tr>
+        <td>{{ r.date }}</td>
+        <td>{{ r.kg }}</td>
+        <td>{{ r.price }} $/kg</td>
+        <td>{{ r.amount|usd }}</td>
+        <td>{% if r.restock %}Ha{% else %}Yo'q{% endif %}</td>
+        <td>{{ r.note|default:"—" }}</td>
+        <td class="row-actions">
+          <a class="btn btn-ghost" href="{% url 'return_delete' r.pk %}" data-modal>O'chirish</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Hali qaytarish qilinmagan.</p>
+  {% endif %}
 </div>
 
 <div class="card">

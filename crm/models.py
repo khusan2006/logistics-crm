@@ -29,6 +29,7 @@ class AuditLog(models.Model):
         DELETE = "delete", "O'chirildi"
         STATUS = "status", "Holat o'zgardi"
         PAYMENT = "payment", "To'lov"
+        RETURN = "return", "Qaytarish"
 
     created_at = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(
@@ -372,6 +373,36 @@ class Sale(models.Model):
 
     def __str__(self):
         return f"Sotuv #{self.pk} · {self.customer} · {self.kg} kg"
+
+
+class Return(models.Model):
+    """Qaytarish: goods coming back from a sale. Credits the customer's debt at the
+    sale price (kg * price) regardless of restock; if restocked, the kg flows back
+    into the lot via Shipment.returned_kg / available_kg."""
+
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE,
+                             related_name="returns", verbose_name="Sotuv")
+    kg = models.DecimalField("Qaytarilgan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
+    date = models.DateField("Sana", default=timezone.localdate)
+    restock = models.BooleanField("Omborga qaytarilsinmi", default=True)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="returns",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Qaytarish"
+        verbose_name_plural = "Qaytarishlar"
+
+    @property
+    def amount(self):
+        return (self.kg * self.price).quantize(Decimal("0.01"))
+
+    def __str__(self):
+        return f"Qaytarish #{self.pk} · sotuv #{self.sale_id} · {self.kg} kg"
 
 
 class CustomerPayment(models.Model):

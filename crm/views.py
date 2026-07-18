@@ -13,12 +13,13 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .forms import (
-    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, SaleForm, ShipmentExpenseForm,
+    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReturnForm, SaleForm, ShipmentExpenseForm,
     ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentDelay,
-    ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment, apply_customer_advance,
+    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Return, Sale, Shipment,
+    ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment,
+    apply_customer_advance,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
 
@@ -798,3 +799,43 @@ def sale_detail(request, pk):
     sale = get_object_or_404(
         Sale.objects.select_related("customer", "shipment__contract__partner"), pk=pk)
     return render(request, "crm/sale_detail.html", {"sale": sale})
+
+
+@role_required(User.Role.ADMIN)
+def return_create(request):
+    sale = get_object_or_404(Sale, pk=request.GET.get("sale") or request.POST.get("sale"))
+    form = ReturnForm(request.POST or None, sale=sale)
+    if request.method == "POST":
+        if form.is_valid():
+            ret = form.save(commit=False)
+            ret.created_by = request.user
+            ret.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.RETURN, "Qaytarish", ret.pk,
+                f"Qaytarish: {ret.kg} kg · sotuv #{sale.pk} · {sale.customer.name}",
+            )
+            messages.success(request, "Qaytarish qo'shildi")
+            return form_success(request, reverse("sale_detail", args=[sale.pk]))
+        return form_response(request, form, "Qaytarish", invalid=True)
+    return form_response(request, form, "Qaytarish")
+
+
+@role_required(User.Role.ADMIN)
+def return_delete(request, pk):
+    ret = get_object_or_404(Return, pk=pk)
+    sale = ret.sale
+    if request.method == "POST":
+        label = f"{ret.kg} kg · sotuv #{sale.pk}"
+        ret.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Qaytarish", pk,
+                        f"Qaytarish o'chirildi: {label}")
+        messages.success(request, "Qaytarish o'chirildi")
+        return form_reload(request, reverse("sale_detail", args=[sale.pk]))
+    return render_confirm(
+        request,
+        "Qaytarishni o'chirish",
+        f"“{ret.kg} kg” qaytarish o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="sale_list",
+    )

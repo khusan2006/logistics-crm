@@ -3,8 +3,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from django import forms
 
 from .models import (
-    Contract, Currency, Customer, CustomerPayment, Partner, Sale, Shipment, ShipmentExpense, ShipmentStatus,
-    SupplierPayment,
+    Contract, Currency, Customer, CustomerPayment, Partner, Return, Sale, Shipment, ShipmentExpense,
+    ShipmentStatus, SupplierPayment,
 )
 
 
@@ -176,6 +176,47 @@ class SaleForm(forms.ModelForm):
             if kg > available:
                 self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
         return cleaned
+
+
+class ReturnForm(forms.ModelForm):
+    """Sale comes from the view (URL `?sale=`), not from the form — the field list
+    deliberately excludes it."""
+
+    class Meta:
+        model = Return
+        fields = ["kg", "price", "date", "restock", "note"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "note": forms.Textarea(attrs={"rows": 2}),
+        }
+
+    def __init__(self, *args, sale=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sale = sale or getattr(self.instance, "sale", None)
+        if self.sale and not self.instance.pk and not self.initial.get("price"):
+            self.initial["price"] = self.sale.price
+
+    def clean(self):
+        cleaned = super().clean()
+        kg = cleaned.get("kg")
+        if self.sale is None:
+            raise forms.ValidationError("Sotuv topilmadi")
+        if kg is not None and kg <= 0:
+            self.add_error("kg", "Kg musbat bo'lishi kerak")
+        if kg is not None and kg > 0:
+            already_returned = sum(
+                (r.kg for r in self.sale.returns.exclude(pk=self.instance.pk)), Decimal("0"))
+            available = self.sale.kg - already_returned
+            if kg > available:
+                self.add_error("kg", f"Qaytarish sotilgan kg dan oshmasligi kerak ({available} kg)")
+        return cleaned
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        obj.sale = self.sale
+        if commit:
+            obj.save()
+        return obj
 
 
 class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
