@@ -531,10 +531,12 @@ def apply_customer_advance(sale):
     came from a reservation (bron), money earmarked for that reservation
     (`CustomerPayment.reservation == sale.reservation`) applies FIRST, then the
     fallback is the customer's general oldest-first advances — same as before."""
+    earmarked_pks = []
     with transaction.atomic():
         if sale.reservation_id:
             earmarked = sale.reservation.earmarked_payments.order_by("date", "id")
             for payment in earmarked:
+                earmarked_pks.append(payment.pk)
                 if sale.remaining <= 0:
                     break
                 unallocated = (payment.amount
@@ -542,7 +544,10 @@ def apply_customer_advance(sale):
                 take = min(unallocated, sale.remaining)
                 if take > 0:
                     PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
-        for payment in sale.customer.customer_payments.order_by("date", "id"):
+        # General advances: skip the earmarked payments already handled above, so
+        # "earmark-first" is structural, not dependent on the fresh-query recompute.
+        general = sale.customer.customer_payments.exclude(pk__in=earmarked_pks).order_by("date", "id")
+        for payment in general:
             if sale.remaining <= 0:
                 break
             unallocated = payment.amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))

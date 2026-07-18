@@ -112,6 +112,34 @@ class TestEarmarkedPayment:
         alloc = PaymentAllocation.objects.get(payment=payment, sale=sale)
         assert alloc.amount == Decimal("2000.00")
 
+    def test_earmark_first_then_general_no_double_count(self, admin_client, db):
+        """Earmarked money applies first; a general advance covers the rest; the
+        earmarked payment is never re-taken by the general pass (no over-allocation)."""
+        from django.db.models import Sum
+
+        lot = _arrived_lot(kg="10000")
+        customer = _customer()
+        _reserve(admin_client, lot, customer, kg="5000", price="1.50")  # 7,500 sale
+        r = Reservation.objects.get()
+        earmark = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-17", amount=Decimal("2000.00"), reservation=r)
+        general = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-18", amount=Decimal("10000.00"))
+
+        resp = admin_client.post(f"/reservations/{r.pk}/convert/", {"price": "1.50"})
+        assert resp.status_code == 302
+        sale = Sale.objects.get(reservation=r)
+
+        earmark_alloc = PaymentAllocation.objects.filter(payment=earmark, sale=sale).aggregate(s=Sum("amount"))["s"]
+        general_alloc = PaymentAllocation.objects.filter(payment=general, sale=sale).aggregate(s=Sum("amount"))["s"]
+        assert earmark_alloc == Decimal("2000.00")          # earmark applied first, once
+        assert general_alloc == Decimal("5500.00")          # general covers the remaining 5,500
+        sale.refresh_from_db()
+        assert sale.paid == Decimal("7500.00")              # exactly net_total, not more
+        assert sale.remaining == Decimal("0")
+        # invariant: neither payment over-allocated
+        assert earmark_alloc <= earmark.amount and general_alloc <= general.amount
+
 
 class TestConvertToSale:
     def test_convert_creates_sale_and_updates_kg(self, admin_client, db):
