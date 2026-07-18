@@ -70,3 +70,52 @@ class Partner(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class Contract(models.Model):
+    """Kelishuv: one brand of granula from one partner at one USD/kg price."""
+
+    partner = models.ForeignKey(Partner, on_delete=models.PROTECT,
+                                related_name="contracts", verbose_name="Hamkor")
+    brand = models.CharField("Granula markasi", max_length=100)
+    kg = models.DecimalField("Kelishilgan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
+    created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
+    deadline = models.DateField("Yetkazish muddati")
+    note = models.TextField("Izoh", blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, blank=True, related_name="contracts",
+                                   verbose_name="Kim ochdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created", "-id"]
+        verbose_name = "Kelishuv"
+        verbose_name_plural = "Kelishuvlar"
+
+    @property
+    def total_value(self):
+        return (self.kg * self.price).quantize(Decimal("0.01"))
+
+    @property
+    def shipped_kg(self):
+        if not hasattr(self, "shipments"):  # relation lands in Task 7
+            return Decimal("0")
+        return self.shipments.aggregate(s=Sum("kg"))["s"] or Decimal("0")
+
+    @property
+    def remaining_kg(self):
+        return self.kg - self.shipped_kg
+
+    @property
+    def paid_total(self):
+        if not hasattr(self, "supplier_payments"):  # relation lands in Task 5
+            return Decimal("0")
+        return self.supplier_payments.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+
+    @property
+    def debt(self):
+        return self.total_value - self.paid_total
+
+    def __str__(self):
+        return f"#{self.pk} · {self.brand} · {self.partner}"
