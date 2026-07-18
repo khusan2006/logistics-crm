@@ -44,6 +44,11 @@
       {% else %}
       <button type="button" class="btn btn-sm" disabled>Sotish</button>
       {% endif %}
+      {% if lot.available_kg > 0 %}
+      <a class="btn btn-sm btn-ghost" href="{% url 'reservation_create' %}?lot={{ lot.pk }}" data-modal>Bron</a>
+      {% else %}
+      <button type="button" class="btn btn-sm btn-ghost" disabled>Bron</button>
+      {% endif %}
     </td>
   </tr>
   {% endfor %}

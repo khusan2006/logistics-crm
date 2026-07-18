@@ -13,12 +13,12 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .forms import (
-    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReturnForm, SaleForm, ShipmentExpenseForm,
-    ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
+    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm, SaleForm,
+    ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Return, Sale, Shipment,
-    ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment,
+    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Return, Sale,
+    Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
@@ -799,6 +799,93 @@ def sale_detail(request, pk):
     sale = get_object_or_404(
         Sale.objects.select_related("customer", "shipment__contract__partner"), pk=pk)
     return render(request, "crm/sale_detail.html", {"sale": sale})
+
+
+@role_required(User.Role.ADMIN)
+def reservation_list(request):
+    reservations = Reservation.objects.select_related("customer", "shipment__contract__partner")
+    page = Paginator(reservations, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/reservation_list.html", {"page": page})
+
+
+@role_required(User.Role.ADMIN)
+def reservation_create(request):
+    initial = {}
+    lot_id = request.GET.get("lot")
+    if lot_id and lot_id.isdigit():
+        initial["shipment"] = int(lot_id)
+    customer_id = request.GET.get("customer")
+    if customer_id and customer_id.isdigit():
+        initial["customer"] = int(customer_id)
+    form = ReservationForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            reservation = form.save(commit=False)
+            reservation.created_by = request.user
+            reservation.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
+                f"Yangi bron: {reservation.kg} kg · {reservation.customer.name}",
+            )
+            messages.success(request, "Bron qo'shildi")
+            return form_success(request, reverse("reservation_list"))
+        return form_response(request, form, "Yangi bron", invalid=True)
+    return form_response(request, form, "Yangi bron")
+
+
+@role_required(User.Role.ADMIN)
+def reservation_cancel(request, pk):
+    reservation = get_object_or_404(Reservation, pk=pk)
+    if request.method == "POST":
+        reservation.status = Reservation.Status.CANCELLED
+        reservation.save(update_fields=["status"])
+        AuditLog.record(
+            request.user, AuditLog.Action.STATUS, "Bron", reservation.pk,
+            f"Bron bekor qilindi: {reservation.kg} kg · {reservation.customer.name}",
+        )
+        messages.success(request, "Bron bekor qilindi")
+        return form_reload(request, reverse("reservation_list"))
+    return render_confirm(
+        request,
+        "Bronni bekor qilish",
+        f"“{reservation.kg} kg · {reservation.customer.name}” broni bekor qilinadi.",
+        "Ha, bekor qilish",
+        confirm_class="btn-danger",
+        cancel_url_name="reservation_list",
+    )
+
+
+@require_POST
+@role_required(User.Role.ADMIN)
+def reservation_convert(request, pk):
+    reservation = get_object_or_404(Reservation, pk=pk)
+    if reservation.shipment.arrived is None:
+        messages.error(request, "Lot hali omborga yetib kelmagan")
+        return form_reload(request, reverse("reservation_list"))
+    price = reservation.price
+    if price is None:
+        raw_price = request.POST.get("price")
+        try:
+            price = Decimal(raw_price) if raw_price else None
+        except (ValueError, ArithmeticError):
+            price = None
+    if price is None:
+        messages.error(request, "Narx ko'rsatilishi kerak")
+        return form_reload(request, reverse("reservation_list"))
+    sale = Sale.objects.create(
+        customer=reservation.customer, shipment=reservation.shipment, kg=reservation.kg,
+        price=price, cost_price=reservation.shipment.landed_cost_per_kg,
+        date=timezone.localdate(), reservation=reservation, created_by=request.user,
+    )
+    reservation.status = Reservation.Status.CONVERTED
+    reservation.save(update_fields=["status"])
+    AuditLog.record(
+        request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
+        f"Bron sotuvga aylandi: {reservation.kg} kg · {reservation.customer.name}",
+    )
+    apply_customer_advance(sale)
+    messages.success(request, "Bron sotuvga aylantirildi")
+    return form_reload(request, reverse("reservation_list"))
 
 
 @role_required(User.Role.ADMIN)

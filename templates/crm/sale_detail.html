@@ -19,6 +19,12 @@
       <div class="muted">Lot</div>
       <div>#{{ sale.shipment_id }} · {{ sale.shipment.contract.brand }}</div>
     </div>
+    {% if sale.reservation_id %}
+    <div class="stat">
+      <div class="muted">Bron</div>
+      <div>#{{ sale.reservation_id }}</div>
+    </div>
+    {% endif %}
     <div class="stat">
       <div class="muted">Sana</div>
       <div>{{ sale.date }}</div>

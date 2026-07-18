@@ -3,8 +3,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from django import forms
 
 from .models import (
-    Contract, Currency, Customer, CustomerPayment, Partner, Return, Sale, Shipment, ShipmentExpense,
-    ShipmentStatus, SupplierPayment,
+    Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
+    ShipmentExpense, ShipmentStatus, SupplierPayment,
 )
 
 
@@ -175,6 +175,31 @@ class SaleForm(forms.ModelForm):
                 available += self.instance.kg
             if kg > available:
                 self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+        return cleaned
+
+
+class ReservationForm(forms.ModelForm):
+    """A reservation can target an arrived OR in-transit lot — sold_kg is 0 on an
+    in-transit lot, so reservable there is simply kg minus other active reservations."""
+
+    class Meta:
+        model = Reservation
+        fields = ["customer", "shipment", "kg", "price", "note"]
+        widgets = {"note": forms.Textarea(attrs={"rows": 2})}
+
+    def clean(self):
+        cleaned = super().clean()
+        shipment, kg = cleaned.get("shipment"), cleaned.get("kg")
+        if kg is not None and kg <= 0:
+            self.add_error("kg", "Kg musbat bo'lishi kerak")
+        if shipment and kg is not None and kg > 0:
+            other_reserved = sum(
+                (r.kg for r in shipment.reservations.filter(status="active").exclude(pk=self.instance.pk)),
+                Decimal("0"),
+            )
+            reservable = shipment.kg - shipment.sold_kg - other_reserved
+            if kg > reservable:
+                self.add_error("kg", f"Bron miqdori qolgan kg dan oshmasligi kerak ({reservable} kg)")
         return cleaned
 
 

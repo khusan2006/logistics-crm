@@ -303,6 +303,40 @@ class Shipment(models.Model):
         return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"
 
 
+class Reservation(models.Model):
+    """Bron: a customer reserves kg on a lot (arrived or still in-transit). While
+    active it blocks that kg via `Shipment.reserved_kg`. Converting turns it into a
+    Sale (only once the lot has arrived); cancelling frees the kg back up."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Faol"
+        CONVERTED = "converted", "Sotuvga aylandi"
+        CANCELLED = "cancelled", "Bekor qilindi"
+
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
+                                 related_name="reservations", verbose_name="Mijoz")
+    shipment = models.ForeignKey(Shipment, on_delete=models.PROTECT,
+                                 related_name="reservations", verbose_name="Lot (yuk)")
+    kg = models.DecimalField("Bron qilingan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
+                                null=True, blank=True)
+    status = models.CharField("Holat", max_length=10, choices=Status.choices,
+                              default=Status.ACTIVE)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="reservations",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Bron"
+        verbose_name_plural = "Bronlar"
+
+    def __str__(self):
+        return f"Bron #{self.pk} · {self.customer} · {self.kg} kg"
+
+
 class Sale(models.Model):
     """Sotuv: kg sold from one arrived lot at a sale price. Snapshots that lot's
     landed cost at sale time so later shipment expenses never retroactively
@@ -312,6 +346,8 @@ class Sale(models.Model):
                                  related_name="sales", verbose_name="Mijoz")
     shipment = models.ForeignKey(Shipment, on_delete=models.PROTECT,
                                  related_name="sales", verbose_name="Lot (yuk)")
+    reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name="+", verbose_name="Bron")
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
     cost_price = models.DecimalField("1 kg tan narxi (USD)", max_digits=14, decimal_places=4)
@@ -413,6 +449,8 @@ class CustomerPayment(models.Model):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="customer_payments", verbose_name="Mijoz")
+    reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name="earmarked_payments", verbose_name="Bron uchun")
     date = models.DateField("Sana", default=timezone.localdate)
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
     currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
@@ -488,9 +526,22 @@ def allocate_customer_payment(payment, picks=None):
 
 
 def apply_customer_advance(sale):
-    """Pull this customer's unallocated payment money (advance) onto a new sale,
-    oldest payment first, until the sale is covered or the advance runs out."""
+    """Pull this customer's unallocated payment money onto a new sale, oldest
+    payment first, until the sale is covered or the advance runs out. If the sale
+    came from a reservation (bron), money earmarked for that reservation
+    (`CustomerPayment.reservation == sale.reservation`) applies FIRST, then the
+    fallback is the customer's general oldest-first advances — same as before."""
     with transaction.atomic():
+        if sale.reservation_id:
+            earmarked = sale.reservation.earmarked_payments.order_by("date", "id")
+            for payment in earmarked:
+                if sale.remaining <= 0:
+                    break
+                unallocated = (payment.amount
+                              - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0")))
+                take = min(unallocated, sale.remaining)
+                if take > 0:
+                    PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
         for payment in sale.customer.customer_payments.order_by("date", "id"):
             if sale.remaining <= 0:
                 break

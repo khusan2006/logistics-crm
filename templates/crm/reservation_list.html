@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Bronlar · GranulaLog{% endblock %}
+{% block topbar_title %}Bronlar{% endblock %}
+{% block content %}
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Mijoz</th>
+    <th>Lot</th>
+    <th>Kg</th>
+    <th>Narx</th>
+    <th>Holat</th>
+    <th></th>
+  </tr>
+  {% for r in page %}
+  <tr>
+    <td class="sticky-col">{{ r.customer.name }}</td>
+    <td>#{{ r.shipment_id }} · {{ r.shipment.contract.brand }}{% if not r.shipment.arrived %} <span class="muted">(yo'lda)</span>{% endif %}</td>
+    <td>{{ r.kg }}</td>
+    <td>{% if r.price %}{{ r.price }} $/kg{% else %}—{% endif %}</td>
+    <td>
+      {% if r.status == "active" %}<span class="daybadge">Faol</span>
+      {% elif r.status == "converted" %}<span class="daybadge ok">Sotuvga aylandi</span>
+      {% else %}<span class="muted">Bekor qilindi</span>{% endif %}
+    </td>
+    <td class="row-actions">
+      {% if r.status == "active" %}
+        {% if r.shipment.arrived %}
+        <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal>
+          {% csrf_token %}
+          {% if not r.price %}<input type="number" step="0.0001" name="price" placeholder="Narx" required style="width:90px;">{% endif %}
+          <button type="submit" class="btn btn-sm">Sotuvga aylantirish</button>
+        </form>
+        {% else %}
+        <button type="button" class="btn btn-sm" disabled title="Lot hali omborga yetib kelmagan">Sotuvga aylantirish</button>
+        {% endif %}
+        <a class="btn btn-sm btn-ghost" href="{% url 'reservation_cancel' r.pk %}" data-modal>Bekor qilish</a>
+      {% else %}
+        —
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Bronlar topilmadi.</p>
+{% endif %}
+{% endblock %}
