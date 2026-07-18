@@ -926,3 +926,21 @@ def return_delete(request, pk):
         confirm_class="btn-danger",
         cancel_url_name="sale_list",
     )
+
+
+@role_required(User.Role.ADMIN)
+def debt_list(request):
+    debtors = [c for c in Customer.objects.all() if c.balance > 0]
+    rows = []
+    for c in debtors:
+        overdue_count = sum(1 for s in c.sales.all() if s.is_overdue)
+        rows.append({"customer": c, "overdue_count": overdue_count})
+    rows.sort(key=lambda r: r["customer"].balance, reverse=True)
+    return render(request, "crm/debt_list.html", {"rows": rows})
+
+
+@role_required(User.Role.ADMIN)
+def debt_customer(request, pk):
+    customer = get_object_or_404(Customer, pk=pk)
+    sales = [s for s in customer.sales.select_related("shipment__contract").all() if s.remaining > 0]
+    return render(request, "crm/debt_customer.html", {"customer": customer, "sales": sales})

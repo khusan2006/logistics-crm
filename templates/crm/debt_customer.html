@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}{{ customer.name }} · Qarz · GranulaLog{% endblock %}
+{% block topbar_title %}{{ customer.name }}{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'customer_payment_create' %}?customer={{ customer.pk }}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>To'lov</a>{% endblock %}
+{% block content %}
+
+<p>
+  {% if customer.balance > 0 %}<span class="late">{{ customer.balance|usd }} qarz</span>
+  {% elif customer.balance < 0 %}<span class="avans">{{ customer.balance|usd }} avans</span>
+  {% else %}Balans: 0{% endif %}
+</p>
+
+{% if sales %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Sana</th>
+    <th>Lot</th>
+    <th>Kg</th>
+    <th>Jami</th>
+    <th>To'langan</th>
+    <th>Qoldiq</th>
+    <th>Muddat</th>
+    <th></th>
+  </tr>
+  {% for s in sales %}
+  <tr>
+    <td class="sticky-col">{{ s.date }}</td>
+    <td>#{{ s.shipment_id }} · {{ s.shipment.contract.brand }}</td>
+    <td>{{ s.kg }}</td>
+    <td>{{ s.total|usd }}</td>
+    <td>{{ s.paid|usd }}</td>
+    <td class="late">{{ s.remaining|usd }}</td>
+    <td>
+      {{ s.debt_deadline|default:"—" }}
+      {% if s.is_overdue %}<span class="late">muddati o'tgan</span>{% endif %}
+    </td>
+    <td class="row-actions">
+      <a class="icon-action" href="{% url 'customer_payment_create' %}?customer={{ customer.pk }}" data-modal title="To'lov">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Ushbu mijozning to'lanmagan sotuvlari yo'q.</p>
+{% endif %}
+{% endblock %}
