@@ -23,4 +23,9 @@ urlpatterns = [
     path("supplier-payments/new/", crm_views.supplier_payment_create, name="supplier_payment_create"),
     path("supplier-payments/<int:pk>/edit/", crm_views.supplier_payment_edit, name="supplier_payment_edit"),
     path("supplier-payments/<int:pk>/delete/", crm_views.supplier_payment_delete, name="supplier_payment_delete"),
+    path("statuses/", crm_views.status_list, name="status_list"),
+    path("statuses/new/", crm_views.status_create, name="status_create"),
+    path("statuses/<int:pk>/edit/", crm_views.status_edit, name="status_edit"),
+    path("statuses/<int:pk>/delete/", crm_views.status_delete, name="status_delete"),
+    path("statuses/<int:pk>/move/", crm_views.status_move, name="status_move"),
 ]

@@ -1,14 +1,14 @@
 from django.contrib import messages
 from django.core.paginator import Paginator
-from django.db.models import ProtectedError, Q
-from django.shortcuts import get_object_or_404, render
+from django.db.models import Max, ProtectedError, Q
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from accounts.decorators import role_required
 from accounts.models import User
 
-from .forms import ContractForm, PartnerForm, SupplierPaymentForm
-from .models import AuditLog, Contract, Partner, SupplierPayment
+from .forms import ContractForm, PartnerForm, ShipmentStatusForm, SupplierPaymentForm
+from .models import AuditLog, Contract, Partner, ShipmentStatus, SupplierPayment
 from .utils import form_reload, form_response, form_success, render_confirm
 
 
@@ -227,3 +227,83 @@ def supplier_payment_delete(request, pk):
         confirm_class="btn-danger",
         cancel_url_name="supplier_payment_list",
     )
+
+
+@role_required(User.Role.ADMIN)
+def status_list(request):
+    statuses = ShipmentStatus.objects.all()
+    return render(request, "crm/status_list.html", {"statuses": statuses})
+
+
+@role_required(User.Role.ADMIN)
+def status_create(request):
+    form = ShipmentStatusForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            status = form.save(commit=False)
+            max_order = ShipmentStatus.objects.aggregate(m=Max("order"))["m"] or 0
+            status.order = max_order + 1
+            status.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Holat", status.pk, f"Yangi holat: {status.name}"
+            )
+            messages.success(request, "Holat qo'shildi")
+            return form_success(request, reverse("status_list"))
+        return form_response(request, form, "Yangi holat", invalid=True)
+    return form_response(request, form, "Yangi holat")
+
+
+@role_required(User.Role.ADMIN)
+def status_edit(request, pk):
+    status = get_object_or_404(ShipmentStatus, pk=pk)
+    form = ShipmentStatusForm(request.POST or None, instance=status)
+    title = "Holatni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Holat", status.pk, f"Holat tahrirlandi: {status.name}"
+            )
+            messages.success(request, "Holat yangilandi")
+            return form_reload(request, reverse("status_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def status_delete(request, pk):
+    status = get_object_or_404(ShipmentStatus, pk=pk)
+    if request.method == "POST":
+        if status.is_arrival:
+            messages.error(request, "Omborga kelish holatini o'chirib bo'lmaydi")
+            return redirect("status_list")
+        pk_, name = status.pk, status.name
+        try:
+            status.delete()
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Holat", pk_, f"Holat o'chirildi: {name}")
+            messages.success(request, "Holat o'chirildi")
+        except ProtectedError:
+            messages.error(request, "Holatga yuk biriktirilgan — o'chirib bo'lmaydi")
+        return redirect("status_list")
+    return redirect("status_list")
+
+
+@role_required(User.Role.ADMIN)
+def status_move(request, pk):
+    status = get_object_or_404(ShipmentStatus, pk=pk)
+    if request.method == "POST":
+        direction = request.POST.get("dir")
+        statuses = list(ShipmentStatus.objects.all())
+        index = next((i for i, s in enumerate(statuses) if s.pk == status.pk), None)
+        if index is not None:
+            neighbor_index = index - 1 if direction == "up" else index + 1
+            if 0 <= neighbor_index < len(statuses):
+                neighbor = statuses[neighbor_index]
+                status.order, neighbor.order = neighbor.order, status.order
+                status.save(update_fields=["order"])
+                neighbor.save(update_fields=["order"])
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Holat", status.pk,
+                    f"Holat tartibi o'zgartirildi: {status.name}",
+                )
+    return redirect("status_list")

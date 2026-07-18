@@ -121,6 +121,34 @@ class Contract(models.Model):
         return f"#{self.pk} · {self.brand} · {self.partner}"
 
 
+class ShipmentStatus(models.Model):
+    """Admin-editable ordered status chain. Exactly one row is the arrival status —
+    reaching it is what turns a shipment into a warehouse lot, so it is protected:
+    saving another row as arrival demotes the rest, and the arrival row can't be
+    deleted (guarded in the view)."""
+
+    name = models.CharField("Nomi", max_length=100, unique=True)
+    order = models.PositiveSmallIntegerField("Tartib", default=0)
+    is_arrival = models.BooleanField("Omborga kelish holati", default=False)
+
+    class Meta:
+        ordering = ["order", "id"]
+        verbose_name = "Yuk holati"
+        verbose_name_plural = "Yuk holatlari"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_arrival:
+            ShipmentStatus.objects.exclude(pk=self.pk).update(is_arrival=False)
+
+    @classmethod
+    def arrival(cls):
+        return cls.objects.filter(is_arrival=True).first()
+
+    def __str__(self):
+        return self.name
+
+
 class SupplierPayment(models.Model):
     """To'lov to one supplier contract. `amount` is always USD; a so'm payment is
     converted at entry and keeps its original figure + rate. Overpaying a contract

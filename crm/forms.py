@@ -2,7 +2,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
 
-from .models import Contract, Currency, Partner, SupplierPayment
+from .models import Contract, Currency, Partner, ShipmentStatus, SupplierPayment
 
 
 class PartnerForm(forms.ModelForm):
@@ -34,6 +34,12 @@ class ContractForm(forms.ModelForm):
         if self.instance.pk and kg is not None and kg < self.instance.shipped_kg:
             self.add_error("kg", "Kelishilgan kg yuborilgan kg dan kam bo'la olmaydi")
         return cleaned
+
+
+class ShipmentStatusForm(forms.ModelForm):
+    class Meta:
+        model = ShipmentStatus
+        fields = ["name", "is_arrival"]
 
 
 class MoneyEntryFormMixin:

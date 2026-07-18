@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Holatlar · GranulaLog{% endblock %}
+{% block topbar_title %}Yuk holatlari{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'status_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi holat</a>{% endblock %}
+{% block content %}
+
+{% if statuses %}
+<div class="table-wrap">
+<table>
+  <tr><th class="sticky-col">Nomi</th><th>Tartib</th><th>Omborga kelish</th><th></th></tr>
+  {% for status in statuses %}
+  <tr>
+    <td class="sticky-col">
+      <a href="{% url 'status_edit' status.pk %}" data-modal>{{ status.name }}</a>
+    </td>
+    <td>
+      <form method="post" action="{% url 'status_move' status.pk %}" class="inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="dir" value="up">
+        <button type="submit" class="icon-action" title="Yuqoriga" {% if forloop.first %}disabled{% endif %}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        </button>
+      </form>
+      <form method="post" action="{% url 'status_move' status.pk %}" class="inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="dir" value="down">
+        <button type="submit" class="icon-action" title="Pastga" {% if forloop.last %}disabled{% endif %}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+        </button>
+      </form>
+    </td>
+    <td>
+      {% if status.is_arrival %}<span class="badge badge-ok">Omborga kelish</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}
+    </td>
+    <td class="row-actions">
+      <a class="icon-action act-edit" href="{% url 'status_edit' status.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <form method="post" action="{% url 'status_delete' status.pk %}" class="inline-form" onsubmit="return confirm('“{{ status.name }}” holati o\'chiriladi. Davom etasizmi?');">
+        {% csrf_token %}
+        <button type="submit" class="icon-action act-delete" title="O'chirish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        </button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Holatlar topilmadi.</p>
+{% endif %}
+{% endblock %}
