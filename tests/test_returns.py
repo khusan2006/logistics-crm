@@ -44,6 +44,7 @@ def test_return_credits_debt_and_restocks_lot(admin_client, db):
     assert customer.balance == Decimal("6400.00")
     lot.refresh_from_db()
     assert lot.available_kg == Decimal("6000")
+    assert sale.profit == Decimal("1600.00")  # (1.60 − 1.20) × 4000
 
     resp = admin_client.post(f"/returns/new/?sale={sale.pk}", {
         "kg": "1000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
@@ -64,6 +65,7 @@ def test_return_credits_debt_and_restocks_lot(admin_client, db):
     lot.refresh_from_db()
     assert lot.returned_kg == Decimal("1000")
     assert lot.available_kg == Decimal("7000")
+    assert sale.profit == Decimal("1200.00")  # 1600 − (1.60 − 1.20) × 1000 restocked
 
     assert AuditLog.objects.filter(action=AuditLog.Action.RETURN, target_type="Qaytarish").exists()
 
@@ -143,6 +145,10 @@ def test_translator_forbidden(translator_client, admin_client, db):
     assert translator_client.post(f"/returns/new/?sale={sale.pk}", {
         "kg": "100", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     }).status_code == 403
+    # the delete path is admin-only too
+    ret = Return.objects.create(sale=sale, kg=Decimal("100"), price=Decimal("1.60"), date="2026-07-19")
+    assert translator_client.post(f"/returns/{ret.pk}/delete/").status_code == 403
+    assert Return.objects.filter(pk=ret.pk).exists()
 
 
 def test_return_create_modal_get_returns_partial(admin_client, db):
