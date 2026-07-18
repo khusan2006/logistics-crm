@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Sotuv #{{ sale.pk }} · GranulaLog{% endblock %}
+{% block topbar_title %}Sotuv #{{ sale.pk }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <a class="btn btn-ghost" href="{% url 'sale_list' %}">&larr; Sotuvlar ro'yxatiga</a>
+    <a class="btn" href="{% url 'sale_edit' sale.pk %}" data-modal>Tahrirlash</a>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="muted">Mijoz</div>
+      <div>{{ sale.customer.name }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Lot</div>
+      <div>#{{ sale.shipment_id }} · {{ sale.shipment.contract.brand }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Sana</div>
+      <div>{{ sale.date }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Kg</div>
+      <div>{{ sale.kg }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Tan narx</div>
+      <div>{{ sale.cost_price }} $/kg</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Sotuv narxi</div>
+      <div>{{ sale.price }} $/kg</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Jami</div>
+      <div>{{ sale.total|usd }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Foyda</div>
+      <div>{{ sale.profit|usd }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">To'lov muddati</div>
+      <div>
+        {{ sale.debt_deadline|default:"—" }}
+        {% if sale.is_overdue %}<span class="daybadge overdue">Muddati o'tgan</span>{% endif %}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="muted">Qoldiq/qarz</div>
+      <div{% if sale.remaining > 0 %} class="late"{% endif %}>{{ sale.remaining|usd }}</div>
+    </div>
+  </div>
+  {% if sale.note %}<p class="muted" style="margin-top: 14px;">{{ sale.note }}</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin-top: 0;">Qaytarishlar</h3>
+  <p class="muted">Hali qaytarish funksiyasi qo'shilmagan.</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top: 0;">To'lovlar</h3>
+  <p class="muted">Hali to'lov funksiyasi qo'shilmagan.</p>
+</div>
+
+{% endblock %}

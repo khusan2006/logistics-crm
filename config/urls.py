@@ -43,4 +43,9 @@ urlpatterns = [
     path("expenses/new/", crm_views.expense_create, name="expense_create"),
     path("expenses/<int:pk>/edit/", crm_views.expense_edit, name="expense_edit"),
     path("expenses/<int:pk>/delete/", crm_views.expense_delete, name="expense_delete"),
+    path("sales/", crm_views.sale_list, name="sale_list"),
+    path("sales/new/", crm_views.sale_create, name="sale_create"),
+    path("sales/<int:pk>/edit/", crm_views.sale_edit, name="sale_edit"),
+    path("sales/<int:pk>/delete/", crm_views.sale_delete, name="sale_delete"),
+    path("sales/<int:pk>/", crm_views.sale_detail, name="sale_detail"),
 ]

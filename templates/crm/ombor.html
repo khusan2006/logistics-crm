@@ -25,6 +25,7 @@
     <th>Bron</th>
     <th>Qoldiq</th>
     <th>Tan narx</th>
+    <th></th>
   </tr>
   {% for lot in page %}
   <tr>
@@ -37,6 +38,13 @@
     <td>{{ lot.reserved_kg }}</td>
     <td>{{ lot.available_kg }}</td>
     <td>{{ lot.landed_cost_per_kg }} $/kg</td>
+    <td class="row-actions">
+      {% if lot.available_kg > 0 %}
+      <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal>Sotish</a>
+      {% else %}
+      <button type="button" class="btn btn-sm" disabled>Sotish</button>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>

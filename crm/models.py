@@ -283,6 +283,8 @@ class Shipment(models.Model):
             return Decimal("0")
         total = Decimal("0")
         for s in self.sales.all():
+            if not hasattr(s, "returns"):  # relation lands in Task 5
+                continue
             total += sum((r.kg for r in s.returns.all() if r.restock), Decimal("0"))
         return total
 
@@ -298,6 +300,78 @@ class Shipment(models.Model):
 
     def __str__(self):
         return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"
+
+
+class Sale(models.Model):
+    """Sotuv: kg sold from one arrived lot at a sale price. Snapshots that lot's
+    landed cost at sale time so later shipment expenses never retroactively
+    change a past sale's profit."""
+
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
+                                 related_name="sales", verbose_name="Mijoz")
+    shipment = models.ForeignKey(Shipment, on_delete=models.PROTECT,
+                                 related_name="sales", verbose_name="Lot (yuk)")
+    kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
+    cost_price = models.DecimalField("1 kg tan narxi (USD)", max_digits=14, decimal_places=4)
+    date = models.DateField("Sana", default=timezone.localdate)
+    debt_deadline = models.DateField("To'lov muddati", null=True, blank=True)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="sales", verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Sotuv"
+        verbose_name_plural = "Sotuvlar"
+
+    @property
+    def total(self):
+        return (self.kg * self.price).quantize(Decimal("0.01"))
+
+    @property
+    def returned_amount(self):
+        if not hasattr(self, "returns"):  # relation lands in Task 5
+            return Decimal("0")
+        return sum((r.amount for r in self.returns.all()), Decimal("0"))
+
+    @property
+    def net_total(self):
+        return self.total - self.returned_amount
+
+    @property
+    def paid(self):
+        if not hasattr(self, "allocations"):  # relation lands in Task 4
+            return Decimal("0")
+        return self.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+
+    @property
+    def remaining(self):
+        return self.net_total - self.paid
+
+    @property
+    def is_paid(self):
+        return self.remaining <= 0
+
+    @property
+    def is_overdue(self):
+        return (self.remaining > 0 and self.debt_deadline is not None
+                and self.debt_deadline < timezone.localdate())
+
+    @property
+    def profit(self):
+        return ((self.price - self.cost_price) * self.kg).quantize(Decimal("0.01")) - self._returned_profit
+
+    @property
+    def _returned_profit(self):
+        if not hasattr(self, "returns"):  # relation lands in Task 5
+            return Decimal("0")
+        return sum(((r.price - self.cost_price) * r.kg for r in self.returns.all() if r.restock),
+                  Decimal("0"))
+
+    def __str__(self):
+        return f"Sotuv #{self.pk} · {self.customer} · {self.kg} kg"
 
 
 class ShipmentExpense(models.Model):

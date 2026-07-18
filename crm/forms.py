@@ -3,7 +3,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from django import forms
 
 from .models import (
-    Contract, Currency, Customer, Partner, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
+    Contract, Currency, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
 )
 
 
@@ -145,6 +145,36 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
         if commit:
             obj.save()
         return obj
+
+
+class SaleForm(forms.ModelForm):
+    class Meta:
+        model = Sale
+        fields = ["customer", "shipment", "kg", "price", "date", "debt_deadline", "note"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "debt_deadline": forms.DateInput(attrs={"type": "date"}),
+            "note": forms.Textarea(attrs={"rows": 2}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["shipment"].queryset = Shipment.objects.filter(arrived__isnull=False)
+
+    def clean(self):
+        cleaned = super().clean()
+        shipment, kg = cleaned.get("shipment"), cleaned.get("kg")
+        if kg is not None and kg <= 0:
+            self.add_error("kg", "Kg musbat bo'lishi kerak")
+        if shipment and shipment.arrived is None:
+            self.add_error("shipment", "Faqat kelgan (arrived) lotdan sotish mumkin")
+        if shipment and shipment.arrived is not None and kg is not None and kg > 0:
+            available = shipment.available_kg
+            if self.instance.pk and self.instance.shipment_id == shipment.pk:
+                available += self.instance.kg
+            if kg > available:
+                self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+        return cleaned
 
 
 class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):

@@ -13,11 +13,11 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .forms import (
-    ContractForm, CustomerForm, PartnerForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm,
-    ShipmentStatusForm, SupplierPaymentForm,
+    ContractForm, CustomerForm, PartnerForm, SaleForm, ShipmentExpenseForm, ShipmentExtendForm,
+    ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Customer, Partner, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus,
+    AuditLog, Contract, Customer, Partner, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus,
     SupplierPayment,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
@@ -609,3 +609,91 @@ def expense_delete(request, pk):
         confirm_class="btn-danger",
         cancel_url_name="shipment_list",
     )
+
+
+@role_required(User.Role.ADMIN)
+def sale_list(request):
+    q = request.GET.get("q", "").strip()
+    sales = Sale.objects.select_related("customer", "shipment__contract__partner")
+    if q:
+        filters = (Q(customer__name__icontains=q) | Q(shipment__contract__brand__icontains=q))
+        if q.isdigit():
+            filters |= Q(shipment_id=int(q))
+        sales = sales.filter(filters)
+    page = Paginator(sales, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/sale_list.html", {"page": page, "q": q})
+
+
+@role_required(User.Role.ADMIN)
+def sale_create(request):
+    initial = {}
+    lot_id = request.GET.get("lot")
+    if lot_id and lot_id.isdigit():
+        initial["shipment"] = int(lot_id)
+    customer_id = request.GET.get("customer")
+    if customer_id and customer_id.isdigit():
+        initial["customer"] = int(customer_id)
+    form = SaleForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            sale = form.save(commit=False)
+            sale.cost_price = sale.shipment.landed_cost_per_kg
+            sale.created_by = request.user
+            sale.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
+                f"Yangi sotuv: {sale.kg} kg · {sale.customer.name}",
+            )
+            messages.success(request, "Sotuv qo'shildi")
+            return form_success(request, reverse("sale_list"))
+        return form_response(request, form, "Yangi sotuv", invalid=True)
+    return form_response(request, form, "Yangi sotuv")
+
+
+@role_required(User.Role.ADMIN)
+def sale_edit(request, pk):
+    sale = get_object_or_404(Sale, pk=pk)
+    form = SaleForm(request.POST or None, instance=sale)
+    title = "Sotuvni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            sale = form.save(commit=False)
+            sale.cost_price = sale.shipment.landed_cost_per_kg
+            sale.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Sotuv", sale.pk,
+                f"Sotuv tahrirlandi: {sale.kg} kg · {sale.customer.name}",
+            )
+            messages.success(request, "Sotuv yangilandi")
+            return form_reload(request, reverse("sale_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def sale_delete(request, pk):
+    sale = get_object_or_404(Sale, pk=pk)
+    if request.method == "POST":
+        label = f"{sale.kg} kg · {sale.customer.name}"
+        try:
+            sale.delete()
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Sotuv", pk, f"Sotuv o'chirildi: {label}")
+            messages.success(request, "Sotuv o'chirildi")
+        except ProtectedError:
+            messages.error(request, "Sotuvga bog'liq ma'lumot bor — o'chirib bo'lmaydi")
+        return form_reload(request, reverse("sale_list"))
+    return render_confirm(
+        request,
+        "Sotuvni o'chirish",
+        f"“{sale.kg} kg · {sale.customer.name}” sotuvi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="sale_list",
+    )
+
+
+@role_required(User.Role.ADMIN)
+def sale_detail(request, pk):
+    sale = get_object_or_404(
+        Sale.objects.select_related("customer", "shipment__contract__partner"), pk=pk)
+    return render(request, "crm/sale_detail.html", {"sale": sale})
