@@ -430,6 +430,18 @@ def shipment_list(request):
 
 
 @role_required(User.Role.ADMIN)
+def ombor(request):
+    q = request.GET.get("q", "").strip()
+    lots = Shipment.objects.filter(arrived__isnull=False).select_related("contract__partner")
+    if q:
+        lots = lots.filter(
+            Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q)
+            | Q(contract_id__icontains=q))
+    page = Paginator(lots, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/ombor.html", {"page": page, "q": q})
+
+
+@role_required(User.Role.ADMIN)
 def shipment_create(request):
     form = ShipmentForm(request.POST or None)
     if request.method == "POST":

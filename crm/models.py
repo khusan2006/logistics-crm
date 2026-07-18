@@ -266,6 +266,36 @@ class Shipment(models.Model):
         extra = self.expenses_total / self.kg if self.kg else Decimal("0")
         return (self.contract.price + extra).quantize(Decimal("0.0001"))
 
+    @property
+    def is_lot(self):
+        return self.arrived is not None
+
+    @property
+    def sold_kg(self):
+        if not hasattr(self, "sales"):  # relation lands in Task 3
+            return Decimal("0")
+        return sum((s.kg for s in self.sales.all()), Decimal("0"))
+
+    @property
+    def returned_kg(self):
+        # kg flowed back into this lot by restocked returns on its sales
+        if not hasattr(self, "sales"):  # relation lands in Task 3
+            return Decimal("0")
+        total = Decimal("0")
+        for s in self.sales.all():
+            total += sum((r.kg for r in s.returns.all() if r.restock), Decimal("0"))
+        return total
+
+    @property
+    def reserved_kg(self):
+        if not hasattr(self, "reservations"):  # relation lands in Task 6
+            return Decimal("0")
+        return sum((r.kg for r in self.reservations.all() if r.status == "active"), Decimal("0"))
+
+    @property
+    def available_kg(self):
+        return self.kg - self.sold_kg - self.reserved_kg + self.returned_kg
+
     def __str__(self):
         return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"
 

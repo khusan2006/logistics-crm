@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Ombor · GranulaLog{% endblock %}
+{% block topbar_title %}Ombor{% endblock %}
+{% block content %}
+
+<form method="get" class="searchbar" role="search" data-live-search>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Marka, hamkor yoki kelishuv raqami bo'yicha qidirish…" autocomplete="off" aria-label="Ombor qidirish">
+    {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+</form>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Kelishuv #</th>
+    <th>Hamkor</th>
+    <th>Marka</th>
+    <th>Kelgan sana</th>
+    <th>Kirim</th>
+    <th>Sotilgan</th>
+    <th>Bron</th>
+    <th>Qoldiq</th>
+    <th>Tan narx</th>
+  </tr>
+  {% for lot in page %}
+  <tr>
+    <td class="sticky-col">#{{ lot.contract_id }}</td>
+    <td>{{ lot.contract.partner.name }}</td>
+    <td>{{ lot.contract.brand }}</td>
+    <td>{{ lot.arrived }}</td>
+    <td>{{ lot.kg }}</td>
+    <td>{{ lot.sold_kg }}</td>
+    <td>{{ lot.reserved_kg }}</td>
+    <td>{{ lot.available_kg }}</td>
+    <td>{{ lot.landed_cost_per_kg }} $/kg</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Ombor bo'sh{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+{% endif %}
+{% endblock %}
