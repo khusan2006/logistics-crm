@@ -10,8 +10,11 @@ from django.views.decorators.http import require_POST
 from accounts.decorators import role_required
 from accounts.models import User
 
-from .forms import ContractForm, PartnerForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm
-from .models import AuditLog, Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+from .forms import (
+    ContractForm, PartnerForm, ShipmentExtendForm, ShipmentForm, ShipmentStatusForm,
+    SupplierPaymentForm,
+)
+from .models import AuditLog, Contract, Partner, Shipment, ShipmentDelay, ShipmentStatus, SupplierPayment
 from .utils import form_reload, form_response, form_success, render_confirm
 
 
@@ -364,6 +367,37 @@ def shipment_edit(request, pk):
             )
             messages.success(request, "Yuk yangilandi")
             return form_reload(request, reverse("shipment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_detail(request, pk):
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner", "status"), pk=pk)
+    return render(request, "crm/shipment_detail.html", {"shipment": shipment})
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_extend(request, pk):
+    shipment = get_object_or_404(Shipment, pk=pk)
+    form = ShipmentExtendForm(request.POST or None)
+    title = f"Yuk #{shipment.pk} — muddatni uzaytirish"
+    if request.method == "POST":
+        if form.is_valid():
+            new_eta = form.cleaned_data["new_eta"]
+            reason = form.cleaned_data["reason"]
+            ShipmentDelay.objects.create(
+                shipment=shipment, old_eta=shipment.eta, new_eta=new_eta,
+                reason=reason, created_by=request.user)
+            shipment.eta = new_eta
+            shipment.save(update_fields=["eta"])
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                f"Muddat uzaytirildi: {new_eta} ({reason})",
+            )
+            messages.success(request, "Kelish sanasi uzaytirildi")
+            return form_success(request, reverse("shipment_list"))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
 

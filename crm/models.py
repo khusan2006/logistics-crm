@@ -222,3 +222,26 @@ class Shipment(models.Model):
 
     def __str__(self):
         return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"
+
+
+class ShipmentDelay(models.Model):
+    """One ETA extension: the audit trail requirement — every push of the arrival
+    date keeps its reason and author."""
+
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE,
+                                 related_name="delays", verbose_name="Yuk")
+    old_eta = models.DateField("Avvalgi sana", null=True)
+    new_eta = models.DateField("Yangi sana")
+    reason = models.CharField("Kechikish sababi", max_length=255)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="shipment_delays",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Yuk kechikishi"
+        verbose_name_plural = "Yuk kechikishlari"
+
+    def __str__(self):
+        return f"{self.shipment_id}: {self.old_eta} → {self.new_eta}"

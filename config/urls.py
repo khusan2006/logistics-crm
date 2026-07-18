@@ -33,4 +33,6 @@ urlpatterns = [
     path("shipments/<int:pk>/edit/", crm_views.shipment_edit, name="shipment_edit"),
     path("shipments/<int:pk>/status/", crm_views.shipment_set_status, name="shipment_set_status"),
     path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
+    path("shipments/<int:pk>/extend/", crm_views.shipment_extend, name="shipment_extend"),
+    path("shipments/<int:pk>/", crm_views.shipment_detail, name="shipment_detail"),
 ]

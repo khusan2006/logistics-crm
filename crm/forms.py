@@ -105,6 +105,12 @@ class ShipmentForm(forms.ModelForm):
         return cleaned
 
 
+class ShipmentExtendForm(forms.Form):
+    new_eta = forms.DateField(label="Yangi kelish sanasi",
+                              widget=forms.DateInput(attrs={"type": "date"}))
+    reason = forms.CharField(label="Kechikish sababi", max_length=255)
+
+
 class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = SupplierPayment

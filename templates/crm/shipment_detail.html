@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Yuk #{{ shipment.pk }} · GranulaLog{% endblock %}
+{% block topbar_title %}Yuk #{{ shipment.pk }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <a class="btn btn-ghost" href="{% url 'shipment_list' %}">&larr; Yuklar ro'yxatiga</a>
+    <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="muted">Kelishuv</div>
+      <div>#{{ shipment.contract_id }} · {{ shipment.contract.brand }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Hamkor</div>
+      <div>{{ shipment.contract.partner.name }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Kg</div>
+      <div>{{ shipment.kg }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Holat</div>
+      <div>{{ shipment.status.name }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Transport</div>
+      <div>{{ shipment.transport|default:"—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Konteyner</div>
+      <div>{{ shipment.container|default:"—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Jo'natilgan</div>
+      <div>{{ shipment.sent|default:"—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Kelish (ETA)</div>
+      <div>
+        {{ shipment.eta|default:"—" }}
+        {% if shipment.is_overdue %}<span class="daybadge overdue">{{ shipment.days_late }} kun kechikdi</span>{% endif %}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="muted">Yetib kelgan</div>
+      <div>{{ shipment.arrived|default:"—" }}</div>
+    </div>
+  </div>
+</div>
+
+{% comment %} Task 10: admin-only expenses/landed-cost card goes here inside {% if user.is_admin_role %} — no money in Task 9. {% endcomment %}
+
+<div class="card">
+  <h3 style="margin-top: 0;">Kechikish tarixi</h3>
+  {% if shipment.delays.all %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>Sana</th>
+      <th>Eski &rarr; Yangi sana</th>
+      <th>Sabab</th>
+      <th>Kim</th>
+    </tr>
+    {% for d in shipment.delays.all %}
+    <tr>
+      <td>{{ d.created_at|date:"Y-m-d H:i" }}</td>
+      <td>{{ d.old_eta|default:"—" }} &rarr; {{ d.new_eta }}</td>
+      <td>{{ d.reason }}</td>
+      <td>{{ d.created_by }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Hali muddat uzaytirilmagan.</p>
+  {% endif %}
+</div>
+
+{% endblock %}
