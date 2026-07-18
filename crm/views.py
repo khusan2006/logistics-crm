@@ -11,10 +11,13 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .forms import (
-    ContractForm, PartnerForm, ShipmentExtendForm, ShipmentForm, ShipmentStatusForm,
-    SupplierPaymentForm,
+    ContractForm, PartnerForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm,
+    ShipmentStatusForm, SupplierPaymentForm,
 )
-from .models import AuditLog, Contract, Partner, Shipment, ShipmentDelay, ShipmentStatus, SupplierPayment
+from .models import (
+    AuditLog, Contract, Partner, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus,
+    SupplierPayment,
+)
 from .utils import form_reload, form_response, form_success, render_confirm
 
 
@@ -435,6 +438,65 @@ def shipment_delete(request, pk):
         request,
         "Yukni o'chirish",
         f"“{shipment.contract.brand} · {shipment.kg} kg” yuki o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="shipment_list",
+    )
+
+
+@role_required(User.Role.ADMIN)
+def expense_create(request):
+    initial = {"shipment": request.GET.get("shipment")}
+    form = ShipmentExpenseForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            expense = form.save(commit=False)
+            expense.created_by = request.user
+            expense.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Yuk xarajati", expense.pk,
+                f"Yangi xarajat: {expense.amount}$ · yuk #{expense.shipment_id}",
+            )
+            messages.success(request, "Xarajat qo'shildi")
+            return form_success(request, reverse("shipment_detail", args=[expense.shipment_id]))
+        return form_response(request, form, "Yangi xarajat", invalid=True)
+    return form_response(request, form, "Yangi xarajat")
+
+
+@role_required(User.Role.ADMIN)
+def expense_edit(request, pk):
+    expense = get_object_or_404(ShipmentExpense, pk=pk)
+    form = ShipmentExpenseForm(request.POST or None, instance=expense)
+    title = "Xarajatni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Yuk xarajati", expense.pk,
+                f"Xarajat tahrirlandi: {expense.amount}$ · yuk #{expense.shipment_id}",
+            )
+            messages.success(request, "Xarajat yangilandi")
+            return form_reload(request, reverse("shipment_detail", args=[expense.shipment_id]))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def expense_delete(request, pk):
+    expense = get_object_or_404(ShipmentExpense, pk=pk)
+    if request.method == "POST":
+        amount, shipment_id = expense.amount, expense.shipment_id
+        expense.delete()
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Yuk xarajati", pk,
+            f"Xarajat o'chirildi: {amount}$ · yuk #{shipment_id}",
+        )
+        messages.success(request, "Xarajat o'chirildi")
+        return form_reload(request, reverse("shipment_detail", args=[shipment_id]))
+    return render_confirm(
+        request,
+        "Xarajatni o'chirish",
+        f"“{expense.amount}$” xarajati o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="shipment_list",

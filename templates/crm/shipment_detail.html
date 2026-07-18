@@ -52,7 +52,49 @@
   </div>
 </div>
 
-{% comment %} Task 10: admin-only expenses/landed-cost card goes here inside {% if user.is_admin_role %} — no money in Task 9. {% endcomment %}
+{% if user.is_admin_role %}
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <h3 style="margin: 0;">Yo'l va bojxona xarajatlari</h3>
+    <a class="btn" href="{% url 'expense_create' %}?shipment={{ shipment.pk }}" data-modal>+ Xarajat</a>
+  </div>
+  {% if shipment.expenses.all %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>Sana</th>
+      <th>Turkum</th>
+      <th>Summa</th>
+      <th>Usul</th>
+      <th>Izoh</th>
+      <th></th>
+    </tr>
+    {% for e in shipment.expenses.all %}
+    <tr>
+      <td>{{ e.date }}</td>
+      <td>{{ e.get_category_display }}</td>
+      <td>
+        {{ e.amount }} $
+        {% if e.currency == "uzs" %}<div class="muted" style="font-size: 12px;">{{ e.amount_original }} so'm</div>{% endif %}
+      </td>
+      <td>{{ e.get_method_display }}</td>
+      <td>{{ e.note|default:"—" }}</td>
+      <td class="row-actions">
+        <a class="btn btn-ghost" href="{% url 'expense_edit' e.pk %}" data-modal>Tahrirlash</a>
+        <a class="btn btn-ghost" href="{% url 'expense_delete' e.pk %}" data-modal>O'chirish</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  <p class="muted" style="margin-top: 10px;">
+    Jami: {{ shipment.expenses_total }} $ · Tan narx: {{ shipment.landed_cost_per_kg }} $/kg
+  </p>
+  {% else %}
+  <p class="muted">Hali xarajat kiritilmagan. Tan narx: {{ shipment.landed_cost_per_kg }} $/kg</p>
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="card">
   <h3 style="margin-top: 0;">Kechikish tarixi</h3>

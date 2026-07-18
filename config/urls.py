@@ -35,4 +35,7 @@ urlpatterns = [
     path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
     path("shipments/<int:pk>/extend/", crm_views.shipment_extend, name="shipment_extend"),
     path("shipments/<int:pk>/", crm_views.shipment_detail, name="shipment_detail"),
+    path("expenses/new/", crm_views.expense_create, name="expense_create"),
+    path("expenses/<int:pk>/edit/", crm_views.expense_edit, name="expense_edit"),
+    path("expenses/<int:pk>/delete/", crm_views.expense_delete, name="expense_delete"),
 ]

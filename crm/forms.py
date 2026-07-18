@@ -2,7 +2,9 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
 
-from .models import Contract, Currency, Partner, Shipment, ShipmentStatus, SupplierPayment
+from .models import (
+    Contract, Currency, Partner, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
+)
 
 
 class PartnerForm(forms.ModelForm):
@@ -127,6 +129,24 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
             if amount > debt:
                 self.add_error("amount", f"Ortiqcha to'lovga ruxsat berilmaydi (qarz: {debt} $)")
         return cleaned
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        obj.amount = self.cleaned_data["amount"]
+        obj.amount_original = self.cleaned_data["amount_original"]
+        obj.exchange_rate = self.cleaned_data["exchange_rate"]
+        if commit:
+            obj.save()
+        return obj
+
+
+class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):
+    class Meta:
+        model = ShipmentExpense
+        fields = ["shipment", "date", "category", "currency", "amount",
+                  "exchange_rate", "method", "note"]
+        widgets = {"date": forms.DateInput(attrs={"type": "date"}),
+                   "shipment": forms.HiddenInput()}
 
     def save(self, commit=True):
         obj = super().save(commit=False)

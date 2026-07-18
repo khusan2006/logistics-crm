@@ -64,8 +64,9 @@ def test_extend_modal_post_valid_returns_204_with_redirect(admin_client, late_sh
     assert resp["X-Redirect"] == "/shipments/"
 
 
-def test_detail_has_no_money(admin_client, late_shipment):
-    html = admin_client.get(f"/shipments/{late_shipment.pk}/").content.decode()
+def test_translator_detail_has_no_money(translator_client, late_shipment):
+    # Task 10: expenses/landed cost are admin-only. Translators must see none of it.
+    html = translator_client.get(f"/shipments/{late_shipment.pk}/").content.decode()
     content = html.split('class="content"', 1)[1].split("</main>", 1)[0]
     lowered = content.lower()
     for term in ("qarz", "debt", "narx", "to'lov", "price", "expense", "xarajat"):

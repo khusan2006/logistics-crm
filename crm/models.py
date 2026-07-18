@@ -220,8 +220,59 @@ class Shipment(models.Model):
             return None
         return (self.eta - timezone.localdate()).days
 
+    @property
+    def expenses_total(self):
+        return self.expenses.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+
+    @property
+    def landed_cost_per_kg(self):
+        """True cost of one kg in this load: contract price plus this load's own
+        road/customs spend spread over its kg. Phase 2 snapshots this into sales."""
+        extra = self.expenses_total / self.kg if self.kg else Decimal("0")
+        return (self.contract.price + extra).quantize(Decimal("0.0001"))
+
     def __str__(self):
         return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"
+
+
+class ShipmentExpense(models.Model):
+    """Road/customs money spent on one load. Rolls into that load's landed cost:
+    landed cost per kg = contract price + expenses ÷ kg (decision #3)."""
+
+    class Category(models.TextChoices):
+        CUSTOMS = "customs", "Bojxona"
+        TRANSPORT = "transport", "Transport"
+        ROAD = "road", "Yo'l xarajati"
+        CERT = "cert", "Sertifikat"
+        OTHER = "other", "Boshqa"
+
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE,
+                                 related_name="expenses", verbose_name="Yuk")
+    date = models.DateField("Sana", default=timezone.localdate)
+    category = models.CharField("Turkum", max_length=10, choices=Category.choices,
+                                default=Category.OTHER)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
+                                default=Currency.USD)
+    exchange_rate = models.DecimalField("Dollar kursi (1$ = so'm)", max_digits=12,
+                                        decimal_places=2, default=0, blank=True)
+    amount_original = models.DecimalField("Asl summa (valyutada)", max_digits=18,
+                                          decimal_places=2, default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="shipment_expenses",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Yuk xarajati"
+        verbose_name_plural = "Yuk xarajatlari"
+
+    def __str__(self):
+        return f"{self.get_category_display()}: {self.amount}$ (yuk #{self.shipment_id})"
 
 
 class ShipmentDelay(models.Model):
