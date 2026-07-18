@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crm_extras %}
 {% block title %}To'lovlar (hamkor) · GranulaLog{% endblock %}
 {% block topbar_title %}To'lovlar (hamkor){% endblock %}
 {% block fab %}<a class="fab" href="{% url 'supplier_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi to'lov</a>{% endblock %}
@@ -22,7 +23,7 @@
     <td><a href="{% url 'contract_edit' p.contract_id %}">#{{ p.contract_id }} · {{ p.contract.brand }}</a></td>
     <td>{{ p.contract.partner.name }}</td>
     <td>
-      ${{ p.amount }}
+      {{ p.amount|usd }}
       {% if p.currency == "uzs" %}<br><small class="muted">{{ p.amount_original }} so'm</small>{% endif %}
     </td>
     <td>{{ p.get_method_display }}</td>

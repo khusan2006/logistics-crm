@@ -53,7 +53,10 @@ def test_extend_modal_get_returns_partial(admin_client, late_shipment):
     assert "<html" not in html
 
 
-def test_extend_modal_post_valid_returns_204_with_redirect(admin_client, late_shipment):
+def test_extend_modal_post_valid_returns_204_no_redirect(admin_client, late_shipment):
+    # form_reload (not form_success): the extend modal is often opened from
+    # shipment_detail, so a successful AJAX submit reloads whatever page opened
+    # it in place, rather than bouncing to the list via X-Redirect.
     new_eta = (date.today() + timedelta(days=5)).isoformat()
     resp = admin_client.post(
         f"/shipments/{late_shipment.pk}/extend/",
@@ -61,7 +64,7 @@ def test_extend_modal_post_valid_returns_204_with_redirect(admin_client, late_sh
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
-    assert resp["X-Redirect"] == "/shipments/"
+    assert "X-Redirect" not in resp
 
 
 def test_translator_detail_has_no_money(translator_client, late_shipment):

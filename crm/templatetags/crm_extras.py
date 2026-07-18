@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 
 from django import template
 from django.contrib.staticfiles import finders
@@ -18,3 +19,12 @@ def static_v(path):
         except OSError:
             pass
     return url
+
+
+@register.filter
+def usd(value):
+    """Format a number as USD: $1,234.56 (2 dp, thousands separator). Blank-safe."""
+    try:
+        return "${:,.2f}".format(Decimal(value or 0))
+    except (TypeError, ValueError, ArithmeticError):
+        return "$0.00"

@@ -305,7 +305,7 @@ def status_delete(request, pk):
     if request.method == "POST":
         if status.is_arrival:
             messages.error(request, "Omborga kelish holatini o'chirib bo'lmaydi")
-            return redirect("status_list")
+            return form_reload(request, reverse("status_list"))
         pk_, name = status.pk, status.name
         try:
             status.delete()
@@ -313,8 +313,15 @@ def status_delete(request, pk):
             messages.success(request, "Holat o'chirildi")
         except ProtectedError:
             messages.error(request, "Holatga yuk biriktirilgan — o'chirib bo'lmaydi")
-        return redirect("status_list")
-    return redirect("status_list")
+        return form_reload(request, reverse("status_list"))
+    return render_confirm(
+        request,
+        "Holatni o'chirish",
+        f"“{status.name}” holati o'chiriladi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="status_list",
+    )
 
 
 @role_required(User.Role.ADMIN)
@@ -420,7 +427,10 @@ def shipment_extend(request, pk):
                 f"Muddat uzaytirildi: {new_eta} ({reason})",
             )
             messages.success(request, "Kelish sanasi uzaytirildi")
-            return form_success(request, reverse("shipment_list"))
+            # Reload in place (list or detail — wherever the modal was opened from)
+            # instead of redirecting to the list, since extend is often opened
+            # from shipment_detail.
+            return form_reload(request, reverse("shipment_list"))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
 

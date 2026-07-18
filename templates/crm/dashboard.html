@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crm_extras %}
 {% block title %}Dashboard · GranulaLog{% endblock %}
 {% block topbar_title %}Asosiy{% endblock %}
 {% block content %}
@@ -33,7 +34,7 @@
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
       <span class="kpi-label">Jami to'langan</span>
     </div>
-    <div class="kpi-value">${{ paid_total|floatformat:"0g" }}</div>
+    <div class="kpi-value">{{ paid_total|usd }}</div>
   </div>
 
   <div class="kpi kpi--red">
@@ -41,7 +42,7 @@
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
       <span class="kpi-label">Hamkor qarzi</span>
     </div>
-    <div class="kpi-value">${{ debt_total|floatformat:"0g" }}</div>
+    <div class="kpi-value">{{ debt_total|usd }}</div>
   </div>
 
   <div class="kpi {% if overdue %}kpi--red{% else %}kpi--green{% endif %}">

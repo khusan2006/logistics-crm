@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crm_extras %}
 {% block title %}Kelishuvlar · GranulaLog{% endblock %}
 {% block topbar_title %}Kelishuvlar{% endblock %}
 {% block fab %}<a class="fab" href="{% url 'contract_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi kelishuv</a>{% endblock %}
@@ -31,16 +32,16 @@
   {% for c in page %}
   <tr>
     <td class="sticky-col">
-      <a href="{% url 'contract_edit' c.pk %}">#{{ c.pk }}</a>
+      <a href="{% url 'contract_edit' c.pk %}" data-modal>#{{ c.pk }}</a>
     </td>
     <td>{{ c.created }}</td>
     <td>{{ c.partner.name }}</td>
     <td>{{ c.brand }}</td>
     <td>{{ c.kg }}</td>
-    <td>${{ c.price }}</td>
-    <td>${{ c.total_value }}</td>
+    <td>{{ c.price|usd }}</td>
+    <td>{{ c.total_value|usd }}</td>
     <td>{{ c.shipped_kg }} / {{ c.remaining_kg }}</td>
-    <td>${{ c.paid_total }} / ${{ c.debt }}</td>
+    <td>{{ c.paid_total|usd }} / {{ c.debt|usd }}</td>
     <td>{{ c.deadline }}</td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">

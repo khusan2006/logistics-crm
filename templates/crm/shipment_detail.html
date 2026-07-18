@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crm_extras %}
 {% block title %}Yuk #{{ shipment.pk }} · GranulaLog{% endblock %}
 {% block topbar_title %}Yuk #{{ shipment.pk }}{% endblock %}
 {% block content %}
@@ -74,7 +75,7 @@
       <td>{{ e.date }}</td>
       <td>{{ e.get_category_display }}</td>
       <td>
-        {{ e.amount }} $
+        {{ e.amount|usd }}
         {% if e.currency == "uzs" %}<div class="muted" style="font-size: 12px;">{{ e.amount_original }} so'm</div>{% endif %}
       </td>
       <td>{{ e.get_method_display }}</td>
@@ -88,7 +89,7 @@
   </table>
   </div>
   <p class="muted" style="margin-top: 10px;">
-    Jami: {{ shipment.expenses_total }} $ · Tan narx: {{ shipment.landed_cost_per_kg }} $/kg
+    Jami: {{ shipment.expenses_total|usd }} · Tan narx: {{ shipment.landed_cost_per_kg }} $/kg
   </p>
   {% else %}
   <p class="muted">Hali xarajat kiritilmagan. Tan narx: {{ shipment.landed_cost_per_kg }} $/kg</p>
