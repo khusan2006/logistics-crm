@@ -1,0 +1,8 @@
+.superpowers/
+__pycache__/
+*.pyc
+.venv/
+venv/
+test_db.sqlite3
+staticfiles/
+.env
