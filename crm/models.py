@@ -119,3 +119,35 @@ class Contract(models.Model):
 
     def __str__(self):
         return f"#{self.pk} · {self.brand} · {self.partner}"
+
+
+class SupplierPayment(models.Model):
+    """To'lov to one supplier contract. `amount` is always USD; a so'm payment is
+    converted at entry and keeps its original figure + rate. Overpaying a contract
+    is blocked at the form layer (per-contract model, no supplier prepayments)."""
+
+    contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
+                                 related_name="supplier_payments", verbose_name="Kelishuv")
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
+                                default=Currency.USD)
+    exchange_rate = models.DecimalField("Dollar kursi (1$ = so'm)", max_digits=12,
+                                        decimal_places=2, default=0, blank=True)
+    amount_original = models.DecimalField("Asl summa (valyutada)", max_digits=18,
+                                          decimal_places=2, default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.TRANSFER)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="supplier_payments",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Hamkor to'lovi"
+        verbose_name_plural = "Hamkor to'lovlari"
+
+    def __str__(self):
+        return f"{self.contract_id} · {self.amount}$ ({self.date})"

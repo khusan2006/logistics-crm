@@ -7,8 +7,8 @@ from django.urls import reverse
 from accounts.decorators import role_required
 from accounts.models import User
 
-from .forms import ContractForm, PartnerForm
-from .models import AuditLog, Contract, Partner
+from .forms import ContractForm, PartnerForm, SupplierPaymentForm
+from .models import AuditLog, Contract, Partner, SupplierPayment
 from .utils import form_reload, form_response, form_success, render_confirm
 
 
@@ -154,4 +154,76 @@ def contract_delete(request, pk):
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="contract_list",
+    )
+
+
+@role_required(User.Role.ADMIN)
+def supplier_payment_list(request):
+    payments = SupplierPayment.objects.select_related("contract__partner")
+    contract_id = request.GET.get("contract")
+    if contract_id and contract_id.isdigit():
+        payments = payments.filter(contract_id=contract_id)
+    page = Paginator(payments, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/supplier_payment_list.html", {"page": page})
+
+
+@role_required(User.Role.ADMIN)
+def supplier_payment_create(request):
+    initial = {}
+    contract_id = request.GET.get("contract")
+    if contract_id and contract_id.isdigit():
+        initial["contract"] = int(contract_id)
+    form = SupplierPaymentForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            payment = form.save(commit=False)
+            payment.created_by = request.user
+            payment.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.PAYMENT, "Hamkor to'lovi", payment.pk,
+                f"To'lov: {payment.amount}$ · kelishuv #{payment.contract_id}",
+            )
+            messages.success(request, "To'lov qo'shildi")
+            return form_success(request, reverse("supplier_payment_list"))
+        return form_response(request, form, "Yangi to'lov", invalid=True)
+    return form_response(request, form, "Yangi to'lov")
+
+
+@role_required(User.Role.ADMIN)
+def supplier_payment_edit(request, pk):
+    payment = get_object_or_404(SupplierPayment, pk=pk)
+    form = SupplierPaymentForm(request.POST or None, instance=payment)
+    title = "To'lovni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Hamkor to'lovi", payment.pk,
+                f"To'lov tahrirlandi: {payment.amount}$ · kelishuv #{payment.contract_id}",
+            )
+            messages.success(request, "To'lov yangilandi")
+            return form_reload(request, reverse("supplier_payment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def supplier_payment_delete(request, pk):
+    payment = get_object_or_404(SupplierPayment, pk=pk)
+    if request.method == "POST":
+        amount, contract_id = payment.amount, payment.contract_id
+        payment.delete()
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Hamkor to'lovi", pk,
+            f"To'lov o'chirildi: {amount}$ · kelishuv #{contract_id}",
+        )
+        messages.success(request, "To'lov o'chirildi")
+        return form_reload(request, reverse("supplier_payment_list"))
+    return render_confirm(
+        request,
+        "To'lovni o'chirish",
+        f"“{payment.amount}$” to'lovi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="supplier_payment_list",
     )

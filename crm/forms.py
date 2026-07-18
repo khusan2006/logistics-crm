@@ -1,6 +1,8 @@
+from decimal import ROUND_HALF_UP, Decimal
+
 from django import forms
 
-from .models import Contract, Partner
+from .models import Contract, Currency, Partner, SupplierPayment
 
 
 class PartnerForm(forms.ModelForm):
@@ -32,3 +34,56 @@ class ContractForm(forms.ModelForm):
         if self.instance.pk and kg is not None and kg < self.instance.shipped_kg:
             self.add_error("kg", "Kelishilgan kg yuborilgan kg dan kam bo'la olmaydi")
         return cleaned
+
+
+class MoneyEntryFormMixin:
+    """Shared so'm→USD conversion. The user types `amount` in `currency`; after
+    clean(), cleaned_data["amount"] is canonical USD and amount_original/exchange_rate
+    carry the entry-time facts. Reused by the expense form."""
+
+    def clean(self):
+        cleaned = super().clean()
+        currency, amount = cleaned.get("currency"), cleaned.get("amount")
+        rate = cleaned.get("exchange_rate") or Decimal("0")
+        if amount is None:
+            return cleaned
+        if amount <= 0:
+            self.add_error("amount", "Summa musbat bo'lishi kerak")
+            return cleaned
+        if currency == Currency.UZS:
+            if rate <= 0:
+                self.add_error("exchange_rate", "So'mdagi summa uchun dollar kursini kiriting")
+                return cleaned
+            cleaned["amount_original"] = amount
+            cleaned["amount"] = (amount / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        else:
+            cleaned["amount_original"] = amount
+            cleaned["exchange_rate"] = Decimal("0")
+        return cleaned
+
+
+class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
+    class Meta:
+        model = SupplierPayment
+        fields = ["contract", "date", "currency", "amount", "exchange_rate", "method", "note"]
+        widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+
+    def clean(self):
+        cleaned = super().clean()
+        contract, amount = cleaned.get("contract"), cleaned.get("amount")
+        if contract and amount is not None and not self.errors:
+            debt = contract.debt
+            if self.instance.pk and self.instance.contract_id == contract.pk:
+                debt += self.instance.amount
+            if amount > debt:
+                self.add_error("amount", f"Ortiqcha to'lovga ruxsat berilmaydi (qarz: {debt} $)")
+        return cleaned
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        obj.amount = self.cleaned_data["amount"]
+        obj.amount_original = self.cleaned_data["amount_original"]
+        obj.exchange_rate = self.cleaned_data["exchange_rate"]
+        if commit:
+            obj.save()
+        return obj

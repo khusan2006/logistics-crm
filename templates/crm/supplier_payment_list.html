@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}To'lovlar (hamkor) · GranulaLog{% endblock %}
+{% block topbar_title %}To'lovlar (hamkor){% endblock %}
+{% block fab %}<a class="fab" href="{% url 'supplier_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi to'lov</a>{% endblock %}
+{% block content %}
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Sana</th>
+    <th>Kelishuv</th>
+    <th>Hamkor</th>
+    <th>Summa</th>
+    <th>Usul</th>
+    <th>Izoh</th>
+    <th></th>
+  </tr>
+  {% for p in page %}
+  <tr>
+    <td class="sticky-col">{{ p.date }}</td>
+    <td><a href="{% url 'contract_edit' p.contract_id %}">#{{ p.contract_id }} · {{ p.contract.brand }}</a></td>
+    <td>{{ p.contract.partner.name }}</td>
+    <td>
+      ${{ p.amount }}
+      {% if p.currency == "uzs" %}<br><small class="muted">{{ p.amount_original }} so'm</small>{% endif %}
+    </td>
+    <td>{{ p.get_method_display }}</td>
+    <td>{{ p.note|default:"—" }}</td>
+    <td class="row-actions">
+      <a class="icon-action act-edit" href="{% url 'supplier_payment_edit' p.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'supplier_payment_delete' p.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">To'lovlar topilmadi.</p>
+{% endif %}
+{% endblock %}
