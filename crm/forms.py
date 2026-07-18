@@ -3,7 +3,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from django import forms
 
 from .models import (
-    Contract, Currency, Partner, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
+    Contract, Currency, Customer, Partner, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
 )
 
 
@@ -11,6 +11,13 @@ class PartnerForm(forms.ModelForm):
     class Meta:
         model = Partner
         fields = ["name", "phone", "city", "note"]
+        widgets = {"note": forms.Textarea(attrs={"rows": 3})}
+
+
+class CustomerForm(forms.ModelForm):
+    class Meta:
+        model = Customer
+        fields = ["name", "phone", "address", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 3})}
 
 

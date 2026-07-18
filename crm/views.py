@@ -13,11 +13,11 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .forms import (
-    ContractForm, PartnerForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm,
+    ContractForm, CustomerForm, PartnerForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm,
     ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Partner, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus,
+    AuditLog, Contract, Customer, Partner, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus,
     SupplierPayment,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
@@ -112,6 +112,72 @@ def partner_delete(request, pk):
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="partner_list",
+    )
+
+
+@role_required(User.Role.ADMIN)
+def customer_list(request):
+    q = request.GET.get("q", "").strip()
+    customers = Customer.objects.all()
+    if q:
+        customers = customers.filter(
+            Q(name__icontains=q) | Q(phone__icontains=q) | Q(address__icontains=q)
+        )
+    page = Paginator(customers, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/customer_list.html", {"page": page, "q": q})
+
+
+@role_required(User.Role.ADMIN)
+def customer_create(request):
+    form = CustomerForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            customer = form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Mijoz", customer.pk, f"Yangi mijoz: {customer.name}"
+            )
+            messages.success(request, "Mijoz qo'shildi")
+            return form_success(request, reverse("customer_list"))
+        return form_response(request, form, "Yangi mijoz", invalid=True)
+    return form_response(request, form, "Yangi mijoz")
+
+
+@role_required(User.Role.ADMIN)
+def customer_edit(request, pk):
+    customer = get_object_or_404(Customer, pk=pk)
+    form = CustomerForm(request.POST or None, instance=customer)
+    title = "Mijozni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Mijoz", customer.pk, f"Mijoz tahrirlandi: {customer.name}"
+            )
+            messages.success(request, "Mijoz yangilandi")
+            return form_reload(request, reverse("customer_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def customer_delete(request, pk):
+    customer = get_object_or_404(Customer, pk=pk)
+    if request.method == "POST":
+        name = customer.name
+        try:
+            customer.delete()
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Mijoz", pk, f"Mijoz o'chirildi: {name}")
+            messages.success(request, "Mijoz o'chirildi")
+        except ProtectedError:
+            messages.error(request, "Mijozga savdo biriktirilgan — o'chirib bo'lmaydi")
+        return form_reload(request, reverse("customer_list"))
+    return render_confirm(
+        request,
+        "Mijozni o'chirish",
+        f"“{customer.name}” mijozi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="customer_list",
     )
 
 

@@ -72,6 +72,41 @@ class Partner(models.Model):
         return self.name
 
 
+class Customer(models.Model):
+    """Mijoz (buyer) — purchases granula from us."""
+
+    name = models.CharField("Ismi", max_length=200)
+    phone = models.CharField("Telefon", max_length=30, blank=True)
+    address = models.CharField("Manzil", max_length=300, blank=True)
+    note = models.TextField("Izoh", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Mijoz"
+        verbose_name_plural = "Mijozlar"
+
+    @property
+    def sales_total(self):
+        if not hasattr(self, "sales"):  # relation lands in a later Phase-2 task
+            return Decimal("0")
+        return sum((s.net_total for s in self.sales.all()), Decimal("0"))
+
+    @property
+    def paid_total(self):
+        if not hasattr(self, "customer_payments"):  # relation lands in a later Phase-2 task
+            return Decimal("0")
+        return self.customer_payments.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+
+    @property
+    def balance(self):
+        """Positive = customer owes us (qarz); negative = advance (avans)."""
+        return self.sales_total - self.paid_total
+
+    def __str__(self):
+        return self.name
+
+
 class Contract(models.Model):
     """Kelishuv: one brand of granula from one partner at one USD/kg price."""
 
