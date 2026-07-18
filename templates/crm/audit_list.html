@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Audit · GranulaLog{% endblock %}
+{% block topbar_title %}Audit jurnali{% endblock %}
+{% block content %}
+<div class="table-wrap"><table>
+  <tr><th>Vaqt</th><th>Kim</th><th>Amal</th><th>Obyekt</th><th>Tafsilot</th></tr>
+  {% for row in page %}
+  <tr><td>{{ row.created_at|date:"d.m.Y H:i" }}</td><td>{{ row.user|default:"Tizim" }}</td>
+      <td>{{ row.get_action_display }}</td><td>{{ row.target_type }} {% if row.target_id %}#{{ row.target_id }}{% endif %}</td>
+      <td>{{ row.summary }}</td></tr>
+  {% empty %}<tr><td colspan="5" class="muted">Yozuvlar yo'q</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

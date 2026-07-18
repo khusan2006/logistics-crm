@@ -1,5 +1,6 @@
 """Shared fixtures: an admin and a translator, plus logged-in test clients."""
 import pytest
+from django.test import Client
 
 from accounts.models import User
 
@@ -23,12 +24,14 @@ def translator_user(db):
 
 
 @pytest.fixture
-def admin_client(client, admin_user):
+def admin_client(admin_user):
+    client = Client()
     client.force_login(admin_user)
     return client
 
 
 @pytest.fixture
-def translator_client(client, translator_user):
+def translator_client(translator_user):
+    client = Client()
     client.force_login(translator_user)
     return client
