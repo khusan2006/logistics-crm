@@ -52,3 +52,21 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.get_action_display()} · {self.target_type} · {self.summary}"
+
+
+class Partner(models.Model):
+    """Yetkazib beruvchi (supplier) in Iran or elsewhere."""
+
+    name = models.CharField("Nomi", max_length=200)
+    phone = models.CharField("Telefon", max_length=30, blank=True)
+    city = models.CharField("Shahar", max_length=100, blank=True)
+    note = models.TextField("Izoh", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Hamkor"
+        verbose_name_plural = "Hamkorlar"
+
+    def __str__(self):
+        return self.name

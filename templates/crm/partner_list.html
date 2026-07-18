@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Hamkorlar · GranulaLog{% endblock %}
+{% block topbar_title %}Hamkorlar{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'partner_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi hamkor</a>{% endblock %}
+{% block content %}
+
+<form method="get" class="searchbar" role="search" data-live-search>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Nomi, telefon yoki shahar bo'yicha qidirish…" autocomplete="off" aria-label="Hamkor qidirish">
+    {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+</form>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr><th class="sticky-col">Nomi</th><th>Telefon</th><th>Shahar</th><th>Izoh</th><th></th></tr>
+  {% for partner in page %}
+  <tr>
+    <td class="sticky-col">
+      <a href="{% url 'partner_edit' partner.pk %}">{{ partner.name }}</a>
+    </td>
+    <td>{{ partner.phone|default:"—" }}</td>
+    <td>{{ partner.city|default:"—" }}</td>
+    <td>{{ partner.note|default:"—" }}</td>
+    <td class="row-actions">
+      <a class="icon-action act-edit" href="{% url 'partner_edit' partner.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'partner_delete' partner.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Hamkorlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+{% endif %}
+{% endblock %}

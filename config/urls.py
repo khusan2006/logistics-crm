@@ -11,4 +11,8 @@ urlpatterns = [
     path("logout/", auth_views.LogoutView.as_view(), name="logout"),
     path("", crm_views.dashboard, name="dashboard"),
     path("audit/", crm_views.audit_list, name="audit_list"),
+    path("partners/", crm_views.partner_list, name="partner_list"),
+    path("partners/new/", crm_views.partner_create, name="partner_create"),
+    path("partners/<int:pk>/edit/", crm_views.partner_edit, name="partner_edit"),
+    path("partners/<int:pk>/delete/", crm_views.partner_delete, name="partner_delete"),
 ]
