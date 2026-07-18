@@ -1,9 +1,11 @@
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Max, ProtectedError, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from accounts.decorators import role_required
 from accounts.models import User
@@ -364,6 +366,23 @@ def shipment_edit(request, pk):
             return form_reload(request, reverse("shipment_list"))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
+
+
+@require_POST
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_set_status(request, pk):
+    shipment = get_object_or_404(Shipment.objects.select_related("status"), pk=pk)
+    status = get_object_or_404(ShipmentStatus, pk=request.POST.get("status"))
+    if status.is_arrival and not request.user.is_admin_role:
+        raise PermissionDenied
+    old_name = shipment.status.name
+    shipment.status = status
+    shipment.arrived = (shipment.arrived or timezone.localdate()) if status.is_arrival else None
+    shipment.save(update_fields=["status", "arrived"])
+    AuditLog.record(request.user, AuditLog.Action.STATUS, "Yuk", shipment.pk,
+                    f"{old_name} → {status.name}")
+    messages.success(request, "Holat yangilandi")
+    return redirect(request.POST.get("next") or "shipment_list")
 
 
 @role_required(User.Role.ADMIN)

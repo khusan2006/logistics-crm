@@ -40,7 +40,19 @@
     <td>{{ s.contract.partner.name }}</td>
     <td>{{ s.contract.brand }}</td>
     <td>{{ s.kg }}</td>
-    <td><span class="badge badge-neutral">{{ s.status.name }}</span></td>
+    <td>
+      <form method="post" action="{% url 'shipment_set_status' s.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <select name="status" onchange="this.form.submit()">
+          {% for st in statuses %}
+            {% if not st.is_arrival or user.is_admin_role %}
+            <option value="{{ st.pk }}" {% if st.pk == s.status_id %}selected{% endif %}>{{ st.name }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </form>
+    </td>
     <td>{{ s.transport|default:"—" }} / {{ s.container|default:"—" }}</td>
     <td>{{ s.sent|default:"—" }}</td>
     <td>
