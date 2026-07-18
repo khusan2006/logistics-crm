@@ -1,0 +1,1145 @@
+{% load static crm_extras %}
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}GranulaLog{% endblock %}</title>
+  <script>
+    // Apply saved theme before first paint to avoid a flash
+    (function () {
+      try {
+        if (localStorage.getItem('theme') === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="{% static_v 'css/app.css' %}">
+</head>
+<body>
+<div class="app-shell">
+{% if user.is_authenticated %}
+  {% with url_name=request.resolver_match.url_name|default:'' %}
+  <div class="nav-backdrop" data-nav-close hidden></div>
+  <aside class="sidebar" id="app-sidebar">
+    <div class="brand">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+      </span>
+      <span class="brand-text">GranulaLog</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-group">
+        <a class="nav-item {% if url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg></span>
+          <span>Asosiy</span>
+        </a>
+      </div>
+    </nav>
+  </aside>
+  {% endwith %}
+{% endif %}
+
+  <div class="main{% if not user.is_authenticated %} main--auth{% endif %}">
+    {% if user.is_authenticated %}
+    <header class="topbar">
+      <div class="topbar-left">
+        <button type="button" class="icon-btn nav-toggle" data-nav-open aria-label="Menyu" aria-controls="app-sidebar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <span class="topbar-title">{% block topbar_title %}GranulaLog{% endblock %}</span>
+      </div>
+      <div class="topbar-right">
+        <div class="user-chip">
+          <span class="avatar sm">{{ user.username|slice:":1"|upper }}</span>
+          <div class="meta">
+            <div class="name">{{ user }}</div>
+            <div class="role">{{ user.get_role_display }}</div>
+          </div>
+        </div>
+        <button type="button" class="icon-btn" id="theme-toggle" title="Mavzu">
+          <svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          <svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <form method="post" action="{% url 'logout' %}" class="inline-form">
+          {% csrf_token %}
+          <button type="submit" class="icon-btn" title="Chiqish">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
+        </form>
+      </div>
+    </header>
+    {% endif %}
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+    {% if user.is_authenticated %}<div class="fab-stack">{% block fab %}{% endblock %}</div>{% endif %}
+  </div>
+</div>
+
+{% if user.is_authenticated %}
+<dialog id="modal" class="modal">
+  <div id="modal-body" class="modal-body"></div>
+</dialog>
+<dialog id="zakaz-modal" class="modal modal--sm">
+  <div class="modal-body">
+    <div class="modal-head"><h2>Omborda yetarli emas</h2></div>
+    <div class="modal-confirm">
+      <p id="zakaz-msg" class="field-hint" style="margin:0 0 8px;"></p>
+      <p style="margin:0 0 14px;">Sotuvni <strong>zakaz</strong> sifatida saqlaymizmi? Ombor qoldig'i minusga o'tadi.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="zakaz-confirm-btn">Ha, zakaz sifatida saqlash</button>
+        <button type="button" class="btn btn-ghost" id="zakaz-cancel-btn">Bekor qilish</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+{% endif %}
+
+{% if messages %}
+<div class="toast-stack" id="toast-stack">
+  {% for message in messages %}
+  <div class="toast toast-{{ message.tags }}" role="status">
+    <span class="toast-msg">{{ message }}</span>
+    <button type="button" class="toast-close" aria-label="Yopish">&times;</button>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+  // Theme toggle (light default, dark saved in localStorage)
+  (function () {
+    var toggle = document.getElementById('theme-toggle');
+    if (!toggle) { return; }
+    toggle.addEventListener('click', function () {
+      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      var next = isDark ? 'light' : 'dark';
+      if (next === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      try { localStorage.setItem('theme', next); } catch (e) {}
+    });
+  })();
+
+  (function () {
+    var stack = document.getElementById('toast-stack');
+    if (stack) {
+      var dismiss = function (t) {
+        t.classList.add('hide');
+        setTimeout(function () { t.remove(); }, 260);
+      };
+      Array.prototype.forEach.call(stack.querySelectorAll('.toast'), function (t) {
+        var btn = t.querySelector('.toast-close');
+        if (btn) { btn.addEventListener('click', function () { dismiss(t); }); }
+        setTimeout(function () { dismiss(t); }, 4500);
+      });
+    }
+  })();
+
+  // Modal forms: [data-modal] opens the linked create/edit form in a dialog,
+  // submits it via fetch, shows inline errors, and redirects on success.
+  (function () {
+    var dlg = document.getElementById('modal');
+    if (!dlg) { return; }
+    var body = document.getElementById('modal-body');
+
+    function bindForm(form) {
+      if (!form) { return; }
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var submit = form.querySelector('button[type=submit]');
+        if (submit) { submit.disabled = true; }
+        fetch(form.getAttribute('action') || window.location.href, {
+          method: 'POST',
+          body: new FormData(form),
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        }).then(function (r) {
+          if (r.status === 204) {
+            window.location = r.headers.get('X-Redirect') || window.location.href;
+            return null;
+          }
+          if (r.headers.get('X-Zakaz-Confirm')) {
+            if (submit) { submit.disabled = false; }
+            return r.json().then(function (d) { showZakazConfirm(form, d.message); return null; });
+          }
+          return r.text();
+        }).then(function (html) {
+          if (html === null || html === undefined) { return; }
+          body.innerHTML = html;
+          bindForm(body.querySelector('form'));
+        }).catch(function () {
+          if (submit) { submit.disabled = false; }
+        });
+      });
+    }
+
+    // Oversell confirm: a small popup on top of the sale modal. Confirming adds
+    // allow_zakaz to the (still-intact) sale form and resubmits it as a zakaz.
+    var zdlg = document.getElementById('zakaz-modal');
+    var zakazForm = null;
+    function showZakazConfirm(form, message) {
+      zakazForm = form;
+      var msgEl = document.getElementById('zakaz-msg');
+      if (msgEl) { msgEl.textContent = message || ''; }
+      if (zdlg && !zdlg.open) { zdlg.showModal(); }
+    }
+    if (zdlg) {
+      document.getElementById('zakaz-confirm-btn').addEventListener('click', function () {
+        if (!zakazForm) { zdlg.close(); return; }
+        var inp = zakazForm.querySelector('input[name="allow_zakaz"]');
+        if (!inp) {
+          inp = document.createElement('input');
+          inp.type = 'hidden'; inp.name = 'allow_zakaz'; inp.value = '1';
+          zakazForm.appendChild(inp);
+        }
+        zdlg.close();
+        if (zakazForm.requestSubmit) { zakazForm.requestSubmit(); } else { zakazForm.submit(); }
+      });
+      document.getElementById('zakaz-cancel-btn').addEventListener('click', function () { zdlg.close(); });
+      zdlg.addEventListener('click', function (e) { if (e.target === zdlg) { zdlg.close(); } });
+    }
+
+    function openModal(url) {
+      fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        .then(function (r) { return r.text(); })
+        .then(function (html) {
+          body.innerHTML = html;
+          if (!dlg.open) { dlg.showModal(); }
+          bindForm(body.querySelector('form'));
+          document.dispatchEvent(new CustomEvent('modal:loaded', { detail: body }));
+        });
+    }
+
+    document.addEventListener('click', function (e) {
+      var opener = e.target.closest('[data-modal]');
+      if (opener) {
+        e.preventDefault();
+        openModal(opener.getAttribute('href'));
+        return;
+      }
+      if (e.target.closest('[data-modal-close]')) {
+        e.preventDefault();
+        dlg.close();
+      }
+    });
+
+    // Light-dismiss: close only when the press BOTH started and ended on the
+    // backdrop. A drag that begins on an inner input and releases over the
+    // backdrop still synthesizes a click targeted at <dialog>, so gating on the
+    // pointerdown target prevents the modal from closing mid-drag.
+    var pressStartedOnBackdrop = false;
+    dlg.addEventListener('pointerdown', function (e) { pressStartedOnBackdrop = (e.target === dlg); });
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg && pressStartedOnBackdrop) { dlg.close(); }
+    });
+    dlg.addEventListener('close', function () { body.innerHTML = ''; });
+  })();
+
+  // Quick-add customer from inside the sale form (no leaving the form)
+  (function () {
+    function quickAdd(saveBtn) {
+      var container = saveBtn.closest('.qa-container');
+      var panel = saveBtn.closest('.quick-add-panel');
+      var toggle = container.querySelector('.quick-add-toggle');
+      var select = document.getElementById(toggle.getAttribute('data-target'));
+      var nameEl = panel.querySelector('.qa-name');
+      var phoneEl = panel.querySelector('.qa-phone');
+      var errEl = panel.querySelector('.qa-error');
+      var name = nameEl.value.trim();
+      errEl.textContent = '';
+      if (!name) { errEl.textContent = 'Ism kiriting'; nameEl.focus(); return; }
+      // A duplicate warning only counts for the exact name it was shown for
+      if (saveBtn.dataset.dupName !== name) { saveBtn.dataset.dupOk = ''; }
+      var form = saveBtn.closest('form');
+      var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      saveBtn.disabled = true;
+      fetch(toggle.getAttribute('data-quick-url'), {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ name: name, phone: window.canonicalPhone ? window.canonicalPhone(phoneEl) : phoneEl.value.trim(), csrfmiddlewaretoken: token, allow_duplicate: saveBtn.dataset.dupOk || '' }),
+      }).then(function (r) {
+        return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+      }).then(function (res) {
+        saveBtn.disabled = false;
+        if (!res.ok) {
+          if (res.data.duplicate) {
+            saveBtn.dataset.dupOk = '1';
+            saveBtn.dataset.dupName = name;
+            errEl.textContent = (res.data.error || 'Bu nomli mijoz bor') + " — baribir qo'shish uchun yana bosing.";
+          } else {
+            errEl.textContent = res.data.error || 'Xatolik';
+          }
+          return;
+        }
+        saveBtn.dataset.dupOk = '';
+        select.add(new Option(res.data.text, res.data.id, true, true));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        panel.hidden = true;
+        nameEl.value = '';
+        phoneEl.value = '';
+        phoneEl.dispatchEvent(new Event('input', { bubbles: true }));  // re-seed "+998 "
+      }).catch(function () { saveBtn.disabled = false; errEl.textContent = 'Xatolik'; });
+    }
+
+    document.addEventListener('click', function (e) {
+      var toggle = e.target.closest('.quick-add-toggle');
+      if (toggle) {
+        e.preventDefault();
+        var panel = toggle.closest('.qa-container').querySelector('.quick-add-panel');
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) { var n = panel.querySelector('.qa-name'); if (n) { n.focus(); } }
+        return;
+      }
+      var save = e.target.closest('.qa-save');
+      if (save) { e.preventDefault(); quickAdd(save); }
+    });
+  })();
+
+  // Quick-add product from inside the receipt form (no leaving the form)
+  (function () {
+    function quickAddProduct(saveBtn) {
+      var container = saveBtn.closest('.qap-container');
+      var toggle = container.querySelector('.qap-toggle');
+      var select = document.getElementById(toggle.getAttribute('data-target'));
+      var panel = saveBtn.closest('.qap-panel');
+      var nameEl = panel.querySelector('.qap-name');
+      var priceEl = panel.querySelector('.qap-price');
+      var costEl = panel.querySelector('.qap-cost');
+      var errEl = panel.querySelector('.qap-error');
+      var name = nameEl.value.trim();
+      errEl.textContent = '';
+      if (!name) { errEl.textContent = 'Nom kiriting'; nameEl.focus(); return; }
+      if (saveBtn.dataset.dupName !== name) { saveBtn.dataset.dupOk = ''; }
+      var form = saveBtn.closest('form');
+      var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
+      saveBtn.disabled = true;
+      fetch(toggle.getAttribute('data-quick-url'), {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ name: name, price: priceEl.value.trim(), cost_price: costEl.value.trim(), csrfmiddlewaretoken: token, allow_duplicate: saveBtn.dataset.dupOk || '' }),
+      }).then(function (r) {
+        return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+      }).then(function (res) {
+        saveBtn.disabled = false;
+        if (!res.ok) {
+          if (res.data.duplicate) {
+            saveBtn.dataset.dupOk = '1';
+            saveBtn.dataset.dupName = name;
+            errEl.textContent = (res.data.error || 'Bu nomli mahsulot bor') + " — baribir qo'shish uchun yana bosing.";
+          } else {
+            errEl.textContent = res.data.error || 'Xatolik';
+          }
+          return;
+        }
+        saveBtn.dataset.dupOk = '';
+        select.add(new Option(res.data.text, res.data.id, true, true));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        panel.hidden = true;
+        nameEl.value = ''; priceEl.value = ''; costEl.value = '';
+      }).catch(function () { saveBtn.disabled = false; errEl.textContent = 'Xatolik'; });
+    }
+
+    document.addEventListener('click', function (e) {
+      var toggle = e.target.closest('.qap-toggle');
+      if (toggle) {
+        e.preventDefault();
+        var panel = toggle.closest('.qap-container').querySelector('.qap-panel');
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) { var n = panel.querySelector('.qap-name'); if (n) { n.focus(); } }
+        return;
+      }
+      var save = e.target.closest('.qap-save');
+      if (save) { e.preventDefault(); quickAddProduct(save); }
+    });
+  })();
+
+  // Sale item formset: add / remove product line rows inside the sale form
+  (function () {
+    document.addEventListener('click', function (e) {
+      var add = e.target.closest('.item-add');
+      if (add) {
+        e.preventDefault();
+        var block = add.closest('.items-block');
+        var rows = block.querySelector('.item-rows');
+        var tpl = block.querySelector('.item-empty-tpl');
+        var total = block.querySelector('[name$="-TOTAL_FORMS"]');
+        var idx = parseInt(total.value, 10);
+        var wrap = document.createElement('div');
+        wrap.innerHTML = tpl.innerHTML.replace(/__prefix__/g, idx).trim();
+        var added = wrap.firstElementChild;
+        rows.appendChild(added);
+        total.value = idx + 1;
+        if (window.enhanceComboboxes) { window.enhanceComboboxes(added); }
+        if (window.enhanceMoneyInputs) { window.enhanceMoneyInputs(added); }
+        return;
+      }
+      var rm = e.target.closest('.item-remove');
+      if (rm) {
+        e.preventDefault();
+        var row = rm.closest('.item-row');
+        var container = row.parentElement;
+        var visible = Array.prototype.filter.call(
+          container.querySelectorAll('.item-row'),
+          function (r) { return r.style.display !== 'none'; }
+        );
+        if (visible.length <= 1) { return; }  // always keep at least one line
+        var del = row.querySelector('input[type=checkbox][name$="-DELETE"]');
+        if (del) { del.checked = true; row.style.display = 'none'; }
+        else { row.remove(); }
+      }
+    });
+  })();
+
+  // Sale form: auto-fill price & cost from the selected product (per unit)
+  (function () {
+    function priceMap() {
+      var el = document.getElementById('product-price-map');
+      if (!el) { return {}; }
+      try { return JSON.parse(el.textContent); } catch (e) { return {}; }
+    }
+    function fillRow(row) {
+      if (!row) { return; }
+      var prod = row.querySelector('select[name$="-product"]');
+      if (!prod || !prod.value) { return; }
+      var info = priceMap()[prod.value];
+      if (!info) { return; }
+      var dim = row.querySelector('[name$="-dimension"]');
+      var factor = (dim && dim.value === 'g') ? 1000 : 1;
+      var conv = function (v) { return (Math.round((parseFloat(v) / factor) * 1000) / 1000).toString(); };
+      var priceEl = row.querySelector('[name$="-price"]');
+      var costEl = row.querySelector('[name$="-cost_price"]');
+      // Dispatch input so the money formatter re-groups the auto-filled figure.
+      var setVal = function (el, v) {
+        if (!el) { return; }
+        el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      setVal(priceEl, conv(info.price));
+      setVal(costEl, conv(info.cost));
+    }
+    document.addEventListener('change', function (e) {
+      var prod = e.target.closest('select[name$="-product"]');
+      if (prod) { fillRow(prod.closest('.item-row')); return; }
+      var dim = e.target.closest('select[name$="-dimension"]');
+      if (dim) { fillRow(dim.closest('.item-row')); }
+    });
+  })();
+
+  // Custom dark range calendar for the sales date control (compact ‹ date › bar)
+  (function () {
+    var root = document.querySelector('.daterange');
+    if (!root) { return; }
+    var trigger = root.querySelector('.daterange-trigger');
+    var pop = root.querySelector('.daterange-pop');
+    if (!trigger || !pop) { return; }
+
+    var MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+    var WD = ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sha', 'Ya'];
+    var todayIso = root.getAttribute('data-today') || '';
+
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+    function parseIso(s) {
+      var p = (s || '').split('-');
+      return p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]) : null;
+    }
+    function fmt(s) { var d = parseIso(s); return d ? d.getDate() + '-' + MONTHS[d.getMonth()] : ''; }
+    // ISO ⇄ hand-typed dd.mm.yyyy, for the manually editable Dan/Gacha fields.
+    function disp(s) { var d = parseIso(s); return d ? pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() : ''; }
+    function fromDisp(s) {
+      var m = (s || '').trim().match(/^(\d{1,2})[.,\/\-](\d{1,2})[.,\/\-](\d{4})$/);
+      if (!m) { return ''; }
+      var dd = +m[1], mm = +m[2], yy = +m[3];
+      var d = new Date(yy, mm - 1, dd);
+      // reject impossible dates (e.g. 31.02.2026 rolls over to March)
+      if (d.getFullYear() !== yy || d.getMonth() !== mm - 1 || d.getDate() !== dd) { return ''; }
+      return iso(d);
+    }
+    function selLabel() {
+      if (!selStart) { return 'Sana tanlang'; }
+      if (!selEnd || selEnd === selStart) { return fmt(selStart); }
+      return fmt(selStart) + ' – ' + fmt(selEnd);
+    }
+
+    var selStart = root.getAttribute('data-from') || todayIso;
+    var selEnd = root.getAttribute('data-to') || selStart;
+    var view = parseIso(selStart) || new Date();
+    view = new Date(view.getFullYear(), view.getMonth(), 1);
+
+    var CHEV_L = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+    var CHEV_R = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+
+    function daysHtml() {
+      var y = view.getFullYear(), m = view.getMonth();
+      var firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-first
+      var days = new Date(y, m + 1, 0).getDate();
+      var hasRange = selStart && selEnd && selEnd !== selStart;
+      var h = '';
+      for (var i = 0; i < firstWeekday; i++) { h += '<span></span>'; }
+      for (var d = 1; d <= days; d++) {
+        var ds = y + '-' + pad(m + 1) + '-' + pad(d);
+        var cls = 'cal-day';
+        if (hasRange && ds === selStart) { cls += ' is-sel is-start'; }
+        else if (hasRange && ds === selEnd) { cls += ' is-sel is-end'; }
+        else if (hasRange && ds > selStart && ds < selEnd) { cls += ' is-range'; }
+        else if (!hasRange && ds === selStart) { cls += ' is-sel'; }
+        if (ds === todayIso) { cls += ' is-today'; }
+        h += '<button type="button" class="' + cls + '" data-day="' + ds + '">' + d + '</button>';
+      }
+      return h;
+    }
+
+    function render() {
+      var h = '<div class="cal-top">'
+        + '<button type="button" class="cal-nav" data-nav="-1" aria-label="Oldingi oy">' + CHEV_L + '</button>'
+        + '<span class="cal-title">' + MONTHS[view.getMonth()] + ' ' + view.getFullYear() + '</span>'
+        + '<button type="button" class="cal-nav" data-nav="1" aria-label="Keyingi oy">' + CHEV_R + '</button>'
+        + '</div><div class="cal-inputs">'
+        + '<label class="cal-in-field">Dan<input type="text" inputmode="numeric" autocomplete="off" placeholder="kk.oo.yyyy" maxlength="10" class="cal-in" data-input="from" value="' + disp(selStart) + '"></label>'
+        + '<label class="cal-in-field">Gacha<input type="text" inputmode="numeric" autocomplete="off" placeholder="kk.oo.yyyy" maxlength="10" class="cal-in" data-input="to" value="' + disp(selEnd || selStart) + '"></label>'
+        + '</div><div class="cal-wd">';
+      for (var w = 0; w < 7; w++) { h += '<span>' + WD[w] + '</span>'; }
+      h += '</div><div class="cal-days">' + daysHtml() + '</div><div class="cal-foot">'
+        + '<button type="button" class="cal-preset" data-preset="today">Bugun</button>'
+        + '<button type="button" class="cal-preset" data-preset="7">7 kun</button>'
+        + '<button type="button" class="cal-preset" data-preset="30">30 kun</button>'
+        + '<button type="button" class="cal-preset" data-preset="month">Bu oy</button>'
+        + '</div><div class="cal-actions">'
+        + '<button type="button" class="btn btn-sm" data-apply>Tanlash</button>'
+        + '</div>';
+      pop.innerHTML = h;
+    }
+
+    // Repaint only the month title + day grid, leaving the Dan/Gacha inputs in the
+    // DOM. A full render() rebuilds those inputs, which fights the user mid-edit
+    // (a cleared field instantly refills, the native picker re-opens).
+    function paintGrid() {
+      var title = pop.querySelector('.cal-title');
+      var grid = pop.querySelector('.cal-days');
+      if (title) { title.textContent = MONTHS[view.getMonth()] + ' ' + view.getFullYear(); }
+      if (grid) { grid.innerHTML = daysHtml(); }
+    }
+
+    // Push the current selection back into the inputs (after a day click).
+    function syncInputs() {
+      var fromEl = pop.querySelector('[data-input="from"]');
+      var toEl = pop.querySelector('[data-input="to"]');
+      if (fromEl) { fromEl.value = disp(selStart); }
+      if (toEl) { toEl.value = disp(selEnd || selStart); }
+    }
+
+    function openPop() {
+      render();
+      pop.classList.remove('is-up');
+      pop.hidden = false;
+      root.classList.add('is-open');
+      trigger.setAttribute('aria-expanded', 'true');
+      if (pop.getBoundingClientRect().bottom > window.innerHeight - 8) { pop.classList.add('is-up'); }
+    }
+    function closePop() { pop.hidden = true; root.classList.remove('is-open'); trigger.setAttribute('aria-expanded', 'false'); }
+
+    function apply(from, to) {
+      if (!from) { return; }
+      if (!to) { to = from; }
+      if (to < from) { var t = from; from = to; to = t; }
+      var u = new URL(window.location.href);
+      u.searchParams.set('dan', from);
+      u.searchParams.set('gacha', to);
+      u.searchParams.delete('page');
+      window.location.assign(u.toString());
+    }
+
+    function applyPreset(kind) {
+      var t = parseIso(todayIso) || new Date();
+      if (kind === 'today') { apply(todayIso, todayIso); return; }
+      if (kind === 'month') { apply(iso(new Date(t.getFullYear(), t.getMonth(), 1)), todayIso); return; }
+      var n = parseInt(kind, 10);
+      var s = new Date(t); s.setDate(s.getDate() - (n - 1));
+      apply(iso(s), todayIso);
+    }
+
+    trigger.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (pop.hidden) { openPop(); } else { closePop(); }
+    });
+
+    pop.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nav = e.target.closest('[data-nav]');
+      if (nav) { view.setMonth(view.getMonth() + parseInt(nav.getAttribute('data-nav'), 10)); paintGrid(); return; }
+      var day = e.target.closest('[data-day]');
+      if (day) {
+        var v = day.getAttribute('data-day');
+        if (selEnd) { selStart = v; selEnd = null; }        // both set → start a fresh range
+        else if (v < selStart) { selEnd = selStart; selStart = v; } // picked earlier → swap
+        else { selEnd = v; }                                 // complete the range
+        syncInputs();
+        paintGrid();
+        return;
+      }
+      var preset = e.target.closest('[data-preset]');
+      if (preset) { applyPreset(preset.getAttribute('data-preset')); return; }
+      if (e.target.closest('[data-apply]')) { apply(selStart, selEnd || selStart); }
+    });
+
+    // Manual entry: typing (or picking) in the Dan/Gacha fields updates the range
+    function syncFromInputs(focusEl) {
+      var fromEl = pop.querySelector('[data-input="from"]');
+      var toEl = pop.querySelector('[data-input="to"]');
+      if (!fromEl || !toEl) { return; }
+      var f = fromDisp(fromEl.value);
+      var t = fromDisp(toEl.value);
+      if (f && t && t < f) { var s = f; f = t; t = s; }
+      selStart = f || t || todayIso;
+      selEnd = t || null;
+      var focus = parseIso(fromDisp((focusEl && focusEl.value) || '') || selStart);
+      if (focus) { view = new Date(focus.getFullYear(), focus.getMonth(), 1); }
+      paintGrid();
+    }
+    pop.addEventListener('change', function (e) {
+      var el = e.target.closest('[data-input]');
+      if (el) { syncFromInputs(el); }
+    });
+    pop.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') { return; }
+      var el = e.target.closest('[data-input]');
+      if (!el) { return; }
+      e.preventDefault();
+      var f = fromDisp(pop.querySelector('[data-input="from"]').value);
+      var t = fromDisp(pop.querySelector('[data-input="to"]').value) || f;
+      if (f) { apply(f, t); }
+    });
+
+    document.addEventListener('click', function () { if (!pop.hidden) { closePop(); } });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) { closePop(); } });
+  })();
+
+  // Debt payment: show the bank commission + net-to-till live when paying by transfer
+  (function () {
+    function money(n) {
+      return Math.round(n).toLocaleString('ru-RU').replace(/ /g, ' ');
+    }
+    // Money inputs may hold space-grouped text ("1 000 000"); parse the raw number.
+    function num(el) {
+      if (!el) { return 0; }
+      return parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')) || 0;
+    }
+    function recalc(root) {
+      var amountEl = root.querySelector('[name=amount]');
+      var methodEl = root.querySelector('[name=method]');
+      var pctEl = root.querySelector('[name=commission_percent]');
+      var currencyEl = root.querySelector('[name=currency]');
+      var rateEl = root.querySelector('[name=exchange_rate]');
+      if (!amountEl || !methodEl) { return; }
+      var entered = num(amountEl);
+      // Dollar payments convert to so'm at the hand-entered rate before anything else
+      var isUsd = currencyEl && currencyEl.value === 'usd';
+      var rate = num(rateEl);
+      Array.prototype.forEach.call(root.querySelectorAll('.usd-only'), function (el) {
+        el.hidden = !isUsd;
+      });
+      var amount = isUsd ? entered * rate : entered;
+      var usdOut = root.querySelector('[data-usd]');
+      if (usdOut) {
+        if (isUsd && entered > 0 && rate > 0) {
+          usdOut.hidden = false;
+          usdOut.innerHTML =
+            "<span>$" + entered + " × " + money(rate) + "</span><strong>" + money(amount) + " so'm</strong>";
+        } else { usdOut.hidden = true; usdOut.innerHTML = ''; }
+      }
+      var isTransfer = methodEl.value === 'transfer';
+      Array.prototype.forEach.call(root.querySelectorAll('.transfer-only'), function (el) {
+        el.hidden = !isTransfer;
+      });
+      var out = root.querySelector('[data-net]');
+      if (!out) { return; }
+      var pct = pctEl ? (parseFloat(pctEl.value) || 0) : 0;
+      if (!isTransfer || amount <= 0 || pct <= 0) { out.hidden = true; out.innerHTML = ''; return; }
+      var commission = amount * pct / 100;
+      var net = amount - commission;
+      out.hidden = false;
+      out.innerHTML =
+        "<span>Bank komissiyasi (" + pct + "%)</span><strong>−" + money(commission) + " so'm</strong>"
+        + "<span>Qo'lga tegadigan summa</span><strong>" + money(net) + " so'm</strong>";
+    }
+    function recalcAll() {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-debt-pay]'), recalc);
+    }
+    document.addEventListener('input', function (e) {
+      var root = e.target.closest('[data-debt-pay]'); if (root) { recalc(root); }
+    });
+    document.addEventListener('change', function (e) {
+      var root = e.target.closest('[data-debt-pay]'); if (root) { recalc(root); }
+    });
+    document.addEventListener('modal:loaded', recalcAll);
+    if (document.readyState !== 'loading') { recalcAll(); }
+    else { document.addEventListener('DOMContentLoaded', recalcAll); }
+  })();
+
+  // Live thousands-grouping on money inputs. Renders "1 000 000" as the user
+  // types (marked server-side with data-money); the raw numeric value is
+  // restored right before submit, so the server always gets a plain number.
+  (function () {
+    function toNumeric(value) {
+      var s = String(value).replace(/\s/g, '').replace(',', '.').replace(/[^\d.]/g, '');
+      var dot = s.indexOf('.');
+      if (dot !== -1) { s = s.slice(0, dot + 1) + s.slice(dot + 1).replace(/\./g, ''); }
+      return s;
+    }
+    function format(value) {
+      var s = toNumeric(value);
+      if (s === '' || s === '.') { return s; }
+      var dot = s.indexOf('.');
+      var intPart = dot === -1 ? s : s.slice(0, dot);
+      var dec = dot === -1 ? '' : s.slice(dot);
+      intPart = intPart.replace(/^0+(?=\d)/, '');
+      if (intPart === '') { intPart = '0'; }
+      return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + dec;
+    }
+    function digitsBefore(str, caret) {
+      var n = 0;
+      for (var i = 0; i < caret && i < str.length; i++) { if (str[i] >= '0' && str[i] <= '9') { n++; } }
+      return n;
+    }
+    function caretForDigits(str, count) {
+      if (count <= 0) {
+        for (var i = 0; i < str.length; i++) { if (str[i] >= '0' && str[i] <= '9') { return i; } }
+        return str.length;
+      }
+      var seen = 0;
+      for (var j = 0; j < str.length; j++) {
+        if (str[j] >= '0' && str[j] <= '9') { seen++; if (seen === count) { return j + 1; } }
+      }
+      return str.length;
+    }
+    function reformat(el) {
+      var caret = el.selectionStart;
+      var before = caret == null ? null : digitsBefore(el.value, caret);
+      el.value = format(el.value);
+      if (before != null) {
+        var pos = caretForDigits(el.value, before);
+        try { el.setSelectionRange(pos, pos); } catch (e) {}
+      }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('input[data-money]').forEach(function (el) {
+        if (el.dataset.moneyReady) { return; }
+        el.dataset.moneyReady = '1';
+        el.type = 'text';                       // number inputs can't show grouping
+        el.setAttribute('inputmode', 'decimal');
+        el.autocomplete = 'off';
+        if (el.value) { el.value = format(el.value); }
+      });
+    }
+    document.addEventListener('input', function (e) {
+      if (e.target.matches && e.target.matches('input[data-money]')) { reformat(e.target); }
+    });
+    // Restore the raw numeric value before submit. Capture phase runs before the
+    // modal's own submit handler builds its FormData, so the fetch sends clean data.
+    document.addEventListener('submit', function (e) {
+      if (!e.target.querySelectorAll) { return; }
+      e.target.querySelectorAll('input[data-money]').forEach(function (el) { el.value = toNumeric(el.value); });
+    }, true);
+    window.enhanceMoneyInputs = enhance;
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Phone inputs (data-phone): lock a "+998 " prefix and let the user type only
+  // the 9 national digits, auto-grouped as "90 123 45 67". A bare "+998" with no
+  // national digits is collapsed to empty on submit, so the field stays optional.
+  (function () {
+    var PREFIX = '+998 ';
+    function national(value) {
+      var digits = String(value).replace(/\D/g, '');
+      if (digits.indexOf('998') === 0) { digits = digits.slice(3); }  // drop country code
+      return digits.slice(0, 9);
+    }
+    function group(nat) {
+      var parts = [];
+      if (nat.length > 0) { parts.push(nat.slice(0, 2)); }
+      if (nat.length > 2) { parts.push(nat.slice(2, 5)); }
+      if (nat.length > 5) { parts.push(nat.slice(5, 7)); }
+      if (nat.length > 7) { parts.push(nat.slice(7, 9)); }
+      return parts.join(' ');
+    }
+    function display(value) { return PREFIX + group(national(value)); }
+    function canonical(value) {
+      var nat = national(value);
+      return nat ? PREFIX + group(nat) : '';   // no national digits → empty
+    }
+    // Caret help: count/restore by national-digit position (skip the 3 CC digits).
+    function natDigitsBefore(str, caret) {
+      var cc = 0, seen = 0;
+      for (var i = 0; i < caret && i < str.length; i++) {
+        if (str[i] >= '0' && str[i] <= '9') { if (cc < 3) { cc++; } else { seen++; } }
+      }
+      return seen;
+    }
+    function caretForNat(str, count) {
+      if (count <= 0) { return str.indexOf(PREFIX) === 0 ? PREFIX.length : str.length; }
+      var cc = 0, seen = 0;
+      for (var j = 0; j < str.length; j++) {
+        if (str[j] >= '0' && str[j] <= '9') {
+          if (cc < 3) { cc++; continue; }
+          seen++;
+          if (seen === count) { return j + 1; }
+        }
+      }
+      return str.length;
+    }
+    function reformat(el) {
+      var caret = el.selectionStart;
+      var before = caret == null ? null : natDigitsBefore(el.value, caret);
+      el.value = display(el.value);
+      if (before != null) {
+        var pos = caretForNat(el.value, before);
+        try { el.setSelectionRange(pos, pos); } catch (e) {}
+      }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('input[data-phone]').forEach(function (el) {
+        if (el.dataset.phoneReady) { return; }
+        el.dataset.phoneReady = '1';
+        el.type = 'tel';
+        el.setAttribute('inputmode', 'numeric');
+        el.autocomplete = 'off';
+        el.value = display(el.value);   // always show the locked "+998 " prefix
+      });
+    }
+    document.addEventListener('input', function (e) {
+      if (e.target.matches && e.target.matches('input[data-phone]')) { reformat(e.target); }
+    });
+    // Seed the prefix on focus and keep the caret out of the locked "+998 ".
+    document.addEventListener('focusin', function (e) {
+      var el = e.target;
+      if (!el.matches || !el.matches('input[data-phone]')) { return; }
+      if (!el.value) { el.value = PREFIX; }
+      setTimeout(function () {
+        if (el.selectionStart < PREFIX.length) {
+          try { el.setSelectionRange(PREFIX.length, Math.max(PREFIX.length, el.selectionEnd)); } catch (e2) {}
+        }
+      }, 0);
+    });
+    // An untouched "+998 " should submit as empty (phone is optional).
+    document.addEventListener('submit', function (e) {
+      if (!e.target.querySelectorAll) { return; }
+      e.target.querySelectorAll('input[data-phone]').forEach(function (el) { el.value = canonical(el.value); });
+    }, true);
+    window.enhancePhoneInputs = enhance;
+    window.canonicalPhone = function (el) { return canonical(el ? el.value : ''); };
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Password show/hide: wrap every password input with an eye button that
+  // toggles the value between hidden (•••) and visible plain text.
+  (function () {
+    var EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+    var EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
+    function enhance(root) {
+      (root || document).querySelectorAll('input[type=password]').forEach(function (el) {
+        if (el.dataset.pwReady) { return; }
+        el.dataset.pwReady = '1';
+        var wrap = document.createElement('div');
+        wrap.className = 'pw-field';
+        el.parentNode.insertBefore(wrap, el);
+        wrap.appendChild(el);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pw-toggle';
+        btn.setAttribute('aria-label', "Parolni ko'rsatish");
+        btn.innerHTML = EYE;
+        wrap.appendChild(btn);
+        btn.addEventListener('click', function () {
+          var show = el.type === 'password';
+          el.type = show ? 'text' : 'password';
+          btn.innerHTML = show ? EYE_OFF : EYE;
+          btn.setAttribute('aria-label', show ? 'Parolni yashirish' : "Parolni ko'rsatish");
+        });
+      });
+    }
+    window.enhancePasswordInputs = enhance;
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Debt deadline preview: as the user types the number of days, show the
+  // resulting return date under the input. The server stays authoritative
+  // (SaleForm.clean computes the same date); this is a live hint only.
+  (function () {
+    var MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+    var DEFAULT_DAYS = 7;  // mirrors DEFAULT_DEBT_DAYS in crm/forms.py
+    function parseIso(s) {
+      var p = (s || '').split('-');
+      return p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]) : null;
+    }
+    function update(daysEl) {
+      var form = daysEl.closest('form');
+      if (!form) { return; }
+      var out = form.querySelector('[data-deadline-preview]');
+      if (!out) { return; }
+      var dateEl = form.querySelector('input[name=date]');
+      var base = parseIso(dateEl && dateEl.value) || new Date();
+      var raw = daysEl.value.trim();
+      var days = raw === '' ? DEFAULT_DAYS : parseInt(raw, 10);
+      if (isNaN(days) || days < 0) { out.hidden = true; out.textContent = ''; return; }
+      var d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + days);
+      out.hidden = false;
+      out.textContent = '→ ' + d.getDate() + '-' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+    }
+    function daysElFor(target) {
+      var form = target.closest('form');
+      return form ? form.querySelector('[data-debt-days]') : null;
+    }
+    function onChange(e) {
+      if (!e.target.matches) { return; }
+      if (e.target.matches('[data-debt-days]')) { update(e.target); }
+      else if (e.target.matches('input[name=date]')) {
+        var el = daysElFor(e.target);   // the deadline shifts with the sale date
+        if (el) { update(el); }
+      }
+    }
+    function updateAll(root) {
+      (root || document).querySelectorAll('[data-debt-days]').forEach(update);
+    }
+    document.addEventListener('input', onChange);
+    document.addEventListener('change', onChange);
+    document.addEventListener('modal:loaded', function (e) { updateAll(e.detail || document); });
+    if (document.readyState !== 'loading') { updateAll(); }
+    else { document.addEventListener('DOMContentLoaded', function () { updateAll(); }); }
+  })();
+
+  // Off-canvas sidebar drawer (mobile): hamburger toggles it, backdrop/nav closes it
+  (function () {
+    var sidebar = document.getElementById('app-sidebar');
+    var backdrop = document.querySelector('.nav-backdrop');
+    if (!sidebar || !backdrop) { return; }
+    function openNav() {
+      sidebar.classList.add('open');
+      backdrop.hidden = false;
+    }
+    function closeNav() {
+      sidebar.classList.remove('open');
+      backdrop.hidden = true;
+    }
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('[data-nav-open]')) { e.preventDefault(); openNav(); return; }
+      if (e.target.closest('[data-nav-close]')) { closeNav(); return; }
+      // Tapping any nav link closes the drawer as we navigate away
+      if (e.target.closest('.sidebar .nav-item')) { closeNav(); }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && sidebar.classList.contains('open')) { closeNav(); }
+    });
+  })();
+
+  // Slide-in filter drawer (Sotuvlar page)
+  (function () {
+    var drawer = document.getElementById('filter-drawer');
+    if (!drawer) { return; }
+    var backdrop = document.querySelector('.drawer-backdrop');
+    function openDrawer() {
+      drawer.classList.add('open');
+      drawer.setAttribute('aria-hidden', 'false');
+      if (backdrop) { backdrop.hidden = false; }
+    }
+    function closeDrawer() {
+      drawer.classList.remove('open');
+      drawer.setAttribute('aria-hidden', 'true');
+      if (backdrop) { backdrop.hidden = true; }
+    }
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('[data-filter-open]')) { e.preventDefault(); openDrawer(); }
+      else if (e.target.closest('[data-filter-close]')) { e.preventDefault(); closeDrawer(); }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && drawer.classList.contains('open')) { closeDrawer(); }
+    });
+  })();
+
+  // Live search: forms marked [data-live-search] submit themselves ~350ms after
+  // the user stops typing, so the list filters without a button. Clearing the box
+  // submits an empty query (removing the filter). After the reload we restore focus
+  // to the search input so the user can keep typing seamlessly.
+  (function () {
+    var timers = new WeakMap();
+    document.addEventListener('input', function (e) {
+      var input = e.target;
+      if (!input.matches || !input.matches('[data-live-search] input[name=q]')) { return; }
+      var form = input.closest('form');
+      if (!form) { return; }
+      clearTimeout(timers.get(form));
+      timers.set(form, setTimeout(function () {
+        if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+      }, 350));
+    });
+    function restoreFocus() {
+      var input = document.querySelector('[data-live-search] input[name=q]');
+      if (input && input.value) {
+        input.focus();
+        var v = input.value; input.value = ''; input.value = v;  // caret to the end
+      }
+    }
+    if (document.readyState !== 'loading') { restoreFocus(); }
+    else { document.addEventListener('DOMContentLoaded', restoreFocus); }
+  })();
+
+  // Searchable combobox: progressively enhances <select data-combobox> into a
+  // type-to-filter input. The native <select> stays in the DOM (kept in sync)
+  // so the form submits normally and existing change-listeners keep working.
+  (function () {
+    function enhance(select) {
+      if (select.dataset.comboboxReady) { return; }
+      select.dataset.comboboxReady = '1';
+
+      var wrap = document.createElement('div');
+      wrap.className = 'combobox';
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'combobox-input';
+      input.autocomplete = 'off';
+      input.setAttribute('role', 'combobox');
+      input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-expanded', 'false');
+      input.placeholder = select.dataset.placeholder || '';
+      var pop = document.createElement('div');
+      pop.className = 'combobox-pop';
+      pop.setAttribute('role', 'listbox');
+      pop.hidden = true;
+
+      select.parentNode.insertBefore(wrap, select);
+      wrap.appendChild(select);
+      wrap.appendChild(input);
+      wrap.appendChild(pop);
+      select.classList.add('combobox-native');
+
+      var visible = [];
+      var active = -1;
+
+      function selectedText() {
+        var o = select.options[select.selectedIndex];
+        return o ? o.textContent.trim() : '';
+      }
+      function syncInput() { input.value = selectedText(); }
+
+      function build(filter) {
+        var tokens = (filter || '').toLowerCase().split(/\s+/).filter(Boolean);
+        pop.innerHTML = '';
+        visible = [];
+        Array.prototype.forEach.call(select.options, function (opt, i) {
+          var text = opt.textContent.trim();
+          // Never list the invisible placeholder row (empty value + empty label);
+          // a labelled empty choice like the filters' "Barchasi" still shows.
+          if (!opt.value && !text) { return; }
+          // Match against the option's data-search haystack (name + phone +
+          // address, set server-side) when present; else the visible text.
+          var haystack = (opt.dataset.search || text).toLowerCase();
+          // Every typed word must appear, so "Ali Chilonzor" (name + address)
+          // narrows. A word matches literally, or — for phone input — by its
+          // digits alone, so "+99877" (mixing "+" and the number's spaces) still
+          // finds the digits-only copy of "+998 77 777 77 77" in the haystack.
+          if (!tokens.every(function (t) {
+            if (haystack.indexOf(t) !== -1) { return true; }
+            var d = t.replace(/\D/g, '');
+            return d && haystack.indexOf(d) !== -1;
+          })) { return; }
+          var item = document.createElement('div');
+          item.className = 'combobox-option';
+          item.setAttribute('role', 'option');
+          item.dataset.index = i;
+          // Two-line result (name + muted phone · address) when the option carries
+          // a subtitle; otherwise a plain single-line option as before.
+          if (opt.dataset.subtitle) {
+            var main = document.createElement('span');
+            main.className = 'combobox-main';
+            main.textContent = text;
+            var sub = document.createElement('span');
+            sub.className = 'combobox-sub';
+            sub.textContent = opt.dataset.subtitle;
+            item.appendChild(main);
+            item.appendChild(sub);
+          } else {
+            item.textContent = text;
+          }
+          if (i === select.selectedIndex) { item.setAttribute('aria-selected', 'true'); }
+          pop.appendChild(item);
+          visible.push(item);
+        });
+        if (!visible.length) {
+          var empty = document.createElement('div');
+          empty.className = 'combobox-empty';
+          empty.textContent = 'Topilmadi';
+          pop.appendChild(empty);
+        }
+        active = -1;
+      }
+
+      function open() {
+        build('');                 // rebuild from the live <select> each open
+        pop.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        input.select();
+      }
+      function close() {
+        pop.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+        syncInput();               // discard any half-typed text
+      }
+      function choose(i) {
+        select.selectedIndex = i;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        close();
+      }
+      function setActive(n) {
+        if (!visible.length) { return; }
+        active = (n + visible.length) % visible.length;
+        visible.forEach(function (el, i) { el.classList.toggle('is-active', i === active); });
+        visible[active].scrollIntoView({ block: 'nearest' });
+      }
+
+      input.addEventListener('focus', function () { if (pop.hidden) { open(); } });
+      input.addEventListener('click', function () { if (pop.hidden) { open(); } });
+      input.addEventListener('input', function () {
+        pop.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        build(input.value);
+      });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); if (pop.hidden) { open(); } setActive(active + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(active - 1); }
+        else if (e.key === 'Enter') {
+          if (!pop.hidden && active >= 0) { e.preventDefault(); choose(parseInt(visible[active].dataset.index, 10)); }
+        } else if (e.key === 'Escape') { if (!pop.hidden) { e.preventDefault(); close(); } }
+      });
+      input.addEventListener('blur', function () { setTimeout(close, 120); });
+      pop.addEventListener('mousedown', function (e) {
+        var opt = e.target.closest('.combobox-option');
+        if (opt) { e.preventDefault(); choose(parseInt(opt.dataset.index, 10)); }
+      });
+      select.addEventListener('change', syncInput);
+
+      syncInput();
+    }
+
+    function enhanceComboboxes(root) {
+      (root || document).querySelectorAll('select[data-combobox]').forEach(enhance);
+    }
+    window.enhanceComboboxes = enhanceComboboxes;
+
+    if (document.readyState !== 'loading') { enhanceComboboxes(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhanceComboboxes(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhanceComboboxes(e.detail || document); });
+  })();
+</script>
+</body>
+</html>

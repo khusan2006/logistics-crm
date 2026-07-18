@@ -1,0 +1,7 @@
+# Test / development dependencies (install: pip install -r requirements-dev.txt).
+# The E2E suite drives a real browser via Playwright — after installing, run once:
+#   python -m playwright install chromium
+-r requirements.txt
+pytest==9.1.1
+pytest-django==4.12.0
+pytest-playwright==0.8.0

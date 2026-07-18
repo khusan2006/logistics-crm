@@ -1,8 +1,12 @@
 .superpowers/
-__pycache__/
-*.pyc
 .venv/
 venv/
-test_db.sqlite3
-staticfiles/
+__pycache__/
+*.pyc
 .env
+db.sqlite3
+test_db.sqlite3
+.DS_Store
+staticfiles/
+.pytest_cache/
+test-results/
