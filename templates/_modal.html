@@ -5,6 +5,7 @@
 <form method="post" action="{{ request.path }}" class="stacked">
   {% csrf_token %}
   {{ form.as_p }}
+  {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
   <div class="modal-actions">
     <button type="submit" class="btn">Saqlash</button>
     <button type="button" class="btn btn-ghost" data-modal-close>Bekor qilish</button>

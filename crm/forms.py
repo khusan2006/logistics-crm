@@ -3,7 +3,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from django import forms
 
 from .models import (
-    Contract, Currency, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
+    Contract, Currency, Customer, CustomerPayment, Partner, Sale, Shipment, ShipmentExpense, ShipmentStatus,
+    SupplierPayment,
 )
 
 
@@ -175,6 +176,22 @@ class SaleForm(forms.ModelForm):
             if kg > available:
                 self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
         return cleaned
+
+
+class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
+    class Meta:
+        model = CustomerPayment
+        fields = ["customer", "date", "currency", "amount", "exchange_rate", "method", "note"]
+        widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        obj.amount = self.cleaned_data["amount"]
+        obj.amount_original = self.cleaned_data["amount_original"]
+        obj.exchange_rate = self.cleaned_data["exchange_rate"]
+        if commit:
+            obj.save()
+        return obj
 
 
 class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):

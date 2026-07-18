@@ -48,4 +48,8 @@ urlpatterns = [
     path("sales/<int:pk>/edit/", crm_views.sale_edit, name="sale_edit"),
     path("sales/<int:pk>/delete/", crm_views.sale_delete, name="sale_delete"),
     path("sales/<int:pk>/", crm_views.sale_detail, name="sale_detail"),
+    path("customer-payments/", crm_views.customer_payment_list, name="customer_payment_list"),
+    path("customer-payments/new/", crm_views.customer_payment_create, name="customer_payment_create"),
+    path("customer-payments/<int:pk>/edit/", crm_views.customer_payment_edit, name="customer_payment_edit"),
+    path("customer-payments/<int:pk>/delete/", crm_views.customer_payment_delete, name="customer_payment_delete"),
 ]

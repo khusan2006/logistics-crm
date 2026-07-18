@@ -1,0 +1,21 @@
+{% load crm_extras %}
+<div class="stacked" style="margin-top: 10px;">
+  <label class="muted" style="display:block; margin-bottom: 6px;">
+    Taqsimlash (ixtiyoriy) — bo'sh qoldirilsa, eng eski sotuvlarga avtomatik taqsimlanadi
+  </label>
+  <div class="table-wrap">
+    <table>
+      <tr><th>Sotuv</th><th>Sana</th><th>Qoldiq</th><th>Summa</th></tr>
+      {% for s in alloc_sales %}
+      <tr>
+        <td>#{{ s.pk }} · {{ s.kg }} kg</td>
+        <td>{{ s.date }}</td>
+        <td>{{ s.remaining|usd }}</td>
+        <td><input type="number" step="0.01" min="0" name="alloc_{{ s.pk }}" placeholder="0.00"></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="muted">Ushbu mijozning to'lanmagan sotuvlari yo'q.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>

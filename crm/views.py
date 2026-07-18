@@ -13,12 +13,12 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .forms import (
-    ContractForm, CustomerForm, PartnerForm, SaleForm, ShipmentExpenseForm, ShipmentExtendForm,
-    ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
+    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, SaleForm, ShipmentExpenseForm,
+    ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Customer, Partner, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus,
-    SupplierPayment,
+    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentDelay,
+    ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment, apply_customer_advance,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
 
@@ -321,6 +321,106 @@ def supplier_payment_delete(request, pk):
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="supplier_payment_list",
+    )
+
+
+def _parse_alloc_picks(post):
+    """Read manual allocation picks from POST fields named alloc_<sale_id>,
+    ignoring blanks and zeros."""
+    picks = []
+    for key, value in post.items():
+        if not key.startswith("alloc_"):
+            continue
+        value = (value or "").strip()
+        if not value:
+            continue
+        try:
+            sale_id = int(key[len("alloc_"):])
+            amount = Decimal(value)
+        except (ValueError, ArithmeticError):
+            continue
+        if amount > 0:
+            picks.append((sale_id, amount))
+    return picks
+
+
+@role_required(User.Role.ADMIN)
+def customer_payment_list(request):
+    payments = CustomerPayment.objects.select_related("customer")
+    customer_id = request.GET.get("customer")
+    if customer_id and customer_id.isdigit():
+        payments = payments.filter(customer_id=customer_id)
+    page = Paginator(payments, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/customer_payment_list.html", {"page": page})
+
+
+@role_required(User.Role.ADMIN)
+def customer_payment_create(request):
+    initial = {}
+    customer_id = request.GET.get("customer")
+    customer = None
+    if customer_id and customer_id.isdigit():
+        initial["customer"] = int(customer_id)
+        customer = Customer.objects.filter(pk=customer_id).first()
+    form = CustomerPaymentForm(request.POST or None, initial=initial)
+    alloc_sales = [s for s in customer.sales.all() if s.remaining > 0] if customer else None
+    if request.method == "POST":
+        if form.is_valid():
+            payment = form.save(commit=False)
+            payment.created_by = request.user
+            payment.save()
+            picks = _parse_alloc_picks(request.POST) if customer else None
+            allocate_customer_payment(payment, picks)
+            AuditLog.record(
+                request.user, AuditLog.Action.PAYMENT, "Mijoz to'lovi", payment.pk,
+                f"To'lov: {payment.amount}$ · mijoz {payment.customer.name}",
+            )
+            messages.success(request, "To'lov qo'shildi")
+            return form_success(request, reverse("customer_payment_list"))
+        return form_response(request, form, "Yangi to'lov", invalid=True,
+                             extra_context={"alloc_sales": alloc_sales})
+    return form_response(request, form, "Yangi to'lov", extra_context={"alloc_sales": alloc_sales})
+
+
+@role_required(User.Role.ADMIN)
+def customer_payment_edit(request, pk):
+    payment = get_object_or_404(CustomerPayment, pk=pk)
+    form = CustomerPaymentForm(request.POST or None, instance=payment)
+    title = "To'lovni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            payment = form.save()
+            payment.allocations.all().delete()
+            allocate_customer_payment(payment)
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Mijoz to'lovi", payment.pk,
+                f"To'lov tahrirlandi: {payment.amount}$ · mijoz {payment.customer.name}",
+            )
+            messages.success(request, "To'lov yangilandi")
+            return form_reload(request, reverse("customer_payment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def customer_payment_delete(request, pk):
+    payment = get_object_or_404(CustomerPayment, pk=pk)
+    if request.method == "POST":
+        amount, customer_name = payment.amount, payment.customer.name
+        payment.delete()  # CASCADE clears its allocations
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Mijoz to'lovi", pk,
+            f"To'lov o'chirildi: {amount}$ · mijoz {customer_name}",
+        )
+        messages.success(request, "To'lov o'chirildi")
+        return form_reload(request, reverse("customer_payment_list"))
+    return render_confirm(
+        request,
+        "To'lovni o'chirish",
+        f"“{payment.amount}$” to'lovi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="customer_payment_list",
     )
 
 
@@ -644,6 +744,7 @@ def sale_create(request):
                 request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
                 f"Yangi sotuv: {sale.kg} kg · {sale.customer.name}",
             )
+            apply_customer_advance(sale)  # a pre-existing advance auto-applies to the new sale
             messages.success(request, "Sotuv qo'shildi")
             return form_success(request, reverse("sale_list"))
         return form_response(request, form, "Yangi sotuv", invalid=True)

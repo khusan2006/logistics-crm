@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models import DecimalField, Sum
 from django.utils import timezone
 
@@ -372,6 +372,97 @@ class Sale(models.Model):
 
     def __str__(self):
         return f"Sotuv #{self.pk} · {self.customer} · {self.kg} kg"
+
+
+class CustomerPayment(models.Model):
+    """To'lov received from a customer. `amount` is always USD; a so'm payment is
+    converted at entry and keeps its original figure + rate. Not tied to one sale —
+    it auto-allocates (FIFO or manual pick) via `allocate_customer_payment`; any
+    leftover is the customer's advance (avans)."""
+
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
+                                 related_name="customer_payments", verbose_name="Mijoz")
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
+                                default=Currency.USD)
+    exchange_rate = models.DecimalField("Dollar kursi (1$ = so'm)", max_digits=12,
+                                        decimal_places=2, default=0, blank=True)
+    amount_original = models.DecimalField("Asl summa (valyutada)", max_digits=18,
+                                          decimal_places=2, default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.TRANSFER)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="customer_payments",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Mijoz to'lovi"
+        verbose_name_plural = "Mijoz to'lovlari"
+
+    def __str__(self):
+        return f"{self.customer_id} · {self.amount}$ ({self.date})"
+
+
+class PaymentAllocation(models.Model):
+    """One slice of a CustomerPayment applied to one Sale. A payment can spread
+    across many sales (FIFO or manual pick); a sale can be paid off by many
+    payments (including advances applied later)."""
+
+    payment = models.ForeignKey(CustomerPayment, on_delete=models.CASCADE,
+                                related_name="allocations", verbose_name="To'lov")
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE,
+                             related_name="allocations", verbose_name="Sotuv")
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "To'lov taqsimoti"
+        verbose_name_plural = "To'lov taqsimotlari"
+
+    def __str__(self):
+        return f"{self.payment_id} → sotuv #{self.sale_id}: {self.amount}$"
+
+
+def allocate_customer_payment(payment, picks=None):
+    """Allocate a payment across the customer's outstanding sales. `picks` is an
+    optional list of (sale_id, amount) chosen in the form; the rest (or all, if no
+    picks) auto-fills oldest-first. Leftover stays unallocated = advance."""
+    remaining = payment.amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))
+    with transaction.atomic():
+        if picks:
+            for sale_id, amt in picks:
+                sale = Sale.objects.get(pk=sale_id, customer=payment.customer)
+                amt = min(Decimal(amt), sale.remaining, remaining)
+                if amt > 0:
+                    PaymentAllocation.objects.create(payment=payment, sale=sale, amount=amt)
+                    remaining -= amt
+        # FIFO the leftover across still-outstanding sales
+        for sale in payment.customer.sales.order_by("date", "id"):
+            if remaining <= 0:
+                break
+            take = min(sale.remaining, remaining)
+            if take > 0:
+                PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
+                remaining -= take
+    return remaining  # the advance left over
+
+
+def apply_customer_advance(sale):
+    """Pull this customer's unallocated payment money (advance) onto a new sale,
+    oldest payment first, until the sale is covered or the advance runs out."""
+    with transaction.atomic():
+        for payment in sale.customer.customer_payments.order_by("date", "id"):
+            if sale.remaining <= 0:
+                break
+            unallocated = payment.amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))
+            take = min(unallocated, sale.remaining)
+            if take > 0:
+                PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
 
 
 class ShipmentExpense(models.Model):

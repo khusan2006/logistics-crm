@@ -6,6 +6,7 @@
   <form method="post" class="stacked">
     {% csrf_token %}
     {{ form.as_p }}
+    {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
     <button type="submit" class="btn">Saqlash</button>
   </form>
 </div>

@@ -30,6 +30,9 @@
       {% else %}—{% endif %}
     </td>
     <td class="row-actions">
+      <a class="icon-action" href="{% url 'customer_payment_create' %}?customer={{ c.pk }}" data-modal title="To'lov">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+      </a>
       <a class="icon-action act-edit" href="{% url 'customer_edit' c.pk %}" data-modal title="Tahrirlash">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </a>

@@ -65,7 +65,26 @@
 
 <div class="card">
   <h3 style="margin-top: 0;">To'lovlar</h3>
-  <p class="muted">Hali to'lov funksiyasi qo'shilmagan.</p>
+  {% if sale.allocations.all %}
+  <div class="table-wrap">
+    <table>
+      <tr><th>Sana</th><th>To'lov</th><th>Usul</th><th>Taqsimlangan summa</th></tr>
+      {% for a in sale.allocations.all %}
+      <tr>
+        <td>{{ a.payment.date }}</td>
+        <td><a href="{% url 'customer_payment_edit' a.payment_id %}" data-modal>#{{ a.payment_id }}</a></td>
+        <td>{{ a.payment.get_method_display }}</td>
+        <td>{{ a.amount|usd }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Hali to'lov qilinmagan.</p>
+  {% endif %}
+  <p style="margin-top: 12px;">
+    Qoldiq: <strong{% if sale.remaining > 0 %} class="late"{% endif %}>{{ sale.remaining|usd }}</strong>
+  </p>
 </div>
 
 {% endblock %}
