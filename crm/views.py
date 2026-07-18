@@ -1,7 +1,9 @@
+from decimal import Decimal
+
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.db.models import Max, ProtectedError, Q
+from django.db.models import Count, Max, ProtectedError, Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -22,7 +24,25 @@ from .utils import form_reload, form_response, form_success, render_confirm
 
 
 def dashboard(request):
-    return render(request, "crm/dashboard.html")
+    if not request.user.is_admin_role:
+        return redirect("shipment_list")
+    shipments = Shipment.objects.select_related("contract__partner", "status")
+    contracts = Contract.objects.select_related("partner")
+    total_kg = contracts.aggregate(s=Sum("kg"))["s"] or 0
+    shipped_kg = shipments.aggregate(s=Sum("kg"))["s"] or 0
+    arrived_kg = shipments.filter(arrived__isnull=False).aggregate(s=Sum("kg"))["s"] or 0
+    paid_total = SupplierPayment.objects.aggregate(s=Sum("amount"))["s"] or 0
+    debt_total = sum((c.debt for c in contracts), Decimal("0"))
+    overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
+               if s.is_overdue]
+    status_counts = (ShipmentStatus.objects
+                     .annotate(n=Count("shipments"))
+                     .filter(n__gt=0))
+    return render(request, "crm/dashboard.html", {
+        "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
+        "paid_total": paid_total, "debt_total": debt_total, "overdue": overdue,
+        "contracts": contracts[:8], "status_counts": status_counts,
+    })
 
 
 @role_required(User.Role.ADMIN)
