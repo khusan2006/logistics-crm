@@ -25,7 +25,7 @@ from .models import (
     Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment,
     allocate_customer_payment, apply_customer_advance, fifo_lots, trim_sale_allocations,
 )
-from .utils import form_reload, form_response, form_success, render_confirm
+from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
 
 def dashboard(request):
@@ -546,10 +546,12 @@ def status_move(request, pk):
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def shipment_list(request):
-    """Loads as table rows, with status tabs (in pipeline order) to switch the view.
-    Tabs filter client-side; each row carries its status + overdue flag."""
+    """ACTIVE loads (not yet arrived), grouped by kelishuv, with status tabs (in
+    pipeline order) to switch the view. Tabs filter client-side; each row carries
+    its status + overdue flag. Arrived loads live on the Yakunlangan page."""
     q = request.GET.get("q", "").strip()
-    shipments = (Shipment.objects.select_related("contract__partner", "status")
+    shipments = (Shipment.objects.filter(arrived__isnull=True)
+                 .select_related("contract__partner", "status")
                  .prefetch_related("delays", "legs", "expenses"))
     if q:
         shipments = shipments.filter(
@@ -564,12 +566,44 @@ def shipment_list(request):
         if s.is_overdue:
             overdue_count += 1
 
+    # Group the rows under their kelishuv (newest contract first, newest load first
+    # inside — same recency feel as the flat list had).
+    groups = []
+    by_contract = {}
+    for s in sorted(shipments, key=lambda s: -s.contract_id):
+        g = by_contract.get(s.contract_id)
+        if g is None:
+            g = by_contract[s.contract_id] = {"contract": s.contract, "shipments": []}
+            groups.append(g)
+        g["shipments"].append(s)
+    for g in groups:
+        g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
+
     statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
-    tabs = [{"status": st, "count": counts.get(st.pk, 0)} for st in statuses]
+    # No tab for the arrival status — reaching it moves the load to Yakunlangan.
+    tabs = [{"status": st, "count": counts.get(st.pk, 0)}
+            for st in statuses if not st.is_arrival]
+    done_count = Shipment.objects.filter(arrived__isnull=False).count()
     return render(request, "crm/shipment_list.html", {
-        "shipments": shipments, "statuses": statuses, "tabs": tabs,
-        "total": len(shipments), "overdue_count": overdue_count, "q": q,
+        "shipments": shipments, "groups": groups, "statuses": statuses, "tabs": tabs,
+        "total": len(shipments), "overdue_count": overdue_count,
+        "done_count": done_count, "q": q,
     })
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_done_list(request):
+    """Yakunlangan yuklar: loads that reached the ombor (arrived), newest first."""
+    q = request.GET.get("q", "").strip()
+    shipments = (Shipment.objects.filter(arrived__isnull=False)
+                 .select_related("contract__partner", "status")
+                 .order_by("-arrived", "-id"))
+    if q:
+        shipments = shipments.filter(
+            Q(transport__icontains=q) | Q(container__icontains=q)
+            | Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q))
+    page = Paginator(shipments, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/shipment_done_list.html", {"page": page, "q": q})
 
 
 @role_required(User.Role.ADMIN)
@@ -741,6 +775,10 @@ def shipment_set_status(request, pk):
     shipment.save(update_fields=["status", "arrived"])
     AuditLog.record(request.user, AuditLog.Action.STATUS, "Yuk", shipment.pk,
                     f"{old_name} → {status.name}")
+    if is_ajax(request):
+        # The list JS updates the row in place (or drops it, if the load just
+        # arrived and moved to Yakunlangan) — no page reload, never stale.
+        return JsonResponse({"status_id": status.pk, "arrived": shipment.arrived is not None})
     messages.success(request, "Holat yangilandi")
     return redirect(request.POST.get("next") or "shipment_list")
 

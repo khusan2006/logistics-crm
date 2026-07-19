@@ -1737,6 +1737,13 @@ ul.errorlist li::before { content: "⚠ "; }
 .qa-panel input { flex: 1 1 140px; min-width: 120px; }
 .qa-msg { flex-basis: 100%; font-size: 12px; }
 
+/* Kelishuv group header rows on the Yuklar table */
+.kelishuv-row > td { background: var(--table-head); padding: 8px 14px; border-top: 1px solid var(--border); }
+.kelishuv-title { font-weight: 700; margin-right: 10px; }
+.kelishuv-sub { color: var(--text-muted); margin-right: 10px; }
+.kelishuv-meta { font-size: 12px; }
+.status-tab--done { text-decoration: none; margin-left: auto; }
+
 /* Expandable route-legs row on the Yuklar table */
 .leg-expand { width: 24px; height: 24px; padding: 0; margin-right: 7px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent); font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transition: transform .15s ease, background .15s ease, color .15s ease; }
 .leg-expand:hover { background: var(--surface-hover); }

@@ -15,7 +15,7 @@
   </div>
 </form>
 
-{% if shipments %}
+{% if shipments or done_count %}
 <div class="status-tabs" role="tablist">
   {% for t in tabs %}
   <button type="button" class="status-tab" data-tab="{{ t.status.pk }}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
@@ -23,8 +23,11 @@
   {% if overdue_count %}
   <button type="button" class="status-tab status-tab--danger" data-tab="overdue">Kechikkan <span class="status-tab-count">{{ overdue_count }}</span></button>
   {% endif %}
+  <a class="status-tab status-tab--done" href="{% url 'shipment_done_list' %}" title="Omborga yetib kelgan yuklar">&#10003; Yakunlangan <span class="status-tab-count" data-done-count>{{ done_count }}</span></a>
 </div>
+{% endif %}
 
+{% if shipments %}
 <div class="table-wrap">
 <table class="loads-table">
   <tr>
@@ -32,19 +35,27 @@
     <th>Hamkor / Marka</th>
     <th>Yo'nalish</th>
     <th class="num">Kg</th>
-    {% if user.is_admin_role %}<th class="num">Narx</th>{% endif %}
+    {% if user.is_admin_role %}<th class="num">Narx (1 kg)</th>{% endif %}
     <th>Holat</th>
     <th>Transport / Konteyner</th>
     <th>Kelish</th>
     <th></th>
   </tr>
-  {% for s in shipments %}
+  {% for g in groups %}
+  <tr class="kelishuv-row" data-contract="{{ g.contract.pk }}">
+    <td colspan="9">
+      <span class="kelishuv-title">Kelishuv #{{ g.contract.pk }}</span>
+      <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand }}</span>
+      <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
+    </td>
+  </tr>
+  {% for s in g.shipments %}
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
+      data-contract="{{ g.contract.pk }}"
       class="load-row{% if s.is_overdue %} is-overdue{% endif %}">
     <td class="sticky-col">
       <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
-      <div class="muted load-sub">Kelishuv #{{ s.contract_id }}</div>
     </td>
     <td>
       <div class="load-partner">{{ s.contract.partner.name }}</div>
@@ -55,13 +66,18 @@
       <span class="route">{{ s.origin|default:"—" }} <span class="route-arrow">→</span> {{ s.destination|default:"—" }}</span>
       {% else %}<span class="muted">—</span>{% endif %}
     </td>
-    <td class="num">{{ s.kg }}</td>
-    {% if user.is_admin_role %}<td class="num">{{ s.goods_value|usd }}</td>{% endif %}
+    <td class="num">{{ s.kg|floatformat:"-3" }}</td>
+    {% if user.is_admin_role %}
+    <td class="num">
+      <div>{{ s.unit_price|floatformat:"-4" }} $/kg</div>
+      <div class="muted load-sub">{{ s.goods_value|usd }}</div>
+    </td>
+    {% endif %}
     <td>
       <form method="post" action="{% url 'shipment_set_status' s.pk %}" class="status-cell-form">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}">
-        <select name="status" class="status-select" onchange="this.form.submit()">
+        <select name="status" class="status-select">
           {% for st in statuses %}
             {% if not st.is_arrival or user.is_admin_role %}
             <option value="{{ st.pk }}" {% if st.pk == s.status_id %}selected{% endif %}>{{ st.name }}</option>
@@ -75,9 +91,8 @@
       <div class="muted load-sub">{{ s.container|default:"—" }}</div>
     </td>
     <td>
-      {% if s.arrived %}<span class="daybadge soon">Yetib kelgan</span>
-      {% elif s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
-      {% elif s.days_left is not None %}<span class="daybadge">{{ s.days_left }} kun qoldi</span>
+      {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
+      {% elif s.days_left is not None %}<span class="daybadge {% if s.days_left <= 7 %}today{% else %}soon{% endif %}">{{ s.days_left }} kun qoldi</span>
       {% else %}<span class="muted">—</span>{% endif %}
       {% if s.eta %}<div class="muted load-sub">{{ s.eta }}</div>{% endif %}
       {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}
@@ -99,7 +114,7 @@
       {% endif %}
     </td>
   </tr>
-  <tr class="legs-detail" data-load="{{ s.pk }}" data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}" hidden>
+  <tr class="legs-detail" data-load="{{ s.pk }}" data-contract="{{ g.contract.pk }}" hidden>
     <td colspan="9">
       <div class="legs-inline">
         <div class="legs-inline-head">
@@ -158,27 +173,29 @@
     </td>
   </tr>
   {% endfor %}
+  {% endfor %}
 </table>
 </div>
 <p class="muted loads-empty-filtered" hidden>Bu holatda yuk yo'q.</p>
 {% else %}
-<p class="muted">Yuklar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+<p class="muted">Faol yuklar yo'q{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
 
 <script>
 (function () {
-  var tabs = document.querySelectorAll('.status-tab');
-  var rows = document.querySelectorAll('.load-row');
-  var legRows = document.querySelectorAll('.legs-detail');
-  var expandBtns = document.querySelectorAll('.leg-expand');
+  var tabs = document.querySelectorAll('.status-tab[data-tab]');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
+  var activeTab = null;
+
+  function rows() { return document.querySelectorAll('.load-row'); }
+  function legRows() { return document.querySelectorAll('.legs-detail'); }
 
   function collapseAll() {
-    legRows.forEach(function (r) { r.hidden = true; });
-    expandBtns.forEach(function (b) { b.classList.remove('is-open'); });
+    legRows().forEach(function (r) { r.hidden = true; });
+    document.querySelectorAll('.leg-expand').forEach(function (b) { b.classList.remove('is-open'); });
   }
-  // Expand a load's inline route legs
-  expandBtns.forEach(function (b) {
+  // Expand a load's inline route legs + expenses
+  document.querySelectorAll('.leg-expand').forEach(function (b) {
     b.addEventListener('click', function () {
       var detail = document.querySelector('.legs-detail[data-load="' + b.getAttribute('data-load') + '"]');
       if (!detail) { return; }
@@ -188,29 +205,96 @@
     });
   });
 
-  if (!tabs.length) { return; }
-  function showAll() { rows.forEach(function (r) { r.hidden = false; }); collapseAll(); if (emptyMsg) { emptyMsg.hidden = true; } }
+  // A kelishuv header row shows only while at least one of its loads is visible.
+  function syncGroups() {
+    document.querySelectorAll('.kelishuv-row').forEach(function (h) {
+      var any = false;
+      document.querySelectorAll('.load-row[data-contract="' + h.getAttribute('data-contract') + '"]')
+        .forEach(function (r) { if (!r.hidden) { any = true; } });
+      h.hidden = !any;
+    });
+  }
+
+  function updateCounts() {
+    tabs.forEach(function (t) {
+      var tab = t.getAttribute('data-tab');
+      var n = 0;
+      rows().forEach(function (r) {
+        var ok = (tab === 'overdue') ? r.getAttribute('data-overdue') === '1'
+                                     : r.getAttribute('data-status') === tab;
+        if (ok) { n++; }
+      });
+      var chip = t.querySelector('.status-tab-count');
+      if (chip) { chip.textContent = n; }
+    });
+  }
+
+  function showAll() {
+    rows().forEach(function (r) { r.hidden = false; });
+    collapseAll(); syncGroups();
+    if (emptyMsg) { emptyMsg.hidden = true; }
+  }
   function filter(tab) {
     collapseAll();   // switching tabs collapses any open route panels
     var shown = 0;
-    rows.forEach(function (r) {
+    rows().forEach(function (r) {
       var ok = (tab === 'overdue') ? r.getAttribute('data-overdue') === '1'
                                    : r.getAttribute('data-status') === tab;
       r.hidden = !ok;
       if (ok) { shown++; }
     });
+    syncGroups();
     if (emptyMsg) { emptyMsg.hidden = shown !== 0; }
   }
+  function applyActive() { if (activeTab) { filter(activeTab); } else { showAll(); } }
+
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {
       if (t.classList.contains('is-active')) {   // clicking the active tab clears the filter
         t.classList.remove('is-active');
+        activeTab = null;
         showAll();
         return;
       }
       tabs.forEach(function (x) { x.classList.remove('is-active'); });
       t.classList.add('is-active');
-      filter(t.getAttribute('data-tab'));
+      activeTab = t.getAttribute('data-tab');
+      filter(activeTab);
+    });
+  });
+
+  // Status dropdown: save via fetch and update the row IN PLACE — no page
+  // reload, so what you see is always the saved state. If the load reached
+  // the arrival status it moves to Yakunlangan and its row is removed.
+  document.querySelectorAll('.status-select').forEach(function (sel) {
+    sel.dataset.prev = sel.value;
+    sel.addEventListener('change', function () {
+      var form = sel.closest('form');
+      var row = sel.closest('tr');
+      fetch(form.getAttribute('action'), {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      }).then(function (r) {
+        if (!r.ok) { throw new Error(); }
+        return r.json();
+      }).then(function (data) {
+        if (data.arrived) {           // moved to Yakunlangan — drop the row pair
+          var loadId = row.querySelector('.leg-expand').getAttribute('data-load');
+          var detail = document.querySelector('.legs-detail[data-load="' + loadId + '"]');
+          if (detail) { detail.remove(); }
+          row.remove();
+          var done = document.querySelector('[data-done-count]');
+          if (done) { done.textContent = parseInt(done.textContent || '0', 10) + 1; }
+        } else {
+          row.setAttribute('data-status', String(data.status_id));
+          sel.dataset.prev = sel.value;
+        }
+        updateCounts(); applyActive();
+      }).catch(function () {
+        sel.value = sel.dataset.prev;  // save failed — put the old status back
+        alert("Holatni saqlab bo'lmadi. Qayta urinib ko'ring.");
+      });
     });
   });
 })();

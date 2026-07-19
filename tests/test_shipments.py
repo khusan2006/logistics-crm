@@ -68,7 +68,9 @@ def test_status_tabs_have_per_status_counts(admin_client, db):
     assert resp.status_code == 200
     tabs = resp.context["tabs"]
     names = [t["status"].name for t in tabs]
-    assert names == list(ShipmentStatus.objects.values_list("name", flat=True))
+    # no tab for the arrival status — those loads live on the Yakunlangan page
+    assert names == list(ShipmentStatus.objects.filter(is_arrival=False)
+                         .values_list("name", flat=True))
     by_name = {t["status"].name: t["count"] for t in tabs}
     assert by_name["Yo'lda"] == 2 and by_name["Bojxona"] == 1
     assert resp.context["total"] == 3
@@ -203,3 +205,76 @@ def test_shipment_form_price_prefills_from_contract(db):
     from crm.forms import ShipmentForm
     _contract()
     assert "data-price" in str(ShipmentForm())
+
+
+def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db):
+    """Rows are grouped under kelishuv header rows, and the Narx column shows the
+    per-kg unit price."""
+    c = _contract()
+    Shipment.objects.create(contract=c, kg=Decimal("100"), price=Decimal("2.5"),
+                            status=ShipmentStatus.objects.first())
+    resp = admin_client.get("/shipments/")
+    html = resp.content.decode()
+    assert f'class="kelishuv-row" data-contract="{c.pk}"' in html
+    assert "Kelishuv #%d" % c.pk in html
+    assert "$/kg" in html and "2,5" in html or "2.5" in html
+    groups = resp.context["groups"]
+    assert len(groups) == 1 and groups[0]["contract"].pk == c.pk
+
+
+def test_arrived_loads_move_to_done_page(admin_client, db):
+    """Arrived loads leave the active Yuklar list and appear on Yakunlangan."""
+    c = _contract()
+    active = Shipment.objects.create(contract=c, kg=Decimal("100"),
+                                     status=ShipmentStatus.objects.first())
+    done = Shipment.objects.create(contract=c, kg=Decimal("200"),
+                                   status=ShipmentStatus.arrival(),
+                                   arrived=date.today())
+    main = admin_client.get("/shipments/")
+    ids = [s.pk for s in main.context["shipments"]]
+    assert active.pk in ids and done.pk not in ids
+    assert main.context["done_count"] == 1
+    assert "/shipments/done/" in main.content.decode()
+
+    done_page = admin_client.get("/shipments/done/")
+    assert done_page.status_code == 200
+    done_ids = [s.pk for s in done_page.context["page"].object_list]
+    assert done_ids == [done.pk]
+    # translator may see it too, but with no money on the page
+    assert "Yakunlangan" in done_page.content.decode()
+
+
+def test_done_page_hides_money_from_translator(translator_client, admin_client, db):
+    c = _contract()  # price 1.00/kg
+    Shipment.objects.create(contract=c, kg=Decimal("100"),
+                            status=ShipmentStatus.arrival(), arrived=date.today())
+
+    def content(html):
+        return html.split('class="content"', 1)[1].split("</main>", 1)[0]
+
+    tr = content(translator_client.get("/shipments/done/").content.decode())
+    assert "$" not in tr and "Narx" not in tr
+    ad = content(admin_client.get("/shipments/done/").content.decode())
+    assert "$/kg" in ad
+
+
+def test_set_status_ajax_returns_json_in_place_update(admin_client, db):
+    """The list saves status changes via fetch: JSON back, no redirect — the row
+    updates in place and an arrival answer tells the JS to drop the row."""
+    c = _contract()
+    s = Shipment.objects.create(contract=c, kg=Decimal("100"),
+                                status=ShipmentStatus.objects.first())
+    other = ShipmentStatus.objects.filter(is_arrival=False).exclude(pk=s.status_id).first()
+    resp = admin_client.post(f"/shipments/{s.pk}/status/", {"status": other.pk},
+                             HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+    assert resp.status_code == 200
+    assert resp.json() == {"status_id": other.pk, "arrived": False}
+    s.refresh_from_db()
+    assert s.status_id == other.pk
+
+    arrival = ShipmentStatus.arrival()
+    resp = admin_client.post(f"/shipments/{s.pk}/status/", {"status": arrival.pk},
+                             HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+    assert resp.json() == {"status_id": arrival.pk, "arrived": True}
+    s.refresh_from_db()
+    assert s.arrived is not None
