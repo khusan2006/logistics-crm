@@ -3,6 +3,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
 from django.urls import reverse_lazy
+from django.utils import timezone
 
 from .models import (
     Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
@@ -75,6 +76,11 @@ class ContractForm(forms.ModelForm):
             "price": forms.NumberInput(attrs={"data-som-price": "", "step": "0.0001"}),
             "kg": forms.NumberInput(attrs={"data-som-kg": ""}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.instance.pk:  # new contract → default the date to today
+            self.fields["created"].initial = timezone.localdate
 
     def clean(self):
         cleaned = super().clean()
