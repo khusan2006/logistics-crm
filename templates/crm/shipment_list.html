@@ -32,7 +32,7 @@
 <table class="loads-table">
   <tr>
     <th class="sticky-col">Yuk</th>
-    <th>Hamkor / Marka</th>
+    <th>Marka</th>
     <th>Yo'nalish</th>
     <th class="num">Kg</th>
     {% if user.is_admin_role %}<th class="num">Narx (1 kg)</th>{% endif %}
@@ -44,22 +44,26 @@
   {% for g in groups %}
   <tr class="kelishuv-row" data-contract="{{ g.contract.pk }}">
     <td colspan="9">
-      <span class="kelishuv-title">Kelishuv #{{ g.contract.pk }}</span>
-      <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand }}</span>
-      <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
+      <div class="kelishuv-head">
+        <span class="kelishuv-title">Kelishuv #{{ g.contract.pk }}</span>
+        <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand }}</span>
+        <span class="kelishuv-count">{{ g.shipments|length }} yuk</span>
+        <span class="kelishuv-progress" title="Yuborilgan / kelishilgan kg"><span style="width: {% widthratio g.contract.shipped_kg g.contract.kg 100 %}%"></span></span>
+        <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
+      </div>
     </td>
   </tr>
   {% for s in g.shipments %}
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
       data-contract="{{ g.contract.pk }}"
       class="load-row{% if s.is_overdue %} is-overdue{% endif %}">
-    <td class="sticky-col">
+    <td class="sticky-col load-toggle" data-load="{{ s.pk }}" title="Bosqichlar va xarajatlarni ochish">
       <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
     </td>
     <td>
-      <div class="load-partner">{{ s.contract.partner.name }}</div>
-      <div class="muted load-sub">{{ s.contract.brand }}</div>
+      <div class="load-partner">{{ s.contract.brand }}</div>
+      <div class="muted load-sub">{{ s.contract.partner.name }}</div>
     </td>
     <td>
       {% if s.origin or s.destination %}
@@ -193,15 +197,23 @@
   function collapseAll() {
     legRows().forEach(function (r) { r.hidden = true; });
     document.querySelectorAll('.leg-expand').forEach(function (b) { b.classList.remove('is-open'); });
+    rows().forEach(function (r) { r.classList.remove('is-expanded'); });
   }
-  // Expand a load's inline route legs + expenses
-  document.querySelectorAll('.leg-expand').forEach(function (b) {
-    b.addEventListener('click', function () {
-      var detail = document.querySelector('.legs-detail[data-load="' + b.getAttribute('data-load') + '"]');
-      if (!detail) { return; }
-      var willOpen = detail.hidden;
-      detail.hidden = !willOpen;
-      b.classList.toggle('is-open', willOpen);
+  // Expand a load's inline route legs + expenses — the caret or the whole Yuk
+  // cell toggles it (bigger hit area); the #id link still opens the detail page.
+  function toggleLoad(loadId) {
+    var detail = document.querySelector('.legs-detail[data-load="' + loadId + '"]');
+    var btn = document.querySelector('.leg-expand[data-load="' + loadId + '"]');
+    if (!detail || !btn) { return; }
+    var willOpen = detail.hidden;
+    detail.hidden = !willOpen;
+    btn.classList.toggle('is-open', willOpen);
+    btn.closest('tr').classList.toggle('is-expanded', willOpen);
+  }
+  document.querySelectorAll('.load-toggle').forEach(function (cell) {
+    cell.addEventListener('click', function (e) {
+      if (e.target.closest('a')) { return; }   // the #id link keeps its own job
+      toggleLoad(cell.getAttribute('data-load'));
     });
   });
 
@@ -289,6 +301,8 @@
         } else {
           row.setAttribute('data-status', String(data.status_id));
           sel.dataset.prev = sel.value;
+          sel.classList.add('is-saved');           // brief green flash = saqlandi
+          setTimeout(function () { sel.classList.remove('is-saved'); }, 900);
         }
         updateCounts(); applyActive();
       }).catch(function () {
