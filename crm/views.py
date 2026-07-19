@@ -1135,7 +1135,8 @@ def reports(request):
     customer_ids = sales.values_list("customer_id", flat=True).distinct()
     for customer in Customer.objects.filter(pk__in=customer_ids):
         c_sales = sales.filter(customer=customer)
-        sotildi = sum((s.total for s in c_sales), Decimal("0"))
+        # net (post-returns) so the row reconciles with the net-based qarz column
+        sotildi = sum((s.net_total for s in c_sales), Decimal("0"))
         tolandi = _sum(cust_pays.filter(customer=customer))
         qarz = customer.balance if customer.balance > 0 else Decimal("0")
         customer_rows.append({
