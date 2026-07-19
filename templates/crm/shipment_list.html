@@ -121,58 +121,89 @@
   <tr class="legs-detail" data-load="{{ s.pk }}" data-contract="{{ g.contract.pk }}" hidden>
     <td colspan="9">
       <div class="legs-inline">
-        <div class="legs-inline-head">
-          <strong>Yo'nalish bosqichlari</strong>
-          <a class="btn btn-sm" href="{% url 'leg_create' %}?shipment={{ s.pk }}" data-modal>+ Bosqich</a>
+
+        {# ── Panel head: which load + quick jump ── #}
+        <div class="load-panel-head">
+          <strong>Yuk #{{ s.pk }}</strong>
+          <span class="muted">{{ s.contract.brand }} · {{ s.contract.partner.name }} · Kelishuv #{{ s.contract_id }}</span>
+          {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>{% endif %}
+          <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="{% url 'shipment_detail' s.pk %}">To'liq sahifa &rarr;</a>
         </div>
-        {% if s.legs.all %}
-        <table class="legs-inline-table">
-          <tr><th>#</th><th>Yo'nalish</th><th>Haydovchi</th><th>Sana</th><th>Izoh</th><th></th></tr>
-          {% for leg in s.legs.all %}
-          <tr{% if leg.is_current %} class="leg-current"{% endif %}>
-            <td>{{ forloop.counter }}</td>
-            <td>{{ leg.from_location }} <span class="route-arrow">&rarr;</span> {{ leg.to_location }}{% if leg.is_current %} <span class="daybadge">hozirgi</span>{% endif %}</td>
-            <td>{{ leg.transport|default:"—" }}</td>
-            <td class="muted">{{ leg.departed|default:"—" }} &rarr; {{ leg.arrived|default:"—" }}</td>
-            <td class="muted">{{ leg.note|default:"—" }}</td>
-            <td class="row-actions">
-              <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="up"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Yuqoriga">↑</button></form>
-              <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="down"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Pastga">↓</button></form>
-              <a class="btn btn-ghost btn-sm" href="{% url 'leg_edit' leg.pk %}" data-modal>Tahrirlash</a>
-              <a class="btn btn-ghost btn-sm" href="{% url 'leg_delete' leg.pk %}" data-modal>O'chirish</a>
-            </td>
-          </tr>
-          {% endfor %}
-        </table>
-        {% else %}
-        <p class="muted" style="margin: 6px 0 0;">Bosqich yo'q. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing.</p>
-        {% endif %}
-        {% if user.is_admin_role %}
-        <div class="legs-inline-head" style="margin-top: 14px;">
-          <strong>Xarajatlar</strong>
-          <a class="btn btn-sm" href="{% url 'expense_create' %}?shipment={{ s.pk }}" data-modal>+ Xarajat</a>
+
+        {# ── Facts grid: the load at a glance ── #}
+        <div class="load-facts">
+          <div class="lf"><span class="lf-label">Yo'nalish</span><span class="lf-value">{% if s.origin or s.destination %}{{ s.origin|default:"—" }} → {{ s.destination|default:"—" }}{% else %}—{% endif %}</span></div>
+          <div class="lf"><span class="lf-label">Jo'natilgan</span><span class="lf-value">{{ s.sent|default:"—" }}</span></div>
+          <div class="lf"><span class="lf-label">Kelish (ETA)</span><span class="lf-value">{{ s.eta|default:"—" }}{% if s.delays.count %} <span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}</span></div>
+          <div class="lf"><span class="lf-label">Hozirgi transport</span><span class="lf-value">{{ s.current_transport|default:"—" }}</span></div>
+          <div class="lf"><span class="lf-label">Konteyner</span><span class="lf-value">{{ s.container|default:"—" }}</span></div>
+          <div class="lf"><span class="lf-label">Kg</span><span class="lf-value">{{ s.kg|floatformat:"-3" }}</span></div>
+          {% if user.is_admin_role %}
+          <div class="lf"><span class="lf-label">1 kg narxi</span><span class="lf-value">{{ s.unit_price|floatformat:"-4" }} $</span></div>
+          <div class="lf"><span class="lf-label">Yuk qiymati</span><span class="lf-value">{{ s.goods_value|usd }}</span></div>
+          <div class="lf"><span class="lf-label">Xarajatlar</span><span class="lf-value">{{ s.expenses_total|usd }}</span></div>
+          <div class="lf lf--accent"><span class="lf-label">Tan narx (1 kg)</span><span class="lf-value">{{ s.landed_cost_per_kg }} $</span></div>
+          {% endif %}
+          {% if s.note %}<div class="lf lf--wide"><span class="lf-label">Izoh</span><span class="lf-value">{{ s.note }}</span></div>{% endif %}
         </div>
-        {% if s.expenses.all %}
-        <table class="legs-inline-table">
-          <tr><th>Sana</th><th>Turkum</th><th>Summa</th><th>Izoh</th><th></th></tr>
-          {% for e in s.expenses.all %}
-          <tr>
-            <td>{{ e.date }}</td>
-            <td>{{ e.get_category_display }}</td>
-            <td>{{ e.amount|usd }}</td>
-            <td class="muted">{{ e.note|default:"—" }}</td>
-            <td class="row-actions">
-              <a class="btn btn-ghost btn-sm" href="{% url 'expense_edit' e.pk %}" data-modal>Tahrirlash</a>
-              <a class="btn btn-ghost btn-sm" href="{% url 'expense_delete' e.pk %}" data-modal>O'chirish</a>
-            </td>
-          </tr>
-          {% endfor %}
-        </table>
-        <p class="muted" style="margin: 6px 0 0;">Jami: {{ s.expenses_total|usd }} · Tan narx: {{ s.landed_cost_per_kg }} $/kg</p>
-        {% else %}
-        <p class="muted" style="margin: 6px 0 0;">Xarajat yo'q.</p>
-        {% endif %}
-        {% endif %}
+
+        {# ── Bosqichlar va xarajatlar yonma-yon ── #}
+        <div class="load-panel-cols">
+          <div>
+            <div class="legs-inline-head">
+              <strong>Yo'nalish bosqichlari</strong>
+              <a class="btn btn-sm" href="{% url 'leg_create' %}?shipment={{ s.pk }}" data-modal>+ Bosqich</a>
+            </div>
+            {% if s.legs.all %}
+            <table class="legs-inline-table">
+              <tr><th>#</th><th>Yo'nalish</th><th>Haydovchi</th><th>Sana</th><th></th></tr>
+              {% for leg in s.legs.all %}
+              <tr{% if leg.is_current %} class="leg-current"{% endif %}>
+                <td>{{ forloop.counter }}</td>
+                <td>{{ leg.from_location }} <span class="route-arrow">&rarr;</span> {{ leg.to_location }}{% if leg.is_current %} <span class="daybadge soon">hozirgi</span>{% endif %}{% if leg.note %}<div class="muted load-sub">{{ leg.note }}</div>{% endif %}</td>
+                <td>{{ leg.transport|default:"—" }}</td>
+                <td class="muted">{{ leg.departed|default:"—" }} &rarr; {{ leg.arrived|default:"—" }}</td>
+                <td class="row-actions">
+                  <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="up"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Yuqoriga">↑</button></form>
+                  <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="down"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Pastga">↓</button></form>
+                  <a class="icon-action act-edit" href="{% url 'leg_edit' leg.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></a>
+                  <a class="icon-action act-delete" href="{% url 'leg_delete' leg.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+                </td>
+              </tr>
+              {% endfor %}
+            </table>
+            {% else %}
+            <p class="muted" style="margin: 6px 0 0;">Bosqich yo'q. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing.</p>
+            {% endif %}
+          </div>
+          {% if user.is_admin_role %}
+          <div>
+            <div class="legs-inline-head">
+              <strong>Xarajatlar</strong>
+              <a class="btn btn-sm" href="{% url 'expense_create' %}?shipment={{ s.pk }}" data-modal>+ Xarajat</a>
+            </div>
+            {% if s.expenses.all %}
+            <table class="legs-inline-table">
+              <tr><th>Sana</th><th>Turkum</th><th class="num">Summa</th><th></th></tr>
+              {% for e in s.expenses.all %}
+              <tr>
+                <td>{{ e.date }}</td>
+                <td>{{ e.get_category_display }}{% if e.note %}<div class="muted load-sub">{{ e.note }}</div>{% endif %}</td>
+                <td class="num"><strong>{{ e.amount|usd }}</strong></td>
+                <td class="row-actions">
+                  <a class="icon-action act-edit" href="{% url 'expense_edit' e.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></a>
+                  <a class="icon-action act-delete" href="{% url 'expense_delete' e.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+                </td>
+              </tr>
+              {% endfor %}
+              <tr class="lf-total-row"><td colspan="2"><strong>Jami</strong> <span class="muted">· tan narx {{ s.landed_cost_per_kg }} $/kg</span></td><td class="num"><strong>{{ s.expenses_total|usd }}</strong></td><td></td></tr>
+            </table>
+            {% else %}
+            <p class="muted" style="margin: 6px 0 0;">Xarajat yo'q. Yo'l, bojxona va boshqa sarflar shu yukning tan narxiga qo'shiladi.</p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
       </div>
     </td>
   </tr>
