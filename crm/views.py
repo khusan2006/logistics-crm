@@ -1142,9 +1142,20 @@ def kassa(request):
     feed.sort(key=lambda r: (r["date"], r["id"]), reverse=True)
     feed_page = Paginator(feed, 50).get_page(request.GET.get("page"))
 
+    # What we owe hamkorlar RIGHT NOW (not date-filtered — a current-state figure):
+    # per contract the debt accrues per shipped truck (shipped value − paid).
+    payables = {}
+    for c in Contract.objects.select_related("partner").prefetch_related("shipments"):
+        d = c.debt
+        if d > 0:
+            payables[c.partner] = payables.get(c.partner, Decimal("0")) + d
+    partner_debts = sorted(payables.items(), key=lambda kv: kv[1], reverse=True)
+    payable_total = sum((d for _, d in partner_debts), Decimal("0"))
+
     return render(request, "crm/kassa.html", {
         "balances": balances, "net_in": net_in, "net_out": net_out,
         "net_total": net_in - net_out, "feed": feed_page,
+        "partner_debts": partner_debts, "payable_total": payable_total,
         "date_from": date_from, "date_to": date_to,
     })
 

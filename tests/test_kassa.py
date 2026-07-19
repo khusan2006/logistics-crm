@@ -86,3 +86,24 @@ def test_date_filter_excludes_out_of_range_payment(admin_client, db):
 
 def test_translator_forbidden(translator_client, db):
     assert translator_client.get("/kassa/").status_code == 403
+
+
+def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
+    """The Kassa surfaces what we owe hamkorlar right now: Σ per contract of
+    shipped value − paid, grouped by partner."""
+    from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+
+    partner = Partner.objects.create(name="Pars", phone="1", city="T")
+    c = Contract.objects.create(partner=partner, brand="LLDPE", kg=Decimal("1000"),
+                                price=Decimal("1.00"), created="2026-07-01",
+                                deadline="2026-08-01")
+    Shipment.objects.create(contract=c, kg=Decimal("600"),
+                            status=ShipmentStatus.objects.first())   # owe 600
+    SupplierPayment.objects.create(contract=c, date="2026-07-02",
+                                   amount=Decimal("250"), amount_original=Decimal("250"),
+                                   method="cash")                    # paid 250
+    resp = admin_client.get("/kassa/")
+    assert resp.context["payable_total"] == Decimal("350.00")
+    debts = {p.name: d for p, d in resp.context["partner_debts"]}
+    assert debts == {"Pars": Decimal("350.00")}
+    assert "Hamkorlarga qarzimiz" in resp.content.decode()

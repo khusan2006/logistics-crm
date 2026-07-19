@@ -40,7 +40,32 @@
       <span class="avans">+{{ net_in|usd }}</span> · <span class="late">−{{ net_out|usd }}</span>
     </div>
   </div>
+  <div class="kpi {% if payable_total > 0 %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Hamkorlarga qarzimiz</span></div>
+    <div class="kpi-value">{{ payable_total|usd }}</div>
+    <div class="kpi-meta muted">yuborilgan yuklar bo'yicha</div>
+  </div>
 </div>
+
+{% if partner_debts %}
+<div class="card" style="margin-bottom: 16px;">
+  <h3 style="margin: 0 0 10px;">Hamkorlarga qarzimiz</h3>
+  <div class="table-wrap">
+  <table>
+    <tr><th class="sticky-col">Hamkor</th><th>Qarz</th><th></th></tr>
+    {% for partner, debt in partner_debts %}
+    <tr>
+      <td class="sticky-col">{{ partner.name }}</td>
+      <td class="late">{{ debt|usd }}</td>
+      <td class="row-actions">
+        <a class="btn btn-ghost btn-sm" href="{% url 'supplier_payment_create' %}" data-modal>To'lash</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endif %}
 
 {% if feed.object_list %}
 <div class="table-wrap">
