@@ -15,11 +15,12 @@ from accounts.models import User
 from .exports import xlsx_response
 from .forms import (
     ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm, SaleForm,
-    ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
+    ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLegForm, ShipmentStatusForm,
+    SupplierPaymentForm,
 )
 from .models import (
     AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, PayMethod, Reservation,
-    Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment,
+    Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment,
     allocate_customer_payment, apply_customer_advance, trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
@@ -528,7 +529,7 @@ def shipment_list(request):
     Tabs filter client-side; each row carries its status + overdue flag."""
     q = request.GET.get("q", "").strip()
     shipments = (Shipment.objects.select_related("contract__partner", "status")
-                 .prefetch_related("delays"))
+                 .prefetch_related("delays", "legs"))
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
@@ -605,6 +606,75 @@ def shipment_detail(request, pk):
     shipment = get_object_or_404(
         Shipment.objects.select_related("contract__partner", "status"), pk=pk)
     return render(request, "crm/shipment_detail.html", {"shipment": shipment})
+
+
+# --- Route legs (Yo'nalish bosqichlari) — physical movement, no money, so both
+#     admins and translators manage them (translators coordinate the drivers). ---
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def leg_create(request):
+    shipment = get_object_or_404(Shipment, pk=request.GET.get("shipment") or request.POST.get("shipment"))
+    form = ShipmentLegForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        leg = form.save(commit=False)
+        leg.shipment = shipment
+        leg.created_by = request.user
+        leg.order = (shipment.legs.aggregate(m=Max("order"))["m"] or 0) + 1
+        leg.save()
+        AuditLog.record(request.user, AuditLog.Action.CREATE, "Yo'nalish", shipment.pk,
+                        f"Bosqich: {leg.from_location} → {leg.to_location}")
+        messages.success(request, "Bosqich qo'shildi")
+        return form_success(request, reverse("shipment_detail", args=[shipment.pk]))
+    return form_response(request, form, "Yangi bosqich", invalid=request.method == "POST")
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def leg_edit(request, pk):
+    leg = get_object_or_404(ShipmentLeg, pk=pk)
+    form = ShipmentLegForm(request.POST or None, instance=leg)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yo'nalish", leg.shipment_id,
+                        f"Bosqich tahrirlandi: {leg.from_location} → {leg.to_location}")
+        messages.success(request, "Bosqich yangilandi")
+        return form_reload(request, reverse("shipment_detail", args=[leg.shipment_id]))
+    return form_response(request, form, "Bosqichni tahrirlash", invalid=request.method == "POST")
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def leg_delete(request, pk):
+    leg = get_object_or_404(ShipmentLeg, pk=pk)
+    shipment_id = leg.shipment_id
+    if request.method == "POST":
+        label = f"{leg.from_location} → {leg.to_location}"
+        leg.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Yo'nalish", shipment_id,
+                        f"Bosqich o'chirildi: {label}")
+        messages.success(request, "Bosqich o'chirildi")
+        return form_reload(request, reverse("shipment_detail", args=[shipment_id]))
+    return render_confirm(
+        request, "Bosqichni o'chirish",
+        f"“{leg.from_location} → {leg.to_location}” bosqichi o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="shipment_list")
+
+
+@require_POST
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def leg_move(request, pk):
+    """Reorder a leg up/down — this is how an unplanned stop gets slotted between
+    existing legs."""
+    leg = get_object_or_404(ShipmentLeg, pk=pk)
+    legs = list(leg.shipment.legs.all())
+    index = next((i for i, x in enumerate(legs) if x.pk == leg.pk), None)
+    neighbor_index = index - 1 if request.POST.get("dir") == "up" else index + 1
+    if index is not None and 0 <= neighbor_index < len(legs):
+        neighbor = legs[neighbor_index]
+        leg.order, neighbor.order = neighbor.order, leg.order
+        leg.save(update_fields=["order"])
+        neighbor.save(update_fields=["order"])
+        AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yo'nalish", leg.shipment_id,
+                        "Bosqich tartibi o'zgardi")
+    return form_reload(request, reverse("shipment_detail", args=[leg.shipment_id]))
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)

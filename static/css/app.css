@@ -1726,3 +1726,7 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Load route (from → to) on the Yuklar table */
 .route { font-size: 13px; }
 .route-arrow { color: var(--text-faint); margin: 0 2px; }
+
+/* Route legs (Yo'nalish bosqichlari) on the load detail page */
+.leg-current { background: var(--accent-soft); }
+.btn-sm { padding: 4px 9px; font-size: 12px; }

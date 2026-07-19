@@ -28,12 +28,16 @@
       <div>{{ shipment.status.name }}</div>
     </div>
     <div class="stat">
-      <div class="muted">Transport</div>
-      <div>{{ shipment.transport|default:"—" }}</div>
+      <div class="muted">Hozirgi transport</div>
+      <div>{{ shipment.current_transport|default:"—" }}</div>
     </div>
     <div class="stat">
       <div class="muted">Konteyner</div>
       <div>{{ shipment.container|default:"—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Yo'nalish</div>
+      <div>{% if shipment.origin or shipment.destination %}{{ shipment.origin|default:"—" }} <span class="route-arrow">→</span> {{ shipment.destination|default:"—" }}{% else %}—{% endif %}</div>
     </div>
     <div class="stat">
       <div class="muted">Jo'natilgan</div>
@@ -51,6 +55,45 @@
       <div>{{ shipment.arrived|default:"—" }}</div>
     </div>
   </div>
+</div>
+
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <h3 style="margin: 0;">Yo'nalish bosqichlari</h3>
+    <a class="btn" href="{% url 'leg_create' %}?shipment={{ shipment.pk }}" data-modal>+ Bosqich</a>
+  </div>
+  {% if shipment.legs.all %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>#</th>
+      <th>Yo'nalish</th>
+      <th>Haydovchi / transport</th>
+      <th>Jo'natilgan &rarr; Yetib kelgan</th>
+      <th>Izoh</th>
+      <th></th>
+    </tr>
+    {% for leg in shipment.legs.all %}
+    <tr{% if leg.is_current %} class="leg-current"{% endif %}>
+      <td>{{ forloop.counter }}</td>
+      <td>{{ leg.from_location }} <span class="route-arrow">&rarr;</span> {{ leg.to_location }}
+        {% if leg.is_current %}<span class="daybadge">hozirgi</span>{% endif %}</td>
+      <td>{{ leg.transport|default:"—" }}{% if leg.container %}<div class="muted" style="font-size: 12px;">{{ leg.container }}</div>{% endif %}</td>
+      <td>{{ leg.departed|default:"—" }} &rarr; {{ leg.arrived|default:"—" }}</td>
+      <td>{{ leg.note|default:"—" }}</td>
+      <td class="row-actions">
+        <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="up"><button type="submit" class="lc-arrow" title="Yuqoriga">↑</button></form>
+        <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="down"><button type="submit" class="lc-arrow" title="Pastga">↓</button></form>
+        <a class="btn btn-ghost btn-sm" href="{% url 'leg_edit' leg.pk %}" data-modal>Tahrirlash</a>
+        <a class="btn btn-ghost btn-sm" href="{% url 'leg_delete' leg.pk %}" data-modal>O'chirish</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Hali bosqich qo'shilmagan. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing (va &uarr;&darr; bilan joylashtiring).</p>
+  {% endif %}
 </div>
 
 {% if user.is_admin_role %}

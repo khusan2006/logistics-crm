@@ -5,7 +5,7 @@ from django import forms
 
 from .models import (
     Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
-    ShipmentExpense, ShipmentStatus, SupplierPayment,
+    ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment,
 )
 
 # Accepts Uzbek (+998 + 9 national digits) or Iranian (+98 + 10 national digits).
@@ -212,6 +212,27 @@ class ShipmentExtendForm(forms.Form):
     new_eta = forms.DateField(label="Yangi kelish sanasi",
                               widget=forms.DateInput(attrs={"type": "date"}))
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
+
+
+class ShipmentLegForm(forms.ModelForm):
+    class Meta:
+        model = ShipmentLeg
+        fields = ["from_location", "to_location", "transport", "container",
+                  "departed", "arrived", "note"]
+        widgets = {
+            "departed": forms.DateInput(attrs={"type": "date"}),
+            "arrived": forms.DateInput(attrs={"type": "date"}),
+            "from_location": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
+            "to_location": forms.TextInput(attrs={"placeholder": "Masalan: Chegara"}),
+            "transport": forms.TextInput(attrs={"placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+        }
+
+    def clean(self):
+        cleaned = super().clean()
+        dep, arr = cleaned.get("departed"), cleaned.get("arrived")
+        if dep and arr and arr < dep:
+            self.add_error("arrived", "Yetib kelgan sana jo'natilgan sanadan oldin bo'la olmaydi")
+        return cleaned
 
 
 class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):

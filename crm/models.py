@@ -265,6 +265,16 @@ class Shipment(models.Model):
         return (self.kg * self.contract.price).quantize(Decimal("0.01"))
 
     @property
+    def current_transport(self):
+        """The vehicle/driver on the load now: the active leg's, else the last leg's,
+        falling back to the load's own transport field when there are no legs."""
+        legs = list(self.legs.all())
+        if legs:
+            active = next((leg for leg in legs if leg.is_current), None)
+            return (active or legs[-1]).transport or self.transport
+        return self.transport
+
+    @property
     def expenses_total(self):
         return self.expenses.aggregate(s=Sum("amount"))["s"] or Decimal("0")
 
@@ -646,3 +656,39 @@ class ShipmentDelay(models.Model):
 
     def __str__(self):
         return f"{self.shipment_id}: {self.old_eta} → {self.new_eta}"
+
+
+class ShipmentLeg(models.Model):
+    """One segment of a load's journey: from one place to the next, driven by one
+    vehicle. A load usually has a planned sequence of legs; an unplanned stop is just
+    another leg inserted into the order. A driver hand-off = the next leg has a
+    different `transport`. No money here — translators manage legs (they coordinate
+    the drivers), same as they manage status and ETA."""
+
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE,
+                                 related_name="legs", verbose_name="Yuk")
+    order = models.PositiveSmallIntegerField("Tartib", default=0)
+    from_location = models.CharField("Qayerdan", max_length=120)
+    to_location = models.CharField("Qayerga", max_length=120)
+    transport = models.CharField("Haydovchi / transport", max_length=50, blank=True)
+    container = models.CharField("Konteyner", max_length=50, blank=True)
+    departed = models.DateField("Jo'natilgan sana", null=True, blank=True)
+    arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="shipment_legs",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["order", "id"]
+        verbose_name = "Yo'nalish bosqichi"
+        verbose_name_plural = "Yo'nalish bosqichlari"
+
+    @property
+    def is_current(self):
+        """The active leg: departed but not yet arrived."""
+        return self.departed is not None and self.arrived is None
+
+    def __str__(self):
+        return f"{self.from_location} → {self.to_location}"
