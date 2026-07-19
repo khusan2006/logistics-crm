@@ -11,7 +11,7 @@ from crm.models import (
 ADMIN_ONLY_URLS = [
     "/partners/", "/partners/new/", "/contracts/", "/contracts/new/",
     "/supplier-payments/", "/supplier-payments/new/", "/statuses/",
-    "/expenses/new/", "/audit/",
+    "/expenses/new/", "/audit/", "/kassa/",
 ]
 
 

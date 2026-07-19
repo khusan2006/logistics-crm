@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Kassa · GranulaLog{% endblock %}
+{% block topbar_title %}Kassa{% endblock %}
+{% block content %}
+
+<form method="get" class="searchbar" style="margin-bottom: 16px;">
+  <label>Boshlanish<br><input type="date" name="from" value="{{ date_from }}"></label>
+  <label>Tugash<br><input type="date" name="to" value="{{ date_to }}"></label>
+  <button type="submit" class="btn">Filtrlash</button>
+  {% if date_from or date_to %}<a class="btn btn-ghost" href="{% url 'kassa' %}">Tozalash</a>{% endif %}
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi {% if balances.cash.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Naqd</span></div>
+    <div class="kpi-value">{{ balances.cash.balance|usd }}</div>
+    <div class="kpi-meta muted">
+      <span class="avans">+{{ balances.cash.in|usd }}</span> · <span class="late">−{{ balances.cash.out|usd }}</span>
+    </div>
+  </div>
+  <div class="kpi {% if balances.card.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Karta</span></div>
+    <div class="kpi-value">{{ balances.card.balance|usd }}</div>
+    <div class="kpi-meta muted">
+      <span class="avans">+{{ balances.card.in|usd }}</span> · <span class="late">−{{ balances.card.out|usd }}</span>
+    </div>
+  </div>
+  <div class="kpi {% if balances.transfer.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Bank</span></div>
+    <div class="kpi-value">{{ balances.transfer.balance|usd }}</div>
+    <div class="kpi-meta muted">
+      <span class="avans">+{{ balances.transfer.in|usd }}</span> · <span class="late">−{{ balances.transfer.out|usd }}</span>
+    </div>
+  </div>
+  <div class="kpi {% if net_total < 0 %}kpi--red{% else %}kpi--blue{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Jami</span></div>
+    <div class="kpi-value">{{ net_total|usd }}</div>
+    <div class="kpi-meta muted">
+      <span class="avans">+{{ net_in|usd }}</span> · <span class="late">−{{ net_out|usd }}</span>
+    </div>
+  </div>
+</div>
+
+{% if feed.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Sana</th>
+    <th>Turi</th>
+    <th>Kimga / kimdan</th>
+    <th>Usul</th>
+    <th>Summa</th>
+  </tr>
+  {% for row in feed %}
+  <tr>
+    <td class="sticky-col">{{ row.date }}</td>
+    <td>{{ row.kind }}</td>
+    <td>{{ row.label }}</td>
+    <td>{{ row.method }}</td>
+    <td class="{% if row.direction == 'in' %}avans{% else %}late{% endif %}">
+      {% if row.direction == 'in' %}+{% else %}−{% endif %}{{ row.amount|usd }}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% if feed.has_other_pages %}
+<div class="pagination">
+  {% if feed.has_previous %}
+  <a class="btn btn-ghost" href="?{% if date_from %}from={{ date_from }}&{% endif %}{% if date_to %}to={{ date_to }}&{% endif %}page={{ feed.previous_page_number }}">Oldingi</a>
+  {% endif %}
+  <span class="muted">{{ feed.number }} / {{ feed.paginator.num_pages }}</span>
+  {% if feed.has_next %}
+  <a class="btn btn-ghost" href="?{% if date_from %}from={{ date_from }}&{% endif %}{% if date_to %}to={{ date_to }}&{% endif %}page={{ feed.next_page_number }}">Keyingi</a>
+  {% endif %}
+</div>
+{% endif %}
+{% else %}
+<p class="muted">Bu davrda kassa harakati yo'q.</p>
+{% endif %}
+{% endblock %}

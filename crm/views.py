@@ -17,9 +17,9 @@ from .forms import (
     ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Return, Sale,
-    Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment,
-    apply_customer_advance, trim_sale_allocations,
+    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, PayMethod, Reservation,
+    Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment,
+    allocate_customer_payment, apply_customer_advance, trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
 
@@ -955,3 +955,60 @@ def debt_customer(request, pk):
     customer = get_object_or_404(Customer, pk=pk)
     sales = [s for s in customer.sales.select_related("shipment__contract").all() if s.remaining > 0]
     return render(request, "crm/debt_customer.html", {"customer": customer, "sales": sales})
+
+
+@role_required(User.Role.ADMIN)
+def kassa(request):
+    """The till: per-method (naqd/karta/bank) USD balances and a unified in/out feed.
+    Purely derived — money IN is customer payments; money OUT is supplier payments
+    and shipment expenses. Optional ?from&to date range narrows everything."""
+    date_from = (request.GET.get("from") or "").strip()
+    date_to = (request.GET.get("to") or "").strip()
+
+    def _range(qs):
+        if date_from:
+            qs = qs.filter(date__gte=date_from)
+        if date_to:
+            qs = qs.filter(date__lte=date_to)
+        return qs
+
+    cust_pays = _range(CustomerPayment.objects.select_related("customer"))
+    sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
+    expenses = _range(ShipmentExpense.objects.select_related("shipment__contract"))
+
+    def _sum(qs):
+        return qs.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+
+    balances = {}
+    net_in = net_out = Decimal("0")
+    for value, label in PayMethod.choices:
+        m_in = _sum(cust_pays.filter(method=value))
+        m_out = _sum(sup_pays.filter(method=value)) + _sum(expenses.filter(method=value))
+        balances[value] = {"label": label, "in": m_in, "out": m_out, "balance": m_in - m_out}
+        net_in += m_in
+        net_out += m_out
+
+    feed = []
+    for p in cust_pays:
+        feed.append({"date": p.date, "kind": "Mijoz to'lovi", "label": p.customer.name,
+                     "method": p.get_method_display(), "direction": "in", "amount": p.amount,
+                     "id": p.pk})
+    for p in sup_pays:
+        feed.append({"date": p.date, "kind": "Hamkor to'lovi",
+                     "label": f"#{p.contract_id} · {p.contract.partner.name}",
+                     "method": p.get_method_display(), "direction": "out", "amount": p.amount,
+                     "id": p.pk})
+    for e in expenses:
+        feed.append({"date": e.date, "kind": "Xarajat",
+                     "label": f"{e.get_category_display()} · yuk #{e.shipment_id}",
+                     "method": e.get_method_display(), "direction": "out", "amount": e.amount,
+                     "id": e.pk})
+    # Newest first; id as a stable tiebreak since the three sources merge by date only.
+    feed.sort(key=lambda r: (r["date"], r["id"]), reverse=True)
+    feed_page = Paginator(feed, 50).get_page(request.GET.get("page"))
+
+    return render(request, "crm/kassa.html", {
+        "balances": balances, "net_in": net_in, "net_out": net_out,
+        "net_total": net_in - net_out, "feed": feed_page,
+        "date_from": date_from, "date_to": date_to,
+    })
