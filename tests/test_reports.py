@@ -81,3 +81,10 @@ def test_date_filter_excludes_out_of_range_sale_from_profit(admin_client, db):
 
 def test_translator_forbidden(translator_client, db):
     assert translator_client.get("/reports/").status_code == 403
+
+
+def test_reports_has_print_button(admin_client, db):
+    resp = admin_client.get("/reports/")
+    assert resp.status_code == 200
+    html = resp.content.decode()
+    assert "window.print()" in html

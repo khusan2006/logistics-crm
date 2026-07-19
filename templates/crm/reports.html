@@ -40,7 +40,7 @@
   <a class="btn btn-ghost" href="{% url 'export_shipments' %}?{{ request.GET.urlencode }}">Yuklar (xlsx)</a>
   <a class="btn btn-ghost" href="{% url 'export_sales' %}?{{ request.GET.urlencode }}">Sotuvlar (xlsx)</a>
   <a class="btn btn-ghost" href="{% url 'export_debts' %}?{{ request.GET.urlencode }}">Qarzdorlar (xlsx)</a>
-  {# TODO(Task 4): print/PDF button (window.print()) goes here — @media print CSS not yet implemented. #}
+  <button type="button" class="btn btn-ghost" onclick="window.print()">🖨 Chop etish / PDF</button>
 </form>
 
 <div class="kpi-grid">

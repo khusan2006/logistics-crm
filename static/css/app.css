@@ -1669,3 +1669,36 @@ ul.errorlist li::before { content: "⚠ "; }
   color: var(--text-faint);
   font-weight: 400;
 }
+
+/* Print / PDF-friendly view (Reports page). Scoped to @media print only —
+   does not affect on-screen rendering. */
+@media print {
+  .sidebar,
+  .topbar,
+  .fab,
+  .fab-stack,
+  .searchbar,
+  nav {
+    display: none !important;
+  }
+  .content {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .card {
+    box-shadow: none !important;
+    border: none !important;
+    break-inside: avoid;
+  }
+  .table-wrap {
+    overflow: visible !important;
+  }
+  table {
+    border-collapse: collapse !important;
+  }
+  table, th, td {
+    border: 1px solid #000 !important;
+  }
+}
