@@ -46,6 +46,16 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>
           <span>Yuklar</span>
         </a>
+        {% if user.is_admin_role %}
+        <a class="nav-item {% if 'partner' in url_name %}active{% endif %}" href="{% url 'partner_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+          <span>Hamkorlar</span>
+        </a>
+        <a class="nav-item {% if 'contract' in url_name %}active{% endif %}" href="{% url 'contract_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
+          <span>Kelishuvlar</span>
+        </a>
+        {% endif %}
       </div>
 
       {% if user.is_admin_role %}
@@ -83,14 +93,6 @@
 
       <div class="nav-group">
         <div class="nav-group-label">Nazorat</div>
-        <a class="nav-item {% if 'partner' in url_name %}active{% endif %}" href="{% url 'partner_list' %}">
-          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
-          <span>Hamkorlar</span>
-        </a>
-        <a class="nav-item {% if 'contract' in url_name %}active{% endif %}" href="{% url 'contract_list' %}">
-          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
-          <span>Kelishuvlar</span>
-        </a>
         <a class="nav-item {% if 'supplier_payment' in url_name %}active{% endif %}" href="{% url 'supplier_payment_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
           <span>To'lovlar (hamkor)</span>
@@ -917,6 +919,104 @@
     window.canonicalPhone = function (el) { return canonical(el ? el.value : ''); };
     if (document.readyState !== 'loading') { enhance(); }
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // International phone (data-phone-intl): supports both Uzbek (+998) and Iranian
+  // (+98) numbers, grouped for readability. Formats on blur so it never fights the
+  // caret while typing. Validation is server-side (accepts either country).
+  (function () {
+    function fmt(value) {
+      var d = String(value).replace(/[^\d]/g, '');
+      if (d.indexOf('998') === 0) {
+        var n = d.slice(3, 12), p = ['+998'];
+        if (n.length) { p.push(n.slice(0, 2)); }
+        if (n.length > 2) { p.push(n.slice(2, 5)); }
+        if (n.length > 5) { p.push(n.slice(5, 7)); }
+        if (n.length > 7) { p.push(n.slice(7, 9)); }
+        return p.join(' ');
+      }
+      if (d.indexOf('98') === 0) {
+        var m = d.slice(2, 12), q = ['+98'];
+        if (m.length) { q.push(m.slice(0, 3)); }
+        if (m.length > 3) { q.push(m.slice(3, 6)); }
+        if (m.length > 6) { q.push(m.slice(6, 10)); }
+        return q.join(' ');
+      }
+      return String(value).trim();
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('input[data-phone-intl]').forEach(function (el) {
+        if (el.dataset.phoneIntlReady) { return; }
+        el.dataset.phoneIntlReady = '1';
+        el.type = 'tel'; el.setAttribute('inputmode', 'tel'); el.autocomplete = 'tel';
+        if (el.value) { el.value = fmt(el.value); }
+        el.addEventListener('blur', function () { if (el.value.trim()) { el.value = fmt(el.value); } });
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+  })();
+
+  // Shipment form: prefill Yuboriladigan kg + Taxminiy kelish from the selected
+  // kelishuv (contract). Each option carries data-remaining / data-deadline
+  // (see ContractChoiceSelect). On load with a preselected contract, only empty
+  // fields are filled (so editing a saved shipment isn't clobbered); on an
+  // explicit change, both are refreshed from the newly chosen contract.
+  (function () {
+    function opt(sel) { return sel.options[sel.selectedIndex]; }
+    function apply(sel, overwrite) {
+      var o = opt(sel); if (!o) { return; }
+      var kg = document.getElementById('id_kg');
+      var eta = document.getElementById('id_eta');
+      var rem = o.getAttribute('data-remaining');
+      var dl = o.getAttribute('data-deadline');
+      if (kg && rem !== null && (overwrite || !kg.value)) { kg.value = rem; }
+      if (eta && (overwrite || !eta.value)) { eta.value = dl || (overwrite ? '' : eta.value); }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('select[data-contract-source]').forEach(function (sel) {
+        if (sel.dataset.contractReady) { return; }
+        sel.dataset.contractReady = '1';
+        sel.addEventListener('change', function () { apply(sel, true); });
+        if (sel.value) { apply(sel, false); }
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Contract form: a live so'm preview of the USD price (and total) at the entered
+  // dollar rate. Purely informational — the price stays canonical USD.
+  (function () {
+    function money(n) { return new Intl.NumberFormat('uz-UZ').format(Math.round(n)); }
+    function update(scope) {
+      var price = scope.querySelector('[data-som-price]');
+      var rate = scope.querySelector('[data-som-rate]');
+      var kg = scope.querySelector('[data-som-kg]');
+      if (!price || !rate) { return; }
+      var hint = rate.parentNode.querySelector('.som-preview');
+      if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'som-preview muted';
+        hint.style.fontSize = '12px'; hint.style.marginTop = '4px';
+        rate.parentNode.appendChild(hint);
+      }
+      var p = parseFloat(price.value), r = parseFloat(rate.value), k = kg ? parseFloat(kg.value) : NaN;
+      if (p > 0 && r > 0) {
+        var per = p * r, tot = (k > 0) ? k * p * r : null;
+        hint.textContent = '1 kg ≈ ' + money(per) + " so'm" + (tot ? " · Jami ≈ " + money(tot) + " so'm" : '');
+      } else { hint.textContent = ''; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-som-rate]').forEach(function (el) {
+        if (el.dataset.somReady) { return; }
+        el.dataset.somReady = '1';
+        var form = el.closest('form') || document;
+        form.addEventListener('input', function () { update(form); });
+        update(form);
+      });
+    }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 

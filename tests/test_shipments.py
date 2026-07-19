@@ -123,3 +123,31 @@ def test_create_shipment_modal_post_invalid_returns_422(admin_client, db):
     assert resp.status_code == 422
     assert "modal-head" in html
     assert not Shipment.objects.exists()
+
+
+def test_shipment_transport_rejects_non_plate(db):
+    from crm.forms import ShipmentForm
+    c = _contract()
+    st = ShipmentStatus.objects.first()
+    f = ShipmentForm({"contract": c.pk, "kg": "100", "status": st.pk,
+                      "transport": "hello world text", "container": "", "note": ""})
+    assert not f.is_valid() and "transport" in f.errors
+
+
+def test_shipment_transport_accepts_uz_plate(db):
+    from crm.forms import ShipmentForm
+    c = _contract()
+    st = ShipmentStatus.objects.first()
+    f = ShipmentForm({"contract": c.pk, "kg": "100", "status": st.pk,
+                      "transport": "01 777 AAA", "container": "C1", "note": ""})
+    assert f.is_valid(), f.errors
+
+
+def test_shipment_contract_select_carries_prefill_data(db):
+    """The contract <select> options expose remaining kg + deadline so the form JS
+    can prefill Yuboriladigan kg and Taxminiy kelish."""
+    from crm.forms import ShipmentForm
+    _contract()  # has kg (remaining) and a deadline
+    html = str(ShipmentForm())
+    assert "data-remaining" in html and "data-deadline" in html
+    assert 'data-contract-source' in html

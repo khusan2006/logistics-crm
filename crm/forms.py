@@ -1,3 +1,4 @@
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
@@ -7,22 +8,62 @@ from .models import (
     ShipmentExpense, ShipmentStatus, SupplierPayment,
 )
 
+# Accepts Uzbek (+998 + 9 national digits) or Iranian (+98 + 10 national digits).
+_PHONE_UZ = re.compile(r"998\d{9}")
+_PHONE_IR = re.compile(r"98\d{10}")
+
+
+def validate_intl_phone(value):
+    """Blank, or a valid Uzbek/Iranian number. Formatting (spaces, +, -) is ignored."""
+    v = (value or "").strip()
+    if not v:
+        return v
+    digits = re.sub(r"\D", "", v)
+    if _PHONE_UZ.fullmatch(digits) or _PHONE_IR.fullmatch(digits):
+        return v
+    raise forms.ValidationError(
+        "Telefon O'zbekiston (+998 XX XXX XX XX) yoki Eron (+98 XXX XXX XXXX) "
+        "formatida bo'lishi kerak")
+
+
+def _phone_widget():
+    """A fresh phone TextInput each call (so forms don't share a mutable attrs dict)."""
+    return forms.TextInput(attrs={
+        "data-phone-intl": "", "inputmode": "tel", "autocomplete": "tel",
+        "placeholder": "+998 90 123 45 67  yoki  +98 912 345 6789",
+    })
+
 
 class PartnerForm(forms.ModelForm):
     class Meta:
         model = Partner
         fields = ["name", "phone", "city", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 3})}
+        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": _phone_widget()}
+
+    def clean_phone(self):
+        return validate_intl_phone(self.cleaned_data.get("phone"))
 
 
 class CustomerForm(forms.ModelForm):
     class Meta:
         model = Customer
         fields = ["name", "phone", "address", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 3})}
+        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": _phone_widget()}
+
+    def clean_phone(self):
+        return validate_intl_phone(self.cleaned_data.get("phone"))
 
 
 class ContractForm(forms.ModelForm):
+    # Not stored — a helper so the operator can see the so'm value of the USD price
+    # (and total) at today's rate. The contract price itself stays canonical USD.
+    som_rate = forms.DecimalField(
+        label="Dollar kursi (1$ = so'm, ixtiyoriy)", required=False, min_value=0,
+        widget=forms.NumberInput(attrs={"data-som-rate": "", "step": "1",
+                                        "placeholder": "Masalan: 12650"}))
+
+    field_order = ["partner", "brand", "kg", "price", "som_rate", "created", "deadline", "note"]
+
     class Meta:
         model = Contract
         fields = ["partner", "brand", "kg", "price", "created", "deadline", "note"]
@@ -30,6 +71,8 @@ class ContractForm(forms.ModelForm):
             "created": forms.DateInput(attrs={"type": "date"}),
             "deadline": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 3}),
+            "price": forms.NumberInput(attrs={"data-som-price": "", "step": "0.0001"}),
+            "kg": forms.NumberInput(attrs={"data-som-kg": ""}),
         }
 
     def clean(self):
@@ -91,15 +134,49 @@ class MoneyEntryFormMixin:
         return cleaned
 
 
+class ContractChoiceSelect(forms.Select):
+    """A contract <select> whose options carry data-remaining (qolgan kg) and
+    data-deadline, so the shipment form's JS can prefill Yuboriladigan kg and
+    Taxminiy kelish from the chosen kelishuv."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        instance = getattr(value, "instance", None)  # blank choice has a plain "" value
+        if instance is not None:
+            option["attrs"]["data-remaining"] = f"{instance.remaining_kg}"
+            if instance.deadline:
+                option["attrs"]["data-deadline"] = instance.deadline.isoformat()
+        return option
+
+
 class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
         fields = ["contract", "kg", "status", "sent", "eta", "transport", "container", "note"]
         widgets = {
+            "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
             "sent": forms.DateInput(attrs={"type": "date"}),
             "eta": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 2}),
+            "transport": forms.TextInput(attrs={
+                "placeholder": "01 777 AAA (UZ) yoki 12 A 345-67 (IR)"}),
         }
+        labels = {
+            "kg": "Yuboriladigan kg",
+            "sent": "Jo'natiladigan sana",
+        }
+
+    def clean_transport(self):
+        t = (self.cleaned_data.get("transport") or "").strip()
+        if t:
+            compact = re.sub(r"[\s\-]", "", t)
+            # a plate is short, alphanumeric (Latin or Persian letters), and has a digit
+            if (not re.fullmatch(r"[A-Za-z0-9؀-ۿ]{5,12}", compact)
+                    or not any(c.isdigit() for c in compact)):
+                raise forms.ValidationError(
+                    "Transport O'zbekiston yoki Eron avto raqami bo'lishi kerak "
+                    "(masalan: 01 777 AAA)")
+        return t
 
     def clean_container(self):
         container = (self.cleaned_data.get("container") or "").strip()
