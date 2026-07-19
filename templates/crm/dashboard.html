@@ -52,6 +52,30 @@
     </div>
     <div class="kpi-value">{{ overdue|length }}</div>
   </div>
+
+  <div class="kpi kpi--green">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
+      <span class="kpi-label">Omborda qoldiq</span>
+    </div>
+    <div class="kpi-value">{{ stock_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+  </div>
+
+  <div class="kpi kpi--red">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+      <span class="kpi-label">Mijoz qarzi</span>
+    </div>
+    <div class="kpi-value">{{ customer_debt_total|usd }}</div>
+  </div>
+
+  <div class="kpi kpi--gold">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
+      <span class="kpi-label">Sotuvdan foyda</span>
+    </div>
+    <div class="kpi-value">{{ sales_profit_total|usd }}</div>
+  </div>
 </div>
 
 <div class="chart-grid chart-grid--split">

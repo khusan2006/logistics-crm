@@ -40,10 +40,19 @@ def dashboard(request):
     status_counts = (ShipmentStatus.objects
                      .annotate(n=Count("shipments"))
                      .filter(n__gt=0))
+
+    arrived_lots = shipments.filter(arrived__isnull=False)
+    stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
+    customer_debt_total = sum(
+        (c.balance for c in Customer.objects.all() if c.balance > 0), Decimal("0"))
+    sales_profit_total = sum((s.profit for s in Sale.objects.all()), Decimal("0"))
+
     return render(request, "crm/dashboard.html", {
         "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
         "paid_total": paid_total, "debt_total": debt_total, "overdue": overdue,
         "contracts": contracts[:8], "status_counts": status_counts,
+        "stock_kg": stock_kg, "customer_debt_total": customer_debt_total,
+        "sales_profit_total": sales_profit_total,
     })
 
 
