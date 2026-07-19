@@ -1768,7 +1768,11 @@ ul.errorlist li::before { content: "⚠ "; }
 .leg-expand { width: 24px; height: 24px; padding: 0; margin-right: 7px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent); font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transition: transform .15s ease, background .15s ease, color .15s ease; }
 .leg-expand:hover { background: var(--surface-hover); }
 .leg-expand.is-open { transform: rotate(90deg); background: var(--accent); border-color: var(--accent); color: #fff; }
-.legs-detail > td { background: var(--surface-2); padding: 14px 18px 16px; box-shadow: inset 3px 0 0 var(--accent); }
+.legs-detail > td { background: var(--surface-2); padding: 0; box-shadow: inset 3px 0 0 var(--accent); }
+/* Pinned to the scroll container's visible width (JS sets the exact width),
+   so the panel never runs past the horizontal-scroll edge. white-space resets
+   the global `td { nowrap }` so panel text wraps inside the pinned width. */
+.legs-detail .legs-inline { position: sticky; left: 0; box-sizing: border-box; padding: 14px 18px 16px; white-space: normal; }
 .legs-inline-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .legs-inline-table { width: 100%; background: var(--surface); border-radius: 10px; }
 .legs-inline-table th, .legs-inline-table td { padding: 7px 10px; font-size: 13px; }
@@ -1776,10 +1780,12 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Expanded load panel: head strip + facts grid + two-column detail */
 .load-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .load-panel-head > strong { font-size: 15px; }
-.load-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.load-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-bottom: 14px; }
 .lf { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 11px; min-width: 0; }
 .lf-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); margin-bottom: 2px; }
 .lf-value { display: block; font-size: 13px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.lf-sub { display: block; font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.lf-sub .daybadge { font-size: 11px; padding: 1px 8px; }
 .lf--accent { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .lf--wide { grid-column: 1 / -1; }
 .load-panel-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }

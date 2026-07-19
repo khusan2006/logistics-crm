@@ -130,19 +130,40 @@
           <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="{% url 'shipment_detail' s.pk %}">To'liq sahifa &rarr;</a>
         </div>
 
-        {# ── Facts grid: the load at a glance ── #}
+        {# ── Facts grid: the load at a glance (few, dense cards — no overflow) ── #}
         <div class="load-facts">
-          <div class="lf"><span class="lf-label">Yo'nalish</span><span class="lf-value">{% if s.origin or s.destination %}{{ s.origin|default:"—" }} → {{ s.destination|default:"—" }}{% else %}—{% endif %}</span></div>
-          <div class="lf"><span class="lf-label">Jo'natilgan</span><span class="lf-value">{{ s.sent|default:"—" }}</span></div>
-          <div class="lf"><span class="lf-label">Kelish (ETA)</span><span class="lf-value">{{ s.eta|default:"—" }}{% if s.delays.count %} <span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}</span></div>
-          <div class="lf"><span class="lf-label">Hozirgi transport</span><span class="lf-value">{{ s.current_transport|default:"—" }}</span></div>
-          <div class="lf"><span class="lf-label">Konteyner</span><span class="lf-value">{{ s.container|default:"—" }}</span></div>
-          <div class="lf"><span class="lf-label">Kg</span><span class="lf-value">{{ s.kg|floatformat:"-3" }}</span></div>
+          <div class="lf">
+            <span class="lf-label">Yo'nalish</span>
+            <span class="lf-value">{% if s.origin or s.destination %}{{ s.origin|default:"—" }} → {{ s.destination|default:"—" }}{% else %}—{% endif %}</span>
+            {% if s.sent %}<span class="lf-sub">Jo'natilgan: {{ s.sent }}</span>{% endif %}
+          </div>
+          <div class="lf">
+            <span class="lf-label">Kelish (ETA)</span>
+            <span class="lf-value">{{ s.eta|default:"—" }}</span>
+            <span class="lf-sub">
+              {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
+              {% elif s.days_left is not None %}<span class="daybadge {% if s.days_left <= 7 %}today{% else %}soon{% endif %}">{{ s.days_left }} kun qoldi</span>{% endif %}
+              {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }} uzaytirish</span>{% endif %}
+            </span>
+          </div>
+          <div class="lf">
+            <span class="lf-label">Transport</span>
+            <span class="lf-value">{{ s.current_transport|default:"—" }}</span>
+            {% if s.container %}<span class="lf-sub">Konteyner: {{ s.container }}</span>{% endif %}
+          </div>
           {% if user.is_admin_role %}
-          <div class="lf"><span class="lf-label">1 kg narxi</span><span class="lf-value">{{ s.unit_price|floatformat:"-4" }} $</span></div>
-          <div class="lf"><span class="lf-label">Yuk qiymati</span><span class="lf-value">{{ s.goods_value|usd }}</span></div>
-          <div class="lf"><span class="lf-label">Xarajatlar</span><span class="lf-value">{{ s.expenses_total|usd }}</span></div>
-          <div class="lf lf--accent"><span class="lf-label">Tan narx (1 kg)</span><span class="lf-value">{{ s.landed_cost_per_kg }} $</span></div>
+          <div class="lf">
+            <span class="lf-label">Yuk qiymati</span>
+            <span class="lf-value">{{ s.goods_value|usd }}</span>
+            <span class="lf-sub">{{ s.kg|floatformat:"-3" }} kg × {{ s.unit_price|floatformat:"-4" }} $</span>
+          </div>
+          <div class="lf lf--accent">
+            <span class="lf-label">Tan narx (1 kg)</span>
+            <span class="lf-value">{{ s.landed_cost_per_kg }} $</span>
+            <span class="lf-sub">{{ s.expenses_total|usd }} xarajat bilan</span>
+          </div>
+          {% else %}
+          <div class="lf"><span class="lf-label">Kg</span><span class="lf-value">{{ s.kg|floatformat:"-3" }}</span></div>
           {% endif %}
           {% if s.note %}<div class="lf lf--wide"><span class="lf-label">Izoh</span><span class="lf-value">{{ s.note }}</span></div>{% endif %}
         </div>
@@ -230,6 +251,19 @@
     document.querySelectorAll('.leg-expand').forEach(function (b) { b.classList.remove('is-open'); });
     rows().forEach(function (r) { r.classList.remove('is-expanded'); });
   }
+  // The panel lives inside the horizontally-scrolling table, so pin its inner
+  // container to the visible width (sticky left + explicit width) — the content
+  // wraps into the line instead of running off past the scroll edge.
+  function sizePanels() {
+    var wrap = document.querySelector('.table-wrap');
+    if (!wrap) { return; }
+    document.querySelectorAll('.legs-detail .legs-inline').forEach(function (p) {
+      p.style.width = wrap.clientWidth + 'px';
+    });
+  }
+  window.addEventListener('resize', sizePanels);
+  sizePanels();
+
   // Expand a load's inline route legs + expenses — the caret or the whole Yuk
   // cell toggles it (bigger hit area); the #id link still opens the detail page.
   function toggleLoad(loadId) {
@@ -237,6 +271,7 @@
     var btn = document.querySelector('.leg-expand[data-load="' + loadId + '"]');
     if (!detail || !btn) { return; }
     var willOpen = detail.hidden;
+    sizePanels();
     detail.hidden = !willOpen;
     btn.classList.toggle('is-open', willOpen);
     btn.closest('tr').classList.toggle('is-expanded', willOpen);
