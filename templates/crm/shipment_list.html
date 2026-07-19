@@ -6,82 +6,119 @@
 {% endif %}
 {% block content %}
 
-<div class="kanban-toolbar">
-  <form method="get" class="searchbar" role="search" data-live-search>
-    <div class="toolbar-search{% if q %} is-active{% endif %}">
-      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="search" name="q" value="{{ q }}" placeholder="Transport, konteyner, marka yoki hamkor bo'yicha qidirish…" autocomplete="off" aria-label="Yuk qidirish">
-      {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
-    </div>
-  </form>
-  <div class="kanban-summary">
-    <span class="muted">{{ total }} ta yuk</span>
-    {% if overdue_count %}<span class="daybadge overdue">{{ overdue_count }} kechikkan</span>{% endif %}
+<form method="get" class="searchbar" role="search" data-live-search>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Transport, konteyner, marka yoki hamkor bo'yicha qidirish…" autocomplete="off" aria-label="Yuk qidirish">
+    {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
-</div>
+</form>
 
-<div class="kanban">
-  {% for col in columns %}
-  <div class="kanban-col">
-    <div class="kanban-col-head">
-      <span class="kanban-col-name{% if col.status.is_arrival %} is-arrival{% endif %}">{{ col.status.name }}</span>
-      <span class="kanban-col-count">{{ col.shipments|length }}</span>
-    </div>
-    <div class="kanban-col-body">
-      {% for s in col.shipments %}
-      <div class="load-card{% if s.is_overdue %} is-overdue{% endif %}">
-        <div class="lc-top">
-          <a class="lc-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
-          <span class="lc-kg">{{ s.kg }} kg</span>
-        </div>
-        <div class="lc-title">{{ s.contract.partner.name }} · {{ s.contract.brand }}</div>
-        <div class="lc-meta">{{ s.transport|default:"—" }}{% if s.container %} · {{ s.container }}{% endif %}</div>
-        <div class="lc-eta">
-          {% if s.arrived %}<span class="daybadge soon">Yetib kelgan · {{ s.arrived }}</span>
-          {% elif s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
-          {% elif s.days_left is not None %}<span class="daybadge">{{ s.days_left }} kun qoldi</span>
-          {% else %}<span class="muted">Muddat yo'q</span>{% endif %}
-          {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}
-        </div>
-        <div class="lc-actions">
-          <div class="lc-move">
-            {% if col.prev_id %}
-            <form method="post" action="{% url 'shipment_set_status' s.pk %}" class="lc-move-form">
-              {% csrf_token %}<input type="hidden" name="status" value="{{ col.prev_id }}"><input type="hidden" name="next" value="{{ request.get_full_path }}">
-              <button type="submit" class="lc-arrow" title="Oldingi bosqichga">‹</button>
-            </form>
-            {% endif %}
-            {% if col.next_id %}{% if user.is_admin_role or not col.next_is_arrival %}
-            <form method="post" action="{% url 'shipment_set_status' s.pk %}" class="lc-move-form">
-              {% csrf_token %}<input type="hidden" name="status" value="{{ col.next_id }}"><input type="hidden" name="next" value="{{ request.get_full_path }}">
-              <button type="submit" class="lc-arrow lc-arrow--fwd" title="Keyingi bosqichga">›</button>
-            </form>
-            {% endif %}{% endif %}
-          </div>
-          <div class="lc-icons">
-            <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            </a>
-            {% if user.is_admin_role %}
-            <a class="icon-action act-edit" href="{% url 'shipment_edit' s.pk %}" data-modal title="Tahrirlash">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-            </a>
-            <a class="icon-action act-delete" href="{% url 'shipment_delete' s.pk %}" data-modal title="O'chirish">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </a>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-      {% empty %}
-      <div class="kanban-empty muted">—</div>
-      {% endfor %}
-    </div>
-  </div>
+{% if shipments %}
+<div class="status-tabs" role="tablist">
+  <button type="button" class="status-tab is-active" data-tab="all">Barchasi <span class="status-tab-count">{{ total }}</span></button>
+  {% for t in tabs %}
+  <button type="button" class="status-tab" data-tab="{{ t.status.pk }}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
   {% endfor %}
+  {% if overdue_count %}
+  <button type="button" class="status-tab status-tab--danger" data-tab="overdue">Kechikkan <span class="status-tab-count">{{ overdue_count }}</span></button>
+  {% endif %}
 </div>
 
-{% if not columns %}
-<p class="muted">Holatlar sozlanmagan.</p>
+<div class="table-wrap">
+<table class="loads-table">
+  <tr>
+    <th class="sticky-col">Yuk</th>
+    <th>Hamkor / Marka</th>
+    <th class="num">Kg</th>
+    <th>Holat</th>
+    <th>Transport / Konteyner</th>
+    <th>Kelish</th>
+    <th></th>
+  </tr>
+  {% for s in shipments %}
+  <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
+      class="load-row{% if s.is_overdue %} is-overdue{% endif %}">
+    <td class="sticky-col">
+      <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
+      <div class="muted load-sub">Kelishuv #{{ s.contract_id }}</div>
+    </td>
+    <td>
+      <div class="load-partner">{{ s.contract.partner.name }}</div>
+      <div class="muted load-sub">{{ s.contract.brand }}</div>
+    </td>
+    <td class="num">{{ s.kg }}</td>
+    <td>
+      <form method="post" action="{% url 'shipment_set_status' s.pk %}" class="status-cell-form">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <select name="status" class="status-select" onchange="this.form.submit()">
+          {% for st in statuses %}
+            {% if not st.is_arrival or user.is_admin_role %}
+            <option value="{{ st.pk }}" {% if st.pk == s.status_id %}selected{% endif %}>{{ st.name }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </form>
+    </td>
+    <td>
+      <div>{{ s.transport|default:"—" }}</div>
+      <div class="muted load-sub">{{ s.container|default:"—" }}</div>
+    </td>
+    <td>
+      {% if s.arrived %}<span class="daybadge soon">Yetib kelgan</span>
+      {% elif s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
+      {% elif s.days_left is not None %}<span class="daybadge">{{ s.days_left }} kun qoldi</span>
+      {% else %}<span class="muted">—</span>{% endif %}
+      {% if s.eta %}<div class="muted load-sub">{{ s.eta }}</div>{% endif %}
+      {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}
+    </td>
+    <td class="row-actions">
+      <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </a>
+      {% if user.is_admin_role %}
+      <a class="icon-action act-edit" href="{% url 'shipment_edit' s.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'shipment_delete' s.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </a>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p class="muted loads-empty-filtered" hidden>Bu holatda yuk yo'q.</p>
+{% else %}
+<p class="muted">Yuklar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
+
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.status-tab');
+  var rows = document.querySelectorAll('.load-row');
+  var emptyMsg = document.querySelector('.loads-empty-filtered');
+  if (!tabs.length) { return; }
+  function apply(tab) {
+    var shown = 0;
+    rows.forEach(function (r) {
+      var ok = tab === 'all'
+        || (tab === 'overdue' && r.getAttribute('data-overdue') === '1')
+        || r.getAttribute('data-status') === tab;
+      r.hidden = !ok;
+      if (ok) { shown++; }
+    });
+    if (emptyMsg) { emptyMsg.hidden = shown !== 0; }
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.classList.remove('is-active'); });
+      t.classList.add('is-active');
+      apply(t.getAttribute('data-tab'));
+    });
+  });
+})();
+</script>
 {% endblock %}

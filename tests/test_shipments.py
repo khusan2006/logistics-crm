@@ -54,38 +54,37 @@ def test_translator_sees_list_but_cannot_create(translator_client, db):
     assert _post_shipment(translator_client, c).status_code == 403
 
 
-def test_kanban_groups_shipments_by_status_column(admin_client, db):
-    """The board has one column per status (in order) and each load sits under its
-    own status column with prev/next stage ids wired for the move arrows."""
+def test_status_tabs_have_per_status_counts(admin_client, db):
+    """The page offers one tab per status (in order) with a live count, and every
+    load is rendered as a row tagged with its status for client-side tab filtering."""
     c = _contract(kg="5000")
     yolda = ShipmentStatus.objects.get(name="Yo'lda")
     bojxona = ShipmentStatus.objects.get(name="Bojxona")
-    s1 = Shipment.objects.create(contract=c, kg=Decimal("100"), status=yolda)
-    s2 = Shipment.objects.create(contract=c, kg=Decimal("100"), status=bojxona)
+    Shipment.objects.create(contract=c, kg=Decimal("100"), status=yolda)
+    Shipment.objects.create(contract=c, kg=Decimal("100"), status=yolda)
+    Shipment.objects.create(contract=c, kg=Decimal("100"), status=bojxona)
 
     resp = admin_client.get("/shipments/")
     assert resp.status_code == 200
-    columns = resp.context["columns"]
-    # one column per status, ordered
-    names = [col["status"].name for col in columns]
+    tabs = resp.context["tabs"]
+    names = [t["status"].name for t in tabs]
     assert names == list(ShipmentStatus.objects.values_list("name", flat=True))
-    by_name = {col["status"].name: col for col in columns}
-    assert s1 in by_name["Yo'lda"]["shipments"]
-    assert s2 in by_name["Bojxona"]["shipments"]
-    assert s1 not in by_name["Bojxona"]["shipments"]
-    # move arrows wired to adjacent stages
-    assert by_name["Yo'lda"]["next_id"] == ShipmentStatus.objects.get(name="Chegarada").pk
-    assert by_name["Yo'lda"]["prev_id"] == ShipmentStatus.objects.get(name="Yuklanmoqda").pk
+    by_name = {t["status"].name: t["count"] for t in tabs}
+    assert by_name["Yo'lda"] == 2 and by_name["Bojxona"] == 1
+    assert resp.context["total"] == 3
+    # rows carry their status id so the tab JS can filter them
+    html = resp.content.decode()
+    assert f'data-status="{yolda.pk}"' in html
 
 
-def test_kanban_search_filters_cards(admin_client, db):
+def test_shipment_search_filters_rows(admin_client, db):
     c = _contract(kg="5000")
     first = ShipmentStatus.objects.first()
     Shipment.objects.create(contract=c, kg=Decimal("100"), status=first, transport="TRUCK-XYZ")
     Shipment.objects.create(contract=c, kg=Decimal("100"), status=first, transport="OTHER-1")
     resp = admin_client.get("/shipments/", {"q": "XYZ"})
-    all_cards = [s for col in resp.context["columns"] for s in col["shipments"]]
-    assert len(all_cards) == 1 and all_cards[0].transport == "TRUCK-XYZ"
+    rows = resp.context["shipments"]
+    assert len(rows) == 1 and rows[0].transport == "TRUCK-XYZ"
 
 
 def test_create_shipment_modal_get_returns_partial(admin_client, db):
