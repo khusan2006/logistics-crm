@@ -83,8 +83,10 @@ def test_debt_customer_lists_outstanding_sales_and_excludes_paid(admin_client, d
     assert resp.status_code == 200
     html = resp.content.decode()
     assert f"#{lot.pk}" in html
-    # the fully paid sale's row should not be present; check via its date not duplicated
-    assert html.count("2026-07-16") == 0 or "2026-07-17" in html
+    # Exactly one outstanding sale row: the unpaid one is listed, the fully-paid
+    # sale is excluded. (Dates render localized, so count rows rather than date strings.)
+    assert html.count('class="row-actions"') == 1
+    assert "$1,600.00" in html             # the outstanding sale's total is shown
 
 
 def test_overdue_sale_shows_overdue_indicator(admin_client, db):
