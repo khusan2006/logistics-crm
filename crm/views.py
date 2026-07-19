@@ -524,19 +524,36 @@ def status_move(request, pk):
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def shipment_list(request):
+    """Kanban board: one column per shipment status (in order), each load a card.
+    The column order reads left→right as the delivery pipeline."""
     q = request.GET.get("q", "").strip()
-    status_id = request.GET.get("status", "")
-    shipments = Shipment.objects.select_related("contract__partner", "status")
+    shipments = (Shipment.objects.select_related("contract__partner", "status")
+                 .prefetch_related("delays"))
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
             | Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q))
-    if status_id:
-        shipments = shipments.filter(status_id=status_id)
-    page = Paginator(shipments, 30).get_page(request.GET.get("page"))
+    shipments = list(shipments)
+
+    buckets = {}
+    for s in shipments:
+        buckets.setdefault(s.status_id, []).append(s)
+
+    statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
+    columns = []
+    for i, st in enumerate(statuses):
+        nxt = statuses[i + 1] if i < len(statuses) - 1 else None
+        columns.append({
+            "status": st,
+            "prev_id": statuses[i - 1].pk if i > 0 else None,
+            "next_id": nxt.pk if nxt else None,
+            "next_is_arrival": bool(nxt and nxt.is_arrival),
+            "shipments": buckets.get(st.pk, []),
+        })
     return render(request, "crm/shipment_list.html", {
-        "page": page, "q": q, "status_id": status_id,
-        "statuses": ShipmentStatus.objects.all(),
+        "columns": columns, "q": q,
+        "total": len(shipments),
+        "overdue_count": sum(1 for s in shipments if s.is_overdue),
     })
 
 
