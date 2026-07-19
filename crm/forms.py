@@ -157,14 +157,18 @@ class ContractChoiceSelect(forms.Select):
             option["attrs"]["data-remaining"] = rem
             if instance.deadline:
                 option["attrs"]["data-deadline"] = instance.deadline.isoformat()
+            price = f"{instance.price}"
+            if "." in price:
+                price = price.rstrip("0").rstrip(".")
+            option["attrs"]["data-price"] = price
         return option
 
 
 class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
-        fields = ["contract", "kg", "status", "origin", "destination", "sent", "eta",
-                  "transport", "container", "note"]
+        fields = ["contract", "kg", "price", "status", "origin", "destination", "sent",
+                  "eta", "transport", "container", "note"]
         widgets = {
             "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
             "sent": forms.DateInput(attrs={"type": "date"}),
@@ -178,7 +182,14 @@ class ShipmentForm(forms.ModelForm):
         labels = {
             "kg": "Yuboriladigan kg",
             "sent": "Jo'natiladigan sana",
+            "price": "1 kg narxi (USD)",
         }
+
+    def clean_price(self):
+        price = self.cleaned_data.get("price")
+        if price is not None and price <= 0:
+            raise forms.ValidationError("Narx musbat bo'lishi kerak")
+        return price
 
     def clean_transport(self):
         t = (self.cleaned_data.get("transport") or "").strip()

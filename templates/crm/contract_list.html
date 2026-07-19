@@ -25,6 +25,7 @@
     <th>Narx</th>
     <th>Jami</th>
     <th>Yuborilgan/Qolgan</th>
+    <th title="Yuborilgan yuklar qiymati — qarz shu bo'yicha hisoblanadi">Yuklangan qiymati</th>
     <th>To'langan/Qarz</th>
     <th>Muddat</th>
     <th></th>
@@ -41,6 +42,7 @@
     <td>{{ c.price|usd }}</td>
     <td>{{ c.total_value|usd }}</td>
     <td>{{ c.shipped_kg }} / {{ c.remaining_kg }}</td>
+    <td>{{ c.shipped_value|usd }}</td>
     <td>{{ c.paid_total|usd }} / {{ c.debt|usd }}</td>
     <td>{{ c.deadline }}</td>
     <td class="row-actions">

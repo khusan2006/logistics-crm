@@ -23,6 +23,16 @@
       <div class="muted">Kg</div>
       <div>{{ shipment.kg }}</div>
     </div>
+    {% if user.is_admin_role %}
+    <div class="stat">
+      <div class="muted">1 kg narxi</div>
+      <div>{{ shipment.unit_price }} $/kg{% if shipment.price is None %} <span class="muted">(kelishuvdan)</span>{% endif %}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Yuk qiymati</div>
+      <div>{{ shipment.goods_value|usd }}</div>
+    </div>
+    {% endif %}
     <div class="stat">
       <div class="muted">Holat</div>
       <div>{{ shipment.status.name }}</div>

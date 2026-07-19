@@ -14,7 +14,9 @@ def _contract(**kw):
 def test_total_value(db):
     c = _contract()
     assert c.total_value == Decimal("48000.00")
-    assert c.debt == Decimal("48000.00")
+    # nothing shipped yet → nothing owed (debt accrues per shipped truck)
+    assert c.shipped_value == Decimal("0")
+    assert c.debt == Decimal("0")
     assert c.remaining_kg == Decimal("50000")
 
 

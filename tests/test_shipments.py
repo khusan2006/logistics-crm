@@ -180,3 +180,24 @@ def test_yuklar_list_has_inline_legs_panel(admin_client, db):
     assert "leg-expand" in html and "legs-detail" in html
     assert "Tehron" in html and "Chegara" in html          # legs rendered inline
     assert f"/legs/new/?shipment={s.pk}" in html            # inline "+ Bosqich"
+
+
+def test_shipment_own_price_drives_value_and_landed_cost(admin_client, db):
+    """A truck may carry its own USD/kg price; value, landed cost and the sale
+    cost snapshot all follow it. Blank price falls back to the contract price."""
+    c = _contract()  # price 1.00/kg
+    own = Shipment.objects.create(contract=c, kg=Decimal("100"), price=Decimal("2.50"),
+                                  status=ShipmentStatus.objects.first())
+    dflt = Shipment.objects.create(contract=c, kg=Decimal("100"),
+                                   status=ShipmentStatus.objects.first())
+    assert own.unit_price == Decimal("2.50") and own.goods_value == Decimal("250.00")
+    assert dflt.unit_price == Decimal("1.00") and dflt.goods_value == Decimal("100.00")
+    assert own.landed_cost_per_kg == Decimal("2.5000")
+
+
+def test_shipment_form_price_prefills_from_contract(db):
+    """The contract <select> carries data-price so the form JS can prefill the
+    truck's 1 kg narxi from the chosen kelishuv."""
+    from crm.forms import ShipmentForm
+    _contract()
+    assert "data-price" in str(ShipmentForm())

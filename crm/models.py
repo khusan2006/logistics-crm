@@ -150,8 +150,18 @@ class Contract(models.Model):
         return self.supplier_payments.aggregate(s=Sum("amount"))["s"] or Decimal("0")
 
     @property
+    def shipped_value(self):
+        """USD value of the trucks actually sent (each at its own unit price).
+        The payable to the partner accrues per shipped truck, not on signing."""
+        if not hasattr(self, "shipments"):
+            return Decimal("0")
+        return sum((s.goods_value for s in self.shipments.all()), Decimal("0"))
+
+    @property
     def debt(self):
-        return self.total_value - self.paid_total
+        """What we owe the partner NOW: shipped value minus payments. Payments are
+        capped at this in the form, so it never goes negative (no prepayments)."""
+        return self.shipped_value - self.paid_total
 
     def __str__(self):
         return f"#{self.pk} · {self.brand} · {self.partner}"
@@ -224,6 +234,9 @@ class Shipment(models.Model):
     contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
                                  related_name="shipments", verbose_name="Kelishuv")
     kg = models.DecimalField("Yuborilgan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
+                                null=True, blank=True,
+                                help_text="Bo'sh qoldirilsa kelishuv narxi olinadi")
     status = models.ForeignKey(ShipmentStatus, on_delete=models.PROTECT,
                                related_name="shipments", verbose_name="Holat")
     sent = models.DateField("Jo'natilgan sana", null=True, blank=True)
@@ -259,10 +272,17 @@ class Shipment(models.Model):
         return (self.eta - timezone.localdate()).days
 
     @property
+    def unit_price(self):
+        """This truck's own USD/kg price when set, else the contract price — each
+        truck under one kelishuv can carry a different price (request: per-truck
+        pricing)."""
+        return self.price if self.price is not None else self.contract.price
+
+    @property
     def goods_value(self):
-        """The USD value of the goods in this load at the contract price (before
+        """The USD value of the goods in this load at its unit price (before
         road/customs expenses). Admin-only in the UI — never shown to translators."""
-        return (self.kg * self.contract.price).quantize(Decimal("0.01"))
+        return (self.kg * self.unit_price).quantize(Decimal("0.01"))
 
     @property
     def current_transport(self):
@@ -280,10 +300,10 @@ class Shipment(models.Model):
 
     @property
     def landed_cost_per_kg(self):
-        """True cost of one kg in this load: contract price plus this load's own
+        """True cost of one kg in this load: its unit price plus this load's own
         road/customs spend spread over its kg. Phase 2 snapshots this into sales."""
         extra = self.expenses_total / self.kg if self.kg else Decimal("0")
-        return (self.contract.price + extra).quantize(Decimal("0.0001"))
+        return (self.unit_price + extra).quantize(Decimal("0.0001"))
 
     @property
     def is_lot(self):
@@ -355,9 +375,28 @@ class Reservation(models.Model):
         return f"Bron #{self.pk} · {self.customer} · {self.kg} kg"
 
 
+def fifo_lots(brand):
+    """Arrived lots of one brand that still have kg available, oldest arrival
+    first (then id) — the FIFO consumption order for the ombor."""
+    lots = (Shipment.objects.filter(arrived__isnull=False, contract__brand=brand)
+            .select_related("contract").order_by("arrived", "id"))
+    return [lot for lot in lots if lot.available_kg > 0]
+
+
+def brand_stock():
+    """[(brand, available kg)] across arrived lots, for the FIFO sale form."""
+    totals = {}
+    for lot in Shipment.objects.filter(arrived__isnull=False).select_related("contract"):
+        avail = lot.available_kg
+        if avail > 0:
+            totals[lot.contract.brand] = totals.get(lot.contract.brand, Decimal("0")) + avail
+    return sorted(totals.items())
+
+
 class Sale(models.Model):
-    """Sotuv: kg sold from one arrived lot at a sale price. Snapshots that lot's
-    landed cost at sale time so later shipment expenses never retroactively
+    """Sotuv: kg sold from one arrived lot at a sale price. A sale entered by brand
+    is split FIFO across the oldest lots (one row per lot slice). Snapshots that
+    lot's landed cost at sale time so later shipment expenses never retroactively
     change a past sale's profit."""
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,

@@ -970,10 +970,13 @@
       var o = opt(sel); if (!o) { return; }
       var kg = document.getElementById('id_kg');
       var eta = document.getElementById('id_eta');
+      var price = document.getElementById('id_price');
       var rem = o.getAttribute('data-remaining');
       var dl = o.getAttribute('data-deadline');
+      var pr = o.getAttribute('data-price');
       if (kg && rem !== null && (overwrite || !kg.value)) { kg.value = rem; }
       if (eta && (overwrite || !eta.value)) { eta.value = dl || (overwrite ? '' : eta.value); }
+      if (price && pr !== null && (overwrite || !price.value)) { price.value = pr; }
     }
     function enhance(root) {
       (root || document).querySelectorAll('select[data-contract-source]').forEach(function (sel) {

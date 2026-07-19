@@ -1,13 +1,46 @@
 from decimal import Decimal
 
-from crm.models import Contract, Partner, SupplierPayment
+from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
 
 
-def _contract(db):
+def _contract(db, ship_kg="1000"):
+    """Contract with (by default) its full kg already on a truck — the payable
+    to the partner accrues per shipped truck, so tests that pay need shipped value."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    return Contract.objects.create(partner=partner, brand="LLDPE", kg=Decimal("1000"),
-                                   price=Decimal("1.00"), created="2026-07-01",
-                                   deadline="2026-07-28")
+    c = Contract.objects.create(partner=partner, brand="LLDPE", kg=Decimal("1000"),
+                                price=Decimal("1.00"), created="2026-07-01",
+                                deadline="2026-07-28")
+    if ship_kg:
+        Shipment.objects.create(contract=c, kg=Decimal(ship_kg),
+                                status=ShipmentStatus.objects.first())
+    return c
+
+
+def test_payment_blocked_before_anything_ships(admin_client, db):
+    """Debt accrues per shipped truck — with no trucks sent there is nothing owed,
+    so a payment (prepayment) is rejected."""
+    c = _contract(db, ship_kg=None)
+    assert c.debt == Decimal("0")
+    resp = admin_client.post("/supplier-payments/new/", {
+        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
+        "exchange_rate": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 200 and not SupplierPayment.objects.exists()
+
+
+def test_debt_accrues_per_truck_at_its_own_price(admin_client, db):
+    """Two trucks under one kelishuv, one at its own price: owed = Σ kg × unit
+    price, not the contract total."""
+    c = _contract(db, ship_kg="400")                       # 400 kg @ 1.00 (contract)
+    Shipment.objects.create(contract=c, kg=Decimal("100"), price=Decimal("2.00"),
+                            status=ShipmentStatus.objects.first())
+    assert c.shipped_value == Decimal("600.00")            # 400 + 200
+    assert c.debt == Decimal("600.00")
+    resp = admin_client.post("/supplier-payments/new/", {  # 601 > 600 → blocked
+        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "601",
+        "exchange_rate": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 200 and not SupplierPayment.objects.exists()
 
 
 def test_payment_reduces_debt(admin_client, db):
