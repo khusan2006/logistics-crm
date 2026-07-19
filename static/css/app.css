@@ -1722,3 +1722,7 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-sub { font-size: 12px; margin-top: 1px; }
 .status-cell-form { margin: 0; }
 .status-select { padding: 5px 8px; border-radius: 8px; font-size: 13px; max-width: 170px; }
+
+/* Load route (from → to) on the Yuklar table */
+.route { font-size: 13px; }
+.route-arrow { color: var(--text-faint); margin: 0 2px; }

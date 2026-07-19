@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crm_extras %}
 {% block title %}Yuklar · GranulaLog{% endblock %}
 {% block topbar_title %}Yuklar{% endblock %}
 {% if user.is_admin_role %}
@@ -16,7 +17,6 @@
 
 {% if shipments %}
 <div class="status-tabs" role="tablist">
-  <button type="button" class="status-tab is-active" data-tab="all">Barchasi <span class="status-tab-count">{{ total }}</span></button>
   {% for t in tabs %}
   <button type="button" class="status-tab" data-tab="{{ t.status.pk }}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
   {% endfor %}
@@ -30,7 +30,9 @@
   <tr>
     <th class="sticky-col">Yuk</th>
     <th>Hamkor / Marka</th>
+    <th>Yo'nalish</th>
     <th class="num">Kg</th>
+    {% if user.is_admin_role %}<th class="num">Narx</th>{% endif %}
     <th>Holat</th>
     <th>Transport / Konteyner</th>
     <th>Kelish</th>
@@ -47,7 +49,13 @@
       <div class="load-partner">{{ s.contract.partner.name }}</div>
       <div class="muted load-sub">{{ s.contract.brand }}</div>
     </td>
+    <td>
+      {% if s.origin or s.destination %}
+      <span class="route">{{ s.origin|default:"—" }} <span class="route-arrow">→</span> {{ s.destination|default:"—" }}</span>
+      {% else %}<span class="muted">—</span>{% endif %}
+    </td>
     <td class="num">{{ s.kg }}</td>
+    {% if user.is_admin_role %}<td class="num">{{ s.goods_value|usd }}</td>{% endif %}
     <td>
       <form method="post" action="{% url 'shipment_set_status' s.pk %}" class="status-cell-form">
         {% csrf_token %}
@@ -78,6 +86,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </a>
       {% if user.is_admin_role %}
+      <a class="icon-action" href="{% url 'expense_create' %}?shipment={{ s.pk }}" data-modal title="Xarajat qo'shish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      </a>
       <a class="icon-action act-edit" href="{% url 'shipment_edit' s.pk %}" data-modal title="Tahrirlash">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </a>
@@ -101,12 +112,12 @@
   var rows = document.querySelectorAll('.load-row');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
   if (!tabs.length) { return; }
-  function apply(tab) {
+  function showAll() { rows.forEach(function (r) { r.hidden = false; }); if (emptyMsg) { emptyMsg.hidden = true; } }
+  function filter(tab) {
     var shown = 0;
     rows.forEach(function (r) {
-      var ok = tab === 'all'
-        || (tab === 'overdue' && r.getAttribute('data-overdue') === '1')
-        || r.getAttribute('data-status') === tab;
+      var ok = (tab === 'overdue') ? r.getAttribute('data-overdue') === '1'
+                                   : r.getAttribute('data-status') === tab;
       r.hidden = !ok;
       if (ok) { shown++; }
     });
@@ -114,9 +125,14 @@
   }
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {
+      if (t.classList.contains('is-active')) {   // clicking the active tab clears the filter
+        t.classList.remove('is-active');
+        showAll();
+        return;
+      }
       tabs.forEach(function (x) { x.classList.remove('is-active'); });
       t.classList.add('is-active');
-      apply(t.getAttribute('data-tab'));
+      filter(t.getAttribute('data-tab'));
     });
   });
 })();

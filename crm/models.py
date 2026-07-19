@@ -231,6 +231,8 @@ class Shipment(models.Model):
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
+    origin = models.CharField("Qayerdan (jo'natilish joyi)", max_length=120, blank=True)
+    destination = models.CharField("Qayerga (yetkazish joyi)", max_length=120, blank=True)
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="shipments",
@@ -255,6 +257,12 @@ class Shipment(models.Model):
         if self.arrived or not self.eta:
             return None
         return (self.eta - timezone.localdate()).days
+
+    @property
+    def goods_value(self):
+        """The USD value of the goods in this load at the contract price (before
+        road/customs expenses). Admin-only in the UI — never shown to translators."""
+        return (self.kg * self.contract.price).quantize(Decimal("0.01"))
 
     @property
     def expenses_total(self):

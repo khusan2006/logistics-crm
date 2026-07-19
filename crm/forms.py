@@ -152,7 +152,8 @@ class ContractChoiceSelect(forms.Select):
 class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
-        fields = ["contract", "kg", "status", "sent", "eta", "transport", "container", "note"]
+        fields = ["contract", "kg", "status", "origin", "destination", "sent", "eta",
+                  "transport", "container", "note"]
         widgets = {
             "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
             "sent": forms.DateInput(attrs={"type": "date"}),
@@ -160,6 +161,8 @@ class ShipmentForm(forms.ModelForm):
             "note": forms.Textarea(attrs={"rows": 2}),
             "transport": forms.TextInput(attrs={
                 "placeholder": "01 777 AAA (UZ) yoki 12 A 345-67 (IR)"}),
+            "origin": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
+            "destination": forms.TextInput(attrs={"placeholder": "Masalan: Toshkent ombori"}),
         }
         labels = {
             "kg": "Yuboriladigan kg",

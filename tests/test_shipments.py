@@ -150,3 +150,19 @@ def test_shipment_contract_select_carries_prefill_data(db):
     html = str(ShipmentForm())
     assert "data-remaining" in html and "data-deadline" in html
     assert 'data-contract-source' in html
+
+
+def test_translator_sees_no_price_on_loads(translator_client, admin_client, db):
+    """The Narx (price) column + expense shortcut are admin-only — the loads page is
+    translator-visible and must stay money-free for them. Scope to the page content
+    (the shared base.html JS mentions '$' in an unrelated preview helper)."""
+    c = _contract()  # price 1.00/kg
+    Shipment.objects.create(contract=c, kg=Decimal("100"), status=ShipmentStatus.objects.first())
+
+    def content(html):
+        return html.split('class="content"', 1)[1].split("</main>", 1)[0]
+
+    tr = content(translator_client.get("/shipments/").content.decode())
+    assert "Narx" not in tr and "$" not in tr and "Xarajat" not in tr
+    ad = content(admin_client.get("/shipments/").content.decode())
+    assert "Narx" in ad and "$100.00" in ad and "Xarajat" in ad
