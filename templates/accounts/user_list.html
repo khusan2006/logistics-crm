@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Foydalanuvchilar · GranulaLog{% endblock %}
+{% block topbar_title %}Foydalanuvchilar{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'user_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi foydalanuvchi</a>{% endblock %}
+{% block content %}
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr><th class="sticky-col">Login</th><th>F.I.SH.</th><th>Rol</th><th>Telefon</th><th></th></tr>
+  {% for u in page %}
+  <tr>
+    <td class="sticky-col">
+      <a href="{% url 'user_edit' u.pk %}" data-modal>{{ u.username }}</a>
+    </td>
+    <td>{{ u.get_full_name|default:"—" }}</td>
+    <td>{{ u.get_role_display }}</td>
+    <td>{{ u.phone|default:"—" }}</td>
+    <td class="row-actions">
+      <a class="icon-action act-edit" href="{% url 'user_edit' u.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<p class="muted">Foydalanuvchilar topilmadi.</p>
+{% endif %}
+{% endblock %}

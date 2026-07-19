@@ -68,4 +68,7 @@ urlpatterns = [
     path("reports/export/shipments.xlsx", crm_views.export_shipments, name="export_shipments"),
     path("reports/export/sales.xlsx", crm_views.export_sales, name="export_sales"),
     path("reports/export/debts.xlsx", crm_views.export_debts, name="export_debts"),
+    path("users/", accounts_views.user_list, name="user_list"),
+    path("users/new/", accounts_views.user_create, name="user_create"),
+    path("users/<int:pk>/edit/", accounts_views.user_edit, name="user_edit"),
 ]
