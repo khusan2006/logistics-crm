@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Hisobotlar · GranulaLog{% endblock %}
+{% block topbar_title %}Hisobotlar{% endblock %}
+{% block content %}
+
+<form method="get" class="searchbar" style="margin-bottom: 16px;">
+  <label>Boshlanish<br><input type="date" name="from" value="{{ date_from }}"></label>
+  <label>Tugash<br><input type="date" name="to" value="{{ date_to }}"></label>
+  <label>Hamkor<br>
+    <select name="partner">
+      <option value="">Barchasi</option>
+      {% for p in partners %}
+      <option value="{{ p.pk }}" {% if partner_id == p.pk|stringformat:"s" %}selected{% endif %}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Marka<br>
+    <select name="brand">
+      <option value="">Barchasi</option>
+      {% for b in brands %}
+      <option value="{{ b }}" {% if brand == b %}selected{% endif %}>{{ b }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Holat<br>
+    <select name="status">
+      <option value="">Barchasi</option>
+      {% for st in statuses %}
+      <option value="{{ st.pk }}" {% if status_id == st.pk|stringformat:"s" %}selected{% endif %}>{{ st.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="btn">Filtrlash</button>
+  {% if date_from or date_to or partner_id or brand or status_id %}
+  <a class="btn btn-ghost" href="{% url 'reports' %}">Tozalash</a>
+  {% endif %}
+  {# TODO(Task 3): Excel export buttons (export_contracts / export_supplier_payments / export_shipments / export_sales / export_debts) go here — URLs/JS not yet implemented. #}
+  {# TODO(Task 4): print/PDF button (window.print()) goes here — @media print CSS not yet implemented. #}
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi kpi--blue">
+    <div class="kpi-head"><span class="kpi-label">Kelishilgan kg</span></div>
+    <div class="kpi-value">{{ kelishilgan_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+  </div>
+  <div class="kpi kpi--gold">
+    <div class="kpi-head"><span class="kpi-label">Yuborilgan kg</span></div>
+    <div class="kpi-value">{{ yuborilgan_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+  </div>
+  <div class="kpi kpi--green">
+    <div class="kpi-head"><span class="kpi-label">Omborga kelgan kg</span></div>
+    <div class="kpi-value">{{ omborga_kelgan_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+  </div>
+  <div class="kpi kpi--blue">
+    <div class="kpi-head"><span class="kpi-label">Kontrakt summasi</span></div>
+    <div class="kpi-value">{{ kontrakt_summasi|usd }}</div>
+  </div>
+  <div class="kpi kpi--violet">
+    <div class="kpi-head"><span class="kpi-label">Hamkorga to'langan</span></div>
+    <div class="kpi-value">{{ hamkorga_tolangan|usd }}</div>
+  </div>
+  <div class="kpi kpi--red">
+    <div class="kpi-head"><span class="kpi-label">Hamkor qarzi</span></div>
+    <div class="kpi-value">{{ hamkor_qarzi|usd }}</div>
+  </div>
+  <div class="kpi kpi--red">
+    <div class="kpi-head"><span class="kpi-label">Mijoz qarzi</span></div>
+    <div class="kpi-value">{{ mijoz_qarzi|usd }}</div>
+  </div>
+  <div class="kpi {% if profit_total < 0 %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Sotuvdan foyda</span></div>
+    <div class="kpi-value">{{ profit_total|usd }}</div>
+  </div>
+  <div class="kpi {% if kechikkan_soni %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head"><span class="kpi-label">Kechikkan yuk soni</span></div>
+    <div class="kpi-value">{{ kechikkan_soni }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Hamkorlar bo'yicha</h2></div>
+  {% if partner_rows %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Hamkor</th>
+      <th>Kelishuvlar</th>
+      <th>Kg</th>
+      <th>Kontrakt summasi</th>
+      <th>To'langan</th>
+      <th>Qarz</th>
+    </tr>
+    {% for row in partner_rows %}
+    <tr>
+      <td class="sticky-col"><a href="{% url 'partner_list' %}">{{ row.partner.name }}</a></td>
+      <td>{{ row.contracts_count }}</td>
+      <td>{{ row.kg|floatformat:"0g" }}</td>
+      <td>{{ row.kontrakt_summasi|usd }}</td>
+      <td>{{ row.tolangan|usd }}</td>
+      <td class="{% if row.qarz > 0 %}late{% endif %}">{{ row.qarz|usd }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}<p class="muted">Bu davrda hamkorlar bo'yicha ma'lumot yo'q.</p>{% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Mijozlar bo'yicha</h2></div>
+  {% if customer_rows %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Mijoz</th>
+      <th>Sotildi</th>
+      <th>To'landi</th>
+      <th>Qarz</th>
+    </tr>
+    {% for row in customer_rows %}
+    <tr>
+      <td class="sticky-col"><a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a></td>
+      <td>{{ row.sotildi|usd }}</td>
+      <td>{{ row.tolandi|usd }}</td>
+      <td class="{% if row.qarz > 0 %}late{% endif %}">{{ row.qarz|usd }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}<p class="muted">Bu davrda mijozlar bo'yicha ma'lumot yo'q.</p>{% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Kechikayotgan yuklar</h2></div>
+  {% if late_shipments %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Yuk</th>
+      <th>Hamkor</th>
+      <th>Marka</th>
+      <th>Kg</th>
+      <th>Holat</th>
+      <th>Reja sana</th>
+      <th>Kechikish</th>
+    </tr>
+    {% for s in late_shipments %}
+    <tr>
+      <td class="sticky-col"><a href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a></td>
+      <td>{{ s.contract.partner.name }}</td>
+      <td>{{ s.contract.brand }}</td>
+      <td>{{ s.kg|floatformat:"0g" }}</td>
+      <td>{{ s.status.name }}</td>
+      <td>{{ s.eta }}</td>
+      <td><span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}<p class="muted">Kechikayotgan yuklar yo'q.</p>{% endif %}
+</div>
+
+{% endblock %}

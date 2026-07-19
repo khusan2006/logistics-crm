@@ -1012,3 +1012,113 @@ def kassa(request):
         "net_total": net_in - net_out, "feed": feed_page,
         "date_from": date_from, "date_to": date_to,
     })
+
+
+@role_required(User.Role.ADMIN)
+def reports(request):
+    """Hisobotlar: whole-business KPI + table dashboard. Filters (?from&to&partner&
+    brand&status) narrow contracts/shipments (partner/brand/status/date-created-or-eta)
+    and sales/payments (date). Everything below is derived — no new model."""
+    date_from = (request.GET.get("from") or "").strip()
+    date_to = (request.GET.get("to") or "").strip()
+    partner_id = (request.GET.get("partner") or "").strip()
+    brand = (request.GET.get("brand") or "").strip()
+    status_id = (request.GET.get("status") or "").strip()
+
+    def _sum(qs, field="amount"):
+        return qs.aggregate(s=Sum(field))["s"] or Decimal("0")
+
+    contracts = Contract.objects.select_related("partner")
+    if partner_id:
+        contracts = contracts.filter(partner_id=partner_id)
+    if brand:
+        contracts = contracts.filter(brand=brand)
+    if date_from:
+        contracts = contracts.filter(created__gte=date_from)
+    if date_to:
+        contracts = contracts.filter(created__lte=date_to)
+
+    shipments = Shipment.objects.select_related("contract__partner", "status").filter(
+        contract__in=contracts
+    )
+    if status_id:
+        shipments = shipments.filter(status_id=status_id)
+    if date_from:
+        shipments = shipments.filter(eta__gte=date_from)
+    if date_to:
+        shipments = shipments.filter(eta__lte=date_to)
+
+    sup_pays = SupplierPayment.objects.select_related("contract__partner").filter(contract__in=contracts)
+    if date_from:
+        sup_pays = sup_pays.filter(date__gte=date_from)
+    if date_to:
+        sup_pays = sup_pays.filter(date__lte=date_to)
+
+    sales = Sale.objects.select_related("customer", "shipment__contract__partner")
+    if date_from:
+        sales = sales.filter(date__gte=date_from)
+    if date_to:
+        sales = sales.filter(date__lte=date_to)
+    if partner_id:
+        sales = sales.filter(shipment__contract__partner_id=partner_id)
+    if brand:
+        sales = sales.filter(shipment__contract__brand=brand)
+
+    cust_pays = CustomerPayment.objects.select_related("customer")
+    if date_from:
+        cust_pays = cust_pays.filter(date__gte=date_from)
+    if date_to:
+        cust_pays = cust_pays.filter(date__lte=date_to)
+
+    # KPIs
+    kelishilgan_kg = _sum(contracts, "kg")
+    yuborilgan_kg = _sum(shipments, "kg")
+    omborga_kelgan_kg = _sum(shipments.filter(arrived__isnull=False), "kg")
+    kontrakt_summasi = sum((c.total_value for c in contracts), Decimal("0"))
+    hamkorga_tolangan = _sum(sup_pays)
+    hamkor_qarzi = sum((c.debt for c in contracts), Decimal("0"))
+    mijoz_qarzi = sum((c.balance for c in Customer.objects.all() if c.balance > 0), Decimal("0"))
+    profit_total = sum((s.profit for s in sales), Decimal("0"))
+    late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False) if s.is_overdue]
+    kechikkan_soni = len(late_shipments)
+
+    # Per-partner table
+    partner_rows = []
+    for partner in Partner.objects.filter(contracts__in=contracts).distinct():
+        p_contracts = contracts.filter(partner=partner)
+        partner_rows.append({
+            "partner": partner,
+            "contracts_count": p_contracts.count(),
+            "kg": _sum(p_contracts, "kg"),
+            "kontrakt_summasi": sum((c.total_value for c in p_contracts), Decimal("0")),
+            "tolangan": _sum(sup_pays.filter(contract__partner=partner)),
+            "qarz": sum((c.debt for c in p_contracts), Decimal("0")),
+        })
+    partner_rows.sort(key=lambda r: r["qarz"], reverse=True)
+
+    # Per-customer table
+    customer_rows = []
+    customer_ids = sales.values_list("customer_id", flat=True).distinct()
+    for customer in Customer.objects.filter(pk__in=customer_ids):
+        c_sales = sales.filter(customer=customer)
+        sotildi = sum((s.total for s in c_sales), Decimal("0"))
+        tolandi = _sum(cust_pays.filter(customer=customer))
+        qarz = customer.balance if customer.balance > 0 else Decimal("0")
+        customer_rows.append({
+            "customer": customer, "sotildi": sotildi, "tolandi": tolandi, "qarz": qarz,
+        })
+    customer_rows.sort(key=lambda r: r["qarz"], reverse=True)
+
+    return render(request, "crm/reports.html", {
+        "kelishilgan_kg": kelishilgan_kg, "yuborilgan_kg": yuborilgan_kg,
+        "omborga_kelgan_kg": omborga_kelgan_kg, "kontrakt_summasi": kontrakt_summasi,
+        "hamkorga_tolangan": hamkorga_tolangan, "hamkor_qarzi": hamkor_qarzi,
+        "mijoz_qarzi": mijoz_qarzi, "profit_total": profit_total,
+        "kechikkan_soni": kechikkan_soni, "late_shipments": late_shipments,
+        "partner_rows": partner_rows, "customer_rows": customer_rows,
+        "partners": Partner.objects.all(), "brands": Contract.objects.values_list(
+            "brand", flat=True).distinct().order_by("brand"),
+        "statuses": ShipmentStatus.objects.all(),
+        "date_from": date_from, "date_to": date_to,
+        "partner_id": partner_id, "brand": brand, "status_id": status_id,
+    })

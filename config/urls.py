@@ -61,4 +61,5 @@ urlpatterns = [
     path("debts/", crm_views.debt_list, name="debt_list"),
     path("debts/<int:pk>/", crm_views.debt_customer, name="debt_customer"),
     path("kassa/", crm_views.kassa, name="kassa"),
+    path("reports/", crm_views.reports, name="reports"),
 ]
