@@ -150,7 +150,11 @@ class ContractChoiceSelect(forms.Select):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
         instance = getattr(value, "instance", None)  # blank choice has a plain "" value
         if instance is not None:
-            option["attrs"]["data-remaining"] = f"{instance.remaining_kg}"
+            # a clean kg (no trailing .000): 1000.000 → "1000", 1000.500 → "1000.5"
+            rem = f"{instance.remaining_kg}"
+            if "." in rem:
+                rem = rem.rstrip("0").rstrip(".")
+            option["attrs"]["data-remaining"] = rem
             if instance.deadline:
                 option["attrs"]["data-deadline"] = instance.deadline.isoformat()
         return option
