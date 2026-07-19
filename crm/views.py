@@ -644,7 +644,8 @@ def leg_create(request):
         AuditLog.record(request.user, AuditLog.Action.CREATE, "Yo'nalish", shipment.pk,
                         f"Bosqich: {leg.from_location} → {leg.to_location}")
         messages.success(request, "Bosqich qo'shildi")
-        return form_success(request, reverse("shipment_detail", args=[shipment.pk]))
+        # reload whichever page it was opened from (loads list or the load detail)
+        return form_reload(request, reverse("shipment_detail", args=[shipment.pk]))
     return form_response(request, form, "Yangi bosqich", invalid=request.method == "POST")
 
 
@@ -694,7 +695,7 @@ def leg_move(request, pk):
         neighbor.save(update_fields=["order"])
         AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yo'nalish", leg.shipment_id,
                         "Bosqich tartibi o'zgardi")
-    return form_reload(request, reverse("shipment_detail", args=[leg.shipment_id]))
+    return redirect(request.POST.get("next") or reverse("shipment_detail", args=[leg.shipment_id]))
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)

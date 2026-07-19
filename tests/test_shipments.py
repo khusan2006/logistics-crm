@@ -166,3 +166,17 @@ def test_translator_sees_no_price_on_loads(translator_client, admin_client, db):
     assert "Narx" not in tr and "$" not in tr and "Xarajat" not in tr
     ad = content(admin_client.get("/shipments/").content.decode())
     assert "Narx" in ad and "$100.00" in ad and "Xarajat" in ad
+
+
+def test_yuklar_list_has_inline_legs_panel(admin_client, db):
+    """Each load row on the Yuklar list has an expand control and an inline legs
+    panel so the route can be managed without opening the detail page."""
+    from crm.models import ShipmentLeg
+    c = _contract()
+    s = Shipment.objects.create(contract=c, kg=Decimal("100"), status=ShipmentStatus.objects.first())
+    ShipmentLeg.objects.create(shipment=s, order=1, from_location="Tehron",
+                               to_location="Chegara", transport="12 A 345")
+    html = admin_client.get("/shipments/").content.decode()
+    assert "leg-expand" in html and "legs-detail" in html
+    assert "Tehron" in html and "Chegara" in html          # legs rendered inline
+    assert f"/legs/new/?shipment={s.pk}" in html            # inline "+ Bosqich"

@@ -42,6 +42,7 @@
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
       class="load-row{% if s.is_overdue %} is-overdue{% endif %}">
     <td class="sticky-col">
+      <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
       <div class="muted load-sub">Kelishuv #{{ s.contract_id }}</div>
     </td>
@@ -98,6 +99,38 @@
       {% endif %}
     </td>
   </tr>
+  <tr class="legs-detail" data-load="{{ s.pk }}" data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}" hidden>
+    <td colspan="9">
+      <div class="legs-inline">
+        <div class="legs-inline-head">
+          <strong>Yo'nalish bosqichlari</strong>
+          <a class="btn btn-sm" href="{% url 'leg_create' %}?shipment={{ s.pk }}" data-modal>+ Bosqich</a>
+        </div>
+        {% if s.legs.all %}
+        <table class="legs-inline-table">
+          <tr><th>#</th><th>Yo'nalish</th><th>Haydovchi</th><th>Sana</th><th>Izoh</th><th></th></tr>
+          {% for leg in s.legs.all %}
+          <tr{% if leg.is_current %} class="leg-current"{% endif %}>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ leg.from_location }} <span class="route-arrow">&rarr;</span> {{ leg.to_location }}{% if leg.is_current %} <span class="daybadge">hozirgi</span>{% endif %}</td>
+            <td>{{ leg.transport|default:"—" }}</td>
+            <td class="muted">{{ leg.departed|default:"—" }} &rarr; {{ leg.arrived|default:"—" }}</td>
+            <td class="muted">{{ leg.note|default:"—" }}</td>
+            <td class="row-actions">
+              <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="up"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Yuqoriga">↑</button></form>
+              <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="down"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Pastga">↓</button></form>
+              <a class="btn btn-ghost btn-sm" href="{% url 'leg_edit' leg.pk %}" data-modal>Tahrirlash</a>
+              <a class="btn btn-ghost btn-sm" href="{% url 'leg_delete' leg.pk %}" data-modal>O'chirish</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p class="muted" style="margin: 6px 0 0;">Bosqich yo'q. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing.</p>
+        {% endif %}
+      </div>
+    </td>
+  </tr>
   {% endfor %}
 </table>
 </div>
@@ -110,10 +143,29 @@
 (function () {
   var tabs = document.querySelectorAll('.status-tab');
   var rows = document.querySelectorAll('.load-row');
+  var legRows = document.querySelectorAll('.legs-detail');
+  var expandBtns = document.querySelectorAll('.leg-expand');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
+
+  function collapseAll() {
+    legRows.forEach(function (r) { r.hidden = true; });
+    expandBtns.forEach(function (b) { b.classList.remove('is-open'); });
+  }
+  // Expand a load's inline route legs
+  expandBtns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var detail = document.querySelector('.legs-detail[data-load="' + b.getAttribute('data-load') + '"]');
+      if (!detail) { return; }
+      var willOpen = detail.hidden;
+      detail.hidden = !willOpen;
+      b.classList.toggle('is-open', willOpen);
+    });
+  });
+
   if (!tabs.length) { return; }
-  function showAll() { rows.forEach(function (r) { r.hidden = false; }); if (emptyMsg) { emptyMsg.hidden = true; } }
+  function showAll() { rows.forEach(function (r) { r.hidden = false; }); collapseAll(); if (emptyMsg) { emptyMsg.hidden = true; } }
   function filter(tab) {
+    collapseAll();   // switching tabs collapses any open route panels
     var shown = 0;
     rows.forEach(function (r) {
       var ok = (tab === 'overdue') ? r.getAttribute('data-overdue') === '1'

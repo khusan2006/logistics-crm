@@ -1736,3 +1736,11 @@ ul.errorlist li::before { content: "⚠ "; }
 .qa-panel { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; padding: 10px; background: var(--surface-2); border-radius: 10px; }
 .qa-panel input { flex: 1 1 140px; min-width: 120px; }
 .qa-msg { flex-basis: 100%; font-size: 12px; }
+
+/* Expandable route-legs row on the Yuklar table */
+.leg-expand { border: 0; background: transparent; cursor: pointer; color: var(--text-muted); font-size: 11px; margin-right: 5px; padding: 0; transition: transform .15s ease; display: inline-block; vertical-align: middle; }
+.leg-expand.is-open { transform: rotate(90deg); color: var(--accent); }
+.legs-detail > td { background: var(--surface-2); padding: 12px 18px; }
+.legs-inline-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.legs-inline-table { width: 100%; background: var(--surface); border-radius: 10px; }
+.legs-inline-table th, .legs-inline-table td { padding: 7px 10px; font-size: 13px; }
