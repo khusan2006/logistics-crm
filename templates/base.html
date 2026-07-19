@@ -920,6 +920,68 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
+  // Currency toggle in money-entry modals (supplier/customer payments,
+  // shipment expenses): selecting So'm reveals the exchange-rate field and
+  // shows a live "≈ $X.XX" preview; selecting Dollar hides the rate. The
+  // server still converts on submit (MoneyEntryFormMixin) — this is UX only.
+  // Fields are marked server-side with data-money-currency/-rate/-amount.
+  (function () {
+    function num(el) {
+      if (!el) { return 0; }
+      return parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')) || 0;
+    }
+    function update(currencyEl) {
+      var root = currencyEl.closest('form') || document;
+      var rateEl = root.querySelector('[data-money-rate]');
+      var amountEl = root.querySelector('[data-money-amount]');
+      if (!rateEl || !amountEl) { return; }
+      var ratePara = rateEl.closest('p') || rateEl;
+      var isUzs = currencyEl.value === 'uzs';
+      ratePara.hidden = !isUzs;
+
+      var preview = amountEl.parentNode.querySelector('[data-money-preview]');
+      if (!isUzs) {
+        if (preview) { preview.hidden = true; preview.textContent = ''; }
+        return;
+      }
+      if (!preview) {
+        preview = document.createElement('span');
+        preview.className = 'muted';
+        preview.setAttribute('data-money-preview', '');
+        amountEl.insertAdjacentElement('afterend', preview);
+      }
+      var amount = num(amountEl);
+      var rate = num(rateEl);
+      if (amount > 0 && rate > 0) {
+        preview.hidden = false;
+        preview.textContent = '≈ $' + (amount / rate).toFixed(2);
+      } else {
+        preview.hidden = true;
+        preview.textContent = '';
+      }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-money-currency]').forEach(function (el) {
+        if (el.dataset.currencyToggleReady) { return; }
+        el.dataset.currencyToggleReady = '1';
+        update(el);
+      });
+    }
+    document.addEventListener('change', function (e) {
+      if (e.target.matches && e.target.matches('[data-money-currency]')) { update(e.target); }
+    });
+    document.addEventListener('input', function (e) {
+      if (e.target.matches && e.target.matches('[data-money-rate], [data-money-amount]')) {
+        var root = e.target.closest('form') || document;
+        var currencyEl = root.querySelector('[data-money-currency]');
+        if (currencyEl) { update(currencyEl); }
+      }
+    });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
   // Password show/hide: wrap every password input with an eye button that
   // toggles the value between hidden (•••) and visible plain text.
   (function () {

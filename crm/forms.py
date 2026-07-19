@@ -55,7 +55,20 @@ class ShipmentStatusForm(forms.ModelForm):
 class MoneyEntryFormMixin:
     """Shared so'm→USD conversion. The user types `amount` in `currency`; after
     clean(), cleaned_data["amount"] is canonical USD and amount_original/exchange_rate
-    carry the entry-time facts. Reused by the expense form."""
+    carry the entry-time facts. Reused by the expense form.
+
+    Also marks the currency/amount/exchange_rate widgets with data-money-*
+    hooks so the base.html JS enhancer can show/hide the rate field and
+    render a live USD preview (Phase 3 Task 7)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "currency" in self.fields:
+            self.fields["currency"].widget.attrs["data-money-currency"] = ""
+        if "exchange_rate" in self.fields:
+            self.fields["exchange_rate"].widget.attrs["data-money-rate"] = ""
+        if "amount" in self.fields:
+            self.fields["amount"].widget.attrs["data-money-amount"] = ""
 
     def clean(self):
         cleaned = super().clean()
