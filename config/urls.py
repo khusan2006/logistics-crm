@@ -62,4 +62,10 @@ urlpatterns = [
     path("debts/<int:pk>/", crm_views.debt_customer, name="debt_customer"),
     path("kassa/", crm_views.kassa, name="kassa"),
     path("reports/", crm_views.reports, name="reports"),
+    path("reports/export/contracts.xlsx", crm_views.export_contracts, name="export_contracts"),
+    path("reports/export/supplier-payments.xlsx", crm_views.export_supplier_payments,
+         name="export_supplier_payments"),
+    path("reports/export/shipments.xlsx", crm_views.export_shipments, name="export_shipments"),
+    path("reports/export/sales.xlsx", crm_views.export_sales, name="export_sales"),
+    path("reports/export/debts.xlsx", crm_views.export_debts, name="export_debts"),
 ]

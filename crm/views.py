@@ -12,6 +12,7 @@ from django.views.decorators.http import require_POST
 from accounts.decorators import role_required
 from accounts.models import User
 
+from .exports import xlsx_response
 from .forms import (
     ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm, SaleForm,
     ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentStatusForm, SupplierPaymentForm,
@@ -1014,19 +1015,23 @@ def kassa(request):
     })
 
 
-@role_required(User.Role.ADMIN)
-def reports(request):
-    """Hisobotlar: whole-business KPI + table dashboard. Filters (?from&to&partner&
-    brand&status) narrow contracts/shipments (partner/brand/status/date-created-or-eta)
-    and sales/payments (date). Everything below is derived — no new model."""
-    date_from = (request.GET.get("from") or "").strip()
-    date_to = (request.GET.get("to") or "").strip()
-    partner_id = (request.GET.get("partner") or "").strip()
-    brand = (request.GET.get("brand") or "").strip()
-    status_id = (request.GET.get("status") or "").strip()
+def _report_filters(request):
+    """Parse the shared reports/exports querystring filters (?from&to&partner&brand&status)."""
+    return {
+        "date_from": (request.GET.get("from") or "").strip(),
+        "date_to": (request.GET.get("to") or "").strip(),
+        "partner_id": (request.GET.get("partner") or "").strip(),
+        "brand": (request.GET.get("brand") or "").strip(),
+        "status_id": (request.GET.get("status") or "").strip(),
+    }
 
-    def _sum(qs, field="amount"):
-        return qs.aggregate(s=Sum(field))["s"] or Decimal("0")
+
+def _report_querysets(request):
+    """Build the filtered contracts/shipments/supplier-payments/sales/customer-payments
+    querysets shared by the reports dashboard and the xlsx exports."""
+    f = _report_filters(request)
+    date_from, date_to = f["date_from"], f["date_to"]
+    partner_id, brand, status_id = f["partner_id"], f["brand"], f["status_id"]
 
     contracts = Contract.objects.select_related("partner")
     if partner_id:
@@ -1069,6 +1074,26 @@ def reports(request):
         cust_pays = cust_pays.filter(date__gte=date_from)
     if date_to:
         cust_pays = cust_pays.filter(date__lte=date_to)
+
+    return {
+        "filters": f, "contracts": contracts, "shipments": shipments,
+        "sup_pays": sup_pays, "sales": sales, "cust_pays": cust_pays,
+    }
+
+
+@role_required(User.Role.ADMIN)
+def reports(request):
+    """Hisobotlar: whole-business KPI + table dashboard. Filters (?from&to&partner&
+    brand&status) narrow contracts/shipments (partner/brand/status/date-created-or-eta)
+    and sales/payments (date). Everything below is derived — no new model."""
+    q = _report_querysets(request)
+    date_from, date_to = q["filters"]["date_from"], q["filters"]["date_to"]
+    partner_id, brand, status_id = q["filters"]["partner_id"], q["filters"]["brand"], q["filters"]["status_id"]
+    contracts, shipments = q["contracts"], q["shipments"]
+    sup_pays, sales, cust_pays = q["sup_pays"], q["sales"], q["cust_pays"]
+
+    def _sum(qs, field="amount"):
+        return qs.aggregate(s=Sum(field))["s"] or Decimal("0")
 
     # KPIs
     kelishilgan_kg = _sum(contracts, "kg")
@@ -1122,3 +1147,63 @@ def reports(request):
         "date_from": date_from, "date_to": date_to,
         "partner_id": partner_id, "brand": brand, "status_id": status_id,
     })
+
+
+@role_required(User.Role.ADMIN)
+def export_contracts(request):
+    contracts = _report_querysets(request)["contracts"]
+    headers = ["ID", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg", "To'langan", "Qarz"]
+    rows = (
+        [c.pk, c.created, c.partner.name, c.brand, c.kg, c.price, c.total_value,
+         c.shipped_kg, c.paid_total, c.debt]
+        for c in contracts
+    )
+    return xlsx_response("kelishuvlar.xlsx", headers, rows)
+
+
+@role_required(User.Role.ADMIN)
+def export_supplier_payments(request):
+    sup_pays = _report_querysets(request)["sup_pays"]
+    headers = ["Sana", "Kelishuv ID", "Hamkor", "Summa", "Usul"]
+    rows = (
+        [p.date, p.contract_id, p.contract.partner.name, p.amount, p.get_method_display()]
+        for p in sup_pays
+    )
+    return xlsx_response("hamkor-tolovlari.xlsx", headers, rows)
+
+
+@role_required(User.Role.ADMIN)
+def export_shipments(request):
+    shipments = _report_querysets(request)["shipments"]
+    headers = [
+        "Yuk ID", "Kelishuv ID", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
+        "Yetib kelgan", "Transport", "Konteyner",
+    ]
+    rows = (
+        [s.pk, s.contract_id, s.contract.partner.name, s.contract.brand, s.kg, s.status.name,
+         s.sent, s.eta, s.arrived, s.transport, s.container]
+        for s in shipments
+    )
+    return xlsx_response("yuklar.xlsx", headers, rows)
+
+
+@role_required(User.Role.ADMIN)
+def export_sales(request):
+    sales = _report_querysets(request)["sales"]
+    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Tan narx", "Sotuv narx", "Jami", "Foyda", "Qoldiq"]
+    rows = (
+        [s.date, s.customer.name, s.shipment_id, s.shipment.contract.brand, s.kg, s.cost_price,
+         s.price, s.total, s.profit, s.remaining]
+        for s in sales
+    )
+    return xlsx_response("sotuvlar.xlsx", headers, rows)
+
+
+@role_required(User.Role.ADMIN)
+def export_debts(request):
+    headers = ["Mijoz", "Telefon", "Jami savdo", "To'langan", "Qarz"]
+    rows = (
+        [c.name, c.phone, c.sales_total, c.paid_total, c.balance]
+        for c in Customer.objects.all() if c.balance > 0
+    )
+    return xlsx_response("qarzdorlar.xlsx", headers, rows)

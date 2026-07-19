@@ -35,7 +35,11 @@
   {% if date_from or date_to or partner_id or brand or status_id %}
   <a class="btn btn-ghost" href="{% url 'reports' %}">Tozalash</a>
   {% endif %}
-  {# TODO(Task 3): Excel export buttons (export_contracts / export_supplier_payments / export_shipments / export_sales / export_debts) go here — URLs/JS not yet implemented. #}
+  <a class="btn btn-ghost" href="{% url 'export_contracts' %}?{{ request.GET.urlencode }}">Kelishuvlar (xlsx)</a>
+  <a class="btn btn-ghost" href="{% url 'export_supplier_payments' %}?{{ request.GET.urlencode }}">Hamkor to'lovlari (xlsx)</a>
+  <a class="btn btn-ghost" href="{% url 'export_shipments' %}?{{ request.GET.urlencode }}">Yuklar (xlsx)</a>
+  <a class="btn btn-ghost" href="{% url 'export_sales' %}?{{ request.GET.urlencode }}">Sotuvlar (xlsx)</a>
+  <a class="btn btn-ghost" href="{% url 'export_debts' %}?{{ request.GET.urlencode }}">Qarzdorlar (xlsx)</a>
   {# TODO(Task 4): print/PDF button (window.print()) goes here — @media print CSS not yet implemented. #}
 </form>
 
