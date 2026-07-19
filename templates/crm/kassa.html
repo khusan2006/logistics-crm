@@ -2,15 +2,43 @@
 {% load crm_extras %}
 {% block title %}Kassa · GranulaLog{% endblock %}
 {% block topbar_title %}Kassa{% endblock %}
+{% block fab %}
+<a class="fab" href="{% url 'customer_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>Kirim (mijozdan)</a>
+<a class="fab fab--muted" href="{% url 'supplier_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Chiqim (hamkorga)</a>
+{% endblock %}
 {% block content %}
 
-<form method="get" class="searchbar" style="margin-bottom: 16px;">
+{# Joriy holat — kassadagi pul vs hamkorlarga qarz #}
+<p class="section-eyebrow">Joriy holat</p>
+<section class="balance-hero" aria-label="Kassa holati">
+  <div class="balance-hero-grid">
+    <div class="balance-cell">
+      <div class="balance-cap"><span class="balance-ic balance-ic--cash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="12" cy="14" r="1.5"/></svg></span>Kassadagi pul</div>
+      <div class="balance-num">{{ cash_total|usd }}</div>
+      <div class="balance-note">kirim − chiqim, boshidan</div>
+    </div>
+    <div class="balance-cell">
+      <div class="balance-cap"><span class="balance-ic balance-ic--debt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20"/><path d="M4 20V8l8-5 8 5v12"/></svg></span>Hamkorlarga qarzimiz</div>
+      <div class="balance-num">{{ payable_total|usd }}</div>
+      <div class="balance-note">yuborilgan yuklar bo'yicha to'lanmagani</div>
+    </div>
+  </div>
+</section>
+
+<form method="get" class="searchbar" style="margin-bottom: 6px;">
   <label>Boshlanish<br><input type="date" name="from" value="{{ date_from }}"></label>
   <label>Tugash<br><input type="date" name="to" value="{{ date_to }}"></label>
   <button type="submit" class="btn">Filtrlash</button>
-  {% if date_from or date_to %}<a class="btn btn-ghost" href="{% url 'kassa' %}">Tozalash</a>{% endif %}
 </form>
+<div class="status-tabs" style="margin-bottom: 16px;">
+  {% for label, f, t in presets %}
+  <a class="status-tab{% if date_from == f and date_to == t %} is-active{% endif %}"
+     href="?{% if f %}from={{ f }}&to={{ t }}{% endif %}">{{ label }}</a>
+  {% endfor %}
+</div>
 
+{# Shu davr — tanlangan sana bo'yicha usul kesimida #}
+<p class="section-eyebrow">Shu davr · tanlangan sana bo'yicha</p>
 <div class="kpi-grid">
   <div class="kpi {% if balances.cash.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Naqd</span></div>
@@ -40,15 +68,84 @@
       <span class="avans">+{{ net_in|usd }}</span> · <span class="late">−{{ net_out|usd }}</span>
     </div>
   </div>
-  <div class="kpi {% if payable_total > 0 %}kpi--red{% else %}kpi--green{% endif %}">
-    <div class="kpi-head"><span class="kpi-label">Hamkorlarga qarzimiz</span></div>
-    <div class="kpi-value">{{ payable_total|usd }}</div>
-    <div class="kpi-meta muted">yuborilgan yuklar bo'yicha</div>
+</div>
+
+<div class="grid-2 kassa-ledger">
+  {# ── Kirim: mijozlardan qabul qilingan to'lovlar ── #}
+  <div class="card" style="margin-bottom:0;">
+    <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <h2 style="margin:0;">Kirim</h2>
+      <span class="ledger-total amt-in">+{{ net_in|usd }}</span>
+    </div>
+    <p class="field-hint" style="margin:2px 0 8px;">Mijozlardan qabul qilingan to'lovlar — eng yangisi yuqorida.</p>
+    <div class="table-wrap">
+    <table class="ledger-table">
+      <tr>
+        <th>Sana</th>
+        <th>Kimdan</th>
+        <th>Usul</th>
+        <th class="num">Kurs / asl summa</th>
+        <th class="num">Kirim</th>
+        <th></th>
+      </tr>
+      {% for p in income_rows %}
+      <tr>
+        <td>{{ p.date|date:"d.m.Y" }}</td>
+        <td>{{ p.customer.name }}</td>
+        <td>{% include "crm/_method_badge.html" with code=p.method label=p.get_method_display %}</td>
+        <td class="num muted">{% if p.currency == 'uzs' %}{{ p.amount_original|floatformat:"0g" }} so'm · {{ p.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</td>
+        <td class="num amt-in"><strong>+{{ p.amount|usd }}</strong></td>
+        <td class="row-actions">
+          <a class="icon-action" href="{% url 'customer_payment_edit' p.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="6" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
+    </table>
+    </div>
+  </div>
+
+  {# ── Chiqim: hamkor to'lovlari + yuk xarajatlari ── #}
+  <div class="card" style="margin-bottom:0;">
+    <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <h2 style="margin:0;">Chiqim</h2>
+      <span class="ledger-total amt-out">−{{ net_out|usd }}</span>
+    </div>
+    <p class="field-hint" style="margin:2px 0 8px;">Hamkor to'lovlari va yuk xarajatlari — eng yangisi yuqorida.</p>
+    <div class="table-wrap">
+    <table class="ledger-table">
+      <tr>
+        <th>Sana</th>
+        <th>Tavsif</th>
+        <th>Usul</th>
+        <th class="num">Kurs / asl summa</th>
+        <th class="num">Chiqim</th>
+        <th></th>
+      </tr>
+      {% for t in outflow_rows %}
+      <tr>
+        <td>{{ t.date|date:"d.m.Y" }}</td>
+        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% else %}<span class="badge badge-ok">Xarajat</span>{% endif %} {{ t.title }}</td>
+        <td>{% include "crm/_method_badge.html" with code=t.method_code label=t.method %}</td>
+        <td class="num muted">{% if t.currency == 'uzs' %}{{ t.amount_original|floatformat:"0g" }} so'm · {{ t.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</td>
+        <td class="num amt-out"><strong>−{{ t.amount|usd }}</strong></td>
+        <td class="row-actions">
+          {% if t.kind == 'supplier' %}
+          <a class="icon-action" href="{% url 'supplier_payment_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+          <a class="icon-action danger" href="{% url 'supplier_payment_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+          {% else %}
+          <a class="icon-action" href="{% url 'expense_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+          <a class="icon-action danger" href="{% url 'expense_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="6" class="muted">Bu davrda chiqim yo'q.</td></tr>{% endfor %}
+    </table>
+    </div>
   </div>
 </div>
 
 {% if partner_debts %}
-<div class="card" style="margin-bottom: 16px;">
+<div class="card" style="margin-top: 16px;">
   <h3 style="margin: 0 0 10px;">Hamkorlarga qarzimiz</h3>
   <div class="table-wrap">
   <table>
@@ -65,43 +162,5 @@
   </table>
   </div>
 </div>
-{% endif %}
-
-{% if feed.object_list %}
-<div class="table-wrap">
-<table>
-  <tr>
-    <th class="sticky-col">Sana</th>
-    <th>Turi</th>
-    <th>Kimga / kimdan</th>
-    <th>Usul</th>
-    <th>Summa</th>
-  </tr>
-  {% for row in feed %}
-  <tr>
-    <td class="sticky-col">{{ row.date }}</td>
-    <td>{{ row.kind }}</td>
-    <td>{{ row.label }}</td>
-    <td>{{ row.method }}</td>
-    <td class="{% if row.direction == 'in' %}avans{% else %}late{% endif %}">
-      {% if row.direction == 'in' %}+{% else %}−{% endif %}{{ row.amount|usd }}
-    </td>
-  </tr>
-  {% endfor %}
-</table>
-</div>
-{% if feed.has_other_pages %}
-<div class="pagination">
-  {% if feed.has_previous %}
-  <a class="btn btn-ghost" href="?{% if date_from %}from={{ date_from }}&{% endif %}{% if date_to %}to={{ date_to }}&{% endif %}page={{ feed.previous_page_number }}">Oldingi</a>
-  {% endif %}
-  <span class="muted">{{ feed.number }} / {{ feed.paginator.num_pages }}</span>
-  {% if feed.has_next %}
-  <a class="btn btn-ghost" href="?{% if date_from %}from={{ date_from }}&{% endif %}{% if date_to %}to={{ date_to }}&{% endif %}page={{ feed.next_page_number }}">Keyingi</a>
-  {% endif %}
-</div>
-{% endif %}
-{% else %}
-<p class="muted">Bu davrda kassa harakati yo'q.</p>
 {% endif %}
 {% endblock %}

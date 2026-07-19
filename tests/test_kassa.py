@@ -79,9 +79,9 @@ def test_date_filter_excludes_out_of_range_payment(admin_client, db):
     balances = resp.context["balances"]
     assert balances["cash"]["in"] == Decimal("500.00")
 
-    feed_dates = [row["date"].isoformat() for row in resp.context["feed"].object_list]
-    assert "2026-05-01" not in feed_dates
-    assert "2026-07-10" in feed_dates
+    income_dates = [p.date.isoformat() for p in resp.context["income_rows"]]
+    assert "2026-05-01" not in income_dates
+    assert "2026-07-10" in income_dates
 
 
 def test_translator_forbidden(translator_client, db):
@@ -107,3 +107,26 @@ def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
     debts = {p.name: d for p, d in resp.context["partner_debts"]}
     assert debts == {"Pars": Decimal("350.00")}
     assert "Hamkorlarga qarzimiz" in resp.content.decode()
+
+
+def test_kassa_kirim_chiqim_ledgers_and_cash_hero(admin_client, db):
+    """Client-crm style: an all-time Kassadagi pul hero plus separate Kirim and
+    Chiqim ledgers (customer payments in; hamkor payments + yuk expenses out)."""
+    contract = _contract()
+    shipment = _arrived_shipment(contract)
+    customer = _customer()
+    CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                   amount=Decimal("500.00"), method="cash")
+    SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                   amount=Decimal("200.00"), method="cash")
+    ShipmentExpense.objects.create(shipment=shipment, date="2026-07-12",
+                                   category="transport", amount=Decimal("100.00"),
+                                   method="cash")
+    # the hero is all-time even when the filter excludes some rows
+    resp = admin_client.get("/kassa/", {"from": "2026-07-11", "to": "2026-07-12"})
+    assert resp.context["cash_total"] == Decimal("200.00")   # 500 - 200 - 100
+    assert [p.amount for p in resp.context["income_rows"]] == []      # 07-10 outside range
+    kinds = [(r["kind"], r["amount"]) for r in resp.context["outflow_rows"]]
+    assert kinds == [("expense", Decimal("100.00")), ("supplier", Decimal("200.00"))]
+    html = resp.content.decode()
+    assert "Kirim" in html and "Chiqim" in html and "Kassadagi pul" in html

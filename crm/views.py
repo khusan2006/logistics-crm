@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib import messages
@@ -1133,9 +1134,11 @@ def debt_customer(request, pk):
 
 @role_required(User.Role.ADMIN)
 def kassa(request):
-    """The till: per-method (naqd/karta/bank) USD balances and a unified in/out feed.
-    Purely derived — money IN is customer payments; money OUT is supplier payments
-    and shipment expenses. Optional ?from&to date range narrows everything."""
+    """The till, client-crm style: a current-state hero (Kassadagi pul + what we
+    owe hamkorlar), per-method USD balances for the selected period, and two
+    Excel-like ledgers side by side — Kirim (customer payments) and Chiqim
+    (supplier payments + shipment expenses). Purely derived; ?from&to narrows
+    the period section, the hero is all-time."""
     date_from = (request.GET.get("from") or "").strip()
     date_to = (request.GET.get("to") or "").strip()
 
@@ -1146,12 +1149,17 @@ def kassa(request):
             qs = qs.filter(date__lte=date_to)
         return qs
 
+    def _sum(qs):
+        return qs.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+
+    # Joriy holat (all-time, filter-independent): money physically in the till.
+    cash_total = (_sum(CustomerPayment.objects.all())
+                  - _sum(SupplierPayment.objects.all())
+                  - _sum(ShipmentExpense.objects.all()))
+
     cust_pays = _range(CustomerPayment.objects.select_related("customer"))
     sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
     expenses = _range(ShipmentExpense.objects.select_related("shipment__contract"))
-
-    def _sum(qs):
-        return qs.aggregate(s=Sum("amount"))["s"] or Decimal("0")
 
     balances = {}
     net_in = net_out = Decimal("0")
@@ -1162,24 +1170,28 @@ def kassa(request):
         net_in += m_in
         net_out += m_out
 
-    feed = []
-    for p in cust_pays:
-        feed.append({"date": p.date, "kind": "Mijoz to'lovi", "label": p.customer.name,
-                     "method": p.get_method_display(), "direction": "in", "amount": p.amount,
-                     "id": p.pk})
+    # Kirim ledger: payments received from customers, newest first.
+    income_rows = sorted(cust_pays, key=lambda p: (p.date, p.pk), reverse=True)
+
+    # Chiqim ledger: money out — supplier payments and per-load expenses.
+    outflow_rows = []
     for p in sup_pays:
-        feed.append({"date": p.date, "kind": "Hamkor to'lovi",
-                     "label": f"#{p.contract_id} · {p.contract.partner.name}",
-                     "method": p.get_method_display(), "direction": "out", "amount": p.amount,
-                     "id": p.pk})
+        outflow_rows.append({
+            "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "title": f"Kelishuv #{p.contract_id} · {p.contract.partner.name}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_original": p.amount_original, "amount": p.amount,
+        })
     for e in expenses:
-        feed.append({"date": e.date, "kind": "Xarajat",
-                     "label": f"{e.get_category_display()} · yuk #{e.shipment_id}",
-                     "method": e.get_method_display(), "direction": "out", "amount": e.amount,
-                     "id": e.pk})
-    # Newest first; id as a stable tiebreak since the three sources merge by date only.
-    feed.sort(key=lambda r: (r["date"], r["id"]), reverse=True)
-    feed_page = Paginator(feed, 50).get_page(request.GET.get("page"))
+        outflow_rows.append({
+            "kind": "expense", "pk": e.pk, "date": e.date, "obj": e,
+            "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
+            "method_code": e.method, "method": e.get_method_display(),
+            "currency": e.currency, "exchange_rate": e.exchange_rate,
+            "amount_original": e.amount_original, "amount": e.amount,
+        })
+    outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 
     # What we owe hamkorlar RIGHT NOW (not date-filtered — a current-state figure):
     # per contract the debt accrues per shipped truck (shipped value − paid).
@@ -1191,11 +1203,22 @@ def kassa(request):
     partner_debts = sorted(payables.items(), key=lambda kv: kv[1], reverse=True)
     payable_total = sum((d for _, d in partner_debts), Decimal("0"))
 
+    # Quick period presets for the filter bar.
+    today = timezone.localdate()
+    presets = [
+        ("Bugun", today.isoformat(), today.isoformat()),
+        ("7 kun", (today - timedelta(days=6)).isoformat(), today.isoformat()),
+        ("30 kun", (today - timedelta(days=29)).isoformat(), today.isoformat()),
+        ("Hammasi", "", ""),
+    ]
+
     return render(request, "crm/kassa.html", {
+        "cash_total": cash_total,
         "balances": balances, "net_in": net_in, "net_out": net_out,
-        "net_total": net_in - net_out, "feed": feed_page,
+        "net_total": net_in - net_out,
+        "income_rows": income_rows, "outflow_rows": outflow_rows,
         "partner_debts": partner_debts, "payable_total": payable_total,
-        "date_from": date_from, "date_to": date_to,
+        "date_from": date_from, "date_to": date_to, "presets": presets,
     })
 
 
