@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Count, Max, ProtectedError, Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -15,14 +16,14 @@ from accounts.models import User
 
 from .exports import xlsx_response
 from .forms import (
-    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm, SaleForm,
-    ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLegForm, ShipmentStatusForm,
-    SupplierPaymentForm,
+    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
+    SaleCreateForm, SaleForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLegForm,
+    ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
     AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, PayMethod, Reservation,
     Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment,
-    allocate_customer_payment, apply_customer_advance, trim_sale_allocations,
+    allocate_customer_payment, apply_customer_advance, fifo_lots, trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
 
@@ -574,7 +575,9 @@ def shipment_list(request):
 @role_required(User.Role.ADMIN)
 def ombor(request):
     q = request.GET.get("q", "").strip()
-    lots = Shipment.objects.filter(arrived__isnull=False).select_related("contract__partner")
+    # Oldest arrival first — the FIFO consumption order sales draw from.
+    lots = (Shipment.objects.filter(arrived__isnull=False)
+            .select_related("contract__partner").order_by("arrived", "id"))
     if q:
         lots = lots.filter(
             Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q)
@@ -838,26 +841,47 @@ def sale_list(request):
 
 @role_required(User.Role.ADMIN)
 def sale_create(request):
+    """Sale by brand: the entered kg is consumed from the oldest arrived lots
+    first (FIFO), one Sale row per lot slice so each slice keeps its own lot's
+    landed cost. `?lot=` (from the ombor shortcut) preselects that lot's brand."""
     initial = {}
     lot_id = request.GET.get("lot")
     if lot_id and lot_id.isdigit():
-        initial["shipment"] = int(lot_id)
+        lot = Shipment.objects.filter(pk=int(lot_id)).select_related("contract").first()
+        if lot:
+            initial["brand"] = lot.contract.brand
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
-    form = SaleForm(request.POST or None, initial=initial)
+    form = SaleCreateForm(request.POST or None, initial=initial)
     if request.method == "POST":
         if form.is_valid():
-            sale = form.save(commit=False)
-            sale.cost_price = sale.shipment.landed_cost_per_kg
-            sale.created_by = request.user
-            sale.save()
+            data = form.cleaned_data
+            remaining = data["kg"]
+            slices = []
+            with transaction.atomic():
+                for lot in fifo_lots(data["brand"]):
+                    if remaining <= 0:
+                        break
+                    take = min(lot.available_kg, remaining)
+                    sale = Sale.objects.create(
+                        customer=data["customer"], shipment=lot, kg=take,
+                        price=data["price"], cost_price=lot.landed_cost_per_kg,
+                        date=data["date"], debt_deadline=data["debt_deadline"],
+                        note=data["note"], created_by=request.user,
+                    )
+                    slices.append(sale)
+                    remaining -= take
             AuditLog.record(
-                request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
-                f"Yangi sotuv: {sale.kg} kg · {sale.customer.name}",
+                request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
+                f"Yangi sotuv (FIFO): {data['kg']} kg {data['brand']} · "
+                f"{data['customer'].name} · {len(slices)} lot",
             )
-            apply_customer_advance(sale)  # a pre-existing advance auto-applies to the new sale
-            messages.success(request, "Sotuv qo'shildi")
+            for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
+                apply_customer_advance(sale)
+            messages.success(
+                request,
+                f"Sotuv qo'shildi ({len(slices)} lotdan)" if len(slices) > 1 else "Sotuv qo'shildi")
             return form_success(request, reverse("sale_list"))
         return form_response(request, form, "Yangi sotuv", invalid=True)
     return form_response(request, form, "Yangi sotuv")

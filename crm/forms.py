@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from .models import (
     Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
-    ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment,
+    ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment, brand_stock,
 )
 
 # Accepts Uzbek (+998 + 9 national digits) or Iranian (+98 + 10 national digits).
@@ -282,6 +282,43 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
         if commit:
             obj.save()
         return obj
+
+
+class SaleCreateForm(forms.ModelForm):
+    """New sales are entered by BRAND, not lot: the view consumes the oldest
+    arrived lots first (FIFO), splitting the kg across lots — one Sale row per
+    lot slice, each snapshotting its own lot's landed cost."""
+
+    brand = forms.ChoiceField(label="Marka (ombordan)")
+
+    class Meta:
+        model = Sale
+        fields = ["customer", "brand", "kg", "price", "date", "debt_deadline", "note"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "debt_deadline": forms.DateInput(attrs={"type": "date"}),
+            "note": forms.Textarea(attrs={"rows": 2}),
+            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
+                                            "data-quick-add-label": "Yangi mijoz"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stock = dict(brand_stock())
+        self.fields["brand"].choices = [
+            (b, f"{b} — {avail.normalize()} kg mavjud") for b, avail in self.stock.items()
+        ]
+
+    def clean(self):
+        cleaned = super().clean()
+        brand, kg = cleaned.get("brand"), cleaned.get("kg")
+        if kg is not None and kg <= 0:
+            self.add_error("kg", "Kg musbat bo'lishi kerak")
+        if brand and kg is not None and kg > 0:
+            available = self.stock.get(brand, Decimal("0"))
+            if kg > available:
+                self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+        return cleaned
 
 
 class SaleForm(forms.ModelForm):

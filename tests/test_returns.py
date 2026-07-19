@@ -27,7 +27,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
 
 def _sale(admin_client, lot, customer, kg="4000", price="1.60"):
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "shipment": lot.pk, "kg": kg,
+        "customer": customer.pk, "brand": lot.contract.brand, "kg": kg,
         "price": price, "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     return Sale.objects.get(shipment=lot, kg=Decimal(kg))
@@ -104,7 +104,7 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
 
     # Reachability: the freed advance auto-applies to a NEW sale
     resp2 = admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "shipment": lot.pk, "kg": "500",
+        "customer": customer.pk, "brand": lot.contract.brand, "kg": "500",
         "price": "1.60", "date": "2026-07-20", "debt_deadline": "", "note": "",
     })
     assert resp2.status_code == 302

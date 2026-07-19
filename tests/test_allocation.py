@@ -94,7 +94,7 @@ def test_advance_auto_applies_to_new_sale(admin_client, db):
     assert leftover == Decimal("1000.00")
 
     resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "shipment": lot.pk, "kg": "800",
+        "customer": customer.pk, "brand": lot.contract.brand, "kg": "800",
         "price": "1.00", "date": "2026-07-19", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
