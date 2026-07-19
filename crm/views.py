@@ -550,7 +550,7 @@ def shipment_list(request):
     Tabs filter client-side; each row carries its status + overdue flag."""
     q = request.GET.get("q", "").strip()
     shipments = (Shipment.objects.select_related("contract__partner", "status")
-                 .prefetch_related("delays", "legs"))
+                 .prefetch_related("delays", "legs", "expenses"))
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
@@ -781,7 +781,8 @@ def expense_create(request):
                 f"Yangi xarajat: {expense.amount}$ · yuk #{expense.shipment_id}",
             )
             messages.success(request, "Xarajat qo'shildi")
-            return form_success(request, reverse("shipment_detail", args=[expense.shipment_id]))
+            # reload whichever page it was opened from (loads list or the load detail)
+            return form_reload(request, reverse("shipment_detail", args=[expense.shipment_id]))
         return form_response(request, form, "Yangi xarajat", invalid=True)
     return form_response(request, form, "Yangi xarajat")
 

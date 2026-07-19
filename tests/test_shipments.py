@@ -180,6 +180,8 @@ def test_yuklar_list_has_inline_legs_panel(admin_client, db):
     assert "leg-expand" in html and "legs-detail" in html
     assert "Tehron" in html and "Chegara" in html          # legs rendered inline
     assert f"/legs/new/?shipment={s.pk}" in html            # inline "+ Bosqich"
+    # admin also sees the load's expenses inside the panel
+    assert "Xarajatlar" in html and f"/expenses/new/?shipment={s.pk}" in html
 
 
 def test_shipment_own_price_drives_value_and_landed_cost(admin_client, db):

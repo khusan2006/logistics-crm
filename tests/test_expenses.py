@@ -56,7 +56,9 @@ def test_create_modal_post_valid_returns_204_with_redirect(admin_client, shipmen
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
-    assert resp["X-Redirect"] == "/shipments/%d/" % shipment.pk
+    # no X-Redirect: the modal reloads whichever page it was opened from
+    # (loads list or load detail), so inline expense-adding stays in place
+    assert "X-Redirect" not in resp
     assert ShipmentExpense.objects.filter(shipment=shipment).exists()
 
 
