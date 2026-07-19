@@ -24,6 +24,12 @@ ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "localhost,127.0.0.1")
 # proxy). e.g. CSRF_TRUSTED_ORIGINS=https://crm.example.com
 CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS")
 
+# Telegram overdue-loads digest (crm/management/commands/send_telegram_digest.py).
+# Blank by default so the command degrades gracefully (no crash, no network call)
+# until a bot token and chat id are configured.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
