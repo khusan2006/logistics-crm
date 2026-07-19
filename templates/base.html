@@ -51,6 +51,10 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
           <span>Kelishuvlar</span>
         </a>
+        <a class="nav-item {% if 'supplier_payment' in url_name %}active{% endif %}" href="{% url 'supplier_payment_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
+          <span>To'lovlar (hamkor)</span>
+        </a>
         {% endif %}
         <a class="nav-item {% if 'shipment' in url_name %}active{% endif %}" href="{% url 'shipment_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>
@@ -73,6 +77,10 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
           <span>Sotuvlar</span>
         </a>
+        <a class="nav-item {% if 'debt' in url_name %}active{% endif %}" href="{% url 'debt_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
+          <span>Qarzlar</span>
+        </a>
         <a class="nav-item {% if 'customer_payment' in url_name %}active{% endif %}" href="{% url 'customer_payment_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
           <span>Mijoz to'lovlari</span>
@@ -80,10 +88,6 @@
         <a class="nav-item {% if 'reservation' in url_name %}active{% endif %}" href="{% url 'reservation_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
           <span>Bronlar</span>
-        </a>
-        <a class="nav-item {% if 'debt' in url_name %}active{% endif %}" href="{% url 'debt_list' %}">
-          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
-          <span>Qarzlar</span>
         </a>
         <a class="nav-item {% if url_name == 'kassa' %}active{% endif %}" href="{% url 'kassa' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="16" cy="14" r="1.5"/></svg></span>
@@ -93,10 +97,6 @@
 
       <div class="nav-group">
         <div class="nav-group-label">Nazorat</div>
-        <a class="nav-item {% if 'supplier_payment' in url_name %}active{% endif %}" href="{% url 'supplier_payment_list' %}">
-          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
-          <span>To'lovlar (hamkor)</span>
-        </a>
         <a class="nav-item {% if 'audit' in url_name %}active{% endif %}" href="{% url 'audit_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="12" y2="11"/></svg></span>
           <span>Audit</span>
@@ -1016,6 +1016,69 @@
         form.addEventListener('input', function () { update(form); });
         update(form);
       });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Inline quick-add (data-quick-add-url): a "+ <label>" button next to a select
+  // opens a small name/phone panel, POSTs to the quick-create endpoint, then adds
+  // and selects the new record without leaving the form. Used for the sale form's
+  // customer field; reuses a same-name record instead of duplicating.
+  (function () {
+    function csrf(el) {
+      var f = el.closest('form'), t = f && f.querySelector('[name=csrfmiddlewaretoken]');
+      return t ? t.value : '';
+    }
+    function addOption(sel, id, text) {
+      var existing = sel.querySelector('option[value="' + id + '"]');
+      if (!existing) {
+        existing = document.createElement('option');
+        existing.value = id; existing.textContent = text;
+        sel.appendChild(existing);
+      }
+      sel.value = id;
+    }
+    function inject(sel) {
+      if (sel.dataset.qaReady) { return; }
+      sel.dataset.qaReady = '1';
+      var url = sel.getAttribute('data-quick-add-url');
+      var label = sel.getAttribute('data-quick-add-label') || 'Yangi';
+      var btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'btn btn-sm btn-ghost qa-toggle';
+      btn.textContent = '+ ' + label;
+      var panel = document.createElement('div');
+      panel.className = 'qa-panel'; panel.hidden = true;
+      panel.innerHTML =
+        '<input type="text" class="qa-name" placeholder="Ism / nomi">' +
+        '<input type="text" class="qa-phone" placeholder="Telefon (ixtiyoriy)">' +
+        '<button type="button" class="btn btn-sm qa-save">Qo\'shish</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm qa-cancel">Bekor</button>' +
+        '<span class="qa-msg muted"></span>';
+      sel.parentNode.insertBefore(btn, sel.nextSibling);
+      sel.parentNode.insertBefore(panel, btn.nextSibling);
+      btn.addEventListener('click', function () {
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) { panel.querySelector('.qa-name').focus(); }
+      });
+      panel.querySelector('.qa-cancel').addEventListener('click', function () { panel.hidden = true; });
+      panel.querySelector('.qa-save').addEventListener('click', function () {
+        var name = panel.querySelector('.qa-name').value.trim();
+        var phone = panel.querySelector('.qa-phone').value.trim();
+        var msg = panel.querySelector('.qa-msg');
+        if (!name) { msg.textContent = 'Ism kiriting'; return; }
+        var fd = new FormData(); fd.append('name', name); fd.append('phone', phone);
+        fetch(url, { method: 'POST', body: fd,
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrf(sel) } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.id) { addOption(sel, d.id, d.text); panel.hidden = true; msg.textContent = ''; }
+            else { msg.textContent = d.error || 'Xatolik'; }
+          })
+          .catch(function () { msg.textContent = 'Xatolik'; });
+      });
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('select[data-quick-add-url]').forEach(inject);
     }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();

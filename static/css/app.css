@@ -1730,3 +1730,9 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Route legs (Yo'nalish bosqichlari) on the load detail page */
 .leg-current { background: var(--accent-soft); }
 .btn-sm { padding: 4px 9px; font-size: 12px; }
+
+/* Inline quick-add (e.g. + Yangi mijoz on the sale form) */
+.qa-toggle { margin-top: 6px; }
+.qa-panel { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; padding: 10px; background: var(--surface-2); border-radius: 10px; }
+.qa-panel input { flex: 1 1 140px; min-width: 120px; }
+.qa-msg { flex-basis: 100%; font-size: 12px; }

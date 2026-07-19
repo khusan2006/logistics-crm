@@ -51,3 +51,32 @@ def test_create_customer_modal_post_invalid_returns_422(admin_client):
     html = resp.content.decode()
     assert resp.status_code == 422
     assert "modal-head" in html
+
+
+def test_customer_quick_create(admin_client, db):
+    import json
+    from crm.models import Customer
+    resp = admin_client.post("/customers/quick/", {"name": "Yangi Mijoz", "phone": "+998 90 111 22 33"})
+    assert resp.status_code == 200
+    d = json.loads(resp.content)
+    assert d["created"] is True
+    assert d["id"] == Customer.objects.get(name="Yangi Mijoz").pk
+
+
+def test_customer_quick_create_reuses_same_name(admin_client, db):
+    import json
+    from crm.models import Customer
+    existing = Customer.objects.create(name="Bor Mijoz", phone="1")
+    d = json.loads(admin_client.post("/customers/quick/", {"name": "bor mijoz"}).content)
+    assert d["created"] is False and d["id"] == existing.pk
+    assert Customer.objects.filter(name__iexact="bor mijoz").count() == 1
+
+
+def test_customer_quick_create_translator_forbidden(translator_client, db):
+    assert translator_client.post("/customers/quick/", {"name": "X"}).status_code == 403
+
+
+def test_sale_form_customer_has_quick_add_hook(db):
+    from crm.forms import SaleForm
+    html = str(SaleForm())
+    assert "data-quick-add-url" in html and "/customers/quick/" in html

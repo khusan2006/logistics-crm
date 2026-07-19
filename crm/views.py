@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, Max, ProtectedError, Q, Sum
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -152,6 +153,25 @@ def customer_create(request):
             return form_success(request, reverse("customer_list"))
         return form_response(request, form, "Yangi mijoz", invalid=True)
     return form_response(request, form, "Yangi mijoz")
+
+
+@require_POST
+@role_required(User.Role.ADMIN)
+def customer_quick_create(request):
+    """Create a customer inline (from the sale/other modals) and return it as JSON,
+    so the operator never has to leave the form. Reuses a same-name customer instead
+    of duplicating."""
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        return JsonResponse({"error": "Ism kiriting"}, status=400)
+    customer = Customer.objects.filter(name__iexact=name).first()
+    created = False
+    if customer is None:
+        customer = Customer.objects.create(name=name, phone=(request.POST.get("phone") or "").strip())
+        created = True
+        AuditLog.record(request.user, AuditLog.Action.CREATE, "Mijoz", customer.pk,
+                        f"Tez qo'shildi: {name}")
+    return JsonResponse({"id": customer.pk, "text": str(customer), "created": created})
 
 
 @role_required(User.Role.ADMIN)

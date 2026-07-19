@@ -2,6 +2,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
+from django.urls import reverse_lazy
 
 from .models import (
     Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
@@ -270,6 +271,9 @@ class SaleForm(forms.ModelForm):
             "date": forms.DateInput(attrs={"type": "date"}),
             "debt_deadline": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 2}),
+            # lets the modal JS add a "+ Yangi mijoz" inline quick-create next to it
+            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
+                                            "data-quick-add-label": "Yangi mijoz"}),
         }
 
     def __init__(self, *args, **kwargs):
