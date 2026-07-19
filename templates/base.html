@@ -51,7 +51,7 @@
       {% if user.is_admin_role %}
       <div class="nav-group">
         <div class="nav-group-label">Savdo</div>
-        <a class="nav-item {% if 'customer' in url_name %}active{% endif %}" href="{% url 'customer_list' %}">
+        <a class="nav-item {% if 'customer' in url_name and 'payment' not in url_name %}active{% endif %}" href="{% url 'customer_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
           <span>Mijozlar</span>
         </a>
