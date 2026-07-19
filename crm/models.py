@@ -556,6 +556,27 @@ def apply_customer_advance(sale):
                 PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
 
 
+def trim_sale_allocations(sale):
+    """After a return shrinks a sale's net_total, drop the now-excess allocation
+    amount (newest allocation first) so Σ allocations ≤ net_total. The freed amount
+    returns to its payment's spendable advance, reachable by apply_customer_advance —
+    otherwise a return on a paid sale would strand money in a dead over-cap row."""
+    over = (sale.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0")) - sale.net_total
+    if over <= 0:
+        return
+    with transaction.atomic():
+        for alloc in sale.allocations.order_by("-id"):
+            if over <= 0:
+                break
+            if alloc.amount <= over:
+                over -= alloc.amount
+                alloc.delete()
+            else:
+                alloc.amount -= over
+                alloc.save(update_fields=["amount"])
+                over = Decimal("0")
+
+
 class ShipmentExpense(models.Model):
     """Road/customs money spent on one load. Rolls into that load's landed cost:
     landed cost per kg = contract price + expenses ÷ kg (decision #3)."""

@@ -19,7 +19,7 @@ from .forms import (
 from .models import (
     AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Return, Sale,
     Shipment, ShipmentDelay, ShipmentExpense, ShipmentStatus, SupplierPayment, allocate_customer_payment,
-    apply_customer_advance,
+    apply_customer_advance, trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, render_confirm
 
@@ -872,6 +872,12 @@ def reservation_convert(request, pk):
     if price is None:
         messages.error(request, "Narx ko'rsatilishi kerak")
         return form_reload(request, reverse("reservation_list"))
+    # Defense-in-depth: reserved kg was validated at reservation time and convert is
+    # net-neutral, but refuse if the lot has since become over-committed (e.g. its kg
+    # was edited down) so a convert can never oversell.
+    if reservation.shipment.available_kg < 0:
+        messages.error(request, "Lot kg yetarli emas")
+        return form_reload(request, reverse("reservation_list"))
     sale = Sale.objects.create(
         customer=reservation.customer, shipment=reservation.shipment, kg=reservation.kg,
         price=price, cost_price=reservation.shipment.landed_cost_per_kg,
@@ -897,6 +903,9 @@ def return_create(request):
             ret = form.save(commit=False)
             ret.created_by = request.user
             ret.save()
+            # The return shrank the sale's net_total; trim any now-excess allocation
+            # so the freed money becomes a reachable advance again.
+            trim_sale_allocations(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.RETURN, "Qaytarish", ret.pk,
                 f"Qaytarish: {ret.kg} kg · sotuv #{sale.pk} · {sale.customer.name}",
@@ -914,6 +923,8 @@ def return_delete(request, pk):
     if request.method == "POST":
         label = f"{ret.kg} kg · sotuv #{sale.pk}"
         ret.delete()
+        # net_total rose again; soak any freed advance back onto the restored debt.
+        apply_customer_advance(sale)
         AuditLog.record(request.user, AuditLog.Action.DELETE, "Qaytarish", pk,
                         f"Qaytarish o'chirildi: {label}")
         messages.success(request, "Qaytarish o'chirildi")

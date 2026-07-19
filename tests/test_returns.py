@@ -70,6 +70,52 @@ def test_return_credits_debt_and_restocks_lot(admin_client, db):
     assert AuditLog.objects.filter(action=AuditLog.Action.RETURN, target_type="Qaytarish").exists()
 
 
+def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
+    """A return on a fully-paid sale must trim the over-cap allocation so the freed
+    money becomes a real advance the allocator can spend on a future sale."""
+    lot = _lot()
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")  # $6,400
+    # pay in full
+    admin_client.post("/customer-payments/new/", {
+        "customer": customer.pk, "date": "2026-07-18", "currency": "usd",
+        "amount": "6400", "exchange_rate": "", "method": "cash", "note": "",
+    })
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("0")
+    customer.refresh_from_db()
+    assert customer.balance == Decimal("0")
+
+    # return 1,000 kg @ $1.60 = $1,600 credit
+    resp = admin_client.post(f"/returns/new/?sale={sale.pk}", {
+        "kg": "1000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+    })
+    assert resp.status_code == 302
+
+    sale.refresh_from_db()
+    assert sale.net_total == Decimal("4800.00")
+    assert sale.remaining == Decimal("0")          # NOT negative — allocations trimmed
+    from django.db.models import Sum
+    from crm.models import PaymentAllocation
+    alloc = PaymentAllocation.objects.filter(sale=sale).aggregate(s=Sum("amount"))["s"]
+    assert alloc == Decimal("4800.00")             # trimmed to net_total, not $6,400
+    customer.refresh_from_db()
+    assert customer.balance == Decimal("-1600.00")  # $1,600 advance
+
+    # Reachability: the freed advance auto-applies to a NEW sale
+    resp2 = admin_client.post(f"/sales/new/?lot={lot.pk}", {
+        "customer": customer.pk, "shipment": lot.pk, "kg": "500",
+        "price": "1.60", "date": "2026-07-20", "debt_deadline": "", "note": "",
+    })
+    assert resp2.status_code == 302
+    new_sale = Sale.objects.get(shipment=lot, kg=Decimal("500"))
+    assert new_sale.total == Decimal("800.00")
+    new_sale.refresh_from_db()
+    assert new_sale.remaining == Decimal("0")       # covered by the freed advance
+    customer.refresh_from_db()
+    assert customer.balance == Decimal("-800.00")   # $1,600 − $800 advance left
+
+
 def test_return_without_restock_does_not_flow_kg_back(admin_client, db):
     lot = _lot()
     customer = _customer()
