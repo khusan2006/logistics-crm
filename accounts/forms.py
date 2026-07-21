@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm
 
+from crm.formatting import phone_intl_widget, validate_intl_phone
 from .models import User
 
 
@@ -28,6 +29,10 @@ class UserForm(forms.ModelForm):
     class Meta:
         model = User
         fields = ["username", "first_name", "last_name", "phone", "role"]
+        widgets = {"phone": phone_intl_widget()}
+
+    def clean_phone(self):
+        return validate_intl_phone(self.cleaned_data.get("phone"))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
