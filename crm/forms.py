@@ -1,4 +1,3 @@
-import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
@@ -9,38 +8,14 @@ from .models import (
     Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
     ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment, brand_stock,
 )
-
-# Accepts Uzbek (+998 + 9 national digits) or Iranian (+98 + 10 national digits).
-_PHONE_UZ = re.compile(r"998\d{9}")
-_PHONE_IR = re.compile(r"98\d{10}")
-
-
-def validate_intl_phone(value):
-    """Blank, or a valid Uzbek/Iranian number. Formatting (spaces, +, -) is ignored."""
-    v = (value or "").strip()
-    if not v:
-        return v
-    digits = re.sub(r"\D", "", v)
-    if _PHONE_UZ.fullmatch(digits) or _PHONE_IR.fullmatch(digits):
-        return v
-    raise forms.ValidationError(
-        "Telefon O'zbekiston (+998 XX XXX XX XX) yoki Eron (+98 XXX XXX XXXX) "
-        "formatida bo'lishi kerak")
-
-
-def _phone_widget():
-    """A fresh phone TextInput each call (so forms don't share a mutable attrs dict)."""
-    return forms.TextInput(attrs={
-        "data-phone-intl": "", "inputmode": "tel", "autocomplete": "tel",
-        "placeholder": "+998 90 123 45 67  yoki  +98 912 345 6789",
-    })
+from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 
 
 class PartnerForm(forms.ModelForm):
     class Meta:
         model = Partner
         fields = ["name", "phone", "city", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": _phone_widget()}
+        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def clean_phone(self):
         return validate_intl_phone(self.cleaned_data.get("phone"))
@@ -50,7 +25,7 @@ class CustomerForm(forms.ModelForm):
     class Meta:
         model = Customer
         fields = ["name", "phone", "address", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": _phone_widget()}
+        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def clean_phone(self):
         return validate_intl_phone(self.cleaned_data.get("phone"))
