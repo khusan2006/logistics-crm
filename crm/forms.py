@@ -1,3 +1,4 @@
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
@@ -150,7 +151,9 @@ class ShipmentForm(forms.ModelForm):
             "eta": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 2}),
             "transport": forms.TextInput(attrs={
-                "placeholder": "01 777 AAA (UZ) yoki 12 A 345-67 (IR)"}),
+                "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
+            "container": forms.TextInput(attrs={
+                "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
             "origin": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "destination": forms.TextInput(attrs={"placeholder": "Masalan: Toshkent ombori"}),
         }
@@ -179,7 +182,7 @@ class ShipmentForm(forms.ModelForm):
         return t
 
     def clean_container(self):
-        container = (self.cleaned_data.get("container") or "").strip()
+        container = normalize_container(self.cleaned_data.get("container"))
         if container:
             clash = Shipment.objects.filter(container__iexact=container)
             if self.instance.pk:
@@ -221,8 +224,15 @@ class ShipmentLegForm(forms.ModelForm):
             "arrived": forms.DateInput(attrs={"type": "date"}),
             "from_location": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "to_location": forms.TextInput(attrs={"placeholder": "Masalan: Chegara"}),
-            "transport": forms.TextInput(attrs={"placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+            "transport": forms.TextInput(attrs={
+                "data-plate-intl": "", "autocomplete": "off",
+                "placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+            "container": forms.TextInput(attrs={
+                "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
         }
+
+    def clean_container(self):
+        return normalize_container(self.cleaned_data.get("container"))
 
     def clean(self):
         cleaned = super().clean()
