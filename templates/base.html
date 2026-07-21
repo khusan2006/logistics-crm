@@ -924,6 +924,79 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
+  // Car / truck plate (data-plate-intl): a UZ/IR picker that sets the example and
+  // (for IR) allows Persian letters. Light, lenient formatting — uppercase live,
+  // tidy spacing on blur — so unusual plates still save. The country is a
+  // formatting hint; the plate string itself is what's stored (server keeps its
+  // own lenient clean_transport). On edit the country is auto-detected.
+  (function () {
+    var PERSIAN = /[؀-ۿ]/;
+    var EXAMPLE = { uz: '01 777 AAA', ir: '12 A 345 67' };
+    function tidy(v) { return String(v).toUpperCase().replace(/\s+/g, ' ').replace(/^\s+/, ''); }
+    function detect(v) { return PERSIAN.test(v) ? 'ir' : 'uz'; }
+    function enhance(root) {
+      (root || document).querySelectorAll('input[data-plate-intl]').forEach(function (input) {
+        if (input.dataset.plateReady) { return; }
+        input.dataset.plateReady = '1';
+        var wrap = document.createElement('div');
+        wrap.className = 'intl-field';
+        input.parentNode.insertBefore(wrap, input);
+        var sel = document.createElement('select');
+        sel.className = 'intl-cc';
+        [['uz', '🇺🇿 UZ'], ['ir', '🇮🇷 IR']].forEach(function (pair) {
+          var o = document.createElement('option'); o.value = pair[0]; o.textContent = pair[1]; sel.appendChild(o);
+        });
+        wrap.appendChild(sel);
+        wrap.appendChild(input);
+        sel.value = input.value ? detect(input.value) : 'uz';
+        input.autocomplete = 'off';
+        input.placeholder = EXAMPLE[sel.value];
+        if (input.value) { input.value = tidy(input.value); }
+        input.addEventListener('input', function () {
+          var caret = input.selectionStart;
+          input.value = input.value.toUpperCase();
+          try { input.setSelectionRange(caret, caret); } catch (e) {}
+        });
+        input.addEventListener('blur', function () { input.value = tidy(input.value); });
+        sel.addEventListener('change', function () { input.placeholder = EXAMPLE[sel.value]; input.focus(); });
+      });
+    }
+    window.enhancePlateInputs = enhance;
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+  })();
+
+  // Container (data-container-iso): uppercase live; on blur, when the value is
+  // ISO 6346 (4 letters + 7 digits) group it as "MSKU 123456 7". No hard check —
+  // the server's normalize_container produces the identical string for the
+  // uniqueness test, so what you see is what's stored.
+  (function () {
+    var ISO = /^([A-Z]{4})(\d{6})(\d)$/;
+    function fmt(v) {
+      var up = String(v).toUpperCase(), compact = up.replace(/\s+/g, ''), m = ISO.exec(compact);
+      return m ? (m[1] + ' ' + m[2] + ' ' + m[3]) : up.replace(/\s+/g, ' ').replace(/^\s+/, '');
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('input[data-container-iso]').forEach(function (input) {
+        if (input.dataset.containerReady) { return; }
+        input.dataset.containerReady = '1';
+        input.autocomplete = 'off';
+        if (input.value) { input.value = fmt(input.value); }
+        input.addEventListener('input', function () {
+          var caret = input.selectionStart;
+          input.value = input.value.toUpperCase();
+          try { input.setSelectionRange(caret, caret); } catch (e) {}
+        });
+        input.addEventListener('blur', function () { input.value = fmt(input.value); });
+      });
+    }
+    window.enhanceContainerInputs = enhance;
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+  })();
+
   // Shipment form: prefill Yuboriladigan kg + Taxminiy kelish from the selected
   // kelishuv (contract). Each option carries data-remaining / data-deadline
   // (see ContractChoiceSelect). On load with a preselected contract, only empty
