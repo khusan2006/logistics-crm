@@ -953,6 +953,24 @@ input:focus, select:focus, textarea:focus {
 }
 input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); vertical-align: middle; }
 
+/* Country-code picker joined to a phone/plate field (base.html enhancers) */
+.intl-field { display: flex; align-items: stretch; width: 100%; max-width: 480px; }
+.intl-field > select.intl-cc {
+  width: auto;
+  flex: 0 0 auto;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-color: transparent;
+  padding: 9px 8px;
+}
+.intl-field > input {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  max-width: none;
+}
+.intl-field > select.intl-cc:focus { position: relative; z-index: 1; }
+.modal form.stacked .intl-field { max-width: none; }
+
 /* Password field with a show/hide eye toggle (added by JS in base.html). The
    wrapper matches the input's normal cap so the eye sits at the input's edge. */
 .pw-field { position: relative; max-width: 480px; }

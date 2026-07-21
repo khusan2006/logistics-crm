@@ -834,126 +834,91 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
-  // Phone inputs (data-phone): lock a "+998 " prefix and let the user type only
-  // the 9 national digits, auto-grouped as "90 123 45 67". A bare "+998" with no
-  // national digits is collapsed to empty on submit, so the field stays optional.
+  // International phone (data-phone-intl): injects a country picker (🇺🇿 +998 /
+  // 🇮🇷 +98) joined to the left of the field. The visible box holds only the
+  // national digits, auto-grouped as you type. A hidden mirror carries the
+  // canonical "+998 90 123 45 67" under the field's name, so whatever submit
+  // path runs (normal POST or the modal's FormData) sends the canonical string
+  // that validate_intl_phone accepts. Empty stays empty (phone is optional).
   (function () {
-    var PREFIX = '+998 ';
-    function national(value) {
-      var digits = String(value).replace(/\D/g, '');
-      if (digits.indexOf('998') === 0) { digits = digits.slice(3); }  // drop country code
-      return digits.slice(0, 9);
+    var COUNTRIES = {
+      '998': { label: '+998', flag: '🇺🇿', sizes: [2, 3, 2, 2], ph: '90 123 45 67' },
+      '98':  { label: '+98',  flag: '🇮🇷', sizes: [3, 3, 4],    ph: '912 345 6789' }
+    };
+    var ORDER = ['998', '98'];
+    function maxLen(cc) { return COUNTRIES[cc].sizes.reduce(function (a, b) { return a + b; }, 0); }
+    function digitsOnly(s) { return String(s).replace(/\D/g, ''); }
+    function group(nat, sizes) {
+      var out = [], i = 0;
+      for (var k = 0; k < sizes.length && i < nat.length; k++) { out.push(nat.slice(i, i + sizes[k])); i += sizes[k]; }
+      if (i < nat.length) { out.push(nat.slice(i)); }
+      return out.join(' ');
     }
-    function group(nat) {
-      var parts = [];
-      if (nat.length > 0) { parts.push(nat.slice(0, 2)); }
-      if (nat.length > 2) { parts.push(nat.slice(2, 5)); }
-      if (nat.length > 5) { parts.push(nat.slice(5, 7)); }
-      if (nat.length > 7) { parts.push(nat.slice(7, 9)); }
-      return parts.join(' ');
+    function parse(value) {
+      var d = digitsOnly(value);
+      if (d.indexOf('998') === 0) { return { cc: '998', nat: d.slice(3) }; }
+      if (d.indexOf('98') === 0)  { return { cc: '98',  nat: d.slice(2) }; }
+      return { cc: null, nat: d };
     }
-    function display(value) { return PREFIX + group(national(value)); }
-    function canonical(value) {
-      var nat = national(value);
-      return nat ? PREFIX + group(nat) : '';   // no national digits → empty
+    function display(cc, nat) { return group(nat.slice(0, maxLen(cc)), COUNTRIES[cc].sizes); }
+    function canonicalFrom(cc, nat) {
+      nat = digitsOnly(nat).slice(0, maxLen(cc));
+      return nat ? COUNTRIES[cc].label + ' ' + group(nat, COUNTRIES[cc].sizes) : '';
     }
-    // Caret help: count/restore by national-digit position (skip the 3 CC digits).
-    function natDigitsBefore(str, caret) {
-      var cc = 0, seen = 0;
-      for (var i = 0; i < caret && i < str.length; i++) {
-        if (str[i] >= '0' && str[i] <= '9') { if (cc < 3) { cc++; } else { seen++; } }
-      }
-      return seen;
+    function digitsBefore(s, caret) {
+      var n = 0; for (var i = 0; i < caret && i < s.length; i++) { if (s[i] >= '0' && s[i] <= '9') { n++; } } return n;
     }
-    function caretForNat(str, count) {
-      if (count <= 0) { return str.indexOf(PREFIX) === 0 ? PREFIX.length : str.length; }
-      var cc = 0, seen = 0;
-      for (var j = 0; j < str.length; j++) {
-        if (str[j] >= '0' && str[j] <= '9') {
-          if (cc < 3) { cc++; continue; }
-          seen++;
-          if (seen === count) { return j + 1; }
-        }
-      }
-      return str.length;
+    function caretAfter(s, n) {
+      if (n <= 0) { return 0; }
+      var seen = 0; for (var i = 0; i < s.length; i++) { if (s[i] >= '0' && s[i] <= '9') { if (++seen === n) { return i + 1; } } } return s.length;
     }
-    function reformat(el) {
-      var caret = el.selectionStart;
-      var before = caret == null ? null : natDigitsBefore(el.value, caret);
-      el.value = display(el.value);
-      if (before != null) {
-        var pos = caretForNat(el.value, before);
-        try { el.setSelectionRange(pos, pos); } catch (e) {}
-      }
+    function selectOf(input) { var w = input.closest('.intl-field'); return w ? w.querySelector('select.intl-cc') : null; }
+    function ccOf(input) { var s = selectOf(input); return s ? s.value : '998'; }
+    function reformat(input) {
+      var cc = ccOf(input), caret = input.selectionStart;
+      var before = caret == null ? null : digitsBefore(input.value, caret);
+      input.value = display(cc, digitsOnly(input.value));
+      if (before != null) { var p = caretAfter(input.value, before); try { input.setSelectionRange(p, p); } catch (e) {} }
+    }
+    function mirror(input) { if (input.__intlHidden) { input.__intlHidden.value = canonicalFrom(ccOf(input), input.value); } }
+    function buildSelect(cc) {
+      var sel = document.createElement('select');
+      sel.className = 'intl-cc';
+      ORDER.forEach(function (k) { var o = document.createElement('option'); o.value = k; o.textContent = COUNTRIES[k].flag + ' ' + COUNTRIES[k].label; sel.appendChild(o); });
+      sel.value = cc;
+      return sel;
     }
     function enhance(root) {
-      (root || document).querySelectorAll('input[data-phone]').forEach(function (el) {
-        if (el.dataset.phoneReady) { return; }
-        el.dataset.phoneReady = '1';
-        el.type = 'tel';
-        el.setAttribute('inputmode', 'numeric');
-        el.autocomplete = 'off';
-        el.value = display(el.value);   // always show the locked "+998 " prefix
+      (root || document).querySelectorAll('input[data-phone-intl]').forEach(function (input) {
+        if (input.dataset.phoneIntlReady) { return; }
+        input.dataset.phoneIntlReady = '1';
+        var p = parse(input.value), cc = p.cc || '998';
+        var wrap = document.createElement('div');
+        wrap.className = 'intl-field';
+        input.parentNode.insertBefore(wrap, input);
+        var sel = buildSelect(cc);
+        wrap.appendChild(sel);
+        wrap.appendChild(input);
+        var hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = input.getAttribute('name') || '';
+        input.__intlHidden = hidden;
+        input.removeAttribute('name');
+        wrap.appendChild(hidden);
+        input.type = 'tel'; input.setAttribute('inputmode', 'numeric'); input.autocomplete = 'off';
+        input.placeholder = COUNTRIES[cc].ph;
+        input.value = display(cc, p.nat);
+        mirror(input);
+        input.addEventListener('input', function () { reformat(input); mirror(input); });
+        sel.addEventListener('change', function () { reformat(input); input.placeholder = COUNTRIES[sel.value].ph; mirror(input); input.focus(); });
       });
     }
-    document.addEventListener('input', function (e) {
-      if (e.target.matches && e.target.matches('input[data-phone]')) { reformat(e.target); }
-    });
-    // Seed the prefix on focus and keep the caret out of the locked "+998 ".
-    document.addEventListener('focusin', function (e) {
-      var el = e.target;
-      if (!el.matches || !el.matches('input[data-phone]')) { return; }
-      if (!el.value) { el.value = PREFIX; }
-      setTimeout(function () {
-        if (el.selectionStart < PREFIX.length) {
-          try { el.setSelectionRange(PREFIX.length, Math.max(PREFIX.length, el.selectionEnd)); } catch (e2) {}
-        }
-      }, 0);
-    });
-    // An untouched "+998 " should submit as empty (phone is optional).
-    document.addEventListener('submit', function (e) {
-      if (!e.target.querySelectorAll) { return; }
-      e.target.querySelectorAll('input[data-phone]').forEach(function (el) { el.value = canonical(el.value); });
-    }, true);
-    window.enhancePhoneInputs = enhance;
-    window.canonicalPhone = function (el) { return canonical(el ? el.value : ''); };
-    if (document.readyState !== 'loading') { enhance(); }
-    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
-    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
-  })();
-
-  // International phone (data-phone-intl): supports both Uzbek (+998) and Iranian
-  // (+98) numbers, grouped for readability. Formats on blur so it never fights the
-  // caret while typing. Validation is server-side (accepts either country).
-  (function () {
-    function fmt(value) {
-      var d = String(value).replace(/[^\d]/g, '');
-      if (d.indexOf('998') === 0) {
-        var n = d.slice(3, 12), p = ['+998'];
-        if (n.length) { p.push(n.slice(0, 2)); }
-        if (n.length > 2) { p.push(n.slice(2, 5)); }
-        if (n.length > 5) { p.push(n.slice(5, 7)); }
-        if (n.length > 7) { p.push(n.slice(7, 9)); }
-        return p.join(' ');
-      }
-      if (d.indexOf('98') === 0) {
-        var m = d.slice(2, 12), q = ['+98'];
-        if (m.length) { q.push(m.slice(0, 3)); }
-        if (m.length > 3) { q.push(m.slice(3, 6)); }
-        if (m.length > 6) { q.push(m.slice(6, 10)); }
-        return q.join(' ');
-      }
-      return String(value).trim();
-    }
-    function enhance(root) {
-      (root || document).querySelectorAll('input[data-phone-intl]').forEach(function (el) {
-        if (el.dataset.phoneIntlReady) { return; }
-        el.dataset.phoneIntlReady = '1';
-        el.type = 'tel'; el.setAttribute('inputmode', 'tel'); el.autocomplete = 'tel';
-        if (el.value) { el.value = fmt(el.value); }
-        el.addEventListener('blur', function () { if (el.value.trim()) { el.value = fmt(el.value); } });
-      });
-    }
+    window.enhancePhoneIntl = enhance;
+    window.canonicalPhone = function (input) {
+      if (!input) { return ''; }
+      if (input.dataset && input.dataset.phoneIntlReady) { return canonicalFrom(ccOf(input), input.value); }
+      var p = parse(input.value); return canonicalFrom(p.cc || '998', p.nat);
+    };
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
     if (document.readyState !== 'loading') { enhance(); }
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
@@ -1053,12 +1018,13 @@
       panel.className = 'qa-panel'; panel.hidden = true;
       panel.innerHTML =
         '<input type="text" class="qa-name" placeholder="Ism / nomi">' +
-        '<input type="text" class="qa-phone" placeholder="Telefon (ixtiyoriy)">' +
+        '<input type="text" class="qa-phone" data-phone-intl placeholder="Telefon (ixtiyoriy)">' +
         '<button type="button" class="btn btn-sm qa-save">Qo\'shish</button>' +
         '<button type="button" class="btn btn-ghost btn-sm qa-cancel">Bekor</button>' +
         '<span class="qa-msg muted"></span>';
       sel.parentNode.insertBefore(btn, sel.nextSibling);
       sel.parentNode.insertBefore(panel, btn.nextSibling);
+      if (window.enhancePhoneIntl) { window.enhancePhoneIntl(panel); }
       btn.addEventListener('click', function () {
         panel.hidden = !panel.hidden;
         if (!panel.hidden) { panel.querySelector('.qa-name').focus(); }
@@ -1066,7 +1032,8 @@
       panel.querySelector('.qa-cancel').addEventListener('click', function () { panel.hidden = true; });
       panel.querySelector('.qa-save').addEventListener('click', function () {
         var name = panel.querySelector('.qa-name').value.trim();
-        var phone = panel.querySelector('.qa-phone').value.trim();
+        var phoneEl = panel.querySelector('.qa-phone');
+        var phone = window.canonicalPhone ? window.canonicalPhone(phoneEl) : phoneEl.value.trim();
         var msg = panel.querySelector('.qa-msg');
         if (!name) { msg.textContent = 'Ism kiriting'; return; }
         var fd = new FormData(); fd.append('name', name); fd.append('phone', phone);
