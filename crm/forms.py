@@ -9,38 +9,14 @@ from .models import (
     Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
     ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment, brand_stock,
 )
-
-# Accepts Uzbek (+998 + 9 national digits) or Iranian (+98 + 10 national digits).
-_PHONE_UZ = re.compile(r"998\d{9}")
-_PHONE_IR = re.compile(r"98\d{10}")
-
-
-def validate_intl_phone(value):
-    """Blank, or a valid Uzbek/Iranian number. Formatting (spaces, +, -) is ignored."""
-    v = (value or "").strip()
-    if not v:
-        return v
-    digits = re.sub(r"\D", "", v)
-    if _PHONE_UZ.fullmatch(digits) or _PHONE_IR.fullmatch(digits):
-        return v
-    raise forms.ValidationError(
-        "Telefon O'zbekiston (+998 XX XXX XX XX) yoki Eron (+98 XXX XXX XXXX) "
-        "formatida bo'lishi kerak")
-
-
-def _phone_widget():
-    """A fresh phone TextInput each call (so forms don't share a mutable attrs dict)."""
-    return forms.TextInput(attrs={
-        "data-phone-intl": "", "inputmode": "tel", "autocomplete": "tel",
-        "placeholder": "+998 90 123 45 67  yoki  +98 912 345 6789",
-    })
+from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 
 
 class PartnerForm(forms.ModelForm):
     class Meta:
         model = Partner
         fields = ["name", "phone", "city", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": _phone_widget()}
+        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def clean_phone(self):
         return validate_intl_phone(self.cleaned_data.get("phone"))
@@ -50,7 +26,7 @@ class CustomerForm(forms.ModelForm):
     class Meta:
         model = Customer
         fields = ["name", "phone", "address", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": _phone_widget()}
+        widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def clean_phone(self):
         return validate_intl_phone(self.cleaned_data.get("phone"))
@@ -175,7 +151,9 @@ class ShipmentForm(forms.ModelForm):
             "eta": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 2}),
             "transport": forms.TextInput(attrs={
-                "placeholder": "01 777 AAA (UZ) yoki 12 A 345-67 (IR)"}),
+                "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
+            "container": forms.TextInput(attrs={
+                "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
             "origin": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "destination": forms.TextInput(attrs={"placeholder": "Masalan: Toshkent ombori"}),
         }
@@ -204,7 +182,7 @@ class ShipmentForm(forms.ModelForm):
         return t
 
     def clean_container(self):
-        container = (self.cleaned_data.get("container") or "").strip()
+        container = normalize_container(self.cleaned_data.get("container"))
         if container:
             clash = Shipment.objects.filter(container__iexact=container)
             if self.instance.pk:
@@ -246,8 +224,15 @@ class ShipmentLegForm(forms.ModelForm):
             "arrived": forms.DateInput(attrs={"type": "date"}),
             "from_location": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "to_location": forms.TextInput(attrs={"placeholder": "Masalan: Chegara"}),
-            "transport": forms.TextInput(attrs={"placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+            "transport": forms.TextInput(attrs={
+                "data-plate-intl": "", "autocomplete": "off",
+                "placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+            "container": forms.TextInput(attrs={
+                "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
         }
+
+    def clean_container(self):
+        return normalize_container(self.cleaned_data.get("container"))
 
     def clean(self):
         cleaned = super().clean()

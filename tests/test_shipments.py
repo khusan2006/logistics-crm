@@ -40,6 +40,20 @@ def test_container_unique(admin_client, db):
     assert Shipment.objects.count() == 1 and resp.status_code == 200
 
 
+def test_container_unique_ignores_spacing(admin_client, db):
+    c = _contract()
+    _post_shipment(admin_client, c, kg="100", container="MSKU 123456 7")
+    resp = _post_shipment(admin_client, c, kg="100", container="msku1234567")
+    assert Shipment.objects.count() == 1 and resp.status_code == 200
+    assert Shipment.objects.first().container == "MSKU 123456 7"
+
+
+def test_container_stored_normalized(admin_client, db):
+    c = _contract()
+    _post_shipment(admin_client, c, kg="100", container="mscu1234567")
+    assert Shipment.objects.get().container == "MSCU 123456 7"
+
+
 def test_overdue(db, admin_user):
     c = _contract()
     s = Shipment.objects.create(contract=c, kg=Decimal("100"),
