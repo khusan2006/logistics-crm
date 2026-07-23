@@ -51,10 +51,17 @@
         <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand_summary }}</span>
         <span class="kelishuv-count">{{ g.shipments|length }} yuk</span>
         {% with sent=g.contract.truck_progress.0 planned=g.contract.truck_progress.1 %}
+        {% comment %}
+        Only shown once the kelishuv sets Nechta mashina — without a plan there is
+        nothing to fill against, and a lone count in an empty pill just repeats the
+        "N yuk" chip beside it.
+        {% endcomment %}
+        {% if planned %}
         <span class="kelishuv-progress" title="Jo'natilgan / rejalashtirilgan mashinalar">
-          <span class="kelishuv-progress-fill" style="width: {% if planned %}{% widthratio sent planned 100 %}{% else %}0{% endif %}%"></span>
-          <span class="kelishuv-progress-text">{{ sent }}{% if planned %}/{{ planned }}{% endif %}</span>
+          <span class="kelishuv-progress-fill" style="width: {% widthratio sent planned 100 %}%"></span>
+          <span class="kelishuv-progress-text">{{ sent }}/{{ planned }}</span>
         </span>
+        {% endif %}
         {% endwith %}
         <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
       </div>

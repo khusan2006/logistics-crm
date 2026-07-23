@@ -452,3 +452,15 @@ def test_no_default_tab_when_yolda_was_renamed(admin_client, db):
     """Holatlar tahrirlanadi — nomi o'zgarsa sahifa avvalgidek Hammasi bilan ochiladi."""
     ShipmentStatus.objects.filter(name="Yo'lda").update(name="Harakatda")
     assert admin_client.get("/shipments/").context["default_tab"] is None
+
+
+def test_progress_bar_only_appears_when_a_truck_plan_exists(admin_client, db):
+    """Rejasiz kelishuvda bar bo'sh qutida yolg'iz raqam ko'rsatardi — yonidagi
+    "1 yuk" chipi buni allaqachon aytadi, shuning uchun bar butunlay chiqmaydi."""
+    c = _contract(kg="2000")
+    make_shipment(contract=c, kg="100")
+    assert "kelishuv-progress" not in admin_client.get("/shipments/").content.decode()
+
+    Contract.objects.filter(pk=c.pk).update(planned_trucks=2)
+    html = admin_client.get("/shipments/").content.decode()
+    assert "kelishuv-progress" in html and ">1/2<" in html
