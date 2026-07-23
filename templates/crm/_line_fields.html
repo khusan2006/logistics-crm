@@ -30,8 +30,11 @@ template the JS clones when "+ Mahsulot qo'shish" is pressed.
                   title="Mahsulotni olib tashlash" aria-label="Mahsulotni olib tashlash">&minus;</button>
         </div>
       </div>
-      {# The − button is the control; this checkbox is how the formset is told to
-         delete a saved row, so it ships hidden rather than styled away. #}
+      {% comment %}
+      The − button is the control; this checkbox is how the formset is told to
+      delete a saved row, so it ships hidden rather than styled away. A {# #}
+      comment would not do here — Django only strips those on a single line.
+      {% endcomment %}
       <span class="lineset-del" hidden>{{ f.DELETE }}</span>
     </div>
     {% endfor %}
