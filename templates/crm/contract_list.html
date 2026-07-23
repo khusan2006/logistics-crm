@@ -56,7 +56,7 @@ hidden field); the chips themselves are links, so the two never fight over the
     <th>Narx</th>
     <th>Jami</th>
     <th title="Yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
-    <th title="To'langan va kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa">To'langan / Qolgan to'lov</th>
+    <th title="Kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th></th>
   </tr>
   {% for c in page %}
@@ -76,10 +76,7 @@ hidden field); the chips themselves are links, so the two never fight over the
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.price|usd }}</div>{% endfor %}</td>
     <td>{{ c.total_value|usd }}</td>
     <td><span class="badge {% if c.is_settled %}badge-ok{% else %}badge-warning{% endif %}">{{ c.remaining_kg }}</span></td>
-    <td>
-      {{ c.paid_total|usd }} /
-      <span class="badge {% if c.payable_left > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ c.payable_left|usd }}</span>
-    </td>
+    <td><span class="badge {% if c.payable_left > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ c.payable_left|usd }}</span></td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>

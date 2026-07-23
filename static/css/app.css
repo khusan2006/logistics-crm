@@ -478,6 +478,10 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 /* Two-column card row (production till + handover panel) */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
 @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+/* A grid item defaults to min-width:auto, so a wide table inside one refuses to
+   shrink and pushes the whole page sideways instead of scrolling in its own
+   .table-wrap. Kassa's chiqim ledger is the case that showed it. */
+.grid-2 > *, .stat-grid > * { min-width: 0; }
 
 /* Kassa kirim/chiqim ledgers — two scrollable transaction lists side by side */
 .kassa-ledger .ledger-total { font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
