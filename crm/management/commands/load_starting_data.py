@@ -18,45 +18,8 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from accounts.models import User
-from crm.models import (
-    AuditLog,
-    Contract,
-    Customer,
-    CustomerPayment,
-    Partner,
-    PaymentAllocation,
-    Reservation,
-    Return,
-    Sale,
-    Shipment,
-    ShipmentDelay,
-    ShipmentExpense,
-    ShipmentLeg,
-    ShipmentStatus,
-    SupplierPayment,
-)
-
-OWNER_USERNAME = "otabek"
-OWNER_PASSWORD = "otabek12345"
-
-# Children before parents — deleting in this order never trips a PROTECT FK.
-WIPE_MODELS = [
-    PaymentAllocation,
-    Return,
-    CustomerPayment,
-    Sale,
-    Reservation,
-    ShipmentExpense,
-    ShipmentDelay,
-    ShipmentLeg,
-    Shipment,
-    SupplierPayment,
-    Contract,
-    Customer,
-    Partner,
-    AuditLog,
-]
+from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+from crm.seeding import OWNER_PASSWORD, OWNER_USERNAME, ensure_owner, wipe_business_data
 
 PARTNERS = [
     {"name": "Pars Polymer Co.", "phone": "+98 912 440 1122", "city": "Tehron",
@@ -123,8 +86,8 @@ class Command(BaseCommand):
                 raise CommandError("Bekor qilindi.")
 
         with transaction.atomic():
-            self._wipe()
-            owner = self._owner()
+            wipe_business_data()
+            owner = ensure_owner()
             self._load(owner)
 
         self.stdout.write(self.style.SUCCESS(
@@ -135,26 +98,6 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING(
             f"Egasi: {OWNER_USERNAME} / {OWNER_PASSWORD} — prodda parolni o'zgartiring."
         ))
-
-    def _wipe(self):
-        for model in WIPE_MODELS:
-            model.objects.all().delete()
-
-    def _owner(self):
-        owner, created = User.objects.get_or_create(
-            username=OWNER_USERNAME,
-            defaults={
-                "role": User.Role.ADMIN,
-                "first_name": "Otabek",
-                "last_name": "Yo'ldoshev",
-                "is_staff": True,
-                "is_superuser": True,
-            },
-        )
-        if created:
-            owner.set_password(OWNER_PASSWORD)
-            owner.save()
-        return owner
 
     def _load(self, owner):
         partners = {
