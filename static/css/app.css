@@ -1743,7 +1743,7 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-partner { font-weight: 600; color: var(--text); }
 .load-sub { font-size: 12px; margin-top: 1px; }
 .status-cell-form { margin: 0; }
-.status-select { padding: 5px 10px; border-radius: 999px; font-size: 13px; min-width: 148px; max-width: 170px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; transition: border-color .2s ease, box-shadow .2s ease; }
+.status-select { padding: 5px 10px; border-radius: 999px; font-size: 13px; field-sizing: content; min-width: 92px; max-width: 170px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; transition: border-color .2s ease, box-shadow .2s ease; }
 .status-select:hover { border-color: var(--accent); }
 .status-select.is-saved { border-color: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 
