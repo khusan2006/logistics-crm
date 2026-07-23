@@ -256,41 +256,53 @@ def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db)
     assert len(groups) == 1 and groups[0]["contract"].pk == c.pk
 
 
-def test_arrived_loads_move_to_done_page(admin_client, db):
-    """Arrived loads leave the active Yuklar list and appear on Yakunlangan."""
-    c = _contract()
-    active = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
-    active_line = ShipmentLine.objects.create(
-        shipment=active, contract_line=c.lines.first(), kg=Decimal("100"))
-    done = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=date.today())
-    done_line = ShipmentLine.objects.create(
-        shipment=done, contract_line=c.lines.first(), kg=Decimal("200"))
-    main = admin_client.get("/shipments/")
-    ids = [s.pk for s in main.context["shipments"]]
+def test_arrived_loads_are_hidden_until_hammasi(admin_client, db):
+    """Yetib kelgan yuklar faol ro'yxatda ko'rinmaydi, Hammasi da esa ko'rinadi."""
+    c = _contract(kg="2000")
+    active = make_shipment(contract=c, kg="100")
+    done = make_shipment(contract=c, kg="200", arrived=date.today(),
+                         status=ShipmentStatus.arrival())
+
+    ids = [s.pk for s in admin_client.get("/shipments/").context["shipments"]]
     assert active.pk in ids and done.pk not in ids
-    assert main.context["done_count"] == 1
-    assert "/shipments/done/" in main.content.decode()
 
-    done_page = admin_client.get("/shipments/done/")
-    assert done_page.status_code == 200
-    done_ids = [s.pk for s in done_page.context["page"].object_list]
-    assert done_ids == [done.pk]
-    # translator may see it too, but with no money on the page
-    assert "Yakunlangan" in done_page.content.decode()
+    resp = admin_client.get("/shipments/", {"all": "1"})
+    all_ids = [s.pk for s in resp.context["shipments"]]
+    assert active.pk in all_ids and done.pk in all_ids
+    assert resp.context["show_all"] is True
+    assert resp.context["default_tab"] is None      # Hammasi filtrsiz ochiladi
 
 
-def test_done_page_hides_money_from_translator(translator_client, admin_client, db):
+def test_hammasi_paginates_and_searches_across_every_load(admin_client, db):
+    c = _contract(kg="200000")
+    for i in range(3):
+        make_shipment(contract=c, kg="100", arrived=date.today(), transport=f"01 77{i} AAA",
+                      status=ShipmentStatus.arrival())
+    wanted = make_shipment(contract=c, kg="100", arrived=date.today(),
+                           transport="01 999 ZZZ", status=ShipmentStatus.arrival())
+
+    page = admin_client.get("/shipments/", {"all": "1"}).context["page"]
+    assert page is not None and page.paginator.count == 4
+
+    hit = admin_client.get("/shipments/", {"all": "1", "q": "999"})
+    assert [s.pk for s in hit.context["shipments"]] == [wanted.pk]
+
+
+def test_the_old_done_url_now_lands_on_hammasi(admin_client, db):
+    resp = admin_client.get("/shipments/done/")
+    assert resp.status_code == 302 and resp.url == "/shipments/?all=1"
+
+
+def test_hammasi_hides_money_from_translator(translator_client, admin_client, db):
     c = _contract()  # price 1.00/kg
-    _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=date.today())
-    _ship_obj_line = ShipmentLine.objects.create(
-        shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal("100"))
+    make_shipment(contract=c, kg="100", arrived=date.today(), status=ShipmentStatus.arrival())
 
     def content(html):
         return html.split('class="content"', 1)[1].split("</main>", 1)[0]
 
-    tr = content(translator_client.get("/shipments/done/").content.decode())
+    tr = content(translator_client.get("/shipments/", {"all": "1"}).content.decode())
     assert "$" not in tr and "Qiymati" not in tr
-    ad = content(admin_client.get("/shipments/done/").content.decode())
+    ad = content(admin_client.get("/shipments/", {"all": "1"}).content.decode())
     assert "$" in ad and "Qiymati" in ad
 
 

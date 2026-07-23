@@ -8,14 +8,24 @@
 {% block content %}
 
 <form method="get" class="searchbar" role="search" data-live-search>
+  {% comment %}
+  `all` rides along as a hidden field so searching keeps you in whichever set you
+  are looking at — the toggle beside it is what moves you between them.
+  {% endcomment %}
+  {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
   <div class="toolbar-search{% if q %} is-active{% endif %}">
     <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    <input type="search" name="q" value="{{ q }}" placeholder="Transport, konteyner, marka yoki hamkor bo'yicha qidirish…" autocomplete="off" aria-label="Yuk qidirish">
-    {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    <input type="search" name="q" value="{{ q }}" placeholder="{% if show_all %}Barcha yuklar orasidan qidirish…{% else %}Transport, konteyner, marka yoki hamkor bo'yicha qidirish…{% endif %}" autocomplete="off" aria-label="Yuk qidirish">
+    {% if q %}<a href="?{% if show_all %}all=1{% endif %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
+  <a class="btn{% if not show_all %} btn-ghost{% endif %}"
+     href="?{% if q %}q={{ q|urlencode }}{% if not show_all %}&{% endif %}{% endif %}{% if not show_all %}all=1{% endif %}"
+     title="{% if show_all %}Faqat yo'ldagi yuklar{% else %}Yakunlangan yuklar bilan birga hammasi{% endif %}">
+    {% if show_all %}Faol yuklar{% else %}Hammasi{% endif %}
+  </a>
 </form>
 
-{% if shipments or done_count %}
+{% if shipments %}
 <div class="status-tabs" role="tablist">
   {% for t in tabs %}
   <button type="button" class="status-tab{% if t.status.pk == default_tab %} is-active{% endif %}" data-tab="{{ t.status.pk }}"{% if t.status.pk == default_tab %} data-default{% endif %}>{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
@@ -23,7 +33,6 @@
   {% if overdue_count %}
   <button type="button" class="status-tab status-tab--danger" data-tab="overdue">Kechikkan <span class="status-tab-count">{{ overdue_count }}</span></button>
   {% endif %}
-  <a class="status-tab status-tab--done" href="{% url 'shipment_done_list' %}" title="Omborga yetib kelgan yuklar">&#10003; Yakunlangan <span class="status-tab-count" data-done-count>{{ done_count }}</span></a>
 </div>
 {% endif %}
 
@@ -272,12 +281,20 @@
 </table>
 </div>
 <p class="muted loads-empty-filtered" hidden>Bu holatda yuk yo'q.</p>
+{% if page.has_other_pages %}
+<div class="pagination">
+  {% if page.has_previous %}<a class="btn btn-ghost" href="?all=1{% if q %}&q={{ q|urlencode }}{% endif %}&page={{ page.previous_page_number }}">Oldingi</a>{% endif %}
+  <span class="muted">{{ page.number }} / {{ page.paginator.num_pages }} · {{ page.paginator.count }} yuk</span>
+  {% if page.has_next %}<a class="btn btn-ghost" href="?all=1{% if q %}&q={{ q|urlencode }}{% endif %}&page={{ page.next_page_number }}">Keyingi</a>{% endif %}
+</div>
+{% endif %}
 {% else %}
-<p class="muted">Faol yuklar yo'q{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+<p class="muted">{% if show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
 
 <script>
 (function () {
+  var showAll = {% if show_all %}true{% else %}false{% endif %};
   var tabs = document.querySelectorAll('.status-tab[data-tab]');
   var defaultTab = document.querySelector('.status-tab[data-default]');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
@@ -405,13 +422,11 @@
         if (!r.ok) { throw new Error(); }
         return r.json();
       }).then(function (data) {
-        if (data.arrived) {           // moved to Yakunlangan — drop the row pair
+        if (data.arrived && !showAll) {   // left the active set — drop the row pair
           var loadId = row.querySelector('.leg-expand').getAttribute('data-load');
           var detail = document.querySelector('.legs-detail[data-load="' + loadId + '"]');
           if (detail) { detail.remove(); }
           row.remove();
-          var done = document.querySelector('[data-done-count]');
-          if (done) { done.textContent = parseInt(done.textContent || '0', 10) + 1; }
         } else {
           row.setAttribute('data-status', String(data.status_id));
           sel.dataset.prev = sel.value;

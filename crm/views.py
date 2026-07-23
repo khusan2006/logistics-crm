@@ -684,17 +684,23 @@ def status_move(request, pk):
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def shipment_list(request):
-    """ACTIVE loads (not yet arrived), grouped by kelishuv, with status tabs (in
-    pipeline order) to switch the view. Tabs filter client-side; each row carries
-    its status + overdue flag. Arrived loads live on the Yakunlangan page."""
+    """Loads grouped by kelishuv, with status tabs (in pipeline order) to switch
+    the view. Tabs filter client-side; each row carries its status + overdue flag.
+
+    Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
+    adds the arrived ones and paginates, since that set only grows."""
     q = request.GET.get("q", "").strip()
-    shipments = (Shipment.objects.filter(arrived__isnull=True)
+    show_all = request.GET.get("all") == "1"
+    shipments = (Shipment.objects
                  .select_related("contract__partner", "status")
                  .prefetch_related("delays", "legs", "expenses"))
+    if not show_all:
+        shipments = shipments.filter(arrived__isnull=True)
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
-            | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q))
+            | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q)
+            | Q(driver_name__icontains=q) | Q(responsible__icontains=q)).distinct()
     shipments = list(shipments)
 
     counts = {}
@@ -704,11 +710,16 @@ def shipment_list(request):
         if s.is_overdue:
             overdue_count += 1
 
+    # Hammasi can grow without bound, so page it and group only what this page
+    # shows; the active view stays whole, as the pipeline is meant to be scanned.
+    page = Paginator(shipments, 50).get_page(request.GET.get("page")) if show_all else None
+    rows = list(page.object_list) if page is not None else shipments
+
     # Group the rows under their kelishuv (newest contract first, newest load first
     # inside — same recency feel as the flat list had).
     groups = []
     by_contract = {}
-    for s in sorted(shipments, key=lambda s: -s.contract_id):
+    for s in sorted(rows, key=lambda s: -s.contract_id):
         g = by_contract.get(s.contract_id)
         if g is None:
             g = by_contract[s.contract_id] = {"contract": s.contract, "shipments": []}
@@ -718,35 +729,28 @@ def shipment_list(request):
         g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
 
     statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
-    # No tab for the arrival status — reaching it moves the load to Yakunlangan.
+    # The arrival status only earns a tab in Hammasi — in the active view nothing
+    # can be sitting in it.
     tabs = [{"status": st, "count": counts.get(st.pk, 0)}
-            for st in statuses if not st.is_arrival]
-    done_count = Shipment.objects.filter(arrived__isnull=False).count()
-    # The page opens on Yo'lda — the loads actually moving are what the logist
-    # watches. Resolved by name (statuses are editable) and simply absent if
-    # renamed away, in which case the page opens on Hammasi as before.
-    default_tab = next((t["status"].pk for t in tabs
-                        if t["status"].name.casefold() == "yo'lda"), None)
+            for st in statuses if show_all or not st.is_arrival]
+    # The active view opens on Yo'lda — the loads actually moving are what the
+    # logist watches. Resolved by name (statuses are editable) and simply absent
+    # if renamed away. Hammasi opens unfiltered: it was asked for to show
+    # everything, so preselecting a tab would defeat it.
+    default_tab = None if show_all else next(
+        (t["status"].pk for t in tabs if t["status"].name.casefold() == "yo'lda"), None)
     return render(request, "crm/shipment_list.html", {
-        "shipments": shipments, "groups": groups, "statuses": statuses, "tabs": tabs,
+        "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
-        "done_count": done_count, "q": q, "default_tab": default_tab,
+        "q": q, "default_tab": default_tab, "show_all": show_all, "page": page,
     })
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def shipment_done_list(request):
-    """Yakunlangan yuklar: loads that reached the ombor (arrived), newest first."""
-    q = request.GET.get("q", "").strip()
-    shipments = (Shipment.objects.filter(arrived__isnull=False)
-                 .select_related("contract__partner", "status")
-                 .order_by("-arrived", "-id"))
-    if q:
-        shipments = shipments.filter(
-            Q(transport__icontains=q) | Q(container__icontains=q)
-            | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q))
-    page = Paginator(shipments, 30).get_page(request.GET.get("page"))
-    return render(request, "crm/shipment_done_list.html", {"page": page, "q": q})
+    """Kept so old links and bookmarks still land somewhere: Yakunlangan is now
+    the Hammasi view, which lists arrived loads alongside the moving ones."""
+    return redirect(f"{reverse('shipment_list')}?all=1")
 
 
 @role_required(User.Role.ADMIN)
