@@ -116,3 +116,14 @@ def test_a_zero_percent_payment_adds_no_chiqim_row(admin_client, db):
     _pay(contract, amount="1000", percent="0")
     rows = admin_client.get("/kassa/").context["outflow_rows"]
     assert [r["kind"] for r in rows] == ["supplier"]
+
+
+def test_payment_modal_kelishuv_option_shows_narx(admin_client, db):
+    """To'lov kiritayotganda kelishuvning narxi ham ko'rinsin — yuk formasidagi
+    kabi."""
+    from crm.forms import SupplierPaymentForm
+
+    contract = _contract(kg="1000", price="1.25")
+    label = SupplierPaymentForm().fields["contract"].label_from_instance(contract)
+    assert contract.code in label and "1.25 $/kg" in label
+    assert contract.partner.name in label

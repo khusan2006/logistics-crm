@@ -61,7 +61,44 @@ def dashboard(request):
         "contracts": contracts[:8], "status_counts": status_counts,
         "stock_kg": stock_kg, "customer_debt_total": customer_debt_total,
         "sales_profit_total": sales_profit_total,
+        "monthly": _monthly_rows(),
     })
+
+
+def _monthly_rows(limit=12):
+    """Per-month activity, newest first, skipping months where nothing happened.
+
+    A truck counts under the month it LEFT for `sent` and the month it ARRIVED for
+    everything else, so one load can appear in two rows — that is the point: it
+    answers "how many arrived in July", not "how many that left in July arrived".
+
+    Summed in Python over prefetched rows rather than in SQL: goods_value and a
+    sale's profit both fall back to related rows (the kelishuv price, restocked
+    returns), which the model properties already get right."""
+    months = {}
+
+    def bucket(day):
+        key = day.replace(day=1)
+        return months.setdefault(key, {
+            "month": key, "sent": 0, "arrived": 0, "kg": Decimal("0"),
+            "value": Decimal("0"), "sales": Decimal("0"), "profit": Decimal("0"),
+        })
+
+    for shipment in Shipment.objects.prefetch_related("lines__contract_line"):
+        if shipment.sent:
+            bucket(shipment.sent)["sent"] += 1
+        if shipment.arrived:
+            row = bucket(shipment.arrived)
+            row["arrived"] += 1
+            row["kg"] += shipment.kg
+            row["value"] += shipment.goods_value
+
+    for sale in Sale.objects.prefetch_related("returns"):
+        row = bucket(sale.date)
+        row["sales"] += sale.net_total
+        row["profit"] += sale.profit
+
+    return sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
 
 
 @role_required(User.Role.ADMIN)

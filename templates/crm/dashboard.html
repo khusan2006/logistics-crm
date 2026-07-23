@@ -106,6 +106,40 @@
   </div>
 </div>
 
+{% if monthly %}
+<div class="card">
+  <div class="card-head"><h2>Oylik hisobot</h2></div>
+  <p class="muted" style="margin-top: -6px;">
+    Yuk jo'natilgan oyida <em>jo'natilgan</em>, omborga kelgan oyida <em>yetib kelgan</em>
+    deb sanaladi — shuning uchun bitta yuk ikki oyda ko'rinishi mumkin.
+  </p>
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Oy</th>
+      <th class="num">Jo'natilgan</th>
+      <th class="num">Yetib kelgan</th>
+      <th class="num">Kelgan kg</th>
+      <th class="num">Yuk qiymati</th>
+      <th class="num">Sotuv</th>
+      <th class="num">Foyda</th>
+    </tr>
+    {% for m in monthly %}
+    <tr>
+      <td class="sticky-col">{{ m.month|date:"F Y" }}</td>
+      <td class="num">{{ m.sent }}</td>
+      <td class="num"><strong>{{ m.arrived }}</strong></td>
+      <td class="num">{{ m.kg|floatformat:"-3" }}</td>
+      <td class="num">{{ m.value|usd }}</td>
+      <td class="num">{{ m.sales|usd }}</td>
+      <td class="num">{{ m.profit|usd }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endif %}
+
 {% if overdue %}
 <div class="card">
   <div class="card-head"><h2>Kechikayotgan yuklar</h2></div>

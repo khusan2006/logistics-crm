@@ -411,6 +411,12 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
         # The kassa total is driven by this, so the operator should see it named.
         self.fields["amount"].widget.attrs["data-commission-base"] = ""
+        # Same rich option as the yuk form: which kelishuv, whose, what marka,
+        # what is still owed in goods and at what price.
+        self.fields["contract"].queryset = (
+            Contract.objects.select_related("partner")
+            .prefetch_related("lines__shipment_lines"))
+        self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_commission_percent(self):
         percent = self.cleaned_data.get("commission_percent")
