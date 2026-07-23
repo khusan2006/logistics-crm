@@ -229,12 +229,10 @@ class Contract(models.Model):
 
     @property
     def brand_summary(self):
-        """What to show where one brand used to fit: "2102 repak" for a single
-        product, "2102 repak +2" once the kelishuv covers several."""
-        brands = [ln.brand for ln in self.lines.all()]
-        if not brands:
-            return ""
-        return brands[0] if len(brands) == 1 else f"{brands[0]} +{len(brands) - 1}"
+        """Every product, named in full — "2102 repak, ftor oq". Abbreviating to
+        "2102 repak +1" hid exactly what the operator needs when picking a
+        kelishuv from a dropdown."""
+        return ", ".join(ln.brand for ln in self.lines.all())
 
     @property
     def paid_total(self):
@@ -485,10 +483,8 @@ class Shipment(models.Model):
 
     @property
     def brand_summary(self):
-        brands = [ln.brand for ln in self.lines.all()]
-        if not brands:
-            return ""
-        return brands[0] if len(brands) == 1 else f"{brands[0]} +{len(brands) - 1}"
+        """Every product on the truck, named in full."""
+        return ", ".join(ln.brand for ln in self.lines.all())
 
     def __str__(self):
         return f"Yuk #{self.pk} · {self.brand_summary} · {self.kg} kg"

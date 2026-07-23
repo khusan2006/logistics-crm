@@ -66,9 +66,14 @@ hidden field); the chips themselves are links, so the two never fight over the
     </td>
     <td>{{ c.created }}</td>
     <td>{{ c.partner.name }}</td>
-    <td>{{ c.brand }}</td>
-    <td>{{ c.kg }}</td>
-    <td>{{ c.price|usd }}</td>
+    {% comment %}
+    Marka / kg / narx are per product, so each cell lists one line per product and
+    the three columns stay aligned row-for-row. Jami and the money columns below
+    are kelishuv-level totals.
+    {% endcomment %}
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.brand }}</div>{% endfor %}</td>
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.price|usd }}</div>{% endfor %}</td>
     <td>{{ c.total_value|usd }}</td>
     <td><span class="badge {% if c.is_settled %}badge-ok{% else %}badge-warning{% endif %}">{{ c.remaining_kg }}</span></td>
     <td>{{ c.paid_total|usd }} / {{ c.debt|usd }}</td>

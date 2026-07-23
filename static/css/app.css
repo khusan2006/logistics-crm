@@ -1851,3 +1851,6 @@ ul.errorlist li::before { content: "⚠ "; }
   .lineset-field--brand, .lineset-field--contract_line { grid-column: 1 / -1; }
   .lineset-field--rm { align-self: end; }
 }
+
+/* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
+.cell-line + .cell-line { margin-top: 4px; }

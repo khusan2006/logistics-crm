@@ -214,3 +214,26 @@ def test_filtered_list_does_not_query_per_contract(admin_client, db,
         _ship(c), _pay(c, "10")
     with django_assert_max_num_queries(12):
         admin_client.get("/contracts/", {"pay": "partial"})
+
+
+def test_list_shows_every_marka_with_its_kg_and_narx(admin_client, db):
+    """A kelishuv covering several products must show all of them — the earlier
+    single-brand columns rendered blank once brand/kg/price moved onto the lines."""
+    c = _contract(brand="2102 repak", kg="1000", price="1.25")
+    ContractLine.objects.create(contract=c, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("0.80"))
+
+    html = admin_client.get("/contracts/").content.decode()
+    assert "2102 repak" in html and "ftor oq" in html
+    assert "1.25" in html and "0.80" in html          # each product's own narx
+    assert "$1,650.00" in html                        # 1000×1.25 + 500×0.80
+
+
+def test_dropdowns_name_every_marka(db):
+    """The kelishuv <option> abbreviated to "2102 +1", which hid the very thing
+    the operator is choosing between."""
+    c = _contract(brand="2102 repak")
+    ContractLine.objects.create(contract=c, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("0.80"))
+    assert c.brand_summary == "2102 repak, ftor oq"
+    assert str(c) == f"{c.code} · 2102 repak, ftor oq"
