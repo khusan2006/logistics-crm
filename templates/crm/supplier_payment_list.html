@@ -20,7 +20,7 @@
   {% for p in page %}
   <tr>
     <td class="sticky-col">{{ p.date }}</td>
-    <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand }}</a></td>
+    <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand_summary }}</a></td>
     <td>{{ p.contract.partner.name }}</td>
     <td>
       {{ p.amount|usd }}

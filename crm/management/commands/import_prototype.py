@@ -38,8 +38,10 @@ from django.utils import timezone
 
 from crm.models import (
     Contract,
+    ContractLine,
     Partner,
     Shipment,
+    ShipmentLine,
     ShipmentExpense,
     ShipmentStatus,
     SupplierPayment,
@@ -229,15 +231,18 @@ class Command(BaseCommand):
                     f"Kelishuv #{row.get('id')}: hamkor topilmadi "
                     f"(partnerId={row.get('partnerId')})."
                 )
-            contracts[row["id"]] = Contract.objects.create(
+            contract = Contract.objects.create(
                 partner=partner,
-                brand=_first(row, "brand", "grade", default=""),
-                kg=Decimal(str(row["kg"])), price=Decimal(str(row["price"])),
                 created=_d(_first(row, "created", "date")),
                 deadline=_d(row.get("deadline")),
                 note=row.get("note", ""),
                 created_by=owner,
             )
+            ContractLine.objects.create(
+                contract=contract, brand=_first(row, "brand", "grade", default=""),
+                kg=Decimal(str(row["kg"])), price=Decimal(str(row["price"])),
+            )
+            contracts[row["id"]] = contract
 
         payments = 0
         for row in self._section(data, "payments", used_keys):
@@ -272,7 +277,7 @@ class Command(BaseCommand):
                                       (row.get("note") or "").strip()) if p]
 
             shipment = Shipment.objects.create(
-                contract=contract, kg=Decimal(str(row["kg"])),
+                contract=contract,
                 status=self._resolve_status(row.get("status"), status_by_name),
                 sent=_d(_first(row, "sent", "sentDate", "date")),
                 eta=_d(row.get("eta")),
@@ -280,6 +285,9 @@ class Command(BaseCommand):
                 transport=plate, container=row.get("container", ""),
                 note=" · ".join(note_parts), created_by=owner,
             )
+            ShipmentLine.objects.create(
+                shipment=shipment, contract_line=contract.lines.first(),
+                kg=Decimal(str(row["kg"])))
             shipments += 1
 
             exp_date = shipment.arrived or shipment.sent or timezone.localdate()

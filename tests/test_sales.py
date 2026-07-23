@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from crm.models import AuditLog, Contract, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentStatus
+from crm.models import (
+    AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
+)
 
 
 def _customer(name="Alisher Mebel"):
@@ -11,15 +13,12 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
     """An arrived 10,000 kg lot @ contract price $1.00/kg + $2,000 expenses
     => landed cost = 1.00 + 2000/10000 = $1.20/kg."""
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(
-        partner=partner, brand=brand, kg=Decimal(kg), price=Decimal(contract_price),
-        created="2026-07-01", deadline="2026-08-01",
-    )
-    shipment = Shipment.objects.create(
-        contract=contract, kg=Decimal(kg), status=ShipmentStatus.arrival(),
-        sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16",
-        transport="01A111AA", container="MSCU-1",
-    )
+    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract_line = ContractLine.objects.create(
+        contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(contract_price))
+    shipment = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
+    shipment_line = ShipmentLine.objects.create(
+        shipment=shipment, contract_line=contract.lines.first(), kg=Decimal(kg))
     if expense:
         ShipmentExpense.objects.create(shipment=shipment, amount=Decimal(expense), date="2026-07-16")
     return shipment
@@ -27,14 +26,13 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
 
 def _non_arrived_lot(kg="1000", brand="HDPE"):
     partner = Partner.objects.create(name="Basir", phone="1", city="T")
-    contract = Contract.objects.create(
-        partner=partner, brand=brand, kg=Decimal(kg), price=Decimal("1.00"),
-        created="2026-07-01", deadline="2026-08-01",
-    )
-    return Shipment.objects.create(
-        contract=contract, kg=Decimal(kg), status=ShipmentStatus.objects.first(),
-        sent="2026-07-05", eta="2026-08-01",
-    )
+    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract_line = ContractLine.objects.create(
+        contract=contract, brand=brand, kg=Decimal(kg), price=Decimal("1.00"))
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), sent="2026-07-05", eta="2026-08-01")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg))
+    return _ship_obj
 
 
 def test_sale_snapshots_cost_and_computes_total_profit(admin_client, db):
@@ -213,14 +211,13 @@ def test_ombor_sotish_button_present_for_available_lot(admin_client, db):
 def _second_lot(brand="LLDPE", kg="5000", price="1.50", arrived="2026-07-20"):
     """A NEWER arrived lot of the same brand from another partner."""
     partner = Partner.objects.create(name="Arya", phone="2", city="T")
-    contract = Contract.objects.create(
-        partner=partner, brand=brand, kg=Decimal(kg), price=Decimal(price),
-        created="2026-07-10", deadline="2026-08-10",
-    )
-    return Shipment.objects.create(
-        contract=contract, kg=Decimal(kg), status=ShipmentStatus.arrival(),
-        sent="2026-07-12", arrived=arrived, container="MSCU-2",
-    )
+    contract = Contract.objects.create(partner=partner, created="2026-07-10", deadline="2026-08-10")
+    contract_line = ContractLine.objects.create(
+        contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(price))
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-12", arrived=arrived, container="MSCU-2")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg))
+    return _ship_obj
 
 
 def test_fifo_sale_splits_across_lots_oldest_first(admin_client, db):
@@ -265,11 +262,13 @@ def test_ombor_listed_oldest_arrival_first(admin_client, db):
 def _lot_at(brand, kg, price, arrived):
     """An arrived lot of `brand` carrying its own USD/kg."""
     p = Partner.objects.create(name=f"P-{price}", phone="1", city="T")
-    c = Contract.objects.create(partner=p, brand=brand, kg=Decimal("100000"),
-                                price=Decimal("1.00"), created="2026-07-01",
-                                deadline="2026-08-01")
-    return Shipment.objects.create(contract=c, kg=Decimal(kg), price=Decimal(price),
-                                   status=ShipmentStatus.arrival(), arrived=arrived)
+    c = Contract.objects.create(partner=p, created="2026-07-01", deadline="2026-08-01")
+    c_line = ContractLine.objects.create(
+        contract=c, brand=brand, kg=Decimal("100000"), price=Decimal("1.00"))
+    _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=arrived)
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal(kg), price=Decimal(price))
+    return _ship_obj
 
 
 def test_sale_from_a_chosen_lot_ignores_fifo(admin_client, db):

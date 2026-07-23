@@ -6,8 +6,9 @@ from django.urls import reverse_lazy
 from django.utils import timezone
 
 from .models import (
-    Contract, Currency, Customer, CustomerPayment, Partner, Reservation, Return, Sale, Shipment,
-    ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment, brand_stock,
+    Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation, Return,
+    Sale, Shipment, ShipmentExpense, ShipmentLeg, ShipmentLine, ShipmentStatus, SupplierPayment,
+    arrived_lots, brand_stock,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 
@@ -40,17 +41,15 @@ class ContractForm(forms.ModelForm):
         widget=forms.NumberInput(attrs={"data-som-rate": "", "step": "1",
                                         "placeholder": "Masalan: 12650"}))
 
-    field_order = ["partner", "brand", "kg", "price", "som_rate", "created", "deadline", "note"]
+    field_order = ["partner", "som_rate", "created", "deadline", "note"]
 
     class Meta:
         model = Contract
-        fields = ["partner", "brand", "kg", "price", "created", "deadline", "note"]
+        fields = ["partner", "created", "deadline", "note"]
         widgets = {
             "created": forms.DateInput(attrs={"type": "date"}),
             "deadline": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 3}),
-            "price": forms.NumberInput(attrs={"data-som-price": "", "step": "0.0001"}),
-            "kg": forms.NumberInput(attrs={"data-som-kg": ""}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -63,13 +62,75 @@ class ContractForm(forms.ModelForm):
         created, deadline = cleaned.get("created"), cleaned.get("deadline")
         if created and deadline and deadline < created:
             self.add_error("deadline", "Muddat kelishuv sanasidan oldin bo'la olmaydi")
-        kg = cleaned.get("kg")
-        if kg is not None and kg <= 0:
-            self.add_error("kg", "Kg musbat bo'lishi kerak")
-        # Shrinking below already-shipped kg is invalid (matters from Task 7 on).
-        if self.instance.pk and kg is not None and kg < self.instance.shipped_kg:
-            self.add_error("kg", "Kelishilgan kg yuborilgan kg dan kam bo'la olmaydi")
         return cleaned
+
+
+def contract_option_label(contract):
+    """Kelishuv <option>: code, hamkor, products, and what is still owed."""
+    return (f"{contract.code} · {contract.partner.name} · {contract.brand_summary} · "
+            f"{_clean_number(contract.remaining_kg)} kg qolgan")
+
+
+class ContractLineForm(forms.ModelForm):
+    """One "Mahsulot" row on the kelishuv form."""
+
+    class Meta:
+        model = ContractLine
+        fields = ["brand", "kg", "price"]
+        widgets = {
+            "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
+            "kg": forms.NumberInput(attrs={"data-som-kg": "", "placeholder": "0"}),
+            "price": forms.NumberInput(attrs={"data-som-price": "", "step": "0.0001",
+                                              "placeholder": "0.0000"}),
+        }
+
+    def clean_kg(self):
+        kg = self.cleaned_data.get("kg")
+        if kg is not None and kg <= 0:
+            raise forms.ValidationError("Kg musbat bo'lishi kerak")
+        return kg
+
+    def clean_price(self):
+        price = self.cleaned_data.get("price")
+        if price is not None and price <= 0:
+            raise forms.ValidationError("Narx musbat bo'lishi kerak")
+        return price
+
+    def clean(self):
+        cleaned = super().clean()
+        kg = cleaned.get("kg")
+        # Shrinking a product below what already went out would make qolgan negative.
+        if self.instance.pk and kg is not None and kg < self.instance.shipped_kg:
+            self.add_error("kg", f"Yuborilgan {self.instance.shipped_kg} kg dan kam bo'la olmaydi")
+        return cleaned
+
+
+class BaseContractLineFormSet(forms.BaseInlineFormSet):
+    """A kelishuv is its products, so at least one row must survive, and the same
+    brand must not appear twice — two rows of "2102 repak" would split one product's
+    qolgan kg across two counters."""
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        brands, kept = [], 0
+        for form in self.forms:
+            if not form.cleaned_data or form.cleaned_data.get("DELETE"):
+                continue
+            kept += 1
+            brand = (form.cleaned_data.get("brand") or "").strip().casefold()
+            if brand in brands:
+                form.add_error("brand", "Bu mahsulot ro'yxatda bor")
+            else:
+                brands.append(brand)
+        if not kept:
+            raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
+
+
+ContractLineFormSet = forms.inlineformset_factory(
+    Contract, ContractLine, form=ContractLineForm, formset=BaseContractLineFormSet,
+    extra=1, min_num=1, validate_min=False, can_delete=True)
 
 
 class ShipmentStatusForm(forms.ModelForm):
@@ -117,26 +178,37 @@ class MoneyEntryFormMixin:
         return cleaned
 
 
+def _clean_number(value):
+    """1000.000 → "1000", 1000.500 → "1000.5" — for data- attributes the JS reads."""
+    text = f"{value}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 class ContractChoiceSelect(forms.Select):
-    """A contract <select> whose options carry data-remaining (qolgan kg) and
-    data-deadline, so the shipment form's JS can prefill Yuboriladigan kg and
-    Taxminiy kelish from the chosen kelishuv."""
+    """A contract <select> whose options carry data-deadline, so the shipment form's
+    JS can prefill Taxminiy kelish from the chosen kelishuv."""
 
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
         instance = getattr(value, "instance", None)  # blank choice has a plain "" value
+        if instance is not None and instance.deadline:
+            option["attrs"]["data-deadline"] = instance.deadline.isoformat()
+        return option
+
+
+class ContractLineChoiceSelect(forms.Select):
+    """A product <select> listing every kelishuv's products at once. Each option
+    carries the kelishuv it belongs to, its qolgan kg and its agreed price, so the
+    form's JS can hide the products of other kelishuvlar and prefill kg/narx —
+    no dependent AJAX, and the server re-checks the pairing anyway."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        instance = getattr(value, "instance", None)
         if instance is not None:
-            # a clean kg (no trailing .000): 1000.000 → "1000", 1000.500 → "1000.5"
-            rem = f"{instance.remaining_kg}"
-            if "." in rem:
-                rem = rem.rstrip("0").rstrip(".")
-            option["attrs"]["data-remaining"] = rem
-            if instance.deadline:
-                option["attrs"]["data-deadline"] = instance.deadline.isoformat()
-            price = f"{instance.price}"
-            if "." in price:
-                price = price.rstrip("0").rstrip(".")
-            option["attrs"]["data-price"] = price
+            option["attrs"]["data-contract"] = str(instance.contract_id)
+            option["attrs"]["data-remaining"] = _clean_number(instance.remaining_kg)
+            option["attrs"]["data-price"] = _clean_number(instance.price)
         return option
 
 
@@ -144,7 +216,7 @@ class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "kg", "price", "status", "sent",
+        fields = ["contract", "status", "sent",
                   "eta", "transport", "container", "note"]
         widgets = {
             "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
@@ -156,17 +228,14 @@ class ShipmentForm(forms.ModelForm):
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
         }
-        labels = {
-            "kg": "Yuboriladigan kg",
-            "sent": "Jo'natiladigan sana",
-            "price": "1 kg narxi (USD)",
-        }
+        labels = {"sent": "Jo'natiladigan sana"}
 
-    def clean_price(self):
-        price = self.cleaned_data.get("price")
-        if price is not None and price <= 0:
-            raise forms.ValidationError("Narx musbat bo'lishi kerak")
-        return price
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["contract"].queryset = (
+            Contract.objects.select_related("partner")
+            .prefetch_related("lines__shipment_lines"))
+        self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_transport(self):
         t = (self.cleaned_data.get("transport") or "").strip()
@@ -192,19 +261,90 @@ class ShipmentForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        contract, kg = cleaned.get("contract"), cleaned.get("kg")
         sent, eta = cleaned.get("sent"), cleaned.get("eta")
-        if kg is not None and kg <= 0:
-            self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if contract and kg is not None and kg > 0:
-            left = contract.remaining_kg
-            if self.instance.pk and self.instance.contract_id == contract.pk:
-                left += self.instance.kg
-            if kg > left:
-                self.add_error("kg", f"Yuk miqdori qolgan kg dan oshmasligi kerak ({left} kg)")
         if sent and eta and eta < sent:
             self.add_error("eta", "Kelish sanasi jo'natish sanasidan oldin bo'la olmaydi")
         return cleaned
+
+
+class ShipmentLineForm(forms.ModelForm):
+    """One product on the truck."""
+
+    class Meta:
+        model = ShipmentLine
+        fields = ["contract_line", "kg", "price"]
+        widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""})}
+        labels = {"kg": "Yuboriladigan kg", "price": "1 kg narxi (USD)"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["contract_line"].queryset = (
+            ContractLine.objects.select_related("contract")
+            .prefetch_related("shipment_lines")
+            .order_by("contract__code_slug", "contract__code_number", "position", "id"))
+        # Everything needed to pick the right row without leaving the dropdown:
+        # which kelishuv, which marka, how much is still owed, at what price.
+        self.fields["contract_line"].label_from_instance = (
+            lambda ln: f"{ln.contract.code} · {ln.brand} · "
+                       f"{_clean_number(ln.remaining_kg)} kg qolgan · "
+                       f"{_clean_number(ln.price)} $/kg")
+
+    def clean_kg(self):
+        kg = self.cleaned_data.get("kg")
+        if kg is not None and kg <= 0:
+            raise forms.ValidationError("Kg musbat bo'lishi kerak")
+        return kg
+
+    def clean_price(self):
+        price = self.cleaned_data.get("price")
+        if price is not None and price <= 0:
+            raise forms.ValidationError("Narx musbat bo'lishi kerak")
+        return price
+
+
+class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
+    """Guards the three ways a truck's product rows can be wrong: empty, carrying
+    the same product twice, or carrying more than the kelishuv has left."""
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        rows = [f for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get("DELETE")
+                and f.cleaned_data.get("contract_line")]
+        if not rows:
+            raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
+
+        wanted = {}
+        for form in rows:
+            line = form.cleaned_data["contract_line"]
+            if line.pk in wanted:
+                form.add_error("contract_line", "Bu mahsulot ro'yxatda bor")
+                continue
+            wanted[line.pk] = (form, line, form.cleaned_data.get("kg") or Decimal("0"))
+
+        contracts = {line.contract_id for _, line, _ in wanted.values()}
+        if len(contracts) > 1:
+            raise forms.ValidationError(
+                "Bitta yukdagi mahsulotlar bitta kelishuvga tegishli bo'lishi kerak")
+
+        # What this truck already books against each product frees that much back up.
+        already = {}
+        if self.instance.pk:
+            for existing in self.instance.lines.all():
+                already[existing.contract_line_id] = existing.kg
+
+        for form, line, kg in wanted.values():
+            left = line.remaining_kg + already.get(line.pk, Decimal("0"))
+            if kg > left:
+                form.add_error(
+                    "kg", f"Yuk miqdori qolgan kg dan oshmasligi kerak ({left} kg)")
+
+
+ShipmentLineFormSet = forms.inlineformset_factory(
+    Shipment, ShipmentLine, form=ShipmentLineForm, formset=BaseShipmentLineFormSet,
+    extra=1, min_num=1, validate_min=False, can_delete=True)
 
 
 class ShipmentExtendForm(forms.Form):
@@ -327,7 +467,7 @@ class SaleLotForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["lot"].queryset = Shipment.objects.filter(arrived__isnull=False)
+        self.fields["lot"].queryset = arrived_lots()
 
     def clean(self):
         cleaned = super().clean()
@@ -343,7 +483,7 @@ class SaleLotForm(forms.ModelForm):
 class SaleForm(forms.ModelForm):
     class Meta:
         model = Sale
-        fields = ["customer", "shipment", "kg", "price", "date", "debt_deadline", "note"]
+        fields = ["customer", "line", "kg", "price", "date", "debt_deadline", "note"]
         widgets = {
             "date": forms.DateInput(attrs={"type": "date"}),
             "debt_deadline": forms.DateInput(attrs={"type": "date"}),
@@ -355,18 +495,18 @@ class SaleForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["shipment"].queryset = Shipment.objects.filter(arrived__isnull=False)
+        self.fields["line"].queryset = arrived_lots()
 
     def clean(self):
         cleaned = super().clean()
-        shipment, kg = cleaned.get("shipment"), cleaned.get("kg")
+        line, kg = cleaned.get("line"), cleaned.get("kg")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if shipment and shipment.arrived is None:
-            self.add_error("shipment", "Faqat kelgan (arrived) lotdan sotish mumkin")
-        if shipment and shipment.arrived is not None and kg is not None and kg > 0:
-            available = shipment.available_kg
-            if self.instance.pk and self.instance.shipment_id == shipment.pk:
+        if line and line.arrived is None:
+            self.add_error("line", "Faqat kelgan (arrived) lotdan sotish mumkin")
+        if line and line.arrived is not None and kg is not None and kg > 0:
+            available = line.available_kg
+            if self.instance.pk and self.instance.line_id == line.pk:
                 available += self.instance.kg
             if kg > available:
                 self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
@@ -379,20 +519,20 @@ class ReservationForm(forms.ModelForm):
 
     class Meta:
         model = Reservation
-        fields = ["customer", "shipment", "kg", "price", "note"]
+        fields = ["customer", "line", "kg", "price", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 2})}
 
     def clean(self):
         cleaned = super().clean()
-        shipment, kg = cleaned.get("shipment"), cleaned.get("kg")
+        line, kg = cleaned.get("line"), cleaned.get("kg")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if shipment and kg is not None and kg > 0:
+        if line and kg is not None and kg > 0:
             other_reserved = sum(
-                (r.kg for r in shipment.reservations.filter(status="active").exclude(pk=self.instance.pk)),
+                (r.kg for r in line.reservations.filter(status="active").exclude(pk=self.instance.pk)),
                 Decimal("0"),
             )
-            reservable = shipment.kg - shipment.sold_kg - other_reserved
+            reservable = line.kg - line.sold_kg - other_reserved
             if kg > reservable:
                 self.add_error("kg", f"Bron miqdori qolgan kg dan oshmasligi kerak ({reservable} kg)")
         return cleaned

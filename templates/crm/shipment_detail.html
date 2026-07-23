@@ -13,7 +13,7 @@
   <div class="stat-grid">
     <div class="stat">
       <div class="muted">Kelishuv</div>
-      <div>{{ shipment.contract.code }} · {{ shipment.contract.brand }}</div>
+      <div>{{ shipment.contract.code }} · {{ shipment.brand_summary }}</div>
     </div>
     <div class="stat">
       <div class="muted">Hamkor</div>
@@ -24,10 +24,6 @@
       <div>{{ shipment.kg }}</div>
     </div>
     {% if user.is_admin_role %}
-    <div class="stat">
-      <div class="muted">1 kg narxi</div>
-      <div>{{ shipment.unit_price }} $/kg{% if shipment.price is None %} <span class="muted">(kelishuvdan)</span>{% endif %}</div>
-    </div>
     <div class="stat">
       <div class="muted">Yuk qiymati</div>
       <div>{{ shipment.goods_value|usd }}</div>
@@ -64,6 +60,36 @@
       <div class="muted">Yetib kelgan</div>
       <div>{{ shipment.arrived|default:"—" }}</div>
     </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top: 0;">Mahsulotlar</h3>
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th>Marka</th>
+      <th class="num">Kg</th>
+      {% if user.is_admin_role %}
+      <th class="num">1 kg narxi</th>
+      <th class="num">Qiymati</th>
+      <th class="num">Tan narx</th>
+      {% endif %}
+      {% if shipment.arrived %}<th class="num">Qoldiq</th>{% endif %}
+    </tr>
+    {% for ln in shipment.lines.all %}
+    <tr>
+      <td>{{ ln.brand }}</td>
+      <td class="num">{{ ln.kg|floatformat:"-3" }}</td>
+      {% if user.is_admin_role %}
+      <td class="num">{{ ln.unit_price|floatformat:"-4" }} $/kg{% if ln.price is None %} <span class="muted">(kelishuvdan)</span>{% endif %}</td>
+      <td class="num">{{ ln.goods_value|usd }}</td>
+      <td class="num">{{ ln.landed_cost_per_kg }} $/kg</td>
+      {% endif %}
+      {% if shipment.arrived %}<td class="num"><strong>{{ ln.available_kg|floatformat:"-3" }}</strong></td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table>
   </div>
 </div>
 
@@ -142,10 +168,10 @@
   </table>
   </div>
   <p class="muted" style="margin-top: 10px;">
-    Jami: {{ shipment.expenses_total|usd }} · Tan narx: {{ shipment.landed_cost_per_kg }} $/kg
+    Jami: {{ shipment.expenses_total|usd }} · 1 kg ga {{ shipment.expense_per_kg|floatformat:"-4" }} $ qo'shiladi
   </p>
   {% else %}
-  <p class="muted">Hali xarajat kiritilmagan. Tan narx: {{ shipment.landed_cost_per_kg }} $/kg</p>
+  <p class="muted">Hali xarajat kiritilmagan — tan narx mahsulot narxiga teng.</p>
   {% endif %}
 </div>
 {% endif %}

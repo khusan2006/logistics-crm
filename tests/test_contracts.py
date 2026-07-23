@@ -3,7 +3,9 @@ from decimal import Decimal
 
 from django.utils import timezone
 
-from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+from crm.models import (
+    Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
+)
 
 
 def _contract(**kw):
@@ -11,13 +13,18 @@ def _contract(**kw):
     defaults = dict(partner=partner, brand="LLDPE 209AA", kg=Decimal("50000"),
                     price=Decimal("0.96"), created="2026-07-01", deadline="2026-07-28")
     defaults.update(kw)
-    return Contract.objects.create(**defaults)
+    _contract_obj = Contract.objects.create(**defaults)
+    _contract_obj_line = ContractLine.objects.create(
+        contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
+    return _contract_obj
 
 
 def _ship(contract, kg="100", price="1.00"):
     """One truck under the kelishuv, priced so its goods_value is easy to read."""
-    return Shipment.objects.create(contract=contract, kg=Decimal(kg), price=Decimal(price),
-                                   status=ShipmentStatus.objects.first())
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first())
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg), price=Decimal(price))
+    return _ship_obj
 
 
 def _pay(contract, amount):

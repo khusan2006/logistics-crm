@@ -1,18 +1,21 @@
 from decimal import Decimal
 
-from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+from crm.models import (
+    Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
+)
 
 
 def _contract(db, ship_kg="1000"):
     """Contract with (by default) its full kg already on a truck — the payable
     to the partner accrues per shipped truck, so tests that pay need shipped value."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    c = Contract.objects.create(partner=partner, brand="LLDPE", kg=Decimal("1000"),
-                                price=Decimal("1.00"), created="2026-07-01",
-                                deadline="2026-07-28")
+    c = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-07-28")
+    c_line = ContractLine.objects.create(
+        contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
     if ship_kg:
-        Shipment.objects.create(contract=c, kg=Decimal(ship_kg),
-                                status=ShipmentStatus.objects.first())
+        _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
+        _ship_obj_line = ShipmentLine.objects.create(
+            shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal(ship_kg))
     return c
 
 
@@ -32,8 +35,9 @@ def test_debt_accrues_per_truck_at_its_own_price(admin_client, db):
     """Two trucks under one kelishuv, one at its own price: owed = Σ kg × unit
     price, not the contract total."""
     c = _contract(db, ship_kg="400")                       # 400 kg @ 1.00 (contract)
-    Shipment.objects.create(contract=c, kg=Decimal("100"), price=Decimal("2.00"),
-                            status=ShipmentStatus.objects.first())
+    _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal("100"), price=Decimal("2.00"))
     assert c.shipped_value == Decimal("600.00")            # 400 + 200
     assert c.debt == Decimal("600.00")
     resp = admin_client.post("/supplier-payments/new/", {  # 601 > 600 → blocked

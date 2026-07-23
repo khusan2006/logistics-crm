@@ -18,7 +18,9 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+from crm.models import (
+    Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
+)
 from crm.seeding import OWNER_PASSWORD, OWNER_USERNAME, ensure_owner, wipe_business_data
 
 PARTNERS = [
@@ -109,16 +111,19 @@ class Command(BaseCommand):
 
         contracts = {}  # keyed by brand
         for row in CONTRACTS:
-            contracts[row["brand"]] = Contract.objects.create(
-                partner=partners[row["partner"]], brand=row["brand"],
-                kg=Decimal(row["kg"]), price=Decimal(row["price"]),
+            contract = Contract.objects.create(
+                partner=partners[row["partner"]],
                 created=_d(row["created"]), deadline=_d(row["deadline"]),
                 created_by=owner,
+            )
+            contracts[row["brand"]] = ContractLine.objects.create(
+                contract=contract, brand=row["brand"],
+                kg=Decimal(row["kg"]), price=Decimal(row["price"]),
             )
 
         for row in PAYMENTS:
             SupplierPayment.objects.create(
-                contract=contracts[row["brand"]], amount=Decimal(row["amount"]),
+                contract=contracts[row["brand"]].contract, amount=Decimal(row["amount"]),
                 date=_d(row["date"]), method=row["method"], created_by=owner,
             )
 
@@ -129,9 +134,12 @@ class Command(BaseCommand):
                 raise CommandError(
                     f"ShipmentStatus '{row['status']}' topilmadi — migratsiyalar qo'llanganmi?"
                 )
-            Shipment.objects.create(
-                contract=contracts[row["brand"]], kg=Decimal(row["kg"]), status=status,
+            line = contracts[row["brand"]]
+            shipment = Shipment.objects.create(
+                contract=line.contract, status=status,
                 sent=_d(row["sent"]), eta=_d(row["eta"]), arrived=_d(row["arrived"]),
                 transport=row["transport"], container=row["container"],
                 note=f"Logist: {row['logist']}", created_by=owner,
             )
+            ShipmentLine.objects.create(
+                shipment=shipment, contract_line=line, kg=Decimal(row["kg"]))

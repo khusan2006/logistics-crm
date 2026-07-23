@@ -18,7 +18,7 @@
   {% for r in page %}
   <tr>
     <td class="sticky-col">{{ r.customer.name }}</td>
-    <td>#{{ r.shipment_id }} · {{ r.shipment.contract.brand }}{% if not r.shipment.arrived %} <span class="muted">(yo'lda)</span>{% endif %}</td>
+    <td>#{{ r.line.shipment_id }} · {{ r.line.brand }}{% if not r.line.arrived %} <span class="muted">(yo'lda)</span>{% endif %}</td>
     <td>{{ r.kg }}</td>
     <td>{% if r.price %}{{ r.price }} $/kg{% else %}—{% endif %}</td>
     <td>

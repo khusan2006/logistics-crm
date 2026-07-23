@@ -21,6 +21,8 @@ from django.utils import timezone
 
 from accounts.models import User
 from crm.models import (
+    ContractLine,
+    ShipmentLine,
     Contract,
     Customer,
     CustomerPayment,
@@ -110,22 +112,28 @@ class Command(BaseCommand):
     def _seed_contracts(self, partners, admin):
         today = timezone.localdate()
         c1, _ = Contract.objects.get_or_create(
-            partner=partners["pars"], brand="LLDPE 209", created=today - timedelta(days=60),
+            partner=partners["pars"], created=today - timedelta(days=60),
             defaults={
-                "kg": Decimal("50000"), "price": Decimal("1.05"),
                 "deadline": today + timedelta(days=10),
                 "note": "Demo kelishuv", "created_by": admin,
             },
         )
+        l1, _ = ContractLine.objects.get_or_create(
+            contract=c1, brand="LLDPE 209",
+            defaults={"kg": Decimal("50000"), "price": Decimal("1.05")},
+        )
         c2, _ = Contract.objects.get_or_create(
-            partner=partners["jam"], brand="HDPE 5502", created=today - timedelta(days=30),
+            partner=partners["jam"], created=today - timedelta(days=30),
             defaults={
-                "kg": Decimal("30000"), "price": Decimal("1.15"),
                 "deadline": today + timedelta(days=20),
                 "note": "Demo kelishuv", "created_by": admin,
             },
         )
-        return {"c1": c1, "c2": c2}
+        l2, _ = ContractLine.objects.get_or_create(
+            contract=c2, brand="HDPE 5502",
+            defaults={"kg": Decimal("30000"), "price": Decimal("1.15")},
+        )
+        return {"c1": c1, "c2": c2, "l1": l1, "l2": l2}
 
     def _seed_supplier_payments(self, contracts, admin):
         SupplierPayment.objects.get_or_create(
@@ -147,13 +155,15 @@ class Command(BaseCommand):
         lot, created = Shipment.objects.get_or_create(
             contract=contracts["c1"], container="DEMO-ARRIVED-01",
             defaults={
-                "kg": Decimal("20000"), "status": arrival_status,
+                "status": arrival_status,
                 "sent": today - timedelta(days=40), "eta": today - timedelta(days=10),
                 "arrived": today - timedelta(days=8), "transport": "TRK-001",
                 "note": "Demo omborga kelgan lot", "created_by": admin,
             },
         )
         if created:
+            ShipmentLine.objects.create(
+                shipment=lot, contract_line=contracts["l1"], kg=Decimal("20000"))
             ShipmentExpense.objects.create(
                 shipment=lot, date=today - timedelta(days=8), category="customs",
                 amount=Decimal("800.00"), note="Demo bojxona xarajati", created_by=admin,
@@ -167,26 +177,32 @@ class Command(BaseCommand):
     def _seed_in_transit_shipment(self, contracts, admin):
         first_status = ShipmentStatus.objects.order_by("order", "id").first()
         today = timezone.localdate()
-        Shipment.objects.get_or_create(
+        transit, transit_created = Shipment.objects.get_or_create(
             contract=contracts["c2"], container="DEMO-TRANSIT-01",
             defaults={
-                "kg": Decimal("8000"), "status": first_status,
+                "status": first_status,
                 "sent": today - timedelta(days=5), "eta": today + timedelta(days=7),
                 "transport": "TRK-002", "note": "Demo yo'ldagi yuk", "created_by": admin,
             },
         )
+        if transit_created:
+            ShipmentLine.objects.create(
+                shipment=transit, contract_line=contracts["l2"], kg=Decimal("8000"))
 
     def _seed_overdue_shipment(self, contracts, admin):
         first_status = ShipmentStatus.objects.order_by("order", "id").first()
         today = timezone.localdate()
-        Shipment.objects.get_or_create(
+        overdue, overdue_created = Shipment.objects.get_or_create(
             contract=contracts["c1"], container="DEMO-OVERDUE-01",
             defaults={
-                "kg": Decimal("5000"), "status": first_status,
+                "status": first_status,
                 "sent": today - timedelta(days=20), "eta": today - timedelta(days=3),
                 "transport": "TRK-003", "note": "Demo kechikkan yuk", "created_by": admin,
             },
         )
+        if overdue_created:
+            ShipmentLine.objects.create(
+                shipment=overdue, contract_line=contracts["l1"], kg=Decimal("5000"))
 
     # -- Customers / sales / payments / reservations ------------------------
 
@@ -200,10 +216,10 @@ class Command(BaseCommand):
     def _seed_sale_and_payments(self, lot, customers, admin):
         today = timezone.localdate()
         sale, created = Sale.objects.get_or_create(
-            customer=customers["akbar"], shipment=lot, date=today - timedelta(days=3),
+            customer=customers["akbar"], line=lot.lines.first(), date=today - timedelta(days=3),
             defaults={
                 "kg": Decimal("5000"), "price": Decimal("1.35"),
-                "cost_price": lot.landed_cost_per_kg,
+                "cost_price": lot.lines.first().landed_cost_per_kg,
                 "debt_deadline": today + timedelta(days=14),
                 "note": "Demo sotuv", "created_by": admin,
             },
@@ -230,7 +246,7 @@ class Command(BaseCommand):
         if in_transit is None:
             return
         Reservation.objects.get_or_create(
-            customer=customers["gulnora"], shipment=in_transit,
+            customer=customers["gulnora"], line=in_transit.lines.first(),
             defaults={
                 "kg": Decimal("2000"), "price": Decimal("1.40"),
                 "status": Reservation.Status.ACTIVE,

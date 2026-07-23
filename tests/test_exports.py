@@ -4,7 +4,7 @@ from io import BytesIO
 import openpyxl
 
 from crm.models import (
-    Contract, Customer, CustomerPayment, Partner, Sale, Shipment, ShipmentStatus, SupplierPayment,
+    Contract, ContractLine, Customer, CustomerPayment, Partner, Sale, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -28,18 +28,17 @@ EXPORT_URLS = {
 
 def _contract(partner=None, brand="LLDPE", created="2026-07-01"):
     partner = partner or Partner.objects.create(name="Pars", phone="1", city="T")
-    return Contract.objects.create(
-        partner=partner, brand=brand, kg=Decimal("1000"), price=Decimal("1"),
-        created=created, deadline="2026-08-01",
-    )
+    _contract_obj = Contract.objects.create(partner=partner, created=created, deadline="2026-08-01")
+    _contract_obj_line = ContractLine.objects.create(
+        contract=_contract_obj, brand=brand, kg=Decimal("1000"), price=Decimal("1"))
+    return _contract_obj
 
 
 def _arrived_shipment(contract, kg=Decimal("500"), eta="2026-07-15", arrived="2026-07-16"):
-    return Shipment.objects.create(
-        contract=contract, kg=kg, status=ShipmentStatus.arrival(),
-        sent="2026-07-05", eta=eta, arrived=arrived,
-        transport="01A111AA", container="MSCU-1",
-    )
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta=eta, arrived=arrived, transport="01A111AA", container="MSCU-1")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=kg)
+    return _ship_obj
 
 
 def _customer(name="Alisher Mebel"):

@@ -44,7 +44,7 @@ def build_digest():
         for shipment in overdue:
             contract = shipment.contract
             lines.append(
-                f"#{shipment.pk} {contract.brand} · {contract.partner.name} — "
+                f"#{shipment.pk} {contract.brand_summary} · {contract.partner.name} — "
                 f"{shipment.days_late} kun kechikdi · "
                 f"{shipment.transport}/{shipment.container} · reja: {shipment.eta}"
             )
@@ -55,7 +55,7 @@ def build_digest():
         for shipment in arriving:
             contract = shipment.contract
             lines.append(
-                f"#{shipment.pk} {contract.brand} · {contract.partner.name} · "
+                f"#{shipment.pk} {contract.brand_summary} · {contract.partner.name} · "
                 f"{shipment.transport}/{shipment.container} · reja: {shipment.eta}"
             )
     else:

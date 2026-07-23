@@ -27,7 +27,7 @@
   {% for s in sales %}
   <tr>
     <td class="sticky-col">{{ s.date }}</td>
-    <td>#{{ s.shipment_id }} · {{ s.shipment.contract.brand }}</td>
+    <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
     <td>{{ s.kg }}</td>
     <td>{{ s.total|usd }}</td>
     <td>{{ s.paid|usd }}</td>

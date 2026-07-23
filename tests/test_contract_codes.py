@@ -7,7 +7,7 @@ import pytest
 from django.db import IntegrityError, transaction
 
 from crm.models import (
-    AuditLog, Contract, Partner, Shipment, ShipmentStatus, SupplierPayment, partner_code_slug,
+    AuditLog, Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment, partner_code_slug,
 )
 
 
@@ -19,7 +19,10 @@ def _contract(partner, brand="LLDPE 209AA", **kw):
     defaults = dict(partner=partner, brand=brand, kg=Decimal("50000"),
                     price=Decimal("0.96"), created="2026-07-01", deadline="2026-07-28")
     defaults.update(kw)
-    return Contract.objects.create(**defaults)
+    _contract_obj = Contract.objects.create(**defaults)
+    _contract_obj_line = ContractLine.objects.create(
+        contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
+    return _contract_obj
 
 
 def _listed(client, **params):
@@ -210,8 +213,9 @@ def test_a_number_still_finds_brands_containing_it(admin_client, db):
 def test_active_shipment_list_groups_by_code(admin_client, db):
     """Yuklar sahifasi kelishuvlar bo'yicha guruhlanadi — sarlavhada kod turishi kerak."""
     contract = _contract(_partner("Sobir"))
-    Shipment.objects.create(contract=contract, kg=Decimal("500"),
-                            status=ShipmentStatus.objects.first(), sent="2026-07-05")
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), sent="2026-07-05")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal("500"))
     html = admin_client.get("/shipments/").content.decode()
     assert 'class="kelishuv-title">Kelishuv sobir-1<' in html
 
@@ -250,8 +254,9 @@ def _first_data_row(resp):
 def test_exports_carry_the_code_not_the_row_id(admin_client, db, url, column):
     """Mijoz Excel ni ham o'qiydi — u yerda `#12` chiqsa, kodning ma'nosi yo'qoladi."""
     contract = _contract(_partner("Sobir"))
-    Shipment.objects.create(contract=contract, kg=Decimal("500"),
-                            status=ShipmentStatus.objects.first(), sent="2026-07-05")
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), sent="2026-07-05")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal("500"))
     SupplierPayment.objects.create(contract=contract, date="2026-07-11",
                                    amount=Decimal("200.00"), method="cash")
 

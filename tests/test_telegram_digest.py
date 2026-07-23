@@ -6,7 +6,7 @@ from django.core.management import call_command
 from django.test import override_settings
 
 from crm.management.commands.send_telegram_digest import build_digest, NO_OVERDUE_MESSAGE
-from crm.models import Contract, Partner, Shipment, ShipmentStatus
+from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus
 
 
 @pytest.fixture
@@ -16,17 +16,16 @@ def partner():
 
 @pytest.fixture
 def contract(partner):
-    return Contract.objects.create(
-        partner=partner, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"),
-        created="2026-07-01", deadline="2026-08-01",
-    )
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    _contract_obj_line = ContractLine.objects.create(
+        contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"))
+    return _contract_obj
 
 
 def test_build_digest_lists_overdue_shipment(db, contract):
-    shipment = Shipment.objects.create(
-        contract=contract, kg=Decimal("500"), status=ShipmentStatus.objects.first(),
-        eta=date.today() - timedelta(days=3), transport="01A111AA", container="MSCU-1",
-    )
+    shipment = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), eta=date.today() - timedelta(days=3), transport="01A111AA", container="MSCU-1")
+    shipment_line = ShipmentLine.objects.create(
+        shipment=shipment, contract_line=contract.lines.first(), kg=Decimal("500"))
 
     text = build_digest()
 
