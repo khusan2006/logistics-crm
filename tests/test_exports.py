@@ -48,7 +48,7 @@ def _customer(name="Alisher Mebel"):
 def _sale(customer, shipment, kg=Decimal("100"), price=Decimal("2"), cost_price=Decimal("1"),
           date="2026-07-17"):
     return Sale.objects.create(
-        customer=customer, shipment=shipment, kg=kg, price=price, cost_price=cost_price, date=date,
+        customer=customer, line=shipment.lines.first(), kg=kg, price=price, cost_price=cost_price, date=date,
     )
 
 

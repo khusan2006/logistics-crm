@@ -59,7 +59,7 @@ def test_imports_sample_keyed_by_id(tmp_path, db):
 
     # Duplicate brand -> two distinct contracts under the same partner.
     vazifadon = Partner.objects.get(name="vazifadon")
-    assert vazifadon.contracts.filter(brand="2102 kampaund").count() == 2
+    assert vazifadon.contracts.filter(lines__brand="2102 kampaund").count() == 2
 
     # Naqd -> cash, Karta -> card.
     assert SupplierPayment.objects.filter(method="cash").count() == 1
@@ -207,7 +207,7 @@ def test_schema_b_agreements_generation(tmp_path, db):
     call_command("import_prototype", file=_write(tmp_path, SCHEMA_B), noinput=True)
 
     contract = Contract.objects.get()
-    assert contract.brand == "HDPE 7000F"          # grade -> brand
+    assert contract.brand_summary == "HDPE 7000F"          # grade -> brand
     assert str(contract.created) == "2026-07-01"   # date -> created
     assert SupplierPayment.objects.get().method == "transfer"  # type -> method
 
@@ -236,7 +236,7 @@ def test_schema_a_gl_keys_generation(tmp_path, db):
     call_command("import_prototype", file=_write(tmp_path, SCHEMA_A), noinput=True)
 
     assert Partner.objects.get().name == "SARDOR"
-    assert Contract.objects.get().brand == "2102"
+    assert Contract.objects.get().lines.get().brand == "2102"
     assert SupplierPayment.objects.get().method == "cash"
 
     shipment = Shipment.objects.get()

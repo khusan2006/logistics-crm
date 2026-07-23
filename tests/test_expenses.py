@@ -28,11 +28,11 @@ def test_landed_cost(admin_client, shipment):
         })
     assert shipment.expenses_total == Decimal("2000.00")
     # 1.00 + 2000/10000 = 1.20 per kg
-    assert shipment.landed_cost_per_kg == Decimal("1.2000")
+    assert shipment.lines.first().landed_cost_per_kg == Decimal("1.2000")
 
 
 def test_no_expenses_landed_cost_is_contract_price(shipment):
-    assert shipment.landed_cost_per_kg == Decimal("1.0000")
+    assert shipment.lines.first().landed_cost_per_kg == Decimal("1.0000")
 
 
 def test_translator_forbidden(translator_client, shipment):

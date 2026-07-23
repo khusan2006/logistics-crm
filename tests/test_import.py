@@ -84,10 +84,11 @@ def test_imports_partners_customers_contracts(tmp_path):
     assert Partner.objects.filter(name="Arya Petrochem").exists()
     assert Customer.objects.filter(name="Alisher Trading", address="Toshkent, Chilonzor").exists()
 
-    contract = Contract.objects.get(brand="PP-R")
+    contract = Contract.objects.get(lines__brand="PP-R")
     assert contract.partner.name == "Pars Polymer"
-    assert contract.kg == 5000
-    assert contract.price == 1.25
+    line = contract.lines.get()
+    assert line.kg == 5000
+    assert line.price == 1.25
     assert contract.created == date(2026, 1, 10)
     assert contract.deadline == date(2026, 3, 1)
     assert contract.note == "birinchi partiya"

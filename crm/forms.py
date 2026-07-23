@@ -130,7 +130,7 @@ class BaseContractLineFormSet(forms.BaseInlineFormSet):
 
 ContractLineFormSet = forms.inlineformset_factory(
     Contract, ContractLine, form=ContractLineForm, formset=BaseContractLineFormSet,
-    extra=1, min_num=1, validate_min=False, can_delete=True)
+    extra=1, min_num=0, can_delete=True)
 
 
 class ShipmentStatusForm(forms.ModelForm):
@@ -344,7 +344,7 @@ class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
 
 ShipmentLineFormSet = forms.inlineformset_factory(
     Shipment, ShipmentLine, form=ShipmentLineForm, formset=BaseShipmentLineFormSet,
-    extra=1, min_num=1, validate_min=False, can_delete=True)
+    extra=1, min_num=0, can_delete=True)
 
 
 class ShipmentExtendForm(forms.Form):

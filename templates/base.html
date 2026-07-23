@@ -1017,6 +1017,7 @@
       });
     }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);   // the form is also reachable as a full page (no-JS fallback)
   })();
 
   // Repeating product rows (Mahsulotlar) on the kelishuv and yuk forms. Adds and

@@ -21,7 +21,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
         shipment=shipment, contract_line=contract.lines.first(), kg=Decimal(kg))
     if expense:
         ShipmentExpense.objects.create(shipment=shipment, amount=Decimal(expense), date="2026-07-16")
-    return shipment
+    return shipment_line
 
 
 def _non_arrived_lot(kg="1000", brand="HDPE"):
@@ -32,7 +32,7 @@ def _non_arrived_lot(kg="1000", brand="HDPE"):
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), sent="2026-07-05", eta="2026-08-01")
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg))
-    return _ship_obj
+    return _ship_obj_line
 
 
 def test_sale_snapshots_cost_and_computes_total_profit(admin_client, db):
@@ -41,11 +41,11 @@ def test_sale_snapshots_cost_and_computes_total_profit(admin_client, db):
     customer = _customer()
 
     resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "4000",
+        "customer": customer.pk, "brand": lot.brand, "kg": "4000",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
-    sale = Sale.objects.get(shipment=lot)
+    sale = Sale.objects.get(line=lot)
     assert sale.kg == Decimal("4000")
     assert sale.cost_price == Decimal("1.2000")
     assert sale.total == Decimal("6400.00")
@@ -63,14 +63,14 @@ def test_cost_price_stays_frozen_after_later_expense_change(admin_client, db):
     lot = _lot(expense="2000.00")
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "4000",
+        "customer": customer.pk, "brand": lot.brand, "kg": "4000",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    sale = Sale.objects.get(shipment=lot)
+    sale = Sale.objects.get(line=lot)
     assert sale.cost_price == Decimal("1.2000")
 
     # Add a big new expense — landed cost changes, but the snapshot must not.
-    ShipmentExpense.objects.create(shipment=lot, amount=Decimal("8000.00"), date="2026-07-19")
+    ShipmentExpense.objects.create(shipment=lot.shipment, amount=Decimal("8000.00"), date="2026-07-19")
     lot.refresh_from_db()
     assert lot.landed_cost_per_kg != Decimal("1.2000")
 
@@ -82,22 +82,22 @@ def test_selling_more_than_available_kg_rejected(admin_client, db):
     lot = _lot(kg="1000", expense="0")
     customer = _customer()
     resp = admin_client.post("/sales/new/", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "1500",
+        "customer": customer.pk, "brand": lot.brand, "kg": "1500",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 200
-    assert not Sale.objects.filter(shipment=lot).exists()
+    assert not Sale.objects.filter(line=lot).exists()
 
 
 def test_selling_from_non_arrived_shipment_rejected(admin_client, db):
     lot = _non_arrived_lot()
     customer = _customer()
     resp = admin_client.post("/sales/new/", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "100",
+        "customer": customer.pk, "brand": lot.brand, "kg": "100",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 200
-    assert not Sale.objects.filter(shipment=lot).exists()
+    assert not Sale.objects.filter(line=lot).exists()
 
 
 def test_translator_forbidden(translator_client, db):
@@ -109,7 +109,7 @@ def test_list_and_search(admin_client, db):
     lot = _lot(brand="LLDPE-Findme")
     customer = _customer(name="Findable Customer")
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "500",
+        "customer": customer.pk, "brand": lot.brand, "kg": "500",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     html = admin_client.get("/sales/?q=Findable").content.decode()
@@ -130,13 +130,13 @@ def test_sale_create_modal_post_valid_returns_204_with_redirect(admin_client, db
     customer = _customer()
     resp = admin_client.post(
         "/sales/new/",
-        {"customer": customer.pk, "brand": lot.contract.brand, "kg": "100",
+        {"customer": customer.pk, "brand": lot.brand, "kg": "100",
          "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
     assert resp["X-Redirect"] == "/sales/"
-    assert Sale.objects.filter(shipment=lot).exists()
+    assert Sale.objects.filter(line=lot).exists()
 
 
 def test_sale_create_modal_post_invalid_returns_422(admin_client, db):
@@ -144,7 +144,7 @@ def test_sale_create_modal_post_invalid_returns_422(admin_client, db):
     customer = _customer()
     resp = admin_client.post(
         "/sales/new/",
-        {"customer": customer.pk, "brand": lot.contract.brand, "kg": "99999",
+        {"customer": customer.pk, "brand": lot.brand, "kg": "99999",
          "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
@@ -157,19 +157,19 @@ def test_sale_edit_re_snapshots_cost_from_current_shipment(admin_client, db):
     lot = _lot(expense="2000.00")
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "1000",
+        "customer": customer.pk, "brand": lot.brand, "kg": "1000",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    sale = Sale.objects.get(shipment=lot)
+    sale = Sale.objects.get(line=lot)
     assert sale.cost_price == Decimal("1.2000")
 
-    ShipmentExpense.objects.create(shipment=lot, amount=Decimal("8000.00"), date="2026-07-19")
+    ShipmentExpense.objects.create(shipment=lot.shipment, amount=Decimal("8000.00"), date="2026-07-19")
     lot.refresh_from_db()
     new_landed = lot.landed_cost_per_kg
     assert new_landed != Decimal("1.2000")
 
     resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
-        "customer": customer.pk, "shipment": lot.pk, "kg": "1000",
+        "customer": customer.pk, "line": lot.pk, "kg": "1000",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
@@ -181,10 +181,10 @@ def test_sale_delete(admin_client, db):
     lot = _lot()
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "500",
+        "customer": customer.pk, "brand": lot.brand, "kg": "500",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    sale = Sale.objects.get(shipment=lot)
+    sale = Sale.objects.get(line=lot)
     resp = admin_client.post(f"/sales/{sale.pk}/delete/")
     assert resp.status_code == 302
     assert not Sale.objects.filter(pk=sale.pk).exists()
@@ -194,10 +194,10 @@ def test_sale_detail(admin_client, db):
     lot = _lot()
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "500",
+        "customer": customer.pk, "brand": lot.brand, "kg": "500",
         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    sale = Sale.objects.get(shipment=lot)
+    sale = Sale.objects.get(line=lot)
     resp = admin_client.get(f"/sales/{sale.pk}/")
     assert resp.status_code == 200
 
@@ -217,7 +217,7 @@ def _second_lot(brand="LLDPE", kg="5000", price="1.50", arrived="2026-07-20"):
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-12", arrived=arrived, container="MSCU-2")
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg))
-    return _ship_obj
+    return _ship_obj_line
 
 
 def test_fifo_sale_splits_across_lots_oldest_first(admin_client, db):
@@ -232,8 +232,8 @@ def test_fifo_sale_splits_across_lots_oldest_first(admin_client, db):
         "price": "1.60", "date": "2026-07-21", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
-    s_old = Sale.objects.get(shipment=old)
-    s_new = Sale.objects.get(shipment=new)
+    s_old = Sale.objects.get(line=old)
+    s_new = Sale.objects.get(line=new)
     assert s_old.kg == Decimal("10000") and s_old.cost_price == Decimal("1.2000")
     assert s_new.kg == Decimal("1000") and s_new.cost_price == Decimal("1.5000")
     assert old.available_kg == Decimal("0") and new.available_kg == Decimal("4000")
@@ -268,7 +268,7 @@ def _lot_at(brand, kg, price, arrived):
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=arrived)
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal(kg), price=Decimal(price))
-    return _ship_obj
+    return _ship_obj_line
 
 
 def test_sale_from_a_chosen_lot_ignores_fifo(admin_client, db):
@@ -286,7 +286,7 @@ def test_sale_from_a_chosen_lot_ignores_fifo(admin_client, db):
     assert resp.status_code == 302
     sales = list(Sale.objects.all())
     assert len(sales) == 1
-    assert sales[0].shipment_id == dear.pk                 # not the older cheap lot
+    assert sales[0].line_id == dear.pk                 # not the older cheap lot
     assert sales[0].cost_price == dear.landed_cost_per_kg
     assert cheap.available_kg == Decimal("1000")
 
@@ -315,5 +315,5 @@ def test_sale_without_a_lot_still_runs_fifo_by_brand(admin_client, db):
         "date": "2026-07-24", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
-    assert [(s.shipment_id, s.kg) for s in Sale.objects.order_by("id")] == [
+    assert [(s.line_id, s.kg) for s in Sale.objects.order_by("id")] == [
         (old.pk, Decimal("200.000")), (new.pk, Decimal("100.000"))]

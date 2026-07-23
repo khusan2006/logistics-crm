@@ -17,12 +17,12 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00"):
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg))
-    return _ship_obj
+    return _ship_obj_line
 
 
 def _sale(customer, lot, kg, price, date, debt_deadline=None):
     return Sale.objects.create(
-        customer=customer, shipment=lot, kg=Decimal(kg), price=Decimal(price),
+        customer=customer, line=lot, kg=Decimal(kg), price=Decimal(price),
         cost_price=lot.landed_cost_per_kg, date=date, debt_deadline=debt_deadline,
     )
 

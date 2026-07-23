@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
+from conftest import line_data, make_shipment
 from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus
 
 
@@ -13,10 +14,14 @@ def _contract(kg="1000"):
 
 
 def _post_shipment(client, contract, **extra):
-    data = {"contract": contract.pk, "kg": "400",
+    """A yuk carrying one product of the kelishuv. `kg`/`price` address that row."""
+    row = {"contract_line": contract.lines.first().pk, "kg": extra.pop("kg", "400")}
+    if "price" in extra:
+        row["price"] = extra.pop("price")
+    data = {"contract": contract.pk,
             "status": ShipmentStatus.objects.first().pk, "sent": "2026-07-05",
             "eta": "2026-07-20", "transport": "01A111AA", "container": "MSCU-1",
-            "note": ""}
+            "note": "", **line_data(row)}
     data.update(extra)
     return client.post("/shipments/new/", data)
 
@@ -126,9 +131,10 @@ def test_create_shipment_modal_post_valid_returns_204_with_redirect(admin_client
     c = _contract()
     resp = admin_client.post(
         "/shipments/new/",
-        {"contract": c.pk, "kg": "400", "status": ShipmentStatus.objects.first().pk,
+        {"contract": c.pk, "status": ShipmentStatus.objects.first().pk,
          "sent": "2026-07-05", "eta": "2026-07-20", "transport": "01A222BB",
-         "container": "MSCU-2", "note": ""},
+         "container": "MSCU-2", "note": "",
+         **line_data({"contract_line": c.lines.first().pk, "kg": "400"})},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
@@ -170,13 +176,13 @@ def test_shipment_transport_accepts_uz_plate(db):
 
 
 def test_shipment_contract_select_carries_prefill_data(db):
-    """The contract <select> options expose remaining kg + deadline so the form JS
-    can prefill Yuboriladigan kg and Taxminiy kelish."""
-    from crm.forms import ShipmentForm
+    """The kelishuv <select> exposes the deadline (to prefill Taxminiy kelish) and
+    each product option carries its qolgan kg, so the form JS can prefill the row."""
+    from crm.forms import ShipmentForm, ShipmentLineForm
     _contract()  # has kg (remaining) and a deadline
-    html = str(ShipmentForm())
-    assert "data-remaining" in html and "data-deadline" in html
-    assert 'data-contract-source' in html
+    head, row = str(ShipmentForm()), str(ShipmentLineForm())
+    assert "data-deadline" in head and "data-contract-source" in head
+    assert "data-remaining" in row and "data-line-source" in row
 
 
 def test_translator_sees_no_price_on_loads(translator_client, admin_client, db):
@@ -192,9 +198,9 @@ def test_translator_sees_no_price_on_loads(translator_client, admin_client, db):
         return html.split('class="content"', 1)[1].split("</main>", 1)[0]
 
     tr = content(translator_client.get("/shipments/").content.decode())
-    assert "Narx" not in tr and "$" not in tr and "Xarajat" not in tr
+    assert "Qiymati" not in tr and "$" not in tr and "Xarajat" not in tr
     ad = content(admin_client.get("/shipments/").content.decode())
-    assert "Narx" in ad and "$100.00" in ad and "Xarajat" in ad
+    assert "Qiymati" in ad and "$100.00" in ad and "Xarajat" in ad
 
 
 def test_yuklar_list_has_inline_legs_panel(admin_client, db):
@@ -219,23 +225,19 @@ def test_shipment_own_price_drives_value_and_landed_cost(admin_client, db):
     """A truck may carry its own USD/kg price; value, landed cost and the sale
     cost snapshot all follow it. Blank price falls back to the contract price."""
     c = _contract()  # price 1.00/kg
-    own = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
-    own_line = ShipmentLine.objects.create(
-        shipment=own, contract_line=c.lines.first(), kg=Decimal("100"), price=Decimal("2.50"))
-    dflt = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
-    dflt_line = ShipmentLine.objects.create(
-        shipment=dflt, contract_line=c.lines.first(), kg=Decimal("100"))
+    own = make_shipment(contract=c, kg="100", price="2.50").lines.first()
+    dflt = make_shipment(contract=c, kg="100").lines.first()
     assert own.unit_price == Decimal("2.50") and own.goods_value == Decimal("250.00")
     assert dflt.unit_price == Decimal("1.00") and dflt.goods_value == Decimal("100.00")
     assert own.landed_cost_per_kg == Decimal("2.5000")
 
 
 def test_shipment_form_price_prefills_from_contract(db):
-    """The contract <select> carries data-price so the form JS can prefill the
-    truck's 1 kg narxi from the chosen kelishuv."""
-    from crm.forms import ShipmentForm
+    """Each product option carries data-price so the form JS can prefill that row's
+    1 kg narxi from the kelishuv."""
+    from crm.forms import ShipmentLineForm
     _contract()
-    assert "data-price" in str(ShipmentForm())
+    assert "data-price" in str(ShipmentLineForm())
 
 
 def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db):
@@ -287,9 +289,9 @@ def test_done_page_hides_money_from_translator(translator_client, admin_client, 
         return html.split('class="content"', 1)[1].split("</main>", 1)[0]
 
     tr = content(translator_client.get("/shipments/done/").content.decode())
-    assert "$" not in tr and "Narx" not in tr
+    assert "$" not in tr and "Qiymati" not in tr
     ad = content(admin_client.get("/shipments/done/").content.decode())
-    assert "$/kg" in ad
+    assert "$" in ad and "Qiymati" in ad
 
 
 def test_set_status_ajax_returns_json_in_place_update(admin_client, db):

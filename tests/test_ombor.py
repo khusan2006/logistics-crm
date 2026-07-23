@@ -16,7 +16,7 @@ def _arrived_shipment(kg="400", brand="LLDPE"):
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal(kg))
-    return _ship_obj
+    return _ship_obj_line
 
 
 def _non_arrived_shipment(kg="200", brand="HDPE"):
@@ -45,8 +45,8 @@ def test_ombor_lists_only_arrived_lots(admin_client, db):
     lot = _arrived_shipment(kg="400", brand="LLDPE")
     not_lot = _non_arrived_shipment(kg="200", brand="HDPE-Excluded")
     html = admin_client.get("/ombor/").content.decode()
-    assert lot.contract.brand in html
-    assert not_lot.contract.brand not in html
+    assert lot.brand in html
+    assert not_lot.contract.brand_summary not in html
 
 
 def test_translator_forbidden(translator_client, db):
@@ -57,7 +57,7 @@ def test_admin_sees_lot_brand(admin_client, db):
     lot = _arrived_shipment(kg="400")
     resp = admin_client.get("/ombor/")
     assert resp.status_code == 200
-    assert lot.contract.brand in resp.content.decode()
+    assert lot.brand in resp.content.decode()
 
 
 def _lot(brand="LLDPE", kg="400", price=None, arrived="2026-07-16", partner="Pars"):
@@ -69,7 +69,7 @@ def _lot(brand="LLDPE", kg="400", price=None, arrived="2026-07-16", partner="Par
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=arrived)
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal(kg), price=Decimal(price) if price else None)
-    return _ship_obj
+    return _ship_obj_line
 
 
 def test_ombor_groups_lots_of_one_marka_into_a_single_row(admin_client, db):
@@ -107,7 +107,7 @@ def test_ombor_group_totals_net_out_sales(admin_client, db):
     from crm.models import Customer, Sale
     lot = _lot(brand="2102 kampaund", kg="1000", price="1.20")
     customer = Customer.objects.create(name="Ali")
-    Sale.objects.create(customer=customer, shipment=lot, kg=Decimal("400"),
+    Sale.objects.create(customer=customer, line=lot, kg=Decimal("400"),
                         price=Decimal("2"), cost_price=Decimal("1.20"), date="2026-07-20")
 
     group = admin_client.get("/ombor/").context["page"].object_list[0]

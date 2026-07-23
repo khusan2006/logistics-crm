@@ -76,3 +76,18 @@ def translator_client(translator_user):
     client = Client()
     client.force_login(translator_user)
     return client
+
+
+def line_data(*rows, initial=0, prefix="lines"):
+    """POST payload for a Mahsulotlar formset: management fields plus one dict per
+    product row, e.g. line_data({"brand": "LLDPE", "kg": "100", "price": "1"})."""
+    data = {
+        f"{prefix}-TOTAL_FORMS": str(len(rows)),
+        f"{prefix}-INITIAL_FORMS": str(initial),
+        f"{prefix}-MIN_NUM_FORMS": "0",
+        f"{prefix}-MAX_NUM_FORMS": "1000",
+    }
+    for i, row in enumerate(rows):
+        for key, value in row.items():
+            data[f"{prefix}-{i}-{key}"] = "" if value is None else str(value)
+    return data

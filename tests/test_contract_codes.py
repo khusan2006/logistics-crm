@@ -6,6 +6,7 @@ import openpyxl
 import pytest
 from django.db import IntegrityError, transaction
 
+from conftest import line_data, make_contract, make_shipment
 from crm.models import (
     AuditLog, Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment, partner_code_slug,
 )
@@ -16,13 +17,9 @@ def _partner(name):
 
 
 def _contract(partner, brand="LLDPE 209AA", **kw):
-    defaults = dict(partner=partner, brand=brand, kg=Decimal("50000"),
-                    price=Decimal("0.96"), created="2026-07-01", deadline="2026-07-28")
+    defaults = dict(kg="50000", price="0.96", created="2026-07-01", deadline="2026-07-28")
     defaults.update(kw)
-    _contract_obj = Contract.objects.create(**defaults)
-    _contract_obj_line = ContractLine.objects.create(
-        contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
-    return _contract_obj
+    return make_contract(partner=partner, brand=brand, **defaults)
 
 
 def _listed(client, **params):
@@ -106,9 +103,9 @@ def test_editing_a_hamkor_does_not_reset_their_numbering(db):
 
 def test_editing_other_fields_keeps_the_code(db):
     c = _contract(_partner("Sobir"))
-    c.brand = "HDPE 7000F"
-    c.kg = Decimal("999")
-    c.save()
+    line = c.lines.first()
+    line.brand, line.kg = "HDPE 7000F", Decimal("999")
+    line.save()
     c.refresh_from_db()
     assert c.code == "sobir-1"
 
@@ -213,9 +210,7 @@ def test_a_number_still_finds_brands_containing_it(admin_client, db):
 def test_active_shipment_list_groups_by_code(admin_client, db):
     """Yuklar sahifasi kelishuvlar bo'yicha guruhlanadi — sarlavhada kod turishi kerak."""
     contract = _contract(_partner("Sobir"))
-    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), sent="2026-07-05")
-    _ship_obj_line = ShipmentLine.objects.create(
-        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal("500"))
+    make_shipment(contract=contract, kg="500", sent="2026-07-05")
     html = admin_client.get("/shipments/").content.decode()
     assert 'class="kelishuv-title">Kelishuv sobir-1<' in html
 
@@ -227,8 +222,8 @@ def test_audit_note_names_the_code(admin_client, db):
     umumiy), shuning uchun kod o'qiladigan izohga yoziladi."""
     sobir = _partner("Sobir")
     admin_client.post("/contracts/new/", {
-        "partner": sobir.pk, "brand": "HDPE 7000F", "kg": "30000", "price": "1.05",
-        "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        "partner": sobir.pk, "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert "sobir-1" in AuditLog.objects.get(target_type="Kelishuv").summary
 

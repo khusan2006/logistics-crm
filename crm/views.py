@@ -254,12 +254,16 @@ def contract_list(request):
     delivery = request.GET.get("delivery", "open").strip()
     overdue = request.GET.get("overdue") == "1"
 
+    # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
+    # instead of two per product per kelishuv as the filters walk every row.
     contracts = (Contract.objects.select_related("partner")
-                 .prefetch_related("shipments", "supplier_payments"))
+                 .prefetch_related("lines__shipment_lines", "supplier_payments"))
     if q:
-        filters = (Q(brand__icontains=q) | Q(partner__name__icontains=q)
+        # lines__brand spans a multi-valued relation, so a kelishuv whose products
+        # both match would otherwise come back twice.
+        filters = (Q(lines__brand__icontains=q) | Q(partner__name__icontains=q)
                    | Q(code_slug__icontains=q) | _contract_code_filter(q))
-        contracts = contracts.filter(filters)
+        contracts = contracts.filter(filters).distinct()
     if partner_id.isdigit():
         contracts = contracts.filter(partner_id=int(partner_id))
 
@@ -1067,7 +1071,7 @@ def sale_create_lot(request, lot_id):
     deliberately bypassed: the operator opened this lot because it is the one being
     sold — with several lots of the same marka at different landed costs, FIFO would
     silently bill a different lot's cost."""
-    lot = get_object_or_404(Shipment, pk=lot_id, arrived__isnull=False)
+    lot = get_object_or_404(ShipmentLine, pk=lot_id, shipment__arrived__isnull=False)
     initial = {"lot": lot.pk}
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
@@ -1163,7 +1167,7 @@ def reservation_create(request):
     initial = {}
     lot_id = request.GET.get("lot")
     if lot_id and lot_id.isdigit():
-        initial["shipment"] = int(lot_id)
+        initial["line"] = int(lot_id)
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
@@ -1209,7 +1213,7 @@ def reservation_cancel(request, pk):
 @role_required(User.Role.ADMIN)
 def reservation_convert(request, pk):
     reservation = get_object_or_404(Reservation, pk=pk)
-    if reservation.shipment.arrived is None:
+    if reservation.line.arrived is None:
         messages.error(request, "Lot hali omborga yetib kelmagan")
         return form_reload(request, reverse("reservation_list"))
     price = reservation.price
@@ -1225,12 +1229,12 @@ def reservation_convert(request, pk):
     # Defense-in-depth: reserved kg was validated at reservation time and convert is
     # net-neutral, but refuse if the lot has since become over-committed (e.g. its kg
     # was edited down) so a convert can never oversell.
-    if reservation.shipment.available_kg < 0:
+    if reservation.line.available_kg < 0:
         messages.error(request, "Lot kg yetarli emas")
         return form_reload(request, reverse("reservation_list"))
     sale = Sale.objects.create(
-        customer=reservation.customer, shipment=reservation.shipment, kg=reservation.kg,
-        price=price, cost_price=reservation.shipment.landed_cost_per_kg,
+        customer=reservation.customer, line=reservation.line, kg=reservation.kg,
+        price=price, cost_price=reservation.line.landed_cost_per_kg,
         date=timezone.localdate(), reservation=reservation, created_by=request.user,
     )
     reservation.status = Reservation.Status.CONVERTED
@@ -1420,7 +1424,7 @@ def _report_querysets(request):
     if partner_id:
         contracts = contracts.filter(partner_id=partner_id)
     if brand:
-        contracts = contracts.filter(brand=brand)
+        contracts = contracts.filter(lines__brand=brand).distinct()
     if date_from:
         contracts = contracts.filter(created__gte=date_from)
     if date_to:
@@ -1498,7 +1502,7 @@ def reports(request):
         partner_rows.append({
             "partner": partner,
             "contracts_count": p_contracts.count(),
-            "kg": _sum(p_contracts, "kg"),
+            "kg": _sum(ContractLine.objects.filter(contract__in=p_contracts), "kg"),
             "kontrakt_summasi": sum((c.total_value for c in p_contracts), Decimal("0")),
             "tolangan": _sum(sup_pays.filter(contract__partner=partner)),
             "qarz": sum((c.debt for c in p_contracts), Decimal("0")),
@@ -1526,7 +1530,7 @@ def reports(request):
         "mijoz_qarzi": mijoz_qarzi, "profit_total": profit_total,
         "kechikkan_soni": kechikkan_soni, "late_shipments": late_shipments,
         "partner_rows": partner_rows, "customer_rows": customer_rows,
-        "partners": Partner.objects.all(), "brands": Contract.objects.values_list(
+        "partners": Partner.objects.all(), "brands": ContractLine.objects.values_list(
             "brand", flat=True).distinct().order_by("brand"),
         "statuses": ShipmentStatus.objects.all(),
         "date_from": date_from, "date_to": date_to,

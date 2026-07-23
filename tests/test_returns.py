@@ -21,15 +21,15 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
         shipment=shipment, contract_line=contract.lines.first(), kg=Decimal(kg))
     if expense:
         ShipmentExpense.objects.create(shipment=shipment, amount=Decimal(expense), date="2026-07-16")
-    return shipment
+    return shipment_line
 
 
 def _sale(admin_client, lot, customer, kg="4000", price="1.60"):
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": kg,
+        "customer": customer.pk, "brand": lot.brand, "kg": kg,
         "price": price, "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    return Sale.objects.get(shipment=lot, kg=Decimal(kg))
+    return Sale.objects.get(line=lot, kg=Decimal(kg))
 
 
 def test_return_credits_debt_and_restocks_lot(admin_client, db):
@@ -103,11 +103,11 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
 
     # Reachability: the freed advance auto-applies to a NEW sale
     resp2 = admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "500",
+        "customer": customer.pk, "brand": lot.brand, "kg": "500",
         "price": "1.60", "date": "2026-07-20", "debt_deadline": "", "note": "",
     })
     assert resp2.status_code == 302
-    new_sale = Sale.objects.get(shipment=lot, kg=Decimal("500"))
+    new_sale = Sale.objects.get(line=lot, kg=Decimal("500"))
     assert new_sale.total == Decimal("800.00")
     new_sale.refresh_from_db()
     assert new_sale.remaining == Decimal("0")       # covered by the freed advance

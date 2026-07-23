@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django.utils import timezone
 
+from conftest import line_data, make_contract, make_shipment
 from crm.models import (
     Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
@@ -10,21 +11,15 @@ from crm.models import (
 
 def _contract(**kw):
     partner = kw.pop("partner", None) or Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    defaults = dict(partner=partner, brand="LLDPE 209AA", kg=Decimal("50000"),
-                    price=Decimal("0.96"), created="2026-07-01", deadline="2026-07-28")
+    defaults = dict(brand="LLDPE 209AA", kg="50000", price="0.96",
+                    created="2026-07-01", deadline="2026-07-28")
     defaults.update(kw)
-    _contract_obj = Contract.objects.create(**defaults)
-    _contract_obj_line = ContractLine.objects.create(
-        contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
-    return _contract_obj
+    return make_contract(partner=partner, **defaults)
 
 
 def _ship(contract, kg="100", price="1.00"):
     """One truck under the kelishuv, priced so its goods_value is easy to read."""
-    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first())
-    _ship_obj_line = ShipmentLine.objects.create(
-        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg), price=Decimal(price))
-    return _ship_obj
+    return make_shipment(contract=contract, kg=kg, price=price)
 
 
 def _pay(contract, amount):
@@ -49,19 +44,19 @@ def test_total_value(db):
 def test_create_via_view(admin_client, admin_user):
     p = Partner.objects.create(name="Arya", phone="1", city="Shiroz")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "brand": "HDPE 7000F", "kg": "30000", "price": "1.05",
-        "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        "partner": p.pk, "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert resp.status_code == 302
-    c = Contract.objects.get(brand="HDPE 7000F")
+    c = Contract.objects.get(lines__brand="HDPE 7000F")
     assert c.created_by == admin_user
 
 
 def test_deadline_before_created_rejected(admin_client):
     p = Partner.objects.create(name="X", phone="1", city="Y")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "brand": "B", "kg": "10", "price": "1",
-        "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+        "partner": p.pk, "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+        **line_data({"brand": "B", "kg": "10", "price": "1"}),
     })
     assert resp.status_code == 200 and not Contract.objects.exists()
 
@@ -79,14 +74,14 @@ def test_create_contract_modal_post_valid_returns_204_with_redirect(admin_client
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10",
-            "created": "2026-07-05", "deadline": "2026-08-01", "note": "",
+            "partner": p.pk, "created": "2026-07-05", "deadline": "2026-08-01", "note": "",
+            **line_data({"brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
     assert resp["X-Redirect"] == "/contracts/"
-    assert Contract.objects.filter(brand="LDPE 2100TN00").exists()
+    assert Contract.objects.filter(lines__brand="LDPE 2100TN00").exists()
 
 
 def test_create_contract_modal_post_invalid_returns_422(admin_client):
@@ -94,8 +89,8 @@ def test_create_contract_modal_post_invalid_returns_422(admin_client):
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "brand": "B", "kg": "10", "price": "1",
-            "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+            "partner": p.pk, "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+            **line_data({"brand": "B", "kg": "10", "price": "1"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
