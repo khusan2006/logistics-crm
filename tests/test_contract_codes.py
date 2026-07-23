@@ -207,6 +207,15 @@ def test_a_number_still_finds_brands_containing_it(admin_client, db):
     assert _listed(admin_client, q="209") == ["sobir-1"]
 
 
+def test_active_shipment_list_groups_by_code(admin_client, db):
+    """Yuklar sahifasi kelishuvlar bo'yicha guruhlanadi — sarlavhada kod turishi kerak."""
+    contract = _contract(_partner("Sobir"))
+    Shipment.objects.create(contract=contract, kg=Decimal("500"),
+                            status=ShipmentStatus.objects.first(), sent="2026-07-05")
+    html = admin_client.get("/shipments/").content.decode()
+    assert 'class="kelishuv-title">Kelishuv sobir-1<' in html
+
+
 # --- audit trail and confirmations ----------------------------------------
 
 def test_audit_note_names_the_code(admin_client, db):

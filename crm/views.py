@@ -1311,7 +1311,8 @@ def kassa(request):
     for p in sup_pays:
         outflow_rows.append({
             "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
-            "title": f"Kelishuv {p.contract.code} · {p.contract.partner.name}",
+            # The hamkor is already inside the code, so the brand is the useful half here
+            "title": f"Kelishuv {p.contract.code} · {p.contract.brand}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_original": p.amount_original, "amount": p.amount,

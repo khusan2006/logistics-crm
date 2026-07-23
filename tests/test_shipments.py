@@ -230,7 +230,7 @@ def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db)
     resp = admin_client.get("/shipments/")
     html = resp.content.decode()
     assert f'class="kelishuv-row" data-contract="{c.pk}"' in html
-    assert "Kelishuv #%d" % c.pk in html
+    assert f"Kelishuv {c.code}" in html
     assert "$/kg" in html and "2,5" in html or "2.5" in html
     groups = resp.context["groups"]
     assert len(groups) == 1 and groups[0]["contract"].pk == c.pk

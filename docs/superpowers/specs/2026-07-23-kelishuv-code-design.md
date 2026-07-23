@@ -22,6 +22,19 @@ ko'rinadi. Mijoz har bir hamkor uchun alohida, 1 dan boshlanadigan kod so'radi:
 
 Yaxlitlik: `UniqueConstraint(fields=["code_slug", "code_number"])`.
 
+`Partner` ham ikkita ustun oladi:
+
+| Ustun | Turi | Izoh |
+|---|---|---|
+| `code_slug` | `CharField(max_length=120, db_index=True)` | Joriy nomdan, har `save()` da qayta hisoblanadi |
+| `code_counter` | `PositiveIntegerField(default=0)` | Berilgan eng katta raqam; faqat o'sadi |
+
+Hisoblagich nega `Partner` da? Kodlar muzlatilgan bo'lishi kerak, ya'ni
+`sobir-3` o'chirilsa, 3-raqam qaytib berilmasligi shart. Agar raqam mavjud
+kelishuvlar ustidan `Max()` bilan hisoblansa, oxirgi qator o'chirilgach raqam
+"unutiladi" va qayta beriladi. Hisoblagich qatorlardan uzoqroqda — hamkorda —
+turgani uchun o'chirish unga ta'sir qilmaydi.
+
 ### Nomdan slug olish
 
 `django.utils.text.slugify(partner.name, allow_unicode=True)`:
@@ -36,8 +49,8 @@ zaxira slugi ishlatiladi, shunda kod hech qachon `-3` ko'rinishida qolmaydi.
 ### Raqam berish qoidasi
 
 ```
-raqam = 1 + max(shu hamkor ishlatgan eng katta raqam,
-                shu slug ishlatgan eng katta raqam)
+raqam = 1 + max(shu hamkorning code_counter i,
+                shu slugga ega hamkorlarning code_counter i)
 ```
 
 Ikkala manbani hisobga olish ikkita holatni bir vaqtda to'g'ri hal qiladi:
@@ -72,6 +85,18 @@ Ikki admin bir paytda saqlasa, ikkalasi bir xil raqamni hisoblaydi. Unique
 constraint yutqazganini rad etadi, `save()` esa raqamni qayta hisoblab, 5
 martagacha urinib ko'radi — foydalanuvchiga xato ko'rsatilmaydi.
 
+### Eskirgan `Partner` nusxasidan himoya
+
+`Contract.save()` hisoblagichni nuqtali `UPDATE` bilan oshiradi, shuning uchun
+undan oldin o'qilgan `Partner` nusxasida eski qiymat qoladi. Oddiy
+`partner.save()` (masalan, telefon raqamini tahrirlash) o'sha eski qiymatni
+qaytarib yozsa, hamkorning raqamlashi nolga tushadi va keyingi kelishuv
+allaqachon band kodni olishga urinadi — bu holatda qayta urinish ham yordam
+bermaydi, chunki hisob har safar bir xil noto'g'ri raqamni beradi.
+
+Shuning uchun `Partner.save()` yozishdan oldin bazadagi `code_counter` ni
+o'qiydi va undan pastga tushmaydi.
+
 ## Ko'rinishi
 
 `Contract.__str__` → `f"{self.code} · {self.brand}"`. Hamkor nomi kod ichida
@@ -92,9 +117,18 @@ bor, shuning uchun uni takrorlash shart emas. Bu o'zgarish `ShipmentForm` va
 | `supplier_payment_list.html:23` | `#{{ p.contract_id }}` | `{{ p.contract.code }}` |
 
 Oxirgi to'rttasi hozir `contract_id` ni chiqaradi — join talab qilmaydi.
-`contract.code` esa talab qiladi, shuning uchun tegishli view larda
-`select_related("contract")` borligi tekshiriladi (aks holda 30 qatorli
-ro'yxat 30 ta ortiqcha so'rov beradi).
+`contract.code` esa talab qiladi; tekshirildi — barcha tegishli view larda
+`select_related("contract__partner")` allaqachon bor, ortiqcha so'rov yo'q.
+
+Bundan tashqari: ro'yxat sarlavhasi `#ID` → `KOD`, qidiruv maydonining
+placeholder i "…yoki kod bo'yicha qidirish", o'chirish tasdig'i va Kassa
+chiqim qatori ham kodni ko'rsatadi.
+
+### Excel eksportlari
+
+Mijoz Excel ni ham o'qiydi, shuning uchun u yerda ham kod chiqadi. Uch
+eksportda ustun `Kelishuv ID` (raqam) → `Kelishuv` (kod) bo'ldi:
+`kelishuvlar.xlsx`, `hamkor-tolovlari.xlsx`, `yuklar.xlsx`.
 
 ### Audit log
 
@@ -112,16 +146,30 @@ Kelishuvlar ro'yxatidagi `q`:
   `code_slug` bo'yicha ham qidiriladi, shunda nomi o'zgargan hamkorning eski
   kodlari ham topiladi
 - `3` → **`code_number` = 3** (ilgari `pk` = 3 edi). Raqam yozib, ekranda boshqa
-  raqamli kod chiqishi chalkashtiruvchi edi.
+  raqamli kod chiqishi chalkashtiruvchi edi. Marka bo'yicha moslik saqlanadi —
+  `209` yozilganda `LLDPE 209AA` ham topilaveradi, chunki shartlar OR bilan
+  birlashadi.
 
 ## Migratsiya
 
 `0019_contract_code`:
 
-1. Ikkala ustun ham `null=True` bilan qo'shiladi.
-2. Data migration: har bir kelishuv `(created, id)` bo'yicha tartiblanib,
-   slug ichida 1 dan boshlab raqamlanadi (mavjud 13 ta qator).
-3. Ustunlar `null=False` ga o'tkaziladi va unique constraint qo'shiladi.
+1. To'rtta ustun qo'shiladi (`Partner.code_slug`, `Partner.code_counter`,
+   `Contract.code_slug`, `Contract.code_number`).
+2. Data migration: hamkorlarga slug beriladi; kelishuvlar `(created, id)`
+   bo'yicha tartiblanib, slug ichida 1 dan raqamlanadi; hamkor hisoblagichi
+   o'z kelishuvlarining eng katta raqamidan boshlanadi.
+3. Unique constraint qo'shiladi.
+
+Mavjud bazada tekshirildi — 13 ta kelishuv, 4 hamkor, har biri 1 dan
+boshlanadi, kodsiz qator yo'q, 13 tasi ham yagona:
+
+```
+abulqosim  counter=1  abulqosim-1
+javod      counter=2  javod-1, javod-2
+sobir      counter=6  sobir-1 … sobir-6
+vazifadon  counter=4  vazifadon-1 … vazifadon-4
+```
 
 `bulk_create` hech qayerda ishlatilmaydi — `import_prototype` ham,
 `load_starting_data` ham `objects.create()` ishlatadi, ya'ni ular avtomatik
@@ -144,5 +192,12 @@ mexanizm — hech kim o'qimaydi, va mavjud havolalar buzilmaydi.
 - hamkor almashtirilsa, kod yangi hamkor nomi bilan qayta beriladi
 - bir xil slugga tushadigan ikki hamkor bir-birining raqamini olmaydi
 - ko'p so'zli va apostrofli nomlar to'g'ri sluglanadi
-- `sobir-3`, `sobir` va `3` bo'yicha qidiruv
-- migratsiyadan keyin mavjud qatorlarda kod bor (data migration testi)
+- hamkorni tahrirlash raqamlashni nolga qaytarmaydi
+- band raqamga to'qnashganda `save()` qayta uriniladi
+- `sobir-3`, `sobir` va `3` bo'yicha qidiruv; `209` marka bo'yicha topiladi
+- uch Excel eksporti kodni chiqaradi
+- audit izohi va o'chirish tasdig'i kodni nomlaydi
+
+`tests/test_contract_codes.py` — 32 ta test. Migratsiyaning o'zi mavjud
+bazada qo'lda tekshirildi (yuqoridagi natija), chunki test bazasi bo'sh
+holatdan quriladi.
