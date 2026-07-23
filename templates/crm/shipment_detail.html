@@ -38,6 +38,13 @@
       <div>{{ shipment.current_transport|default:"—" }}</div>
     </div>
     <div class="stat">
+      <div class="muted">Haydovchi</div>
+      <div>
+        {{ shipment.driver_name|default:"—" }}
+        {% if shipment.driver_phone %}<div class="muted">{{ shipment.driver_phone }}</div>{% endif %}
+      </div>
+    </div>
+    <div class="stat">
       <div class="muted">Konteyner</div>
       <div>{{ shipment.container|default:"—" }}</div>
     </div>

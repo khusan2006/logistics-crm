@@ -365,3 +365,60 @@ def test_new_shipment_gets_the_iran_uzbekistan_route(admin_client, db):
     assert _post_shipment(admin_client, c).status_code == 302
     s = Shipment.objects.get()
     assert s.origin == "Eron" and s.destination == "O'zbekiston"
+
+
+def test_transport_and_container_are_optional(admin_client, db):
+    """Yuk ochilayotganda mashina va konteyner raqami hali ma'lum bo'lmasligi
+    mumkin — ikkalasini ham bo'sh qoldirib saqlash mumkin."""
+    c = _contract()
+    resp = _post_shipment(admin_client, c, transport="", container="")
+    assert resp.status_code == 302
+    s = Shipment.objects.get()
+    assert s.transport == "" and s.container == ""
+
+
+def test_two_yuklar_can_both_have_no_container(admin_client, db):
+    """Bo'sh konteyner raqami takrorlanish tekshiruviga tushmasligi kerak."""
+    c = _contract(kg="2000")
+    _post_shipment(admin_client, c, transport="", container="")
+    resp = _post_shipment(admin_client, c, transport="", container="")
+    assert resp.status_code == 302 and Shipment.objects.count() == 2
+
+
+def test_transport_and_container_stay_editable_after_saving(admin_client, db):
+    """Keyin ma'lum bo'lganda qo'shib qo'yish mumkin."""
+    c = _contract()
+    _post_shipment(admin_client, c, transport="", container="")
+    s = Shipment.objects.get()
+    resp = admin_client.post(f"/shipments/{s.pk}/edit/", {
+        "contract": c.pk, "status": s.status_id, "sent": "2026-07-05",
+        "eta": "2026-07-20", "transport": "01 777 AAA", "container": "MSKU 123456 7",
+        "note": "",
+        **line_data({"id": s.lines.first().pk, "contract_line": c.lines.first().pk,
+                     "kg": "400"}, initial=1),
+    })
+    assert resp.status_code in (204, 302)
+    s.refresh_from_db()
+    assert s.transport == "01 777 AAA" and s.container
+
+
+def test_driver_name_and_phone_are_optional_and_saved(admin_client, db):
+    """Haydovchi ismi va telefoni — ixtiyoriy, lekin kiritilsa saqlanadi."""
+    c = _contract(kg="2000")
+    assert _post_shipment(admin_client, c, transport="", container="").status_code == 302
+    assert Shipment.objects.get().driver_name == ""
+
+    Shipment.objects.all().delete()
+    resp = _post_shipment(admin_client, c, driver_name="Akmal aka",
+                          driver_phone="+998901112233")
+    assert resp.status_code == 302
+    s = Shipment.objects.get()
+    assert s.driver_name == "Akmal aka" and s.driver_phone == "+998901112233"
+
+
+def test_driver_shows_on_the_yuk_page(admin_client, db):
+    c = _contract(kg="2000")
+    _post_shipment(admin_client, c, driver_name="Akmal aka", driver_phone="+998901112233")
+    s = Shipment.objects.get()
+    html = admin_client.get(f"/shipments/{s.pk}/").content.decode()
+    assert "Akmal aka" in html and "998901112233" in html

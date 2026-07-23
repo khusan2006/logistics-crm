@@ -216,8 +216,8 @@ class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent",
-                  "eta", "transport", "container", "note"]
+        fields = ["contract", "status", "sent", "eta", "driver_name", "driver_phone",
+                  "transport", "container", "note"]
         widgets = {
             "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
             "sent": forms.DateInput(attrs={"type": "date"}),
@@ -227,8 +227,14 @@ class ShipmentForm(forms.ModelForm):
                 "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
+            "driver_name": forms.TextInput(attrs={
+                "autocomplete": "off", "placeholder": "Masalan: Akmal aka"}),
+            "driver_phone": phone_intl_widget(),
         }
         labels = {"sent": "Jo'natiladigan sana"}
+
+    def clean_driver_phone(self):
+        return validate_intl_phone(self.cleaned_data.get("driver_phone"))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -412,14 +418,17 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         contract, amount = cleaned.get("contract"), cleaned.get("amount")
-        # The cap is on what the hamkor RECEIVES, since that is what settles their
-        # qarz — the middleman's cut rides on top and is not part of the debt.
+        # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
+        # kelishuv's value, not the goods shipped so far. The cap is on what the
+        # hamkor RECEIVES — the middleman's cut rides on top and is not part of it.
         if contract and amount is not None and not self.errors:
-            debt = contract.debt
+            left = contract.payable_left
             if self.instance.pk and self.instance.contract_id == contract.pk:
-                debt += self.instance.amount
-            if amount > debt:
-                self.add_error("amount", f"Ortiqcha to'lovga ruxsat berilmaydi (qarz: {debt} $)")
+                left += self.instance.amount
+            if amount > left:
+                self.add_error(
+                    "amount",
+                    f"Kelishuv qiymatidan oshib ketdi (to'lash mumkin: {left} $)")
         return cleaned
 
     def save(self, commit=True):

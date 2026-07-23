@@ -254,6 +254,13 @@ class Contract(models.Model):
         return self.shipped_value - self.paid_total
 
     @property
+    def payable_left(self):
+        """How much more may be paid on this kelishuv. Paying before a yuk is sent
+        is normal (avans), so the ceiling is the whole kelishuv's value rather than
+        the goods shipped so far — but you still cannot pay past the agreement."""
+        return self.total_value - self.paid_total
+
+    @property
     def is_settled(self):
         """Yopilgan: every kg has gone out AND the partner is paid off. Anything
         else is still open business — goods owed to us, money owed to them, or
@@ -400,6 +407,10 @@ class Shipment(models.Model):
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
+    # Who is actually driving it — often known before the plate, and the number the
+    # logist calls when a load goes quiet.
+    driver_name = models.CharField("Haydovchi", max_length=120, blank=True)
+    driver_phone = models.CharField("Haydovchi telefoni", max_length=30, blank=True)
     # The run is always Eron → O'zbekiston, so the route is a constant rather than
     # something the operator picks. Intermediate stops live on ShipmentLeg.
     origin = models.CharField("Qayerdan (jo'natilish joyi)", max_length=120,

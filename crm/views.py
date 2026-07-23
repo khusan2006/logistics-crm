@@ -222,10 +222,12 @@ def customer_delete(request, pk):
 # To'lov holati of a kelishuv, read off debt = shipped_value − paid_total. A
 # kelishuv with nothing shipped yet has no payable, so it matches none of these —
 # it only appears under "Hammasi" (calling it unpaid would invent a debt).
+# Keyed to the kelishuv's own value: paying before a yuk is sent is normal, so
+# chips that keyed off shipped value left every prepaid kelishuv matching none.
 CONTRACT_PAY_FILTERS = {
-    "paid": lambda c: c.shipped_value > 0 and c.debt <= 0,
-    "partial": lambda c: c.paid_total > 0 and c.debt > 0,
-    "unpaid": lambda c: c.paid_total == 0 and c.debt > 0,
+    "paid": lambda c: c.total_value > 0 and c.payable_left <= 0,
+    "partial": lambda c: 0 < c.paid_total < c.total_value,
+    "unpaid": lambda c: c.total_value > 0 and c.paid_total == 0,
 }
 CONTRACT_PAY_LABELS = [("", "Hammasi"), ("paid", "To'langan"),
                        ("partial", "Qisman to'langan"), ("unpaid", "To'lanmagan")]

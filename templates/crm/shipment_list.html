@@ -163,6 +163,13 @@
             <span class="lf-value">{{ s.current_transport|default:"—" }}</span>
             {% if s.container %}<span class="lf-sub">Konteyner: {{ s.container }}</span>{% endif %}
           </div>
+          {% if s.driver_name or s.driver_phone %}
+          <div class="lf">
+            <span class="lf-label">Haydovchi</span>
+            <span class="lf-value">{{ s.driver_name|default:"—" }}</span>
+            {% if s.driver_phone %}<span class="lf-sub">{{ s.driver_phone }}</span>{% endif %}
+          </div>
+          {% endif %}
           {% if user.is_admin_role %}
           <div class="lf">
             <span class="lf-label">Yuk qiymati</span>

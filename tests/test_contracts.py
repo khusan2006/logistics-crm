@@ -100,28 +100,27 @@ def test_create_contract_modal_post_invalid_returns_422(admin_client):
 
 
 def _mixed_book(partner):
-    """Four kelishuvlar covering every to'lov holati, incl. the not-yet-shipped case."""
-    paid = _contract(partner=partner)
-    _ship(paid), _pay(paid, "100")            # 100$ shipped, 100$ paid → qarz yo'q
-    partial = _contract(partner=partner)
-    _ship(partial), _pay(partial, "40")       # 60$ qarz
-    unpaid = _contract(partner=partner)
-    _ship(unpaid)                             # 100$ qarz, hech to'lov yo'q
-    idle = _contract(partner=partner)         # yuk yuborilmagan → qarz ham yo'q
-    return paid, partial, unpaid, idle
+    """One kelishuv per to'lov holati. Holat follows the kelishuv's own value, so a
+    yuk is not needed for one to count as fully paid — avans is normal."""
+    paid = _contract(partner=partner, kg="100", price="1.00")     # jami 100$
+    _pay(paid, "100")
+    partial = _contract(partner=partner, kg="100", price="1.00")
+    _pay(partial, "40")
+    unpaid = _contract(partner=partner, kg="100", price="1.00")
+    return paid, partial, unpaid
 
 
 def test_filter_by_payment_status(admin_client, db):
-    """To'lov holati comes from debt = shipped_value − paid_total. A kelishuv with
-    nothing shipped owes nothing yet, so it matches none of the three chips — it
-    only shows under Hammasi."""
+    """To'lov holati kelishuv qiymatiga qarab: to'liq to'langan / qisman / hech
+    to'lanmagan. Ilgari yuborilgan yukka bog'liq edi, shuning uchun avans
+    berilgan kelishuv hech qaysi chipga tushmasdi."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    paid, partial, unpaid, idle = _mixed_book(partner)
+    paid, partial, unpaid = _mixed_book(partner)
 
     assert _listed(admin_client, pay="paid")[1] == [paid.pk]
     assert _listed(admin_client, pay="partial")[1] == [partial.pk]
     assert _listed(admin_client, pay="unpaid")[1] == [unpaid.pk]
-    assert set(_listed(admin_client)[1]) == {paid.pk, partial.pk, unpaid.pk, idle.pk}
+    assert set(_listed(admin_client)[1]) == {paid.pk, partial.pk, unpaid.pk}
 
 
 def test_payment_chips_carry_counts(admin_client, db):
@@ -129,7 +128,7 @@ def test_payment_chips_carry_counts(admin_client, db):
     _mixed_book(partner)
     resp, _ = _listed(admin_client)
     counts = {t["key"]: t["count"] for t in resp.context["pay_tabs"]}
-    assert counts == {"": 4, "paid": 1, "partial": 1, "unpaid": 1}
+    assert counts == {"": 3, "paid": 1, "partial": 1, "unpaid": 1}
 
 
 def test_chip_counts_reflect_the_other_filters(admin_client, db):
@@ -237,3 +236,4 @@ def test_dropdowns_name_every_marka(db):
                                 price=Decimal("0.80"))
     assert c.brand_summary == "2102 repak, ftor oq"
     assert str(c) == f"{c.code} · 2102 repak, ftor oq"
+
