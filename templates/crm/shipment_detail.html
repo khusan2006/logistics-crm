@@ -38,6 +38,10 @@
       <div>{{ shipment.current_transport|default:"—" }}</div>
     </div>
     <div class="stat">
+      <div class="muted">Mas'ul shaxs</div>
+      <div>{{ shipment.responsible|default:"—" }}</div>
+    </div>
+    <div class="stat">
       <div class="muted">Haydovchi</div>
       <div>
         {{ shipment.driver_name|default:"—" }}

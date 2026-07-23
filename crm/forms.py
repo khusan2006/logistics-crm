@@ -216,8 +216,8 @@ class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent", "eta", "driver_name", "driver_phone",
-                  "transport", "container", "note"]
+        fields = ["contract", "status", "sent", "eta", "responsible",
+                  "driver_name", "driver_phone", "transport", "container", "note"]
         widgets = {
             "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
             "sent": forms.DateInput(attrs={"type": "date"}),
@@ -227,6 +227,8 @@ class ShipmentForm(forms.ModelForm):
                 "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
+            "responsible": forms.TextInput(attrs={
+                "autocomplete": "off", "placeholder": "Yuk uchun javobgar xodim"}),
             "driver_name": forms.TextInput(attrs={
                 "autocomplete": "off", "placeholder": "Masalan: Akmal aka"}),
             "driver_phone": phone_intl_widget(),

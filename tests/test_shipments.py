@@ -422,3 +422,17 @@ def test_driver_shows_on_the_yuk_page(admin_client, db):
     s = Shipment.objects.get()
     html = admin_client.get(f"/shipments/{s.pk}/").content.decode()
     assert "Akmal aka" in html and "998901112233" in html
+
+
+def test_responsible_person_is_saved_and_shown(admin_client, db):
+    """Mas'ul shaxs — yuk uchun javobgar xodim; ixtiyoriy, lekin kiritilsa
+    yuk sahifasida ko'rinadi."""
+    c = _contract(kg="2000")
+    assert _post_shipment(admin_client, c).status_code == 302
+    assert Shipment.objects.get().responsible == ""      # ixtiyoriy
+
+    Shipment.objects.all().delete()
+    assert _post_shipment(admin_client, c, responsible="Otabek").status_code == 302
+    s = Shipment.objects.get()
+    assert s.responsible == "Otabek"
+    assert "Otabek" in admin_client.get(f"/shipments/{s.pk}/").content.decode()

@@ -407,6 +407,10 @@ class Shipment(models.Model):
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
+    # Who on our side owns this load — free text rather than a user FK, since the
+    # mas'ul shaxs is not always someone with an account (the prototype carried
+    # them as a plain "Logist: <name>" note).
+    responsible = models.CharField("Mas'ul shaxs", max_length=120, blank=True)
     # Who is actually driving it — often known before the plate, and the number the
     # logist calls when a load goes quiet.
     driver_name = models.CharField("Haydovchi", max_length=120, blank=True)
