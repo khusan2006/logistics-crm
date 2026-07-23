@@ -58,8 +58,11 @@ class ContractForm(forms.ModelForm):
 
 
 def contract_option_label(contract):
-    """Kelishuv <option>: code, hamkor, products, what is still owed, and the
-    agreed price — a range when the products are priced differently."""
+    """Kelishuv <option>: code, products, what is still owed, the agreed price —
+    a range when the products are priced differently — and the whole agreement.
+
+    No hamkor name: the code already starts with it (abulqosim-2 · abulqosim read
+    as a stutter)."""
     prices = sorted({ln.price for ln in contract.lines.all()})
     if not prices:
         price = "—"
@@ -67,8 +70,9 @@ def contract_option_label(contract):
         price = f"{_clean_number(prices[0])} $/kg"
     else:
         price = f"{_clean_number(prices[0])}–{_clean_number(prices[-1])} $/kg"
-    return (f"{contract.code} · {contract.partner.name} · {contract.brand_summary} · "
-            f"{_clean_number(contract.remaining_kg)} kg qolgan · {price}")
+    return (f"{contract.code} · {contract.brand_summary} · "
+            f"{_clean_number(contract.remaining_kg)} kg qolgan · {price} · "
+            f"jami {_clean_number(contract.kg)} kg")
 
 
 class TruckPlanForm(forms.ModelForm):

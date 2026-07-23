@@ -262,3 +262,12 @@ def test_truck_progress_without_a_plan_has_no_denominator(db):
     c = _contract(kg="1000")
     _ship(c, kg="400")
     assert c.truck_progress == (1, None)
+
+
+def test_kelishuv_option_ends_with_the_whole_agreement(db):
+    """Variantda qolgan kg dan tashqari kelishuvning jami kg si ham ko'rinadi."""
+    from crm.forms import contract_option_label
+
+    c = _contract(kg="1000", price="1.25")
+    _ship(c, kg="400")
+    assert contract_option_label(c) == f"{c.code} · LLDPE 209AA · 600 kg qolgan · 1.25 $/kg · jami 1000 kg"
