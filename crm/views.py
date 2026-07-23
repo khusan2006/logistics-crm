@@ -17,7 +17,7 @@ from accounts.models import User
 
 from .exports import xlsx_response
 from .forms import (
-    ContractForm, ContractLineFormSet, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
+    ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
     SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
@@ -314,11 +314,13 @@ def _save_lines(formset, parent):
 def contract_create(request):
     form = ContractForm(request.POST or None)
     lines = ContractLineFormSet(request.POST or None)
+    plan = TruckPlanForm(request.POST or None)
     if request.method == "POST":
-        if form.is_valid() and lines.is_valid():
+        if form.is_valid() and lines.is_valid() and plan.is_valid():
             with transaction.atomic():
                 contract = form.save(commit=False)
                 contract.created_by = request.user
+                contract.planned_trucks = plan.cleaned_data["planned_trucks"]
                 contract.save()
                 _save_lines(lines, contract)
             AuditLog.record(
@@ -327,13 +329,15 @@ def contract_create(request):
             )
             messages.success(request, "Kelishuv qo'shildi")
             return form_success(request, reverse("contract_list"))
-        return _contract_form_response(request, form, lines, "Yangi kelishuv", invalid=True)
-    return _contract_form_response(request, form, lines, "Yangi kelishuv")
+        return _contract_form_response(request, form, lines, plan, "Yangi kelishuv",
+                                       invalid=True)
+    return _contract_form_response(request, form, lines, plan, "Yangi kelishuv")
 
 
-def _contract_form_response(request, form, lines, title, invalid=False):
+def _contract_form_response(request, form, lines, plan, title, invalid=False):
     return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar",
+                                        "lines_after": plan})
 
 
 @role_required(User.Role.ADMIN)
@@ -341,11 +345,13 @@ def contract_edit(request, pk):
     contract = get_object_or_404(Contract, pk=pk)
     form = ContractForm(request.POST or None, instance=contract)
     lines = ContractLineFormSet(request.POST or None, instance=contract)
+    plan = TruckPlanForm(request.POST or None, instance=contract)
     title = "Kelishuvni tahrirlash"
     if request.method == "POST":
-        if form.is_valid() and lines.is_valid():
+        if form.is_valid() and lines.is_valid() and plan.is_valid():
             with transaction.atomic():
                 form.save()
+                plan.save()
                 _save_lines(lines, contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
@@ -353,8 +359,8 @@ def contract_edit(request, pk):
             )
             messages.success(request, "Kelishuv yangilandi")
             return form_reload(request, reverse("contract_list"))
-        return _contract_form_response(request, form, lines, title, invalid=True)
-    return _contract_form_response(request, form, lines, title)
+        return _contract_form_response(request, form, lines, plan, title, invalid=True)
+    return _contract_form_response(request, form, lines, plan, title)
 
 
 @role_required(User.Role.ADMIN)
@@ -679,10 +685,15 @@ def shipment_list(request):
     tabs = [{"status": st, "count": counts.get(st.pk, 0)}
             for st in statuses if not st.is_arrival]
     done_count = Shipment.objects.filter(arrived__isnull=False).count()
+    # The page opens on Yo'lda — the loads actually moving are what the logist
+    # watches. Resolved by name (statuses are editable) and simply absent if
+    # renamed away, in which case the page opens on Hammasi as before.
+    default_tab = next((t["status"].pk for t in tabs
+                        if t["status"].name.casefold() == "yo'lda"), None)
     return render(request, "crm/shipment_list.html", {
         "shipments": shipments, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
-        "done_count": done_count, "q": q,
+        "done_count": done_count, "q": q, "default_tab": default_tab,
     })
 
 

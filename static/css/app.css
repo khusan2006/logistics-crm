@@ -1767,8 +1767,31 @@ ul.errorlist li::before { content: "⚠ "; }
 .kelishuv-title { font-weight: 700; color: var(--accent); }
 .kelishuv-sub { color: var(--text); font-weight: 600; }
 .kelishuv-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
-.kelishuv-progress { flex: 0 0 110px; height: 6px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
-.kelishuv-progress > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+/* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
+.kelishuv-progress {
+  flex: 0 0 74px;
+  height: 24px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.kelishuv-progress-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.kelishuv-progress-text {
+  position: relative;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .kelishuv-meta { font-size: 12px; }
 .status-tab--done { text-decoration: none; margin-left: auto; }
 

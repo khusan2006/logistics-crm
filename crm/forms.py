@@ -71,6 +71,23 @@ def contract_option_label(contract):
             f"{_clean_number(contract.remaining_kg)} kg qolgan · {price}")
 
 
+class TruckPlanForm(forms.ModelForm):
+    """Just the planned truck count. Separate from ContractForm so the template can
+    render it after the Mahsulotlar rows — the main form is emitted above them."""
+
+    class Meta:
+        model = Contract
+        fields = ["planned_trucks"]
+        widgets = {"planned_trucks": forms.NumberInput(
+            attrs={"min": "1", "placeholder": "Masalan: 2"})}
+
+    def clean_planned_trucks(self):
+        count = self.cleaned_data.get("planned_trucks")
+        if count is not None and count < 1:
+            raise forms.ValidationError("Kamida 1 bo'lishi kerak")
+        return count
+
+
 class ContractLineForm(forms.ModelForm):
     """One "Mahsulot" row on the kelishuv form."""
 

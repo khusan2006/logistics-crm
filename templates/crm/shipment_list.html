@@ -18,7 +18,7 @@
 {% if shipments or done_count %}
 <div class="status-tabs" role="tablist">
   {% for t in tabs %}
-  <button type="button" class="status-tab" data-tab="{{ t.status.pk }}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
+  <button type="button" class="status-tab{% if t.status.pk == default_tab %} is-active{% endif %}" data-tab="{{ t.status.pk }}"{% if t.status.pk == default_tab %} data-default{% endif %}>{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
   {% endfor %}
   {% if overdue_count %}
   <button type="button" class="status-tab status-tab--danger" data-tab="overdue">Kechikkan <span class="status-tab-count">{{ overdue_count }}</span></button>
@@ -50,7 +50,12 @@
         <span class="kelishuv-title">Kelishuv {{ g.contract.code }}</span>
         <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand_summary }}</span>
         <span class="kelishuv-count">{{ g.shipments|length }} yuk</span>
-        <span class="kelishuv-progress" title="Yuborilgan / kelishilgan kg"><span style="width: {% widthratio g.contract.shipped_kg g.contract.kg 100 %}%"></span></span>
+        {% with sent=g.contract.truck_progress.0 planned=g.contract.truck_progress.1 %}
+        <span class="kelishuv-progress" title="Jo'natilgan / rejalashtirilgan mashinalar">
+          <span class="kelishuv-progress-fill" style="width: {% if planned %}{% widthratio sent planned 100 %}{% else %}0{% endif %}%"></span>
+          <span class="kelishuv-progress-text">{{ sent }}{% if planned %}/{{ planned }}{% endif %}</span>
+        </span>
+        {% endwith %}
         <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
       </div>
     </td>
@@ -267,6 +272,7 @@
 <script>
 (function () {
   var tabs = document.querySelectorAll('.status-tab[data-tab]');
+  var defaultTab = document.querySelector('.status-tab[data-default]');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
   var activeTab = null;
 
@@ -352,6 +358,9 @@
     if (emptyMsg) { emptyMsg.hidden = shown !== 0; }
   }
   function applyActive() { if (activeTab) { filter(activeTab); } else { showAll(); } }
+
+  // Open on Yo'lda when the server marked it; clicking it again clears the filter.
+  if (defaultTab) { activeTab = defaultTab.getAttribute('data-tab'); }
 
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {

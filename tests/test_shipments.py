@@ -436,3 +436,19 @@ def test_responsible_person_is_saved_and_shown(admin_client, db):
     s = Shipment.objects.get()
     assert s.responsible == "Otabek"
     assert "Otabek" in admin_client.get(f"/shipments/{s.pk}/").content.decode()
+
+
+def test_yuklar_opens_on_yolda(admin_client, db):
+    """Logist yo'ldagi yuklarni kuzatadi — sahifa o'sha tabda ochiladi."""
+    make_shipment(contract=_contract(), kg="100")   # tabs only render with yuklar
+    resp = admin_client.get("/shipments/")
+    yolda = ShipmentStatus.objects.get(name="Yo'lda")
+    assert resp.context["default_tab"] == yolda.pk
+    html = resp.content.decode()
+    assert f'class="status-tab is-active" data-tab="{yolda.pk}" data-default' in html
+
+
+def test_no_default_tab_when_yolda_was_renamed(admin_client, db):
+    """Holatlar tahrirlanadi — nomi o'zgarsa sahifa avvalgidek Hammasi bilan ochiladi."""
+    ShipmentStatus.objects.filter(name="Yo'lda").update(name="Harakatda")
+    assert admin_client.get("/shipments/").context["default_tab"] is None

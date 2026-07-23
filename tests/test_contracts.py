@@ -235,3 +235,30 @@ def test_kelishuv_has_no_deadline(db):
 
     assert not hasattr(_contract(), "deadline")
     assert "deadline" not in ContractForm().fields
+
+
+def test_planned_trucks_is_optional_and_saved(admin_client, db):
+    """Kelishuvga nechta mashina biriktirilishi — ixtiyoriy."""
+    p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
+    payload = {"partner": p.pk, "created": "2026-07-05", "note": "",
+               **line_data({"brand": "2102", "kg": "20000", "price": "1.10"})}
+    assert admin_client.post("/contracts/new/", payload).status_code == 302
+    assert Contract.objects.get().planned_trucks is None
+
+    Contract.objects.all().delete()
+    admin_client.post("/contracts/new/", {**payload, "planned_trucks": "2"})
+    assert Contract.objects.get().planned_trucks == 2
+
+
+def test_truck_progress_counts_sent_against_planned(db):
+    """Yuklar sahifasidagi progress mashina soni bo'yicha: 1/2."""
+    c = _contract(kg="1000", planned_trucks=2)
+    assert c.truck_progress == (0, 2)
+    _ship(c, kg="400")
+    assert c.truck_progress == (1, 2)
+
+
+def test_truck_progress_without_a_plan_has_no_denominator(db):
+    c = _contract(kg="1000")
+    _ship(c, kg="400")
+    assert c.truck_progress == (1, None)

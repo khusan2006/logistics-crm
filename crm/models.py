@@ -147,6 +147,11 @@ class Contract(models.Model):
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
     code_number = models.PositiveIntegerField(editable=False)
     created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
+    # How many trucks the kelishuv is expected to take. Optional: it is often not
+    # known when the agreement is signed, and old kelishuvlar never had it.
+    planned_trucks = models.PositiveIntegerField(
+        "Nechta mashina", null=True, blank=True,
+        help_text="Kelishuv bo'yicha rejalashtirilgan mashinalar soni")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, blank=True, related_name="contracts",
@@ -251,6 +256,12 @@ class Contract(models.Model):
         """What we owe the partner NOW: shipped value minus payments. Payments are
         capped at this in the form, so it never goes negative (no prepayments)."""
         return self.shipped_value - self.paid_total
+
+    @property
+    def truck_progress(self):
+        """(sent, planned) for the Yuklar progress bar. `planned` is None when the
+        kelishuv never set a target, so the bar shows a count without a total."""
+        return self.shipments.count(), self.planned_trucks
 
     @property
     def payable_left(self):
