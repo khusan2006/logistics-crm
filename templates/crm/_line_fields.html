@@ -30,7 +30,9 @@ template the JS clones when "+ Mahsulot qo'shish" is pressed.
                   title="Mahsulotni olib tashlash" aria-label="Mahsulotni olib tashlash">&minus;</button>
         </div>
       </div>
-      {% if f.DELETE %}<label class="lineset-del">{{ f.DELETE }} <span>O'chirish</span></label>{% endif %}
+      {# The − button is the control; this checkbox is how the formset is told to
+         delete a saved row, so it ships hidden rather than styled away. #}
+      <span class="lineset-del" hidden>{{ f.DELETE }}</span>
     </div>
     {% endfor %}
   </div>

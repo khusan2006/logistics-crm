@@ -336,12 +336,20 @@ class ShipmentStatus(models.Model):
 class SupplierPayment(models.Model):
     """To'lov to one supplier contract. `amount` is always USD; a so'm payment is
     converted at entry and keeps its original figure + rate. Overpaying a contract
-    is blocked at the form layer (per-contract model, no supplier prepayments)."""
+    is blocked at the form layer (per-contract model, no supplier prepayments).
+
+    The hamkor is not paid directly — a middleman passes the money on and keeps a
+    percentage for the delivery. `amount` is what the hamkor RECEIVES (so it is what
+    settles their qarz); the middleman's cut rides on top of it and leaves the kassa
+    as an expense. Paying 10,000 at 2% therefore costs 10,200."""
 
     contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
                                  related_name="supplier_payments", verbose_name="Kelishuv")
     date = models.DateField("Sana", default=timezone.localdate)
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    commission_percent = models.DecimalField(
+        "Vositachi foizi (%)", max_digits=5, decimal_places=2, default=0, blank=True,
+        help_text="Vositachisiz to'lov uchun bo'sh qoldiring")
     currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
                                 default=Currency.USD)
     exchange_rate = models.DecimalField("Dollar kursi (1$ = so'm)", max_digits=12,
@@ -361,8 +369,24 @@ class SupplierPayment(models.Model):
         verbose_name = "Hamkor to'lovi"
         verbose_name_plural = "Hamkor to'lovlari"
 
+    @property
+    def commission_amount(self):
+        """The middleman's cut, on top of what the hamkor receives."""
+        return (self.amount * self.commission_percent / 100).quantize(Decimal("0.01"))
+
+    @property
+    def total_out(self):
+        """What actually leaves the kassa: the hamkor's money plus the cut."""
+        return self.amount + self.commission_amount
+
     def __str__(self):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
+
+
+def commission_total(payments):
+    """Summed per row so the total always matches the rows on screen — a single
+    SQL expression would round once at the end and could drift by cents."""
+    return sum((p.commission_amount for p in payments), Decimal("0"))
 
 
 class Shipment(models.Model):

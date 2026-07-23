@@ -14,7 +14,10 @@ EXPORT_URLS = {
         "Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg",
         "To'langan", "Qarz",
     ],
-    "/reports/export/supplier-payments.xlsx": ["Sana", "Kelishuv", "Hamkor", "Summa", "Usul"],
+    "/reports/export/supplier-payments.xlsx": [
+        "Sana", "Kelishuv", "Hamkor", "Hamkorga", "Vositachi %", "Vositachi",
+        "Kassadan", "Usul",
+    ],
     "/reports/export/shipments.xlsx": [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "Transport", "Konteyner",

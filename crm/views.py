@@ -22,10 +22,12 @@ from .forms import (
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation,
+    AuditLog, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
+    PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
-    apply_customer_advance, arrived_lots, fifo_lots, trim_sale_allocations,
+    apply_customer_advance, arrived_lots, commission_total, fifo_lots,
+    trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
@@ -1334,6 +1336,7 @@ def kassa(request):
     # Joriy holat (all-time, filter-independent): money physically in the till.
     cash_total = (_sum(CustomerPayment.objects.all())
                   - _sum(SupplierPayment.objects.all())
+                  - commission_total(SupplierPayment.objects.all())
                   - _sum(ShipmentExpense.objects.all()))
 
     cust_pays = _range(CustomerPayment.objects.select_related("customer"))
@@ -1344,7 +1347,9 @@ def kassa(request):
     net_in = net_out = Decimal("0")
     for value, label in PayMethod.choices:
         m_in = _sum(cust_pays.filter(method=value))
-        m_out = _sum(sup_pays.filter(method=value)) + _sum(expenses.filter(method=value))
+        m_out = (_sum(sup_pays.filter(method=value))
+                 + commission_total(sup_pays.filter(method=value))
+                 + _sum(expenses.filter(method=value)))
         balances[value] = {"label": label, "in": m_in, "out": m_out, "balance": m_in - m_out}
         net_in += m_in
         net_out += m_out
@@ -1362,6 +1367,17 @@ def kassa(request):
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_original": p.amount_original, "amount": p.amount,
+        })
+    for p in sup_pays:
+        if not p.commission_amount:
+            continue
+        outflow_rows.append({
+            "kind": "commission", "pk": p.pk, "date": p.date, "obj": p,
+            "title": (f"Vositachi ({p.commission_percent}%) · "
+                      f"kelishuv {p.contract.code}"),
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": Currency.USD, "exchange_rate": Decimal("0"),
+            "amount_original": p.commission_amount, "amount": p.commission_amount,
         })
     for e in expenses:
         outflow_rows.append({
@@ -1557,9 +1573,11 @@ def export_contracts(request):
 @role_required(User.Role.ADMIN)
 def export_supplier_payments(request):
     sup_pays = _report_querysets(request)["sup_pays"]
-    headers = ["Sana", "Kelishuv", "Hamkor", "Summa", "Usul"]
+    headers = ["Sana", "Kelishuv", "Hamkor", "Hamkorga", "Vositachi %", "Vositachi",
+               "Kassadan", "Usul"]
     rows = (
-        [p.date, p.contract.code, p.contract.partner.name, p.amount, p.get_method_display()]
+        [p.date, p.contract.code, p.contract.partner.name, p.amount, p.commission_percent,
+         p.commission_amount, p.total_out, p.get_method_display()]
         for p in sup_pays
     )
     return xlsx_response("hamkor-tolovlari.xlsx", headers, rows)

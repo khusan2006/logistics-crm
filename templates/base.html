@@ -1132,6 +1132,42 @@
     enhance(document);
   })();
 
+  // Hamkor to'lovi: the entered summa is what the hamkor RECEIVES, and the
+  // middleman's percentage rides on top — so show what the kassa actually pays
+  // before the operator saves.
+  (function () {
+    function money(n) { return '$' + n.toFixed(2); }
+    function update(scope) {
+      var base = scope.querySelector('[data-commission-base]');
+      var pct = scope.querySelector('[data-commission-percent]');
+      if (!base || !pct) { return; }
+      var hint = pct.parentNode.querySelector('.commission-preview');
+      if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'commission-preview muted';
+        hint.style.fontSize = '12px'; hint.style.marginTop = '4px';
+        pct.parentNode.appendChild(hint);
+      }
+      var a = parseFloat(base.value), r = parseFloat(pct.value);
+      if (a > 0 && r > 0) {
+        var cut = a * r / 100;
+        hint.textContent = 'Vositachi ' + money(cut) + ' · kassadan ' + money(a + cut)
+                         + ' · hamkorga ' + money(a);
+      } else { hint.textContent = ''; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-commission-percent]').forEach(function (el) {
+        if (el.dataset.commissionReady) { return; }
+        el.dataset.commissionReady = '1';
+        var form = el.closest('form') || document;
+        form.addEventListener('input', function () { update(form); });
+        update(form);
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
   // Contract form: a live so'm preview of the USD price (and total) at the entered
   // dollar rate. Purely informational — the price stays canonical USD.
   (function () {

@@ -384,12 +384,36 @@ class ShipmentLegForm(forms.ModelForm):
 class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = SupplierPayment
-        fields = ["contract", "date", "currency", "amount", "exchange_rate", "method", "note"]
-        widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+        fields = ["contract", "date", "currency", "amount", "exchange_rate",
+                  "commission_percent", "method", "note"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "commission_percent": forms.NumberInput(attrs={
+                "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
+                "placeholder": "0"}),
+        }
+        labels = {"amount": "Hamkor oladigan summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The kassa total is driven by this, so the operator should see it named.
+        self.fields["amount"].widget.attrs["data-commission-base"] = ""
+
+    def clean_commission_percent(self):
+        percent = self.cleaned_data.get("commission_percent")
+        if percent is None:
+            return Decimal("0")
+        if percent < 0:
+            raise forms.ValidationError("Foiz manfiy bo'la olmaydi")
+        if percent > 100:
+            raise forms.ValidationError("Foiz 100 dan oshmasligi kerak")
+        return percent
 
     def clean(self):
         cleaned = super().clean()
         contract, amount = cleaned.get("contract"), cleaned.get("amount")
+        # The cap is on what the hamkor RECEIVES, since that is what settles their
+        # qarz — the middleman's cut rides on top and is not part of the debt.
         if contract and amount is not None and not self.errors:
             debt = contract.debt
             if self.instance.pk and self.instance.contract_id == contract.pk:
