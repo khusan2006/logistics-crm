@@ -273,16 +273,9 @@ def test_kelishuv_option_ends_with_the_whole_agreement(db):
     assert contract_option_label(c) == f"{c.code} · LLDPE 209AA · 600 kg qolgan · 1.25 $/kg · jami 1000 kg"
 
 
-def test_state_chips_carry_faceted_counts(admin_client, db):
-    """Holat chiplari — Tugallanmagan / Tugallangan / Hammasi — sanoq bilan."""
-    done = _contract(kg="100", price="1.00")
-    _ship(done, kg="100"), _pay(done, "100")
-    _contract(kg="100", price="1.00")                # tugallanmagan
-
-    resp, _ = _listed(admin_client, state="")
-    chips = {t["key"]: (t["label"], t["count"]) for t in resp.context["state_tabs"]}
-    assert chips["open"] == ("Tugallanmagan", 1)
-    assert chips["done"] == ("Tugallangan", 1)
-    assert chips[""] == ("Hammasi", 2)
-    assert "Tugallanmagan" in resp.content.decode()
-    assert "Yetkazish" not in resp.content.decode()
+def test_the_holat_select_is_renamed(admin_client, db):
+    """Yetkazish emas, Holat — va variantlar Tugallanmagan / Tugallangan."""
+    _contract()
+    html = admin_client.get("/contracts/").content.decode()
+    assert "Yetkazish" not in html and "Qolgan kelishuvlar" not in html
+    assert "Tugallanmagan" in html and "Tugallangan" in html

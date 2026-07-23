@@ -308,15 +308,6 @@ def contract_list(request):
         contracts = contracts.filter(partner_id=int(partner_id))
 
     rows = list(contracts)
-    # Faceted like the pay chips: counted before this filter narrows them, so each
-    # chip shows what picking it would yield.
-    state_tabs = [
-        {"key": "open", "label": "Tugallanmagan",
-         "count": sum(1 for c in rows if not c.is_settled)},
-        {"key": "done", "label": "Tugallangan",
-         "count": sum(1 for c in rows if c.is_settled)},
-        {"key": "", "label": "Hammasi", "count": len(rows)},
-    ]
     # Tugallanmagan = still owed goods OR still owed money; a kelishuv shipped in
     # full but not paid off is unfinished business too.
     if state == "done":
@@ -336,7 +327,7 @@ def contract_list(request):
     page = Paginator(rows, 30).get_page(request.GET.get("page"))
     return render(request, "crm/contract_list.html", {
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
-        "state": state, "state_tabs": state_tabs, "pay_tabs": pay_tabs,
+        "state": state, "pay_tabs": pay_tabs,
         "partners": Partner.objects.all(),
         "has_filters": bool(pay or partner_id or state != "open"),
     })

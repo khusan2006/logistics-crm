@@ -6,13 +6,12 @@
 {% block content %}
 
 {% comment %}
-Search + hamkor live in this form; the two chip rows below are plain links, so
-the form carries their values as hidden fields and the two never fight over them.
-Changing hamkor auto-submits — the button is the no-JS path.
+The selects live in this form (so they keep the active pay chip via the hidden
+field); the chips themselves are links, so the two never fight over the `pay`
+value. Changing a filter auto-submits — the button is the no-JS path.
 {% endcomment %}
 <form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
   <input type="hidden" name="pay" value="{{ pay }}">
-  <input type="hidden" name="state" value="{{ state }}">
   <div class="toolbar-search{% if q %} is-active{% endif %}">
     <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     <input type="search" name="q" value="{{ q }}" placeholder="Marka, hamkor yoki kod bo'yicha qidirish…" autocomplete="off" aria-label="Kelishuv qidirish">
@@ -26,29 +25,22 @@ Changing hamkor auto-submits — the button is the no-JS path.
       {% endfor %}
     </select>
   </label>
+  <label>Holat
+    <select name="state">
+      <option value="open"{% if state == "open" %} selected{% endif %}>Tugallanmagan</option>
+      <option value="done"{% if state == "done" %} selected{% endif %}>Tugallangan</option>
+      <option value=""{% if not state %} selected{% endif %}>Hammasi</option>
+    </select>
+  </label>
   <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
   {% if has_filters or q %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
 </form>
 
-<div class="filter-rows">
-  <div class="filter-row">
-    <span class="filter-label">Holat</span>
-    <div class="status-tabs">
-      {% for t in state_tabs %}
-      <a class="status-tab{% if state == t.key %} is-active{% endif %}"
-         href="{% querystring state=t.key page=None %}">{{ t.label }} <span class="status-tab-count">{{ t.count }}</span></a>
-      {% endfor %}
-    </div>
-  </div>
-  <div class="filter-row">
-    <span class="filter-label">To'lov</span>
-    <div class="status-tabs">
-      {% for t in pay_tabs %}
-      <a class="status-tab{% if pay == t.key %} is-active{% endif %}"
-         href="{% querystring pay=t.key page=None %}">{{ t.label }} <span class="status-tab-count">{{ t.count }}</span></a>
-      {% endfor %}
-    </div>
-  </div>
+<div class="status-tabs">
+  {% for t in pay_tabs %}
+  <a class="status-tab{% if pay == t.key %} is-active{% endif %}"
+     href="{% querystring pay=t.key page=None %}">{{ t.label }} <span class="status-tab-count">{{ t.count }}</span></a>
+  {% endfor %}
 </div>
 
 {% if page.object_list %}
