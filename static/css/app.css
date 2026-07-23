@@ -1743,7 +1743,7 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-partner { font-weight: 600; color: var(--text); }
 .load-sub { font-size: 12px; margin-top: 1px; }
 .status-cell-form { margin: 0; }
-.status-select { padding: 5px 10px; border-radius: 999px; font-size: 13px; max-width: 170px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; transition: border-color .2s ease, box-shadow .2s ease; }
+.status-select { padding: 5px 10px; border-radius: 999px; font-size: 13px; min-width: 148px; max-width: 170px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; transition: border-color .2s ease, box-shadow .2s ease; }
 .status-select:hover { border-color: var(--accent); }
 .status-select.is-saved { border-color: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 
@@ -1769,8 +1769,8 @@ ul.errorlist li::before { content: "⚠ "; }
 .kelishuv-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
-  flex: 0 0 74px;
-  height: 24px;
+  flex: 0 0 118px;
+  height: 20px;
   position: relative;
   display: flex;
   align-items: center;

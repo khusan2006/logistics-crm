@@ -360,7 +360,12 @@
   function applyActive() { if (activeTab) { filter(activeTab); } else { showAll(); } }
 
   // Open on Yo'lda when the server marked it; clicking it again clears the filter.
-  if (defaultTab) { activeTab = defaultTab.getAttribute('data-tab'); }
+  // Setting activeTab is not enough — nothing filters until applyActive() runs,
+  // and on load it never did (no tab used to be preselected).
+  if (defaultTab) {
+    activeTab = defaultTab.getAttribute('data-tab');
+    applyActive();
+  }
 
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {
