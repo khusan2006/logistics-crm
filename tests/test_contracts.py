@@ -279,3 +279,27 @@ def test_the_holat_select_is_renamed(admin_client, db):
     html = admin_client.get("/contracts/").content.decode()
     assert "Yetkazish" not in html and "Qolgan kelishuvlar" not in html
     assert "Tugallanmagan" in html and "Tugallangan" in html
+
+
+def test_tolov_is_a_select_with_counts(admin_client, db):
+    paid = _contract(kg="100", price="1.00")
+    _pay(paid, "100")
+    _contract(kg="100", price="1.00")                    # to'lanmagan
+
+    html = admin_client.get("/contracts/").content.decode()
+    assert 'name="pay"' in html
+    # Django escapes the apostrophe, so match on the tail of each label
+    assert "langan (1)" in html and "lanmagan (1)" in html
+    assert "status-tab" not in html                       # chiplar yo'q
+
+
+def test_tolov_filter_hidden_and_ignored_for_tugallangan(admin_client, db):
+    """Tugallangan kelishuv ta'rifi bo'yicha to'liq to'langan — bu yerda to'lov
+    filtri ma'nosiz, shuning uchun ko'rsatilmaydi va e'tiborga olinmaydi."""
+    done = _contract(kg="100", price="1.00")
+    _ship(done, kg="100"), _pay(done, "100")
+
+    resp = admin_client.get("/contracts/", {"state": "done"})
+    assert 'name="pay"' not in resp.content.decode()
+    # hatto so'ralganda ham qatorni yo'qotmaydi
+    assert _listed(admin_client, state="done", pay="unpaid")[1] == [done.pk]

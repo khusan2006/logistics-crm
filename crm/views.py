@@ -315,21 +315,24 @@ def contract_list(request):
     elif state == "open":
         rows = [c for c in rows if not c.is_settled]
 
-    # Chip counts are faceted: computed before the payment filter narrows the rows,
-    # so each chip shows what picking it would yield.
+    # A Tugallangan kelishuv is fully paid by definition, so the to'lov axis has
+    # only one non-empty bucket there — the filter is hidden and ignored.
+    pay_applies = state != "done"
+    # Counts are faceted: computed before the payment filter narrows the rows, so
+    # each option shows what picking it would yield.
     pay_tabs = [{"key": key, "label": label,
                  "count": (len(rows) if not key
                            else sum(1 for c in rows if CONTRACT_PAY_FILTERS[key](c)))}
-                for key, label in CONTRACT_PAY_LABELS]
-    if pay in CONTRACT_PAY_FILTERS:
+                for key, label in CONTRACT_PAY_LABELS] if pay_applies else []
+    if pay_applies and pay in CONTRACT_PAY_FILTERS:
         rows = [c for c in rows if CONTRACT_PAY_FILTERS[pay](c)]
 
     page = Paginator(rows, 30).get_page(request.GET.get("page"))
     return render(request, "crm/contract_list.html", {
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
-        "state": state, "pay_tabs": pay_tabs,
+        "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
         "partners": Partner.objects.all(),
-        "has_filters": bool(pay or partner_id or state != "open"),
+        "has_filters": bool((pay and pay_applies) or partner_id or state != "open"),
     })
 
 
