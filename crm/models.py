@@ -245,6 +245,13 @@ class Contract(models.Model):
         capped at this in the form, so it never goes negative (no prepayments)."""
         return self.shipped_value - self.paid_total
 
+    @property
+    def is_settled(self):
+        """Yopilgan: every kg has gone out AND the partner is paid off. Anything
+        else is still open business — goods owed to us, money owed to them, or
+        both — which is what the default Kelishuvlar view shows."""
+        return self.remaining_kg <= 0 and self.debt <= 0
+
     def __str__(self):
         return f"{self.code} · {self.brand}"   # the hamkor is already in the code
 

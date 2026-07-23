@@ -247,7 +247,9 @@ def contract_list(request):
     q = request.GET.get("q", "").strip()
     pay = request.GET.get("pay", "").strip()
     partner_id = request.GET.get("partner", "").strip()
-    delivery = request.GET.get("delivery", "").strip()
+    # Unfinished business is the working view, so it is what you land on; "Hammasi"
+    # (delivery="all") is the deliberate step out of it, not the default.
+    delivery = request.GET.get("delivery", "open").strip()
     overdue = request.GET.get("overdue") == "1"
 
     contracts = (Contract.objects.select_related("partner")
@@ -261,9 +263,11 @@ def contract_list(request):
 
     rows = list(contracts)
     if delivery == "sent":
-        rows = [c for c in rows if c.remaining_kg <= 0]
+        rows = [c for c in rows if c.is_settled]
     elif delivery == "open":
-        rows = [c for c in rows if c.remaining_kg > 0]
+        # Qolgan = still owed goods OR still owed money — a kelishuv shipped in full
+        # but not paid off is unfinished business too.
+        rows = [c for c in rows if not c.is_settled]
     if overdue:
         today = timezone.localdate()
         rows = [c for c in rows if c.deadline < today and c.remaining_kg > 0]
@@ -282,7 +286,7 @@ def contract_list(request):
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
         "delivery": delivery, "overdue": overdue, "pay_tabs": pay_tabs,
         "partners": Partner.objects.all(),
-        "has_filters": bool(pay or partner_id or delivery or overdue),
+        "has_filters": bool(pay or partner_id or delivery != "open" or overdue),
     })
 
 

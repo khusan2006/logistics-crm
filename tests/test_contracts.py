@@ -153,12 +153,27 @@ def test_filter_by_partner(admin_client, db):
 
 
 def test_filter_by_delivery_state(admin_client, db):
-    full = _contract(kg=Decimal("100"))
-    _ship(full, kg="100")                      # qolgan kg yo'q
-    still_open = _contract(kg=Decimal("100"))
-    _ship(still_open, kg="40")
-    assert _listed(admin_client, delivery="sent")[1] == [full.pk]
-    assert _listed(admin_client, delivery="open")[1] == [still_open.pk]
+    """Yakunlangan = hamma kg yuborilgan VA hamkorga qarz qolmagan. To'liq
+    yuborilgan, lekin to'lanmagan kelishuv hali ham qolganlar orasida."""
+    done = _contract(kg=Decimal("100"))
+    _ship(done, kg="100"), _pay(done, "100")
+    owed = _contract(kg=Decimal("100"))
+    _ship(owed, kg="100")                      # yuborilgan, lekin qarz bor
+    part = _contract(kg=Decimal("100"))
+    _ship(part, kg="40")
+
+    assert _listed(admin_client, delivery="sent")[1] == [done.pk]
+    assert set(_listed(admin_client, delivery="open")[1]) == {owed.pk, part.pk}
+
+
+def test_finished_kelishuvlar_are_hidden_by_default(admin_client, db):
+    """Filtrsiz kirilganda faqat qolganlar ko'rinadi — `Hammasi` ataylab tanlanadi."""
+    done = _contract(kg=Decimal("100"))
+    _ship(done, kg="100"), _pay(done, "100")
+    open_one = _contract(kg=Decimal("100"))
+
+    assert _listed(admin_client)[1] == [open_one.pk]
+    assert set(_listed(admin_client, delivery="")[1]) == {done.pk, open_one.pk}
 
 
 def test_filter_overdue_needs_undelivered_kg(admin_client, db):
