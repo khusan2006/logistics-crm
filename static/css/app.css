@@ -1881,3 +1881,18 @@ ul.errorlist li::before { content: "⚠ "; }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
+
+/* Kelishuvlar filters: one labelled chip row per axis (holat / to'lov), so each
+   group reads as a set of choices rather than a wall of pills. */
+.filter-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.filter-row .status-tabs { margin: 0; }
+.filter-label {
+  flex: 0 0 54px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+@media (max-width: 640px) { .filter-label { flex-basis: 100%; } }

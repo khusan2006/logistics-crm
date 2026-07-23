@@ -205,7 +205,7 @@ def test_the_list_shows_what_is_left_to_pay(admin_client, db):
     contract = _fresh_contract()                      # jami 2,000$
     SupplierPayment.objects.create(contract=contract, date="2026-07-23",
                                    amount=Decimal("800"), method="cash")
-    html = admin_client.get("/contracts/", {"delivery": ""}).content.decode()
+    html = admin_client.get("/contracts/", {"state": ""}).content.decode()
     assert "$1,200.00" in html and "-800" not in html
 
 

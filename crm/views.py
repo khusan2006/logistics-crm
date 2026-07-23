@@ -290,9 +290,9 @@ def contract_list(request):
     q = request.GET.get("q", "").strip()
     pay = request.GET.get("pay", "").strip()
     partner_id = request.GET.get("partner", "").strip()
-    # Unfinished business is the working view, so it is what you land on; "Hammasi"
-    # (delivery="all") is the deliberate step out of it, not the default.
-    delivery = request.GET.get("delivery", "open").strip()
+    # Unfinished business is the working view, so it is what you land on; Hammasi
+    # is the deliberate step out of it, not the default.
+    state = request.GET.get("state", "open").strip()
 
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
@@ -308,11 +308,20 @@ def contract_list(request):
         contracts = contracts.filter(partner_id=int(partner_id))
 
     rows = list(contracts)
-    if delivery == "sent":
+    # Faceted like the pay chips: counted before this filter narrows them, so each
+    # chip shows what picking it would yield.
+    state_tabs = [
+        {"key": "open", "label": "Tugallanmagan",
+         "count": sum(1 for c in rows if not c.is_settled)},
+        {"key": "done", "label": "Tugallangan",
+         "count": sum(1 for c in rows if c.is_settled)},
+        {"key": "", "label": "Hammasi", "count": len(rows)},
+    ]
+    # Tugallanmagan = still owed goods OR still owed money; a kelishuv shipped in
+    # full but not paid off is unfinished business too.
+    if state == "done":
         rows = [c for c in rows if c.is_settled]
-    elif delivery == "open":
-        # Qolgan = still owed goods OR still owed money — a kelishuv shipped in full
-        # but not paid off is unfinished business too.
+    elif state == "open":
         rows = [c for c in rows if not c.is_settled]
 
     # Chip counts are faceted: computed before the payment filter narrows the rows,
@@ -327,9 +336,9 @@ def contract_list(request):
     page = Paginator(rows, 30).get_page(request.GET.get("page"))
     return render(request, "crm/contract_list.html", {
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
-        "delivery": delivery, "pay_tabs": pay_tabs,
+        "state": state, "state_tabs": state_tabs, "pay_tabs": pay_tabs,
         "partners": Partner.objects.all(),
-        "has_filters": bool(pay or partner_id or delivery != "open"),
+        "has_filters": bool(pay or partner_id or state != "open"),
     })
 
 

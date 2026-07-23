@@ -123,7 +123,7 @@ def test_payment_chips_carry_counts(admin_client, db):
 
 
 def test_chip_counts_reflect_the_other_filters(admin_client, db):
-    """Counts are faceted: they narrow with partner/delivery/overdue/search, but the
+    """Counts are faceted: they narrow with partner/holat/search, but the
     payment filter itself never shrinks its own chips."""
     a = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     b = Partner.objects.create(name="Arya", phone="2", city="Shiroz")
@@ -144,7 +144,7 @@ def test_filter_by_partner(admin_client, db):
     assert _listed(admin_client, partner=a.pk)[1] == [mine.pk]
 
 
-def test_filter_by_delivery_state(admin_client, db):
+def test_filter_by_completion_state(admin_client, db):
     """Yakunlangan = hamma kg yuborilgan VA hamkorga qarz qolmagan. To'liq
     yuborilgan, lekin to'lanmagan kelishuv hali ham qolganlar orasida."""
     done = _contract(kg=Decimal("100"))
@@ -154,8 +154,8 @@ def test_filter_by_delivery_state(admin_client, db):
     part = _contract(kg=Decimal("100"))
     _ship(part, kg="40")
 
-    assert _listed(admin_client, delivery="sent")[1] == [done.pk]
-    assert set(_listed(admin_client, delivery="open")[1]) == {owed.pk, part.pk}
+    assert _listed(admin_client, state="done")[1] == [done.pk]
+    assert set(_listed(admin_client, state="open")[1]) == {owed.pk, part.pk}
 
 
 def test_finished_kelishuvlar_are_hidden_by_default(admin_client, db):
@@ -165,7 +165,7 @@ def test_finished_kelishuvlar_are_hidden_by_default(admin_client, db):
     open_one = _contract(kg=Decimal("100"))
 
     assert _listed(admin_client)[1] == [open_one.pk]
-    assert set(_listed(admin_client, delivery="")[1]) == {done.pk, open_one.pk}
+    assert set(_listed(admin_client, state="")[1]) == {done.pk, open_one.pk}
 
 
 def test_filters_combine_with_search(admin_client, db):
@@ -181,7 +181,7 @@ def test_filters_combine_with_search(admin_client, db):
 
 def test_filtered_list_does_not_query_per_contract(admin_client, db,
                                                    django_assert_max_num_queries):
-    """The pay/delivery filters read shipments + payments off the prefetch, so the
+    """The pay/holat filters read shipments + payments off the prefetch, so the
     page cost stays flat instead of growing two queries per kelishuv."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     for _ in range(6):
@@ -271,3 +271,18 @@ def test_kelishuv_option_ends_with_the_whole_agreement(db):
     c = _contract(kg="1000", price="1.25")
     _ship(c, kg="400")
     assert contract_option_label(c) == f"{c.code} · LLDPE 209AA · 600 kg qolgan · 1.25 $/kg · jami 1000 kg"
+
+
+def test_state_chips_carry_faceted_counts(admin_client, db):
+    """Holat chiplari — Tugallanmagan / Tugallangan / Hammasi — sanoq bilan."""
+    done = _contract(kg="100", price="1.00")
+    _ship(done, kg="100"), _pay(done, "100")
+    _contract(kg="100", price="1.00")                # tugallanmagan
+
+    resp, _ = _listed(admin_client, state="")
+    chips = {t["key"]: (t["label"], t["count"]) for t in resp.context["state_tabs"]}
+    assert chips["open"] == ("Tugallanmagan", 1)
+    assert chips["done"] == ("Tugallangan", 1)
+    assert chips[""] == ("Hammasi", 2)
+    assert "Tugallanmagan" in resp.content.decode()
+    assert "Yetkazish" not in resp.content.decode()
