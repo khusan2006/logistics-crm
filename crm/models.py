@@ -137,7 +137,9 @@ class Contract(models.Model):
     def shipped_kg(self):
         if not hasattr(self, "shipments"):  # relation lands in Task 7
             return Decimal("0")
-        return self.shipments.aggregate(s=Sum("kg"))["s"] or Decimal("0")
+        # Summed in Python, not via aggregate(), so a prefetched list costs no query
+        # — the kelishuvlar filters walk this over every row.
+        return sum((s.kg for s in self.shipments.all()), Decimal("0"))
 
     @property
     def remaining_kg(self):
@@ -147,7 +149,7 @@ class Contract(models.Model):
     def paid_total(self):
         if not hasattr(self, "supplier_payments"):  # relation lands in Task 5
             return Decimal("0")
-        return self.supplier_payments.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        return sum((p.amount for p in self.supplier_payments.all()), Decimal("0"))
 
     @property
     def shipped_value(self):
@@ -244,8 +246,12 @@ class Shipment(models.Model):
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
-    origin = models.CharField("Qayerdan (jo'natilish joyi)", max_length=120, blank=True)
-    destination = models.CharField("Qayerga (yetkazish joyi)", max_length=120, blank=True)
+    # The run is always Eron → O'zbekiston, so the route is a constant rather than
+    # something the operator picks. Intermediate stops live on ShipmentLeg.
+    origin = models.CharField("Qayerdan (jo'natilish joyi)", max_length=120,
+                              blank=True, default="Eron")
+    destination = models.CharField("Qayerga (yetkazish joyi)", max_length=120,
+                                   blank=True, default="O'zbekiston")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="shipments",

@@ -38,12 +38,14 @@
     {% if user.is_admin_role %}<th class="num">Narx (1 kg)</th>{% endif %}
     <th>Holat</th>
     <th>Transport / Konteyner</th>
+    {% if user.is_admin_role %}<th class="num">Xarajat</th>{% endif %}
     <th>Kelish</th>
     <th></th>
   </tr>
   {% for g in groups %}
+  {# Narx + Xarajat are admin-only, so the full-width rows span 10 or 8 columns. #}
   <tr class="kelishuv-row" data-contract="{{ g.contract.pk }}">
-    <td colspan="9">
+    <td colspan="{% if user.is_admin_role %}10{% else %}8{% endif %}">
       <div class="kelishuv-head">
         <span class="kelishuv-title">Kelishuv #{{ g.contract.pk }}</span>
         <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand }}</span>
@@ -94,6 +96,16 @@
       <div>{{ s.current_transport|default:"—" }}</div>
       <div class="muted load-sub">{{ s.container|default:"—" }}</div>
     </td>
+    {% if user.is_admin_role %}
+    <td class="num load-expense">
+      {% with n=s.expenses.all|length %}
+      {% if n %}
+        <div>{{ s.expenses_total|usd }}</div>
+        <div class="muted load-sub">{{ n }} ta</div>
+      {% else %}<span class="muted">—</span>{% endif %}
+      {% endwith %}
+    </td>
+    {% endif %}
     <td>
       {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
       {% elif s.days_left is not None %}<span class="daybadge {% if s.days_left <= 7 %}today{% else %}soon{% endif %}">{{ s.days_left }} kun qoldi</span>
@@ -119,7 +131,7 @@
     </td>
   </tr>
   <tr class="legs-detail" data-load="{{ s.pk }}" data-contract="{{ g.contract.pk }}" hidden>
-    <td colspan="9">
+    <td colspan="{% if user.is_admin_role %}10{% else %}8{% endif %}">
       <div class="legs-inline">
 
         {# ── Panel head: which load + quick jump ── #}

@@ -14,41 +14,79 @@
 
 {% if page.object_list %}
 <div class="table-wrap">
-<table>
+<table class="stock-table">
   <tr>
-    <th class="sticky-col">Kelishuv #</th>
+    <th class="sticky-col">Marka</th>
     <th>Hamkor</th>
-    <th>Marka</th>
-    <th>Kelgan sana</th>
-    <th>Kirim</th>
-    <th>Sotilgan</th>
-    <th>Bron</th>
-    <th>Qoldiq</th>
-    <th>Tan narx</th>
+    <th>Oxirgi kelgan</th>
+    <th class="num">Kirim</th>
+    <th class="num">Sotilgan</th>
+    <th class="num">Bron</th>
+    <th class="num">Qoldiq</th>
+    <th class="num">Tan narx</th>
     <th></th>
   </tr>
-  {% for lot in page %}
-  <tr>
-    <td class="sticky-col">#{{ lot.contract_id }}</td>
-    <td>{{ lot.contract.partner.name }}</td>
-    <td>{{ lot.contract.brand }}</td>
-    <td>{{ lot.arrived }}</td>
-    <td>{{ lot.kg }}</td>
-    <td>{{ lot.sold_kg }}</td>
-    <td>{{ lot.reserved_kg }}</td>
-    <td>{{ lot.available_kg }}</td>
-    <td>{{ lot.landed_cost_per_kg }} $/kg</td>
+  {% for g in page %}
+  <tr class="stock-row">
+    <td class="sticky-col load-toggle" data-marka="{{ forloop.counter }}" title="Lotlarni ochish">
+      <button type="button" class="leg-expand" data-marka="{{ forloop.counter }}" aria-label="Lotlarni ochish">&#9656;</button>
+      <span class="load-partner">{{ g.brand }}</span>
+      <div class="muted load-sub">{{ g.lots|length }} lot</div>
+    </td>
+    <td>{{ g.partners|join:", " }}</td>
+    <td>{{ g.arrived_last }}</td>
+    <td class="num">{{ g.kirim|floatformat:"-3" }}</td>
+    <td class="num">{{ g.sold|floatformat:"-3" }}</td>
+    <td class="num">{{ g.reserved|floatformat:"-3" }}</td>
+    <td class="num"><strong>{{ g.available|floatformat:"-3" }}</strong></td>
+    <td class="num">
+      {% if g.cost_min == g.cost_max %}{{ g.cost_min }} $/kg
+      {% else %}<span title="Lotlar turli tan narxda keldi">{{ g.cost_min }} – {{ g.cost_max }} $/kg</span>{% endif %}
+    </td>
     <td class="row-actions">
-      {% if lot.available_kg > 0 %}
-      <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal>Sotish</a>
+      {% if g.available > 0 %}
+      <a class="btn btn-sm" href="{% url 'sale_create' %}?brand={{ g.brand|urlencode }}" data-modal title="Eng eski lotdan boshlab sotiladi (FIFO)">Sotish</a>
       {% else %}
       <button type="button" class="btn btn-sm" disabled>Sotish</button>
       {% endif %}
-      {% if lot.available_kg > 0 %}
-      <a class="btn btn-sm btn-ghost" href="{% url 'reservation_create' %}?lot={{ lot.pk }}" data-modal>Bron</a>
-      {% else %}
-      <button type="button" class="btn btn-sm btn-ghost" disabled>Bron</button>
-      {% endif %}
+    </td>
+  </tr>
+  <tr class="stock-detail" data-marka="{{ forloop.counter }}" hidden>
+    <td colspan="9">
+      <div class="legs-inline">
+        <div class="legs-inline-head">
+          <strong>{{ g.brand }} lotlari</strong>
+          <span class="muted">eng eski birinchi — FIFO shu tartibda sotadi; alohida lotni shu yerdan soting</span>
+        </div>
+        <table class="legs-inline-table">
+          <tr>
+            <th>Lot</th><th>Kelishuv</th><th>Hamkor</th><th>Kelgan sana</th>
+            <th class="num">Kirim</th><th class="num">Sotilgan</th><th class="num">Bron</th>
+            <th class="num">Qoldiq</th><th class="num">Tan narx</th><th></th>
+          </tr>
+          {% for lot in g.lots %}
+          <tr>
+            <td><a class="load-id" href="{% url 'shipment_detail' lot.pk %}">#{{ lot.pk }}</a></td>
+            <td>#{{ lot.contract_id }}</td>
+            <td>{{ lot.contract.partner.name }}</td>
+            <td>{{ lot.arrived }}</td>
+            <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
+            <td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
+            <td class="num">{{ lot.reserved_kg|floatformat:"-3" }}</td>
+            <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
+            <td class="num">{{ lot.landed_cost_per_kg }} $/kg</td>
+            <td class="row-actions">
+              {% if lot.available_kg > 0 %}
+              <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal title="Shu lotdan sotish">Sotish</a>
+              <a class="btn btn-sm btn-ghost" href="{% url 'reservation_create' %}?lot={{ lot.pk }}" data-modal>Bron</a>
+              {% else %}
+              <span class="muted">tugagan</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
     </td>
   </tr>
   {% endfor %}
@@ -57,4 +95,21 @@
 {% else %}
 <p class="muted">Ombor bo'sh{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
+
+<script>
+// Marka qatorini ochish — ichida shu markaning lotlari (har biri alohida sotiladi).
+document.querySelectorAll('.load-toggle[data-marka]').forEach(function (cell) {
+  cell.addEventListener('click', function (e) {
+    if (e.target.closest('a')) { return; }
+    var key = cell.getAttribute('data-marka');
+    var detail = document.querySelector('.stock-detail[data-marka="' + key + '"]');
+    var btn = cell.querySelector('.leg-expand');
+    if (!detail || !btn) { return; }
+    var willOpen = detail.hidden;
+    detail.hidden = !willOpen;
+    btn.classList.toggle('is-open', willOpen);
+    cell.closest('tr').classList.toggle('is-expanded', willOpen);
+  });
+});
+</script>
 {% endblock %}

@@ -292,3 +292,51 @@ def test_set_status_ajax_returns_json_in_place_update(admin_client, db):
     assert resp.json() == {"status_id": arrival.pk, "arrived": True}
     s.refresh_from_db()
     assert s.arrived is not None
+
+
+def _expense_cell(html):
+    """The Xarajat cell of the first load row (the inline panel below it also
+    mentions expenses, so assertions have to target the column itself)."""
+    return html.split('class="num load-expense"', 1)[1].split("</td>", 1)[0]
+
+
+def test_loads_table_totals_expenses_after_transport(admin_client, translator_client, db):
+    """Yuklar carries the load's xarajat total in its own column, right after
+    Transport / Konteyner. It is money, so translators never see it."""
+    from crm.models import ShipmentExpense
+    c = _contract()
+    s = Shipment.objects.create(contract=c, kg=Decimal("100"),
+                                status=ShipmentStatus.objects.first(),
+                                transport="01A111AA", container="MSCU-1")
+    ShipmentExpense.objects.create(shipment=s, amount=Decimal("120.50"), category="road")
+    ShipmentExpense.objects.create(shipment=s, amount=Decimal("79.50"), category="customs")
+
+    html = admin_client.get("/shipments/").content.decode()
+    assert html.index("Transport / Konteyner") < html.index("Xarajat</th>") < html.index("Kelish</th>")
+    assert "$200.00" in _expense_cell(html) and "2 ta" in _expense_cell(html)
+
+    tr = translator_client.get("/shipments/").content.decode()
+    assert "Xarajat</th>" not in tr and "$200.00" not in tr
+
+
+def test_loads_table_shows_a_dash_when_no_expenses(admin_client, db):
+    """An expense-free load reads as — , not $0.00: nothing was spent on it yet."""
+    c = _contract()
+    Shipment.objects.create(contract=c, kg=Decimal("100"), status=ShipmentStatus.objects.first())
+    cell = _expense_cell(admin_client.get("/shipments/").content.decode())
+    assert "—" in cell and "$" not in cell
+
+
+def test_shipment_form_has_no_route_fields(db):
+    """Yuk qo'shish never asks qayerdan/qayerga — the run is always Eron →
+    O'zbekiston, so the route is a constant, not a question."""
+    from crm.forms import ShipmentForm
+    form = ShipmentForm()
+    assert "origin" not in form.fields and "destination" not in form.fields
+
+
+def test_new_shipment_gets_the_iran_uzbekistan_route(admin_client, db):
+    c = _contract()
+    assert _post_shipment(admin_client, c).status_code == 302
+    s = Shipment.objects.get()
+    assert s.origin == "Eron" and s.destination == "O'zbekiston"

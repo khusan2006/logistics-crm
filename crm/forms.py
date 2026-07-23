@@ -143,7 +143,8 @@ class ContractChoiceSelect(forms.Select):
 class ShipmentForm(forms.ModelForm):
     class Meta:
         model = Shipment
-        fields = ["contract", "kg", "price", "status", "origin", "destination", "sent",
+        # No origin/destination: every run is Eron → O'zbekiston (model defaults).
+        fields = ["contract", "kg", "price", "status", "sent",
                   "eta", "transport", "container", "note"]
         widgets = {
             "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
@@ -154,8 +155,6 @@ class ShipmentForm(forms.ModelForm):
                 "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
-            "origin": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
-            "destination": forms.TextInput(attrs={"placeholder": "Masalan: Toshkent ombori"}),
         }
         labels = {
             "kg": "Yuboriladigan kg",
@@ -303,6 +302,41 @@ class SaleCreateForm(forms.ModelForm):
             available = self.stock.get(brand, Decimal("0"))
             if kg > available:
                 self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+        return cleaned
+
+
+class SaleLotForm(forms.ModelForm):
+    """Sale from ONE chosen lot, entered from inside a marka in the ombor. The same
+    granula can sit in several lots at different landed costs, so picking the lot
+    has to beat FIFO here — otherwise you could never sell the dearer one. The lot
+    rides along in a hidden field because the modal posts to a bare path."""
+
+    lot = forms.ModelChoiceField(queryset=Shipment.objects.none(),
+                                 widget=forms.HiddenInput())
+
+    class Meta:
+        model = Sale
+        fields = ["lot", "customer", "kg", "price", "date", "debt_deadline", "note"]
+        widgets = {
+            "date": forms.DateInput(attrs={"type": "date"}),
+            "debt_deadline": forms.DateInput(attrs={"type": "date"}),
+            "note": forms.Textarea(attrs={"rows": 2}),
+            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
+                                            "data-quick-add-label": "Yangi mijoz"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["lot"].queryset = Shipment.objects.filter(arrived__isnull=False)
+
+    def clean(self):
+        cleaned = super().clean()
+        lot, kg = cleaned.get("lot"), cleaned.get("kg")
+        if kg is not None and kg <= 0:
+            self.add_error("kg", "Kg musbat bo'lishi kerak")
+        if lot and kg is not None and kg > 0 and kg > lot.available_kg:
+            self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
+                                 f"({lot.available_kg.normalize()} kg)")
         return cleaned
 
 

@@ -260,3 +260,61 @@ def test_ombor_listed_oldest_arrival_first(admin_client, db):
     new = _second_lot()                 # arrived 2026-07-20
     html = admin_client.get("/ombor/").content.decode()
     assert html.index(f"?lot={old.pk}") < html.index(f"?lot={new.pk}")
+
+
+def _lot_at(brand, kg, price, arrived):
+    """An arrived lot of `brand` carrying its own USD/kg."""
+    p = Partner.objects.create(name=f"P-{price}", phone="1", city="T")
+    c = Contract.objects.create(partner=p, brand=brand, kg=Decimal("100000"),
+                                price=Decimal("1.00"), created="2026-07-01",
+                                deadline="2026-08-01")
+    return Shipment.objects.create(contract=c, kg=Decimal(kg), price=Decimal(price),
+                                   status=ShipmentStatus.arrival(), arrived=arrived)
+
+
+def test_sale_from_a_chosen_lot_ignores_fifo(admin_client, db):
+    """Selling from inside a marka takes THAT lot, even when an older/cheaper lot
+    of the same marka would normally be consumed first — that is the whole point
+    of opening the item up."""
+    cheap = _lot_at("2102 kampaund", "1000", "1.20", "2026-07-19")
+    dear = _lot_at("2102 kampaund", "1000", "1.30", "2026-07-23")
+    customer = Customer.objects.create(name="Ali")
+
+    resp = admin_client.post(f"/sales/new/?lot={dear.pk}", {
+        "lot": dear.pk, "customer": customer.pk, "kg": "300", "price": "2.00",
+        "date": "2026-07-24", "debt_deadline": "", "note": "",
+    })
+    assert resp.status_code == 302
+    sales = list(Sale.objects.all())
+    assert len(sales) == 1
+    assert sales[0].shipment_id == dear.pk                 # not the older cheap lot
+    assert sales[0].cost_price == dear.landed_cost_per_kg
+    assert cheap.available_kg == Decimal("1000")
+
+
+def test_sale_from_a_lot_cannot_exceed_that_lot(admin_client, db):
+    """The cap is the chosen lot's own qoldiq, not the marka's total stock."""
+    _lot_at("2102 kampaund", "1000", "1.20", "2026-07-19")
+    small = _lot_at("2102 kampaund", "100", "1.30", "2026-07-23")
+    customer = Customer.objects.create(name="Ali")
+
+    resp = admin_client.post(f"/sales/new/?lot={small.pk}", {
+        "lot": small.pk, "customer": customer.pk, "kg": "300", "price": "2.00",
+        "date": "2026-07-24", "debt_deadline": "", "note": "",
+    })
+    assert resp.status_code == 200 and not Sale.objects.exists()
+
+
+def test_sale_without_a_lot_still_runs_fifo_by_brand(admin_client, db):
+    """The plain Yangi sotuv path is unchanged: oldest lot first, split as needed."""
+    old = _lot_at("2102 kampaund", "200", "1.20", "2026-07-19")
+    new = _lot_at("2102 kampaund", "200", "1.30", "2026-07-23")
+    customer = Customer.objects.create(name="Ali")
+
+    resp = admin_client.post("/sales/new/", {
+        "brand": "2102 kampaund", "customer": customer.pk, "kg": "300", "price": "2.00",
+        "date": "2026-07-24", "debt_deadline": "", "note": "",
+    })
+    assert resp.status_code == 302
+    assert [(s.shipment_id, s.kg) for s in Sale.objects.order_by("id")] == [
+        (old.pk, Decimal("200.000")), (new.pk, Decimal("100.000"))]

@@ -62,17 +62,42 @@ EXPENSE_FIELDS = [
     ("otherExpense", "other", ""),
 ]
 
+# Sections this command knows how to load.
+IMPORTED_SECTIONS = ("partners", "contracts", "payments", "shipments")
+
+# Sections the prototype exports that have no importer yet. They are empty in
+# every export seen so far; if a real client export ever fills one, the run
+# reports it loudly rather than dropping the rows in silence.
+KNOWN_UNIMPORTED = ("audit", "settings", "sales", "cashEntries", "debtPayments")
+
 
 def _d(value):
     """ISO date string -> date, or None for empty/missing values."""
     return date.fromisoformat(value) if value else None
 
 
+def _norm(value):
+    """Normalise curly apostrophes to straight ones.
+
+    The export writes Uzbek text with U+2018/U+2019 ("Yo‘lda", "Bank o‘tkazmasi")
+    while the DB and choice labels use a straight quote, so any lookup keyed on
+    that text must compare normalised forms or it silently misses.
+    """
+    return (value or "").replace("‘", "'").replace("’", "'").strip()
+
+
 def _method(raw):
-    key = (raw or "").replace("‘", "'").replace("’", "'").strip()
+    key = _norm(raw)
     if key not in METHOD_MAP:
         raise CommandError(f"Noma'lum to'lov usuli: {raw!r}")
     return METHOD_MAP[key]
+
+
+def _size(value):
+    """Row count for a section, for the 'not imported' report."""
+    if isinstance(value, (list, dict)):
+        return len(value)
+    return 0 if value in (None, "") else 1
 
 
 class Command(BaseCommand):
@@ -125,8 +150,27 @@ class Command(BaseCommand):
             "Import tayyor: {partners} hamkor, {contracts} kelishuv, "
             "{payments} to'lov, {shipments} yuk, {expenses} xarajat.".format(**counts)
         ))
+        self._report_skipped(data)
         self.stdout.write(self.style.WARNING(
             f"Egasi: {OWNER_USERNAME} / {OWNER_PASSWORD} — prodda parolni o'zgartiring."
+        ))
+
+    def _report_skipped(self, data):
+        """Warn about any non-empty section the importer did not load."""
+        skipped = []
+        for key, value in data.items():
+            if key in IMPORTED_SECTIONS:
+                continue
+            count = _size(value)
+            if not count:
+                continue
+            suffix = "" if key in KNOWN_UNIMPORTED else " — NOMA'LUM bo'lim"
+            skipped.append(f"{key} ({count}){suffix}")
+        if not skipped:
+            return
+        self.stdout.write(self.style.WARNING(
+            "DIQQAT — quyidagi bo'limlar import QILINMADI: " + ", ".join(skipped) + ". "
+            "Bu ma'lumotlar bazaga tushmadi."
         ))
 
     def _load(self, data, owner):
@@ -166,7 +210,7 @@ class Command(BaseCommand):
             )
             payments += 1
 
-        status_by_name = {s.name: s for s in ShipmentStatus.objects.all()}
+        status_by_name = {_norm(s.name): s for s in ShipmentStatus.objects.all()}
         shipments = expenses = 0
         for row in data.get("shipments", []):
             contract = contracts.get(row["contractId"])
@@ -174,7 +218,7 @@ class Command(BaseCommand):
                 raise CommandError(
                     f"Yuk: kelishuv topilmadi (contractId={row.get('contractId')})."
                 )
-            status = status_by_name.get(row.get("status"))
+            status = status_by_name.get(_norm(row.get("status")))
             if status is None:
                 raise CommandError(
                     f"ShipmentStatus '{row.get('status')}' topilmadi — "

@@ -132,6 +132,49 @@ def test_if_empty_noop_survives_missing_file(tmp_path, db):
     assert Partner.objects.count() == 1
 
 
+def test_curly_apostrophes_still_match(tmp_path, db):
+    """The export writes 'Yo‘lda' / 'Bank o‘tkazmasi' with U+2018; the DB uses a
+    straight quote. Lookups must normalise or the import dies on real exports."""
+    curly = {
+        "partners": [{"id": 1, "name": "Pars Polymer Co."}],
+        "contracts": [{"id": 101, "partnerId": 1, "brand": "LLDPE 209AA",
+                       "kg": 50000, "price": 0.96, "created": "2026-07-28",
+                       "deadline": "2026-07-28"}],
+        "payments": [{"contractId": 101, "amount": 18000, "date": "2026-07-02",
+                      "method": "Bank o‘tkazmasi"}],
+        "shipments": [{"contractId": 101, "kg": 20000, "status": "Yo‘lda",
+                       "sent": "2026-07-06", "eta": "2026-07-19", "arrived": "",
+                       "transport": "01 777 AAA", "container": "MSCU-442109",
+                       "logist": "Akmal"}],
+    }
+    call_command("import_prototype", file=_write(tmp_path, curly), noinput=True)
+
+    assert SupplierPayment.objects.get().method == "transfer"
+    assert Shipment.objects.get().status.name == "Yo'lda"
+
+
+def test_warns_about_sections_it_cannot_import(tmp_path, capsys, db):
+    """Non-empty sections with no importer must be reported, never dropped quietly."""
+    with_extras = dict(SAMPLE)
+    with_extras["sales"] = [{"id": 1}, {"id": 2}]
+    with_extras["cashEntries"] = [{"id": 1}]
+    with_extras["settings"] = {"usdRate": 12649}
+    with_extras["mystery"] = [{"id": 9}]
+
+    call_command("import_prototype", file=_write(tmp_path, with_extras), noinput=True)
+
+    out = capsys.readouterr().out
+    assert "import QILINMADI" in out
+    assert "sales (2)" in out
+    assert "cashEntries (1)" in out
+    assert "mystery (1)" in out and "NOMA'LUM" in out
+
+
+def test_no_warning_when_nothing_is_skipped(tmp_path, capsys, db):
+    call_command("import_prototype", file=_write(tmp_path, SAMPLE), noinput=True)
+    assert "import QILINMADI" not in capsys.readouterr().out
+
+
 def test_real_committed_export_loads(db):
     """The committed crm/seed_data/prototype.json loads with expected totals."""
     call_command("import_prototype", noinput=True)

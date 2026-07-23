@@ -1779,18 +1779,18 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Yuk cell toggles the inline panel — show it's clickable, mark the open row */
 .load-toggle { cursor: pointer; }
 .load-toggle:hover .leg-expand { background: var(--surface-hover); }
-.load-row.is-expanded td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
-.load-row.is-expanded td.sticky-col { box-shadow: inset 3px 0 0 var(--accent); }
+.load-row.is-expanded td, .stock-row.is-expanded td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.load-row.is-expanded td.sticky-col, .stock-row.is-expanded td.sticky-col { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* Expandable route-legs row on the Yuklar table */
 .leg-expand { width: 24px; height: 24px; padding: 0; margin-right: 7px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent); font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transition: transform .15s ease, background .15s ease, color .15s ease; }
 .leg-expand:hover { background: var(--surface-hover); }
 .leg-expand.is-open { transform: rotate(90deg); background: var(--accent); border-color: var(--accent); color: #fff; }
-.legs-detail > td { background: var(--surface-2); padding: 0; box-shadow: inset 3px 0 0 var(--accent); }
+.legs-detail > td, .stock-detail > td { background: var(--surface-2); padding: 0; box-shadow: inset 3px 0 0 var(--accent); }
 /* Pinned to the scroll container's visible width (JS sets the exact width),
    so the panel never runs past the horizontal-scroll edge. white-space resets
    the global `td { nowrap }` so panel text wraps inside the pinned width. */
-.legs-detail .legs-inline { position: sticky; left: 0; box-sizing: border-box; padding: 14px 18px 16px; white-space: normal; }
+.legs-detail .legs-inline, .stock-detail .legs-inline { position: sticky; left: 0; box-sizing: border-box; padding: 14px 18px 16px; white-space: normal; }
 .legs-inline-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .legs-inline-table { width: 100%; background: var(--surface); border-radius: 10px; }
 .legs-inline-table th, .legs-inline-table td { padding: 7px 10px; font-size: 13px; }

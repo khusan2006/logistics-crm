@@ -18,8 +18,8 @@ from accounts.models import User
 from .exports import xlsx_response
 from .forms import (
     ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
-    SaleCreateForm, SaleForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLegForm,
-    ShipmentStatusForm, SupplierPaymentForm,
+    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm,
+    ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
     AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, PayMethod, Reservation,
@@ -215,17 +215,65 @@ def customer_delete(request, pk):
     )
 
 
+# To'lov holati of a kelishuv, read off debt = shipped_value − paid_total. A
+# kelishuv with nothing shipped yet has no payable, so it matches none of these —
+# it only appears under "Hammasi" (calling it unpaid would invent a debt).
+CONTRACT_PAY_FILTERS = {
+    "paid": lambda c: c.shipped_value > 0 and c.debt <= 0,
+    "partial": lambda c: c.paid_total > 0 and c.debt > 0,
+    "unpaid": lambda c: c.paid_total == 0 and c.debt > 0,
+}
+CONTRACT_PAY_LABELS = [("", "Hammasi"), ("paid", "To'langan"),
+                       ("partial", "Qisman to'langan"), ("unpaid", "To'lanmagan")]
+
+
 @role_required(User.Role.ADMIN)
 def contract_list(request):
+    """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
+    Hamkor narrows in SQL; the rest read computed properties (debt, remaining_kg),
+    so they run in Python over prefetched rows — the loads and the payments come in
+    one query each instead of two per kelishuv."""
     q = request.GET.get("q", "").strip()
-    contracts = Contract.objects.select_related("partner")
+    pay = request.GET.get("pay", "").strip()
+    partner_id = request.GET.get("partner", "").strip()
+    delivery = request.GET.get("delivery", "").strip()
+    overdue = request.GET.get("overdue") == "1"
+
+    contracts = (Contract.objects.select_related("partner")
+                 .prefetch_related("shipments", "supplier_payments"))
     if q:
         filters = Q(brand__icontains=q) | Q(partner__name__icontains=q)
         if q.isdigit():
             filters |= Q(pk=int(q))
         contracts = contracts.filter(filters)
-    page = Paginator(contracts, 30).get_page(request.GET.get("page"))
-    return render(request, "crm/contract_list.html", {"page": page, "q": q})
+    if partner_id.isdigit():
+        contracts = contracts.filter(partner_id=int(partner_id))
+
+    rows = list(contracts)
+    if delivery == "sent":
+        rows = [c for c in rows if c.remaining_kg <= 0]
+    elif delivery == "open":
+        rows = [c for c in rows if c.remaining_kg > 0]
+    if overdue:
+        today = timezone.localdate()
+        rows = [c for c in rows if c.deadline < today and c.remaining_kg > 0]
+
+    # Chip counts are faceted: computed before the payment filter narrows the rows,
+    # so each chip shows what picking it would yield.
+    pay_tabs = [{"key": key, "label": label,
+                 "count": (len(rows) if not key
+                           else sum(1 for c in rows if CONTRACT_PAY_FILTERS[key](c)))}
+                for key, label in CONTRACT_PAY_LABELS]
+    if pay in CONTRACT_PAY_FILTERS:
+        rows = [c for c in rows if CONTRACT_PAY_FILTERS[pay](c)]
+
+    page = Paginator(rows, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/contract_list.html", {
+        "page": page, "q": q, "pay": pay, "partner_id": partner_id,
+        "delivery": delivery, "overdue": overdue, "pay_tabs": pay_tabs,
+        "partners": Partner.objects.all(),
+        "has_filters": bool(pay or partner_id or delivery or overdue),
+    })
 
 
 @role_required(User.Role.ADMIN)
@@ -609,15 +657,46 @@ def shipment_done_list(request):
 
 @role_required(User.Role.ADMIN)
 def ombor(request):
+    """Ombor by MARKA, one row per granula. The same marka can arrive on several
+    lots at different landed costs; showing those as separate rows made the stock
+    look like different products, so they merge here and the lots live inside the
+    row — each still sellable on its own (a lot's own tan narx follows the sale)."""
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
     lots = (Shipment.objects.filter(arrived__isnull=False)
-            .select_related("contract__partner").order_by("arrived", "id"))
+            .select_related("contract__partner")
+            .prefetch_related("expenses", "reservations", "sales__returns")
+            .order_by("arrived", "id"))
     if q:
-        lots = lots.filter(
-            Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q)
-            | Q(contract_id__icontains=q))
-    page = Paginator(lots, 30).get_page(request.GET.get("page"))
+        filters = (Q(contract__brand__icontains=q)
+                   | Q(contract__partner__name__icontains=q))
+        if q.isdigit():
+            filters |= Q(contract_id=int(q))
+        lots = lots.filter(filters)
+
+    groups = []
+    by_brand = {}
+    for lot in lots:
+        brand = lot.contract.brand
+        g = by_brand.get(brand)
+        if g is None:
+            g = by_brand[brand] = {"brand": brand, "lots": [], "partners": [],
+                                   "kirim": Decimal("0"), "sold": Decimal("0"),
+                                   "reserved": Decimal("0"), "available": Decimal("0")}
+            groups.append(g)
+        g["lots"].append(lot)
+        g["kirim"] += lot.kg
+        g["sold"] += lot.sold_kg
+        g["reserved"] += lot.reserved_kg
+        g["available"] += lot.available_kg
+        if lot.contract.partner.name not in g["partners"]:
+            g["partners"].append(lot.contract.partner.name)
+    for g in groups:
+        costs = [lot.landed_cost_per_kg for lot in g["lots"]]
+        g["cost_min"], g["cost_max"] = min(costs), max(costs)
+        g["arrived_last"] = max(lot.arrived for lot in g["lots"])
+
+    page = Paginator(groups, 30).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {"page": page, "q": q})
 
 
@@ -883,13 +962,16 @@ def sale_list(request):
 def sale_create(request):
     """Sale by brand: the entered kg is consumed from the oldest arrived lots
     first (FIFO), one Sale row per lot slice so each slice keeps its own lot's
-    landed cost. `?lot=` (from the ombor shortcut) preselects that lot's brand."""
+    landed cost. `?lot=` (opening one lot from inside a marka in the ombor) sells
+    from THAT lot instead — see sale_create_lot."""
+    lot_id = request.GET.get("lot") or request.POST.get("lot")
+    if lot_id and str(lot_id).isdigit():
+        return sale_create_lot(request, int(lot_id))
+
     initial = {}
-    lot_id = request.GET.get("lot")
-    if lot_id and lot_id.isdigit():
-        lot = Shipment.objects.filter(pk=int(lot_id)).select_related("contract").first()
-        if lot:
-            initial["brand"] = lot.contract.brand
+    brand = (request.GET.get("brand") or "").strip()   # marka row's Sotish shortcut
+    if brand:
+        initial["brand"] = brand
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
@@ -925,6 +1007,46 @@ def sale_create(request):
             return form_success(request, reverse("sale_list"))
         return form_response(request, form, "Yangi sotuv", invalid=True)
     return form_response(request, form, "Yangi sotuv")
+
+
+def sale_create_lot(request, lot_id):
+    """Sale from one chosen lot (the Sotish inside a marka in the ombor). FIFO is
+    deliberately bypassed: the operator opened this lot because it is the one being
+    sold — with several lots of the same marka at different landed costs, FIFO would
+    silently bill a different lot's cost."""
+    lot = get_object_or_404(Shipment, pk=lot_id, arrived__isnull=False)
+    initial = {"lot": lot.pk}
+    customer_id = request.GET.get("customer")
+    if customer_id and customer_id.isdigit():
+        initial["customer"] = int(customer_id)
+    title = f"Sotish · {lot.contract.brand} (lot #{lot.pk})"
+    # The lot is settled by the URL/hidden field before the form is bound, so a post
+    # that lost the query string (the modal posts to a bare path) still hits the
+    # same lot, and the body can never redirect the sale to another one.
+    data = None
+    if request.method == "POST":
+        data = request.POST.copy()
+        data["lot"] = lot.pk
+    form = SaleLotForm(data, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            data = form.cleaned_data
+            sale = Sale.objects.create(
+                customer=data["customer"], shipment=data["lot"], kg=data["kg"],
+                price=data["price"], cost_price=data["lot"].landed_cost_per_kg,
+                date=data["date"], debt_deadline=data["debt_deadline"],
+                note=data["note"], created_by=request.user,
+            )
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
+                f"Yangi sotuv (lot #{sale.shipment_id}): {sale.kg} kg "
+                f"{sale.shipment.contract.brand} · {sale.customer.name}",
+            )
+            apply_customer_advance(sale)
+            messages.success(request, "Sotuv qo'shildi")
+            return form_success(request, reverse("sale_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
 
 
 @role_required(User.Role.ADMIN)
