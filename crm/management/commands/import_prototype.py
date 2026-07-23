@@ -1,22 +1,26 @@
 """Import a prototype JSON export into the database (wipe-then-load).
 
-The old JS/localStorage prototype exports a JSON blob with `partners`,
-`contracts`, `payments`, and `shipments`. This command wipes existing business
-data, creates the 'Otabek Yo'ldoshev' owner, and loads that export faithfully:
+The JS/localStorage prototype went through several generations, and a client's
+browser may hold any of them. This command accepts all of them:
 
-  * partners  -> Partner            (joined by the export's numeric `id`)
-  * contracts -> Contract           (joined by `id`; `partnerId` -> partner)
-  * payments  -> SupplierPayment    (`contractId` -> contract; method mapped)
-  * shipments -> Shipment           (`contractId` -> contract; status by name)
-                 + one ShipmentExpense per non-zero transport/customs/handling/
-                 other expense bucket.
+  gen A (`gl_*` keys)   : gl_partners / gl_agreements / gl_payments / gl_shipments
+  gen B (`agreements`)  : agreements[].grade, payments[].type, shipments[].sentDate
+                          with numeric transport/customs/other expenses
+  gen C (`granulalog_demo`): contracts[].brand, payments[].method,
+                          shipments[].sent + *Expense buckets + logist/container
 
-Brands are NOT unique in the export (the same brand recurs across contracts),
-so contracts are keyed by their own `id`, never by brand.
+Loaded as:
+  partners  -> Partner            (joined by the export's `id`)
+  contracts -> Contract           (joined by `id`; partnerId -> partner)
+  payments  -> SupplierPayment    (contractId/agreementId -> contract)
+  shipments -> Shipment           (+ one ShipmentExpense per non-zero cost)
 
-DESTRUCTIVE. Prompts for confirmation unless --noinput is given. Everything runs
-in one atomic transaction, so a failure leaves the DB untouched. Re-running
-resets the DB to the file's contents.
+Brands are NOT unique in real exports, so contracts are keyed by their own `id`,
+never by brand.
+
+DESTRUCTIVE. Prompts for confirmation unless --noinput. One atomic transaction,
+so a failure leaves the DB untouched. Any section it cannot import is reported
+rather than dropped silently.
 
 Usage:
     python manage.py import_prototype                      # default committed file
@@ -44,31 +48,30 @@ from crm.seeding import OWNER_PASSWORD, OWNER_USERNAME, ensure_owner, wipe_busin
 
 DEFAULT_FILE = Path(settings.BASE_DIR) / "crm" / "seed_data" / "prototype.json"
 
-# Prototype payment-method label -> PayMethod value. Curly apostrophes in the
-# export are normalised to straight ones before lookup.
+# One logical section -> the key names used by the prototype generations.
+SECTION_ALIASES = {
+    "partners": ("partners", "gl_partners"),
+    "contracts": ("contracts", "agreements", "gl_agreements"),
+    "payments": ("payments", "gl_payments"),
+    "shipments": ("shipments", "gl_shipments"),
+}
+
+# Sections the prototype exports that have no importer yet. Empty in every
+# export seen so far; a non-empty one is reported instead of dropped.
+KNOWN_UNIMPORTED = ("audit", "settings", "sales", "cashEntries", "debtPayments")
+
 METHOD_MAP = {
     "Naqd": "cash",
     "Karta": "card",
     "Bank o'tkazmasi": "transfer",
 }
 
-# Prototype shipment expense key -> (ShipmentExpense category, fallback note).
-# The model has no "handling" category, so handling folds into "other" but keeps
-# a note so the meaning survives.
-EXPENSE_FIELDS = [
-    ("transportExpense", "transport", ""),
-    ("customsExpense", "customs", ""),
-    ("handlingExpense", "other", "Yuk ortish-tushirish"),
-    ("otherExpense", "other", ""),
-]
-
-# Sections this command knows how to load.
-IMPORTED_SECTIONS = ("partners", "contracts", "payments", "shipments")
-
-# Sections the prototype exports that have no importer yet. They are empty in
-# every export seen so far; if a real client export ever fills one, the run
-# reports it loudly rather than dropping the rows in silence.
-KNOWN_UNIMPORTED = ("audit", "settings", "sales", "cashEntries", "debtPayments")
+# Status wording drifted between generations; map the strays onto real rows.
+STATUS_ALIASES = {
+    "bojxonada": "Bojxona",
+    "yo'lda": "Yo'lda",
+    "omborda": "Omborga yetib keldi",
+}
 
 
 def _d(value):
@@ -86,6 +89,15 @@ def _norm(value):
     return (value or "").replace("‘", "'").replace("’", "'").strip()
 
 
+def _first(row, *keys, default=None):
+    """First present, non-empty value among alias keys."""
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
 def _method(raw):
     key = _norm(raw)
     if key not in METHOD_MAP:
@@ -93,8 +105,14 @@ def _method(raw):
     return METHOD_MAP[key]
 
 
+def _money(value):
+    """Numeric expense value -> Decimal, or None when absent/zero."""
+    if value in (None, "", 0):
+        return None
+    return Decimal(str(value))
+
+
 def _size(value):
-    """Row count for a section, for the 'not imported' report."""
     if isinstance(value, (list, dict)):
         return len(value)
     return 0 if value in (None, "") else 1
@@ -144,22 +162,30 @@ class Command(BaseCommand):
         with transaction.atomic():
             wipe_business_data()
             owner = ensure_owner()
-            counts = self._load(data, owner)
+            counts, used_keys = self._load(data, owner)
 
         self.stdout.write(self.style.SUCCESS(
             "Import tayyor: {partners} hamkor, {contracts} kelishuv, "
             "{payments} to'lov, {shipments} yuk, {expenses} xarajat.".format(**counts)
         ))
-        self._report_skipped(data)
+        self._report_skipped(data, used_keys)
         self.stdout.write(self.style.WARNING(
             f"Egasi: {OWNER_USERNAME} / {OWNER_PASSWORD} — prodda parolni o'zgartiring."
         ))
 
-    def _report_skipped(self, data):
+    def _section(self, data, name, used_keys):
+        """Rows for a logical section, whichever generation's key holds them."""
+        for key in SECTION_ALIASES[name]:
+            if key in data:
+                used_keys.add(key)
+                return data[key] or []
+        return []
+
+    def _report_skipped(self, data, used_keys):
         """Warn about any non-empty section the importer did not load."""
         skipped = []
         for key, value in data.items():
-            if key in IMPORTED_SECTIONS:
+            if key in used_keys:
                 continue
             count = _size(value)
             if not count:
@@ -173,16 +199,30 @@ class Command(BaseCommand):
             "Bu ma'lumotlar bazaga tushmadi."
         ))
 
+    def _resolve_status(self, raw, status_by_name):
+        key = _norm(raw)
+        status = status_by_name.get(key)
+        if status is None:
+            status = status_by_name.get(_norm(STATUS_ALIASES.get(key.lower(), "")))
+        if status is None:
+            raise CommandError(
+                f"ShipmentStatus {raw!r} topilmadi. Mavjud holatlar: "
+                + ", ".join(sorted(status_by_name)) + "."
+            )
+        return status
+
     def _load(self, data, owner):
+        used_keys = set()
+
         partners = {}
-        for row in data.get("partners", []):
+        for row in self._section(data, "partners", used_keys):
             partners[row["id"]] = Partner.objects.create(
                 name=row.get("name", ""), phone=row.get("phone", ""),
                 city=row.get("city", ""), note=row.get("note", ""),
             )
 
         contracts = {}
-        for row in data.get("contracts", []):
+        for row in self._section(data, "contracts", used_keys):
             partner = partners.get(row["partnerId"])
             if partner is None:
                 raise CommandError(
@@ -190,58 +230,71 @@ class Command(BaseCommand):
                     f"(partnerId={row.get('partnerId')})."
                 )
             contracts[row["id"]] = Contract.objects.create(
-                partner=partner, brand=row.get("brand", ""),
+                partner=partner,
+                brand=_first(row, "brand", "grade", default=""),
                 kg=Decimal(str(row["kg"])), price=Decimal(str(row["price"])),
-                created=_d(row.get("created")), deadline=_d(row.get("deadline")),
+                created=_d(_first(row, "created", "date")),
+                deadline=_d(row.get("deadline")),
+                note=row.get("note", ""),
                 created_by=owner,
             )
 
         payments = 0
-        for row in data.get("payments", []):
-            contract = contracts.get(row["contractId"])
+        for row in self._section(data, "payments", used_keys):
+            link = _first(row, "contractId", "agreementId")
+            contract = contracts.get(link)
             if contract is None:
-                raise CommandError(
-                    f"To'lov: kelishuv topilmadi (contractId={row.get('contractId')})."
-                )
+                raise CommandError(f"To'lov: kelishuv topilmadi (id={link}).")
             SupplierPayment.objects.create(
                 contract=contract, amount=Decimal(str(row["amount"])),
-                date=_d(row.get("date")), method=_method(row.get("method")),
-                created_by=owner,
+                date=_d(row.get("date")),
+                method=_method(_first(row, "method", "type")),
+                note=row.get("note", ""), created_by=owner,
             )
             payments += 1
 
         status_by_name = {_norm(s.name): s for s in ShipmentStatus.objects.all()}
         shipments = expenses = 0
-        for row in data.get("shipments", []):
-            contract = contracts.get(row["contractId"])
+        for row in self._section(data, "shipments", used_keys):
+            link = _first(row, "contractId", "agreementId")
+            contract = contracts.get(link)
             if contract is None:
-                raise CommandError(
-                    f"Yuk: kelishuv topilmadi (contractId={row.get('contractId')})."
-                )
-            status = status_by_name.get(_norm(row.get("status")))
-            if status is None:
-                raise CommandError(
-                    f"ShipmentStatus '{row.get('status')}' topilmadi — "
-                    "migratsiyalar qo'llanganmi?"
-                )
+                raise CommandError(f"Yuk: kelishuv topilmadi (id={link}).")
+
+            # `transport` means the vehicle plate in gen C but a transport COST in
+            # gen B — a string is a plate, a number is money.
+            raw_transport = row.get("transport")
+            plate = raw_transport if isinstance(raw_transport, str) else ""
+            transport_cost = raw_transport if isinstance(raw_transport, (int, float)) else None
+
             logist = (row.get("logist") or "").strip()
+            note_parts = [p for p in (f"Logist: {logist}" if logist else "",
+                                      (row.get("note") or "").strip()) if p]
+
             shipment = Shipment.objects.create(
-                contract=contract, kg=Decimal(str(row["kg"])), status=status,
-                sent=_d(row.get("sent")), eta=_d(row.get("eta")),
-                arrived=_d(row.get("arrived")),
-                transport=row.get("transport", ""), container=row.get("container", ""),
-                note=f"Logist: {logist}" if logist else "", created_by=owner,
+                contract=contract, kg=Decimal(str(row["kg"])),
+                status=self._resolve_status(row.get("status"), status_by_name),
+                sent=_d(_first(row, "sent", "sentDate", "date")),
+                eta=_d(row.get("eta")),
+                arrived=_d(_first(row, "arrived", "arrival")),
+                transport=plate, container=row.get("container", ""),
+                note=" · ".join(note_parts), created_by=owner,
             )
             shipments += 1
 
             exp_date = shipment.arrived or shipment.sent or timezone.localdate()
             exp_note = (row.get("expenseNote") or "").strip()
-            for src_key, category, fallback in EXPENSE_FIELDS:
-                amount = row.get(src_key) or 0
-                if not amount:
+            buckets = (
+                ("transport", _money(_first(row, "transportExpense") or transport_cost), ""),
+                ("customs", _money(_first(row, "customsExpense", "customs")), ""),
+                ("other", _money(_first(row, "handlingExpense")), "Yuk ortish-tushirish"),
+                ("other", _money(_first(row, "otherExpense", "other")), ""),
+            )
+            for category, amount, fallback in buckets:
+                if amount is None:
                     continue
                 ShipmentExpense.objects.create(
-                    shipment=shipment, category=category, amount=Decimal(str(amount)),
+                    shipment=shipment, category=category, amount=amount,
                     date=exp_date, note=exp_note or fallback, created_by=owner,
                 )
                 expenses += 1
@@ -249,4 +302,4 @@ class Command(BaseCommand):
         return {
             "partners": len(partners), "contracts": len(contracts),
             "payments": payments, "shipments": shipments, "expenses": expenses,
-        }
+        }, used_keys

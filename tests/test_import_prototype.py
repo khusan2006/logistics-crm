@@ -175,6 +175,81 @@ def test_no_warning_when_nothing_is_skipped(tmp_path, capsys, db):
     assert "import QILINMADI" not in capsys.readouterr().out
 
 
+SCHEMA_B = {  # "agreements" generation: grade / type / sentDate / numeric costs
+    "partners": [{"id": "P-100001", "name": "Pars Polymer Co.", "phone": "+98 912 345 67 89",
+                  "city": "Tehron", "note": "HDPE va LLDPE"}],
+    "agreements": [{"id": "K-200001", "partnerId": "P-100001", "grade": "HDPE 7000F",
+                    "kg": 50000, "price": 0.91, "total": 45500, "date": "2026-07-01",
+                    "deadline": "2026-07-28", "note": "2 ta mashinada"}],
+    "payments": [{"id": "T-300001", "agreementId": "K-200001", "amount": 15000,
+                  "date": "2026-07-02", "type": "Bank o‘tkazmasi", "note": "1-to‘lov"}],
+    "shipments": [{"id": "Y-400002", "agreementId": "K-200001", "kg": 18000,
+                   "status": "Bojxonada", "sentDate": "2026-07-07", "eta": "2026-07-15",
+                   "arrival": "", "transport": 2100, "customs": 850, "other": 140,
+                   "note": "2-mashina"}],
+}
+
+SCHEMA_A = {  # gl_* generation: separate keys, no expenses at all
+    "gl_partners": [{"id": "P178", "name": "SARDOR", "phone": "558882552255",
+                     "city": "SAMARQAND", "note": ""}],
+    "gl_agreements": [{"id": "A490", "partnerId": "P178", "grade": "2102",
+                       "date": "2026-07-01", "kg": 100000, "price": 1,
+                       "deadline": "2026-07-30"}],
+    "gl_payments": [{"id": 1784, "agreementId": "A490", "amount": 25000,
+                     "date": "2026-07-30", "type": "Naqd", "note": ""}],
+    "gl_shipments": [{"id": 1784, "agreementId": "A490", "kg": 25000,
+                      "date": "2026-07-02", "status": "Yo‘lda", "note": ""}],
+}
+
+
+def test_schema_b_agreements_generation(tmp_path, db):
+    """`agreements`/`grade`/`type`/`sentDate` must import like the newer shape."""
+    call_command("import_prototype", file=_write(tmp_path, SCHEMA_B), noinput=True)
+
+    contract = Contract.objects.get()
+    assert contract.brand == "HDPE 7000F"          # grade -> brand
+    assert str(contract.created) == "2026-07-01"   # date -> created
+    assert SupplierPayment.objects.get().method == "transfer"  # type -> method
+
+    shipment = Shipment.objects.get()
+    assert shipment.status.name == "Bojxona"       # "Bojxonada" alias
+    assert str(shipment.sent) == "2026-07-07"      # sentDate -> sent
+    assert shipment.arrived is None                # empty arrival -> NULL
+    assert shipment.note == "2-mashina"
+
+
+def test_schema_b_numeric_transport_is_money_not_a_plate(tmp_path, db):
+    """`transport: 2100` is a COST here, not a vehicle plate — must not be stored
+    in the plate field, and must become a transport expense."""
+    call_command("import_prototype", file=_write(tmp_path, SCHEMA_B), noinput=True)
+
+    shipment = Shipment.objects.get()
+    assert shipment.transport == ""  # numeric transport is never a plate
+
+    exps = {e.category: e.amount for e in shipment.expenses.all()}
+    assert str(exps["transport"]) == "2100.00"
+    assert str(exps["customs"]) == "850.00"
+    assert str(exps["other"]) == "140.00"
+
+
+def test_schema_a_gl_keys_generation(tmp_path, db):
+    call_command("import_prototype", file=_write(tmp_path, SCHEMA_A), noinput=True)
+
+    assert Partner.objects.get().name == "SARDOR"
+    assert Contract.objects.get().brand == "2102"
+    assert SupplierPayment.objects.get().method == "cash"
+
+    shipment = Shipment.objects.get()
+    assert shipment.status.name == "Yo'lda"   # curly apostrophe + gl_ key
+    assert str(shipment.sent) == "2026-07-02"  # `date` -> sent
+    assert shipment.expenses.count() == 0      # this generation has no costs
+
+
+def test_alias_sections_are_not_reported_as_skipped(tmp_path, capsys, db):
+    call_command("import_prototype", file=_write(tmp_path, SCHEMA_B), noinput=True)
+    assert "import QILINMADI" not in capsys.readouterr().out
+
+
 def test_real_committed_export_loads(db):
     """The committed crm/seed_data/prototype.json loads with expected totals."""
     call_command("import_prototype", noinput=True)
