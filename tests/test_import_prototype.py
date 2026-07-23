@@ -102,6 +102,36 @@ def test_missing_file_errors(tmp_path, db):
         call_command("import_prototype", file=str(tmp_path / "nope.json"), noinput=True)
 
 
+def test_if_empty_seeds_when_database_is_empty(tmp_path, db):
+    """First deploy: nothing loaded yet, so --if-empty imports normally."""
+    call_command("import_prototype", file=_write(tmp_path, SAMPLE), noinput=True, if_empty=True)
+
+    assert Partner.objects.count() == 2
+    assert Contract.objects.count() == 3
+
+
+def test_if_empty_is_a_noop_when_data_exists(tmp_path, db):
+    """Redeploy: existing data must survive — no wipe, no re-import."""
+    Partner.objects.create(name="Real prod hamkor", phone="+998 90 000 0000")
+
+    call_command("import_prototype", file=_write(tmp_path, SAMPLE), noinput=True, if_empty=True)
+
+    # Untouched: the pre-existing partner is still the only one, nothing imported.
+    assert Partner.objects.count() == 1
+    assert Partner.objects.get().name == "Real prod hamkor"
+    assert Contract.objects.count() == 0
+    assert SupplierPayment.objects.count() == 0
+
+
+def test_if_empty_noop_survives_missing_file(tmp_path, db):
+    """An already-seeded redeploy must not fail even if the export file is gone."""
+    Partner.objects.create(name="Real prod hamkor")
+
+    call_command("import_prototype", file=str(tmp_path / "gone.json"), noinput=True, if_empty=True)
+
+    assert Partner.objects.count() == 1
+
+
 def test_real_committed_export_loads(db):
     """The committed crm/seed_data/prototype.json loads with expected totals."""
     call_command("import_prototype", noinput=True)

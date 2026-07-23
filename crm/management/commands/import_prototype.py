@@ -87,8 +87,22 @@ class Command(BaseCommand):
             "--noinput", "--no-input", action="store_true", dest="noinput",
             help="Skip the destructive-action confirmation prompt.",
         )
+        parser.add_argument(
+            "--if-empty", action="store_true", dest="if_empty",
+            help="Do nothing if business data already exists. Use at deploy time "
+                 "so the import seeds the DB exactly once and redeploys are no-ops.",
+        )
 
     def handle(self, *args, **options):
+        # Deploy-time one-time guard: once anything is loaded, never touch it again
+        # (so redeploys can't wipe real prod data). Checked before the file read so
+        # a missing file never breaks an already-seeded redeploy.
+        if options["if_empty"] and Partner.objects.exists():
+            self.stdout.write(
+                "Ma'lumotlar allaqachon mavjud — import o'tkazib yuborildi (--if-empty)."
+            )
+            return
+
         path = Path(options["file"])
         if not path.exists():
             raise CommandError(f"Fayl topilmadi: {path}")
