@@ -35,7 +35,7 @@
     <th>Marka</th>
     <th>Yo'nalish</th>
     <th class="num">Kg</th>
-    {% if user.is_admin_role %}<th class="num">Narx (1 kg)</th>{% endif %}
+    {% if user.is_admin_role %}<th class="num">Qiymati</th>{% endif %}
     <th>Holat</th>
     <th>Transport / Konteyner</th>
     {% if user.is_admin_role %}<th class="num">Xarajat</th>{% endif %}
@@ -48,7 +48,7 @@
     <td colspan="{% if user.is_admin_role %}10{% else %}8{% endif %}">
       <div class="kelishuv-head">
         <span class="kelishuv-title">Kelishuv {{ g.contract.code }}</span>
-        <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand }}</span>
+        <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand_summary }}</span>
         <span class="kelishuv-count">{{ g.shipments|length }} yuk</span>
         <span class="kelishuv-progress" title="Yuborilgan / kelishilgan kg"><span style="width: {% widthratio g.contract.shipped_kg g.contract.kg 100 %}%"></span></span>
         <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
@@ -64,7 +64,7 @@
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
     </td>
     <td>
-      <div class="load-partner">{{ s.contract.brand }}</div>
+      <div class="load-partner">{{ s.brand_summary }}</div>
       <div class="muted load-sub">{{ s.contract.partner.name }}</div>
     </td>
     <td>
@@ -75,8 +75,8 @@
     <td class="num">{{ s.kg|floatformat:"-3" }}</td>
     {% if user.is_admin_role %}
     <td class="num">
-      <div>{{ s.unit_price|floatformat:"-4" }} $/kg</div>
-      <div class="muted load-sub">{{ s.goods_value|usd }}</div>
+      <div>{{ s.goods_value|usd }}</div>
+      <div class="muted load-sub">{{ s.lines.all|length }} mahsulot</div>
     </td>
     {% endif %}
     <td>
@@ -137,7 +137,7 @@
         {# ── Panel head: which load + quick jump ── #}
         <div class="load-panel-head">
           <strong>Yuk #{{ s.pk }}</strong>
-          <span class="muted">{{ s.contract.brand }} · {{ s.contract.partner.name }} · Kelishuv {{ s.contract.code }}</span>
+          <span class="muted">{{ s.brand_summary }} · {{ s.contract.partner.name }} · Kelishuv {{ s.contract.code }}</span>
           {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>{% endif %}
           <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="{% url 'shipment_detail' s.pk %}">To'liq sahifa &rarr;</a>
         </div>
@@ -163,17 +163,32 @@
             <span class="lf-value">{{ s.current_transport|default:"—" }}</span>
             {% if s.container %}<span class="lf-sub">Konteyner: {{ s.container }}</span>{% endif %}
           </div>
+          {% if s.responsible %}
+          <div class="lf">
+            <span class="lf-label">Mas'ul shaxs</span>
+            <span class="lf-value">{{ s.responsible }}</span>
+          </div>
+          {% endif %}
+          {% if s.driver_name or s.driver_phone %}
+          <div class="lf">
+            <span class="lf-label">Haydovchi</span>
+            <span class="lf-value">{{ s.driver_name|default:"—" }}</span>
+            {% if s.driver_phone %}<span class="lf-sub">{{ s.driver_phone }}</span>{% endif %}
+          </div>
+          {% endif %}
           {% if user.is_admin_role %}
           <div class="lf">
             <span class="lf-label">Yuk qiymati</span>
             <span class="lf-value">{{ s.goods_value|usd }}</span>
-            <span class="lf-sub">{{ s.kg|floatformat:"-3" }} kg × {{ s.unit_price|floatformat:"-4" }} $</span>
+            <span class="lf-sub">{{ s.kg|floatformat:"-3" }} kg</span>
           </div>
-          <div class="lf lf--accent">
-            <span class="lf-label">Tan narx (1 kg)</span>
-            <span class="lf-value">{{ s.landed_cost_per_kg }} $</span>
-            <span class="lf-sub">{{ s.expenses_total|usd }} xarajat bilan</span>
+          {% for ln in s.lines.all %}
+          <div class="lf{% if forloop.first %} lf--accent{% endif %}">
+            <span class="lf-label">{{ ln.brand }}</span>
+            <span class="lf-value">{{ ln.landed_cost_per_kg }} $/kg</span>
+            <span class="lf-sub">{{ ln.kg|floatformat:"-3" }} kg × {{ ln.unit_price|floatformat:"-4" }} $ · tan narx</span>
           </div>
+          {% endfor %}
           {% else %}
           <div class="lf"><span class="lf-label">Kg</span><span class="lf-value">{{ s.kg|floatformat:"-3" }}</span></div>
           {% endif %}
@@ -229,7 +244,7 @@
                 </td>
               </tr>
               {% endfor %}
-              <tr class="lf-total-row"><td colspan="2"><strong>Jami</strong> <span class="muted">· tan narx {{ s.landed_cost_per_kg }} $/kg</span></td><td class="num"><strong>{{ s.expenses_total|usd }}</strong></td><td></td></tr>
+              <tr class="lf-total-row"><td colspan="2"><strong>Jami</strong> <span class="muted">· 1 kg ga {{ s.expense_per_kg|floatformat:"-4" }} $ qo'shiladi</span></td><td class="num"><strong>{{ s.expenses_total|usd }}</strong></td><td></td></tr>
             </table>
             {% else %}
             <p class="muted" style="margin: 6px 0 0;">Xarajat yo'q. Yo'l, bojxona va boshqa sarflar shu yukning tan narxiga qo'shiladi.</p>

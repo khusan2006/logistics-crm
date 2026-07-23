@@ -124,7 +124,7 @@
     <tr>
       <td class="sticky-col"><a href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a></td>
       <td>{{ s.contract.partner.name }}</td>
-      <td>{{ s.contract.brand }}</td>
+      <td>{{ s.brand_summary }}</td>
       <td>{{ s.kg }}</td>
       <td>{{ s.status.name }}</td>
       <td>{{ s.eta }}</td>

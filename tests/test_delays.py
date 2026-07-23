@@ -3,18 +3,21 @@ from decimal import Decimal
 
 import pytest
 
-from crm.models import Contract, Partner, Shipment, ShipmentDelay, ShipmentStatus
+from crm.models import (
+    Contract, ContractLine, Partner, Shipment, ShipmentDelay, ShipmentLine, ShipmentStatus,
+)
 
 
 @pytest.fixture
 def late_shipment(db):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(partner=partner, brand="LLDPE", kg=Decimal("1000"),
-                                       price=Decimal("1"), created="2026-07-01",
-                                       deadline="2026-08-01")
-    return Shipment.objects.create(contract=contract, kg=Decimal("500"),
-                                   status=ShipmentStatus.objects.first(),
-                                   eta=date.today() - timedelta(days=2))
+    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract_line = ContractLine.objects.create(
+        contract=contract, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"))
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), eta=date.today() - timedelta(days=2))
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal("500"))
+    return _ship_obj
 
 
 def test_extend_requires_reason(translator_client, late_shipment):

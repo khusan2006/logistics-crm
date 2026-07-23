@@ -3,21 +3,23 @@ from decimal import Decimal
 
 from django.utils import timezone
 
-from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
+from conftest import line_data, make_contract, make_shipment
+from crm.models import (
+    Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
+)
 
 
 def _contract(**kw):
     partner = kw.pop("partner", None) or Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    defaults = dict(partner=partner, brand="LLDPE 209AA", kg=Decimal("50000"),
-                    price=Decimal("0.96"), created="2026-07-01", deadline="2026-07-28")
+    defaults = dict(brand="LLDPE 209AA", kg="50000", price="0.96",
+                    created="2026-07-01", deadline="2026-07-28")
     defaults.update(kw)
-    return Contract.objects.create(**defaults)
+    return make_contract(partner=partner, **defaults)
 
 
 def _ship(contract, kg="100", price="1.00"):
     """One truck under the kelishuv, priced so its goods_value is easy to read."""
-    return Shipment.objects.create(contract=contract, kg=Decimal(kg), price=Decimal(price),
-                                   status=ShipmentStatus.objects.first())
+    return make_shipment(contract=contract, kg=kg, price=price)
 
 
 def _pay(contract, amount):
@@ -42,19 +44,19 @@ def test_total_value(db):
 def test_create_via_view(admin_client, admin_user):
     p = Partner.objects.create(name="Arya", phone="1", city="Shiroz")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "brand": "HDPE 7000F", "kg": "30000", "price": "1.05",
-        "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        "partner": p.pk, "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert resp.status_code == 302
-    c = Contract.objects.get(brand="HDPE 7000F")
+    c = Contract.objects.get(lines__brand="HDPE 7000F")
     assert c.created_by == admin_user
 
 
 def test_deadline_before_created_rejected(admin_client):
     p = Partner.objects.create(name="X", phone="1", city="Y")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "brand": "B", "kg": "10", "price": "1",
-        "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+        "partner": p.pk, "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+        **line_data({"brand": "B", "kg": "10", "price": "1"}),
     })
     assert resp.status_code == 200 and not Contract.objects.exists()
 
@@ -72,14 +74,14 @@ def test_create_contract_modal_post_valid_returns_204_with_redirect(admin_client
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10",
-            "created": "2026-07-05", "deadline": "2026-08-01", "note": "",
+            "partner": p.pk, "created": "2026-07-05", "deadline": "2026-08-01", "note": "",
+            **line_data({"brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
     assert resp["X-Redirect"] == "/contracts/"
-    assert Contract.objects.filter(brand="LDPE 2100TN00").exists()
+    assert Contract.objects.filter(lines__brand="LDPE 2100TN00").exists()
 
 
 def test_create_contract_modal_post_invalid_returns_422(admin_client):
@@ -87,8 +89,8 @@ def test_create_contract_modal_post_invalid_returns_422(admin_client):
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "brand": "B", "kg": "10", "price": "1",
-            "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+            "partner": p.pk, "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
+            **line_data({"brand": "B", "kg": "10", "price": "1"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
@@ -98,28 +100,27 @@ def test_create_contract_modal_post_invalid_returns_422(admin_client):
 
 
 def _mixed_book(partner):
-    """Four kelishuvlar covering every to'lov holati, incl. the not-yet-shipped case."""
-    paid = _contract(partner=partner)
-    _ship(paid), _pay(paid, "100")            # 100$ shipped, 100$ paid → qarz yo'q
-    partial = _contract(partner=partner)
-    _ship(partial), _pay(partial, "40")       # 60$ qarz
-    unpaid = _contract(partner=partner)
-    _ship(unpaid)                             # 100$ qarz, hech to'lov yo'q
-    idle = _contract(partner=partner)         # yuk yuborilmagan → qarz ham yo'q
-    return paid, partial, unpaid, idle
+    """One kelishuv per to'lov holati. Holat follows the kelishuv's own value, so a
+    yuk is not needed for one to count as fully paid — avans is normal."""
+    paid = _contract(partner=partner, kg="100", price="1.00")     # jami 100$
+    _pay(paid, "100")
+    partial = _contract(partner=partner, kg="100", price="1.00")
+    _pay(partial, "40")
+    unpaid = _contract(partner=partner, kg="100", price="1.00")
+    return paid, partial, unpaid
 
 
 def test_filter_by_payment_status(admin_client, db):
-    """To'lov holati comes from debt = shipped_value − paid_total. A kelishuv with
-    nothing shipped owes nothing yet, so it matches none of the three chips — it
-    only shows under Hammasi."""
+    """To'lov holati kelishuv qiymatiga qarab: to'liq to'langan / qisman / hech
+    to'lanmagan. Ilgari yuborilgan yukka bog'liq edi, shuning uchun avans
+    berilgan kelishuv hech qaysi chipga tushmasdi."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    paid, partial, unpaid, idle = _mixed_book(partner)
+    paid, partial, unpaid = _mixed_book(partner)
 
     assert _listed(admin_client, pay="paid")[1] == [paid.pk]
     assert _listed(admin_client, pay="partial")[1] == [partial.pk]
     assert _listed(admin_client, pay="unpaid")[1] == [unpaid.pk]
-    assert set(_listed(admin_client)[1]) == {paid.pk, partial.pk, unpaid.pk, idle.pk}
+    assert set(_listed(admin_client)[1]) == {paid.pk, partial.pk, unpaid.pk}
 
 
 def test_payment_chips_carry_counts(admin_client, db):
@@ -127,7 +128,7 @@ def test_payment_chips_carry_counts(admin_client, db):
     _mixed_book(partner)
     resp, _ = _listed(admin_client)
     counts = {t["key"]: t["count"] for t in resp.context["pay_tabs"]}
-    assert counts == {"": 4, "paid": 1, "partial": 1, "unpaid": 1}
+    assert counts == {"": 3, "paid": 1, "partial": 1, "unpaid": 1}
 
 
 def test_chip_counts_reflect_the_other_filters(admin_client, db):
@@ -212,3 +213,27 @@ def test_filtered_list_does_not_query_per_contract(admin_client, db,
         _ship(c), _pay(c, "10")
     with django_assert_max_num_queries(12):
         admin_client.get("/contracts/", {"pay": "partial"})
+
+
+def test_list_shows_every_marka_with_its_kg_and_narx(admin_client, db):
+    """A kelishuv covering several products must show all of them — the earlier
+    single-brand columns rendered blank once brand/kg/price moved onto the lines."""
+    c = _contract(brand="2102 repak", kg="1000", price="1.25")
+    ContractLine.objects.create(contract=c, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("0.80"))
+
+    html = admin_client.get("/contracts/").content.decode()
+    assert "2102 repak" in html and "ftor oq" in html
+    assert "1.25" in html and "0.80" in html          # each product's own narx
+    assert "$1,650.00" in html                        # 1000×1.25 + 500×0.80
+
+
+def test_dropdowns_name_every_marka(db):
+    """The kelishuv <option> abbreviated to "2102 +1", which hid the very thing
+    the operator is choosing between."""
+    c = _contract(brand="2102 repak")
+    ContractLine.objects.create(contract=c, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("0.80"))
+    assert c.brand_summary == "2102 repak, ftor oq"
+    assert str(c) == f"{c.code} · 2102 repak, ftor oq"
+

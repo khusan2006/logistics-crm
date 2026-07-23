@@ -478,6 +478,10 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 /* Two-column card row (production till + handover panel) */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
 @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+/* A grid item defaults to min-width:auto, so a wide table inside one refuses to
+   shrink and pushes the whole page sideways instead of scrolling in its own
+   .table-wrap. Kassa's chiqim ledger is the case that showed it. */
+.grid-2 > *, .stat-grid > * { min-width: 0; }
 
 /* Kassa kirim/chiqim ledgers — two scrollable transaction lists side by side */
 .kassa-ledger .ledger-total { font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1809,3 +1813,48 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-panel-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 1100px) { .load-panel-cols { grid-template-columns: 1fr; } }
 .lf-total-row td { border-top: 1px solid var(--border); }
+
+/* ============================================================
+   Line items (Mahsulotlar) — repeating product rows on the
+   kelishuv and yuk forms.
+   ============================================================ */
+
+.lineset { border: 0; padding: 0; margin: 4px 0 14px; }
+.lineset > legend {
+  padding: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.lineset-row {
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  padding: 12px;
+  margin-top: 10px;
+}
+.lineset-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  align-items: end;
+}
+.lineset-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lineset-field > span { font-size: 12px; color: var(--text-muted); }
+.lineset-field input, .lineset-field select { width: 100%; }
+.lineset-field--rm > span { display: none; }
+.lineset-rm { padding: 0 14px; line-height: 34px; }
+.lineset-rm[disabled] { opacity: 0.35; cursor: not-allowed; }
+.lineset-del { display: none; }        /* the − button drives DELETE */
+.lineset-add { margin-top: 10px; }
+
+/* Wide enough for a row: the product spans the top, the numbers sit beside it. */
+@media (min-width: 560px) {
+  .lineset-grid {
+    grid-template-columns: 1fr 1fr auto;
+  }
+  .lineset-field--brand, .lineset-field--contract_line { grid-column: 1 / -1; }
+  .lineset-field--rm { align-self: end; }
+}
+
+/* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
+.cell-line + .cell-line { margin-top: 4px; }

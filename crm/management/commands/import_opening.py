@@ -29,7 +29,7 @@ from decimal import Decimal, InvalidOperation
 import openpyxl
 from django.core.management.base import BaseCommand, CommandError
 
-from crm.models import Contract, Customer, Partner
+from crm.models import Contract, ContractLine, Customer, Partner
 
 
 def _norm_header(value):
@@ -212,14 +212,15 @@ class Command(BaseCommand):
             partner, _ = Partner.objects.get_or_create(name=partner_name)
 
             contract, was_created = Contract.objects.get_or_create(
-                partner=partner, brand=brand, created=created_date,
+                partner=partner, lines__brand=brand, created=created_date,
                 defaults={
-                    "kg": kg,
-                    "price": price,
                     "deadline": deadline_date,
                     "note": row.get("note") or "",
                 },
             )
+            if was_created:
+                ContractLine.objects.create(
+                    contract=contract, brand=brand, kg=kg, price=price)
             if was_created:
                 created += 1
             else:

@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from crm.models import Contract, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentStatus
+from crm.models import (
+    Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus,
+)
 
 
 def _customer(name="Alisher Mebel"):
@@ -9,20 +11,18 @@ def _customer(name="Alisher Mebel"):
 
 def _lot(kg="10000", brand="LLDPE", contract_price="1.00"):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(
-        partner=partner, brand=brand, kg=Decimal(kg), price=Decimal(contract_price),
-        created="2026-07-01", deadline="2026-08-01",
-    )
-    return Shipment.objects.create(
-        contract=contract, kg=Decimal(kg), status=ShipmentStatus.arrival(),
-        sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16",
-        transport="01A111AA", container="MSCU-1",
-    )
+    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract_line = ContractLine.objects.create(
+        contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(contract_price))
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal(kg))
+    return _ship_obj_line
 
 
 def _sale(customer, lot, kg, price, date):
     return Sale.objects.create(
-        customer=customer, shipment=lot, kg=Decimal(kg), price=Decimal(price),
+        customer=customer, line=lot, kg=Decimal(kg), price=Decimal(price),
         cost_price=lot.landed_cost_per_kg, date=date,
     )
 

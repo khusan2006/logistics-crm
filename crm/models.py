@@ -136,7 +136,9 @@ class Customer(models.Model):
 
 
 class Contract(models.Model):
-    """Kelishuv: one brand of granula from one partner at one USD/kg price."""
+    """Kelishuv: an agreement with one partner covering one or more products.
+    Each product — brand, kg, USD/kg — is a ContractLine; this model is the header
+    (who, when, by when) and the sum of its lines."""
 
     partner = models.ForeignKey(Partner, on_delete=models.PROTECT,
                                 related_name="contracts", verbose_name="Hamkor")
@@ -144,9 +146,6 @@ class Contract(models.Model):
     # Max() instead of parsing integers back out of strings (sobir-10 < sobir-9).
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
     code_number = models.PositiveIntegerField(editable=False)
-    brand = models.CharField("Granula markasi", max_length=100)
-    kg = models.DecimalField("Kelishilgan kg", max_digits=12, decimal_places=3)
-    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
     created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
     deadline = models.DateField("Yetkazish muddati")
     note = models.TextField("Izoh", blank=True)
@@ -209,21 +208,31 @@ class Contract(models.Model):
                 # force_insert, and a failed insert leaves the pk unset either way.
                 kwargs.pop("force_insert", None)
 
+    # Every total below is the sum of the kelishuv's product lines. They are summed
+    # in Python, not via aggregate(), so a prefetched list costs no query — the
+    # kelishuvlar filters walk these over every row.
+    @property
+    def kg(self):
+        return sum((ln.kg for ln in self.lines.all()), Decimal("0"))
+
     @property
     def total_value(self):
-        return (self.kg * self.price).quantize(Decimal("0.01"))
+        return sum((ln.total_value for ln in self.lines.all()), Decimal("0"))
 
     @property
     def shipped_kg(self):
-        if not hasattr(self, "shipments"):  # relation lands in Task 7
-            return Decimal("0")
-        # Summed in Python, not via aggregate(), so a prefetched list costs no query
-        # — the kelishuvlar filters walk this over every row.
-        return sum((s.kg for s in self.shipments.all()), Decimal("0"))
+        return sum((ln.shipped_kg for ln in self.lines.all()), Decimal("0"))
 
     @property
     def remaining_kg(self):
         return self.kg - self.shipped_kg
+
+    @property
+    def brand_summary(self):
+        """Every product, named in full — "2102 repak, ftor oq". Abbreviating to
+        "2102 repak +1" hid exactly what the operator needs when picking a
+        kelishuv from a dropdown."""
+        return ", ".join(ln.brand for ln in self.lines.all())
 
     @property
     def paid_total(self):
@@ -233,17 +242,23 @@ class Contract(models.Model):
 
     @property
     def shipped_value(self):
-        """USD value of the trucks actually sent (each at its own unit price).
-        The payable to the partner accrues per shipped truck, not on signing."""
-        if not hasattr(self, "shipments"):
-            return Decimal("0")
-        return sum((s.goods_value for s in self.shipments.all()), Decimal("0"))
+        """USD value of the goods actually sent (each truck line at its own unit
+        price). The payable to the partner accrues per shipped truck, not on
+        signing."""
+        return sum((ln.shipped_value for ln in self.lines.all()), Decimal("0"))
 
     @property
     def debt(self):
         """What we owe the partner NOW: shipped value minus payments. Payments are
         capped at this in the form, so it never goes negative (no prepayments)."""
         return self.shipped_value - self.paid_total
+
+    @property
+    def payable_left(self):
+        """How much more may be paid on this kelishuv. Paying before a yuk is sent
+        is normal (avans), so the ceiling is the whole kelishuv's value rather than
+        the goods shipped so far — but you still cannot pay past the agreement."""
+        return self.total_value - self.paid_total
 
     @property
     def is_settled(self):
@@ -253,7 +268,46 @@ class Contract(models.Model):
         return self.remaining_kg <= 0 and self.debt <= 0
 
     def __str__(self):
-        return f"{self.code} · {self.brand}"   # the hamkor is already in the code
+        # the hamkor is already in the code
+        return f"{self.code} · {self.brand_summary}"
+
+
+class ContractLine(models.Model):
+    """One product on a kelishuv: a brand at an agreed kg and USD/kg price. The
+    thing trucks are booked against — "qolgan kg" is tracked per product, not per
+    kelishuv, so a kelishuv can be half-delivered on one brand and untouched on
+    another."""
+
+    contract = models.ForeignKey(Contract, on_delete=models.CASCADE,
+                                 related_name="lines", verbose_name="Kelishuv")
+    brand = models.CharField("Granula markasi", max_length=100)
+    kg = models.DecimalField("Kelishilgan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
+    position = models.PositiveIntegerField(default=0, editable=False)
+
+    class Meta:
+        ordering = ["position", "id"]
+        verbose_name = "Kelishuv mahsuloti"
+        verbose_name_plural = "Kelishuv mahsulotlari"
+
+    @property
+    def total_value(self):
+        return (self.kg * self.price).quantize(Decimal("0.01"))
+
+    @property
+    def shipped_kg(self):
+        return sum((sl.kg for sl in self.shipment_lines.all()), Decimal("0"))
+
+    @property
+    def remaining_kg(self):
+        return self.kg - self.shipped_kg
+
+    @property
+    def shipped_value(self):
+        return sum((sl.goods_value for sl in self.shipment_lines.all()), Decimal("0"))
+
+    def __str__(self):
+        return f"{self.brand} · {self.kg} kg"
 
 
 class ShipmentStatus(models.Model):
@@ -287,12 +341,20 @@ class ShipmentStatus(models.Model):
 class SupplierPayment(models.Model):
     """To'lov to one supplier contract. `amount` is always USD; a so'm payment is
     converted at entry and keeps its original figure + rate. Overpaying a contract
-    is blocked at the form layer (per-contract model, no supplier prepayments)."""
+    is blocked at the form layer (per-contract model, no supplier prepayments).
+
+    The hamkor is not paid directly — a middleman passes the money on and keeps a
+    percentage for the delivery. `amount` is what the hamkor RECEIVES (so it is what
+    settles their qarz); the middleman's cut rides on top of it and leaves the kassa
+    as an expense. Paying 10,000 at 2% therefore costs 10,200."""
 
     contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
                                  related_name="supplier_payments", verbose_name="Kelishuv")
     date = models.DateField("Sana", default=timezone.localdate)
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    commission_percent = models.DecimalField(
+        "Vositachi foizi (%)", max_digits=5, decimal_places=2, default=0, blank=True,
+        help_text="Vositachisiz to'lov uchun bo'sh qoldiring")
     currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
                                 default=Currency.USD)
     exchange_rate = models.DecimalField("Dollar kursi (1$ = so'm)", max_digits=12,
@@ -312,8 +374,24 @@ class SupplierPayment(models.Model):
         verbose_name = "Hamkor to'lovi"
         verbose_name_plural = "Hamkor to'lovlari"
 
+    @property
+    def commission_amount(self):
+        """The middleman's cut, on top of what the hamkor receives."""
+        return (self.amount * self.commission_percent / 100).quantize(Decimal("0.01"))
+
+    @property
+    def total_out(self):
+        """What actually leaves the kassa: the hamkor's money plus the cut."""
+        return self.amount + self.commission_amount
+
     def __str__(self):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
+
+
+def commission_total(payments):
+    """Summed per row so the total always matches the rows on screen — a single
+    SQL expression would round once at the end and could drift by cents."""
+    return sum((p.commission_amount for p in payments), Decimal("0"))
 
 
 class Shipment(models.Model):
@@ -322,10 +400,6 @@ class Shipment(models.Model):
 
     contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
                                  related_name="shipments", verbose_name="Kelishuv")
-    kg = models.DecimalField("Yuborilgan kg", max_digits=12, decimal_places=3)
-    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
-                                null=True, blank=True,
-                                help_text="Bo'sh qoldirilsa kelishuv narxi olinadi")
     status = models.ForeignKey(ShipmentStatus, on_delete=models.PROTECT,
                                related_name="shipments", verbose_name="Holat")
     sent = models.DateField("Jo'natilgan sana", null=True, blank=True)
@@ -333,6 +407,14 @@ class Shipment(models.Model):
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
+    # Who on our side owns this load — free text rather than a user FK, since the
+    # mas'ul shaxs is not always someone with an account (the prototype carried
+    # them as a plain "Logist: <name>" note).
+    responsible = models.CharField("Mas'ul shaxs", max_length=120, blank=True)
+    # Who is actually driving it — often known before the plate, and the number the
+    # logist calls when a load goes quiet.
+    driver_name = models.CharField("Haydovchi", max_length=120, blank=True)
+    driver_phone = models.CharField("Haydovchi telefoni", max_length=30, blank=True)
     # The run is always Eron → O'zbekiston, so the route is a constant rather than
     # something the operator picks. Intermediate stops live on ShipmentLeg.
     origin = models.CharField("Qayerdan (jo'natilish joyi)", max_length=120,
@@ -365,17 +447,15 @@ class Shipment(models.Model):
         return (self.eta - timezone.localdate()).days
 
     @property
-    def unit_price(self):
-        """This truck's own USD/kg price when set, else the contract price — each
-        truck under one kelishuv can carry a different price (request: per-truck
-        pricing)."""
-        return self.price if self.price is not None else self.contract.price
+    def kg(self):
+        """Everything on the truck, across all its products."""
+        return sum((ln.kg for ln in self.lines.all()), Decimal("0"))
 
     @property
     def goods_value(self):
-        """The USD value of the goods in this load at its unit price (before
+        """The USD value of the goods on this load at their unit prices (before
         road/customs expenses). Admin-only in the UI — never shown to translators."""
-        return (self.kg * self.unit_price).quantize(Decimal("0.01"))
+        return sum((ln.goods_value for ln in self.lines.all()), Decimal("0"))
 
     @property
     def current_transport(self):
@@ -392,11 +472,13 @@ class Shipment(models.Model):
         return self.expenses.aggregate(s=Sum("amount"))["s"] or Decimal("0")
 
     @property
-    def landed_cost_per_kg(self):
-        """True cost of one kg in this load: its unit price plus this load's own
-        road/customs spend spread over its kg. Phase 2 snapshots this into sales."""
-        extra = self.expenses_total / self.kg if self.kg else Decimal("0")
-        return (self.unit_price + extra).quantize(Decimal("0.0001"))
+    def expense_per_kg(self):
+        """Road/customs spend spread evenly over every kg on the truck, whichever
+        product it belongs to. Transport and customs are charged for the load, not
+        per brand, so kg is the honest split — a cheap brand and an expensive one
+        riding together carry the same share of the freight."""
+        total_kg = self.kg
+        return self.expenses_total / total_kg if total_kg else Decimal("0")
 
     @property
     def is_lot(self):
@@ -404,34 +486,99 @@ class Shipment(models.Model):
 
     @property
     def sold_kg(self):
-        if not hasattr(self, "sales"):  # relation lands in Task 3
-            return Decimal("0")
+        return sum((ln.sold_kg for ln in self.lines.all()), Decimal("0"))
+
+    @property
+    def reserved_kg(self):
+        return sum((ln.reserved_kg for ln in self.lines.all()), Decimal("0"))
+
+    @property
+    def available_kg(self):
+        return sum((ln.available_kg for ln in self.lines.all()), Decimal("0"))
+
+    @property
+    def brand_summary(self):
+        """Every product on the truck, named in full."""
+        return ", ".join(ln.brand for ln in self.lines.all())
+
+    def __str__(self):
+        return f"Yuk #{self.pk} · {self.brand_summary} · {self.kg} kg"
+
+
+class ShipmentLine(models.Model):
+    """One product on one truck, and the unit the ombor actually deals in: a lot is
+    a ShipmentLine of an arrived Shipment, so sotuv and bron attach here rather than
+    to the truck. A truck carrying two brands is therefore two lots."""
+
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE,
+                                 related_name="lines", verbose_name="Yuk")
+    contract_line = models.ForeignKey(ContractLine, on_delete=models.PROTECT,
+                                      related_name="shipment_lines",
+                                      verbose_name="Mahsulot")
+    kg = models.DecimalField("Yuborilgan kg", max_digits=12, decimal_places=3)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
+                                null=True, blank=True,
+                                help_text="Bo'sh qoldirilsa kelishuv narxi olinadi")
+    position = models.PositiveIntegerField(default=0, editable=False)
+
+    class Meta:
+        ordering = ["position", "id"]
+        verbose_name = "Yuk mahsuloti"
+        verbose_name_plural = "Yuk mahsulotlari"
+
+    @property
+    def brand(self):
+        return self.contract_line.brand
+
+    @property
+    def arrived(self):
+        return self.shipment.arrived
+
+    @property
+    def is_lot(self):
+        return self.shipment.arrived is not None
+
+    @property
+    def unit_price(self):
+        """This truck's own USD/kg for this product when set, else the agreed
+        kelishuv price — each truck can carry a different price (per-truck
+        pricing)."""
+        return self.price if self.price is not None else self.contract_line.price
+
+    @property
+    def goods_value(self):
+        return (self.kg * self.unit_price).quantize(Decimal("0.01"))
+
+    @property
+    def landed_cost_per_kg(self):
+        """True cost of one kg of this product in this load: its unit price plus
+        the truck's freight share. Snapshotted into sales so later expenses never
+        retroactively change a past sale's profit."""
+        return (self.unit_price + self.shipment.expense_per_kg).quantize(Decimal("0.0001"))
+
+    @property
+    def sold_kg(self):
         return sum((s.kg for s in self.sales.all()), Decimal("0"))
 
     @property
     def returned_kg(self):
         # kg flowed back into this lot by restocked returns on its sales
-        if not hasattr(self, "sales"):  # relation lands in Task 3
-            return Decimal("0")
         total = Decimal("0")
         for s in self.sales.all():
-            if not hasattr(s, "returns"):  # relation lands in Task 5
-                continue
             total += sum((r.kg for r in s.returns.all() if r.restock), Decimal("0"))
         return total
 
     @property
     def reserved_kg(self):
-        if not hasattr(self, "reservations"):  # relation lands in Task 6
-            return Decimal("0")
-        return sum((r.kg for r in self.reservations.all() if r.status == "active"), Decimal("0"))
+        return sum((r.kg for r in self.reservations.all() if r.status == "active"),
+                   Decimal("0"))
 
     @property
     def available_kg(self):
         return self.kg - self.sold_kg - self.reserved_kg + self.returned_kg
 
     def __str__(self):
-        return f"Yuk #{self.pk} · {self.contract.brand} · {self.kg} kg"
+        return f"Lot #{self.pk} · {self.brand} · {self.kg} kg"
 
 
 class Reservation(models.Model):
@@ -446,8 +593,8 @@ class Reservation(models.Model):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="reservations", verbose_name="Mijoz")
-    shipment = models.ForeignKey(Shipment, on_delete=models.PROTECT,
-                                 related_name="reservations", verbose_name="Lot (yuk)")
+    line = models.ForeignKey("ShipmentLine", on_delete=models.PROTECT,
+                             related_name="reservations", verbose_name="Lot (mahsulot)")
     kg = models.DecimalField("Bron qilingan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
                                 null=True, blank=True)
@@ -468,21 +615,28 @@ class Reservation(models.Model):
         return f"Bron #{self.pk} · {self.customer} · {self.kg} kg"
 
 
+def arrived_lots():
+    """Every lot in the ombor: the product lines of arrived trucks."""
+    return (ShipmentLine.objects
+            .filter(shipment__arrived__isnull=False)
+            .select_related("contract_line", "shipment", "shipment__contract"))
+
+
 def fifo_lots(brand):
     """Arrived lots of one brand that still have kg available, oldest arrival
     first (then id) — the FIFO consumption order for the ombor."""
-    lots = (Shipment.objects.filter(arrived__isnull=False, contract__brand=brand)
-            .select_related("contract").order_by("arrived", "id"))
+    lots = arrived_lots().filter(contract_line__brand=brand).order_by(
+        "shipment__arrived", "id")
     return [lot for lot in lots if lot.available_kg > 0]
 
 
 def brand_stock():
     """[(brand, available kg)] across arrived lots, for the FIFO sale form."""
     totals = {}
-    for lot in Shipment.objects.filter(arrived__isnull=False).select_related("contract"):
+    for lot in arrived_lots():
         avail = lot.available_kg
         if avail > 0:
-            totals[lot.contract.brand] = totals.get(lot.contract.brand, Decimal("0")) + avail
+            totals[lot.brand] = totals.get(lot.brand, Decimal("0")) + avail
     return sorted(totals.items())
 
 
@@ -494,8 +648,8 @@ class Sale(models.Model):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="sales", verbose_name="Mijoz")
-    shipment = models.ForeignKey(Shipment, on_delete=models.PROTECT,
-                                 related_name="sales", verbose_name="Lot (yuk)")
+    line = models.ForeignKey("ShipmentLine", on_delete=models.PROTECT,
+                             related_name="sales", verbose_name="Lot (mahsulot)")
     reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name="+", verbose_name="Bron")
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)

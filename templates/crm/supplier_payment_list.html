@@ -12,7 +12,9 @@
     <th class="sticky-col">Sana</th>
     <th>Kelishuv</th>
     <th>Hamkor</th>
-    <th>Summa</th>
+    <th title="Hamkor qo'liga tegadigan summa">Hamkorga</th>
+    <th title="Vositachi ushlab qoladigan foiz va summa">Vositachi</th>
+    <th title="Kassadan chiqadigan jami summa">Kassadan</th>
     <th>Usul</th>
     <th>Izoh</th>
     <th></th>
@@ -20,12 +22,18 @@
   {% for p in page %}
   <tr>
     <td class="sticky-col">{{ p.date }}</td>
-    <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand }}</a></td>
+    <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand_summary }}</a></td>
     <td>{{ p.contract.partner.name }}</td>
     <td>
       {{ p.amount|usd }}
       {% if p.currency == "uzs" %}<br><small class="muted">{{ p.amount_original }} so'm</small>{% endif %}
     </td>
+    <td>
+      {% if p.commission_percent %}
+      {{ p.commission_amount|usd }}<br><small class="muted">{{ p.commission_percent }}%</small>
+      {% else %}<span class="muted">—</span>{% endif %}
+    </td>
+    <td><strong>{{ p.total_out|usd }}</strong></td>
     <td>{{ p.get_method_display }}</td>
     <td>{{ p.note|default:"—" }}</td>
     <td class="row-actions">

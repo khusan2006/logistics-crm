@@ -997,24 +997,16 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
-  // Shipment form: prefill Yuboriladigan kg + Taxminiy kelish from the selected
-  // kelishuv (contract). Each option carries data-remaining / data-deadline
-  // (see ContractChoiceSelect). On load with a preselected contract, only empty
-  // fields are filled (so editing a saved shipment isn't clobbered); on an
-  // explicit change, both are refreshed from the newly chosen contract.
+  // Shipment form: prefill Taxminiy kelish from the selected kelishuv, whose
+  // option carries data-deadline (see ContractChoiceSelect). On load only empty
+  // fields are filled (so editing a saved yuk isn't clobbered); on an explicit
+  // change the date is refreshed from the newly chosen kelishuv.
   (function () {
-    function opt(sel) { return sel.options[sel.selectedIndex]; }
     function apply(sel, overwrite) {
-      var o = opt(sel); if (!o) { return; }
-      var kg = document.getElementById('id_kg');
+      var o = sel.options[sel.selectedIndex]; if (!o) { return; }
       var eta = document.getElementById('id_eta');
-      var price = document.getElementById('id_price');
-      var rem = o.getAttribute('data-remaining');
       var dl = o.getAttribute('data-deadline');
-      var pr = o.getAttribute('data-price');
-      if (kg && rem !== null && (overwrite || !kg.value)) { kg.value = rem; }
       if (eta && (overwrite || !eta.value)) { eta.value = dl || (overwrite ? '' : eta.value); }
-      if (price && pr !== null && (overwrite || !price.value)) { price.value = pr; }
     }
     function enhance(root) {
       (root || document).querySelectorAll('select[data-contract-source]').forEach(function (sel) {
@@ -1025,6 +1017,155 @@
       });
     }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);   // the form is also reachable as a full page (no-JS fallback)
+  })();
+
+  // Repeating product rows (Mahsulotlar) on the kelishuv and yuk forms. Adds and
+  // removes rows client-side by cloning the formset's empty_form and rewriting its
+  // __prefix__ indexes; saved rows are hidden and flagged DELETE instead of being
+  // ripped out, since the server needs the row in order to delete it.
+  (function () {
+    function rows(set) { return set.querySelectorAll('[data-line-row]'); }
+    function totalField(set) {
+      return set.querySelector('input[name$="-TOTAL_FORMS"]');
+    }
+    function visibleCount(set) {
+      var n = 0;
+      rows(set).forEach(function (row) { if (!row.hidden) { n += 1; } });
+      return n;
+    }
+    function syncRemoveButtons(set) {
+      // Never let the operator empty the list — one product is the minimum.
+      var only = visibleCount(set) <= 1;
+      rows(set).forEach(function (row) {
+        var btn = row.querySelector('[data-line-remove]');
+        if (btn) { btn.disabled = only && !row.hidden; }
+      });
+    }
+    function addRow(set) {
+      var tpl = set.querySelector('[data-line-template]');
+      var total = totalField(set);
+      if (!tpl || !total) { return; }
+      var index = parseInt(total.value, 10) || 0;
+      var html = tpl.innerHTML.replace(/__prefix__/g, index);
+      var host = set.querySelector('[data-line-rows]');
+      var wrap = document.createElement('div');
+      wrap.innerHTML = html.trim();
+      var row = wrap.firstElementChild;
+      host.appendChild(row);
+      total.value = index + 1;
+      syncRemoveButtons(set);
+      filterLineOptions(set);
+      var first = row.querySelector('input, select');
+      if (first) { first.focus(); }
+    }
+    function removeRow(set, row) {
+      var del = row.querySelector('input[type=checkbox][name$="-DELETE"]');
+      if (del) {            // saved row → mark for deletion, keep it in the POST
+        del.checked = true;
+        row.hidden = true;
+      } else {              // never-saved row → drop it and renumber what follows
+        row.remove();
+        var total = totalField(set);
+        var i = 0;
+        rows(set).forEach(function (r) {
+          r.querySelectorAll('[name], [id]').forEach(function (el) {
+            if (el.name) { el.name = el.name.replace(/-\d+-/, '-' + i + '-'); }
+            if (el.id) { el.id = el.id.replace(/-\d+-/, '-' + i + '-'); }
+          });
+          i += 1;
+        });
+        if (total) { total.value = i; }
+      }
+      syncRemoveButtons(set);
+    }
+    // On the yuk form the product list spans every kelishuv, so hide the ones
+    // that do not belong to the kelishuv chosen above. The server re-checks.
+    function filterLineOptions(set) {
+      var source = document.querySelector('select[data-contract-source]');
+      if (!source) { return; }
+      var want = source.value;
+      set.querySelectorAll('select[data-line-source]').forEach(function (sel) {
+        Array.prototype.forEach.call(sel.options, function (o) {
+          var owner = o.getAttribute('data-contract');
+          o.hidden = !!(want && owner && owner !== want);
+        });
+        var cur = sel.options[sel.selectedIndex];
+        if (cur && cur.hidden) { sel.value = ''; }
+      });
+    }
+    function prefillFromLine(sel) {
+      var o = sel.options[sel.selectedIndex]; if (!o) { return; }
+      var row = sel.closest('[data-line-row]'); if (!row) { return; }
+      var kg = row.querySelector('input[name$="-kg"]');
+      var price = row.querySelector('input[name$="-price"]');
+      var rem = o.getAttribute('data-remaining');
+      var pr = o.getAttribute('data-price');
+      if (kg && rem !== null && !kg.value) { kg.value = rem; }
+      if (price && pr !== null && !price.value) { price.value = pr; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-lineset]').forEach(function (set) {
+        if (set.dataset.linesetReady) { return; }
+        set.dataset.linesetReady = '1';
+        set.addEventListener('click', function (e) {
+          var add = e.target.closest('[data-line-add]');
+          if (add) { e.preventDefault(); addRow(set); return; }
+          var rm = e.target.closest('[data-line-remove]');
+          if (rm && !rm.disabled) {
+            e.preventDefault();
+            removeRow(set, rm.closest('[data-line-row]'));
+          }
+        });
+        set.addEventListener('change', function (e) {
+          if (e.target.matches('select[data-line-source]')) { prefillFromLine(e.target); }
+        });
+        var source = document.querySelector('select[data-contract-source]');
+        if (source) {
+          source.addEventListener('change', function () { filterLineOptions(set); });
+        }
+        filterLineOptions(set);
+        syncRemoveButtons(set);
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
+  // Hamkor to'lovi: the entered summa is what the hamkor RECEIVES, and the
+  // middleman's percentage rides on top — so show what the kassa actually pays
+  // before the operator saves.
+  (function () {
+    function money(n) { return '$' + n.toFixed(2); }
+    function update(scope) {
+      var base = scope.querySelector('[data-commission-base]');
+      var pct = scope.querySelector('[data-commission-percent]');
+      if (!base || !pct) { return; }
+      var hint = pct.parentNode.querySelector('.commission-preview');
+      if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'commission-preview muted';
+        hint.style.fontSize = '12px'; hint.style.marginTop = '4px';
+        pct.parentNode.appendChild(hint);
+      }
+      var a = parseFloat(base.value), r = parseFloat(pct.value);
+      if (a > 0 && r > 0) {
+        var cut = a * r / 100;
+        hint.textContent = 'Vositachi ' + money(cut) + ' · kassadan ' + money(a + cut)
+                         + ' · hamkorga ' + money(a);
+      } else { hint.textContent = ''; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-commission-percent]').forEach(function (el) {
+        if (el.dataset.commissionReady) { return; }
+        el.dataset.commissionReady = '1';
+        var form = el.closest('form') || document;
+        form.addEventListener('input', function () { update(form); });
+        update(form);
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
   })();
 
   // Contract form: a live so'm preview of the USD price (and total) at the entered

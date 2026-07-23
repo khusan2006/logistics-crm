@@ -1,0 +1,65 @@
+{% comment %}
+Repeating product rows for a kelishuv or a yuk. Each row is a card so the label
+of every field stays visible on a phone; the empty_form at the bottom is the
+template the JS clones when "+ Mahsulot qo'shish" is pressed.
+{% endcomment %}
+<fieldset class="lineset" data-lineset>
+  <legend>{{ lines_legend }}</legend>
+  {{ lines.management_form }}
+  {% if lines.non_form_errors %}
+  <ul class="errorlist">{% for e in lines.non_form_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <div data-line-rows>
+    {% for f in lines %}
+    <div class="lineset-row" data-line-row>
+      {% for hidden in f.hidden_fields %}{{ hidden }}{% endfor %}
+      <div class="lineset-grid">
+        {% for field in f.visible_fields %}
+        {% if field.name != "DELETE" %}
+        <label class="lineset-field lineset-field--{{ field.name }}">
+          <span>{{ field.label }}</span>
+          {{ field }}
+          {% if field.errors %}<ul class="errorlist">{% for e in field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </label>
+        {% endif %}
+        {% endfor %}
+        <div class="lineset-field lineset-field--rm">
+          <span>&nbsp;</span>
+          <button type="button" class="btn btn-ghost lineset-rm" data-line-remove
+                  title="Mahsulotni olib tashlash" aria-label="Mahsulotni olib tashlash">&minus;</button>
+        </div>
+      </div>
+      {% comment %}
+      The − button is the control; this checkbox is how the formset is told to
+      delete a saved row, so it ships hidden rather than styled away. A {# #}
+      comment would not do here — Django only strips those on a single line.
+      {% endcomment %}
+      <span class="lineset-del" hidden>{{ f.DELETE }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <template data-line-template>
+    <div class="lineset-row" data-line-row>
+      {% for hidden in lines.empty_form.hidden_fields %}{{ hidden }}{% endfor %}
+      <div class="lineset-grid">
+        {% for field in lines.empty_form.visible_fields %}
+        {% if field.name != "DELETE" %}
+        <label class="lineset-field lineset-field--{{ field.name }}">
+          <span>{{ field.label }}</span>
+          {{ field }}
+        </label>
+        {% endif %}
+        {% endfor %}
+        <div class="lineset-field lineset-field--rm">
+          <span>&nbsp;</span>
+          <button type="button" class="btn btn-ghost lineset-rm" data-line-remove
+                  title="Mahsulotni olib tashlash" aria-label="Mahsulotni olib tashlash">&minus;</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <button type="button" class="btn btn-ghost lineset-add" data-line-add>+ Mahsulot qo'shish</button>
+</fieldset>

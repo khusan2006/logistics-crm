@@ -1,24 +1,23 @@
 from decimal import Decimal
 
 from crm.models import (
-    Contract, Customer, CustomerPayment, Partner, Shipment, ShipmentExpense, ShipmentStatus, SupplierPayment,
+    Contract, ContractLine, Customer, CustomerPayment, Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
 
 
 def _contract(partner_name="Pars"):
     partner = Partner.objects.create(name=partner_name, phone="1", city="T")
-    return Contract.objects.create(
-        partner=partner, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"),
-        created="2026-07-01", deadline="2026-08-01",
-    )
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    _contract_obj_line = ContractLine.objects.create(
+        contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"))
+    return _contract_obj
 
 
 def _arrived_shipment(contract):
-    return Shipment.objects.create(
-        contract=contract, kg=Decimal("500"), status=ShipmentStatus.arrival(),
-        sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16",
-        transport="01A111AA", container="MSCU-1",
-    )
+    _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=contract.lines.first(), kg=Decimal("500"))
+    return _ship_obj
 
 
 def _customer(name="Alisher Mebel"):
@@ -94,11 +93,12 @@ def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
     from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
 
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    c = Contract.objects.create(partner=partner, brand="LLDPE", kg=Decimal("1000"),
-                                price=Decimal("1.00"), created="2026-07-01",
-                                deadline="2026-08-01")
-    Shipment.objects.create(contract=c, kg=Decimal("600"),
-                            status=ShipmentStatus.objects.first())   # owe 600
+    c = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    c_line = ContractLine.objects.create(
+        contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
+    _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
+    _ship_obj_line = ShipmentLine.objects.create(
+        shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal("600"))   # owe 600
     SupplierPayment.objects.create(contract=c, date="2026-07-02",
                                    amount=Decimal("250"), amount_original=Decimal("250"),
                                    method="cash")                    # paid 250

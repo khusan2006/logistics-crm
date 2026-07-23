@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from crm.models import AuditLog, Contract, Customer, Partner, Return, Sale, Shipment, ShipmentExpense, ShipmentStatus
+from crm.models import (
+    AuditLog, Contract, ContractLine, Customer, Partner, Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
+)
 
 
 def _customer(name="Alisher Mebel"):
@@ -11,26 +13,23 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
     """An arrived 10,000 kg lot @ contract price $1.00/kg + $2,000 expenses
     => landed cost = 1.00 + 2000/10000 = $1.20/kg."""
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(
-        partner=partner, brand=brand, kg=Decimal(kg), price=Decimal(contract_price),
-        created="2026-07-01", deadline="2026-08-01",
-    )
-    shipment = Shipment.objects.create(
-        contract=contract, kg=Decimal(kg), status=ShipmentStatus.arrival(),
-        sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16",
-        transport="01A111AA", container="MSCU-1",
-    )
+    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract_line = ContractLine.objects.create(
+        contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(contract_price))
+    shipment = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
+    shipment_line = ShipmentLine.objects.create(
+        shipment=shipment, contract_line=contract.lines.first(), kg=Decimal(kg))
     if expense:
         ShipmentExpense.objects.create(shipment=shipment, amount=Decimal(expense), date="2026-07-16")
-    return shipment
+    return shipment_line
 
 
 def _sale(admin_client, lot, customer, kg="4000", price="1.60"):
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": kg,
+        "customer": customer.pk, "brand": lot.brand, "kg": kg,
         "price": price, "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    return Sale.objects.get(shipment=lot, kg=Decimal(kg))
+    return Sale.objects.get(line=lot, kg=Decimal(kg))
 
 
 def test_return_credits_debt_and_restocks_lot(admin_client, db):
@@ -104,11 +103,11 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
 
     # Reachability: the freed advance auto-applies to a NEW sale
     resp2 = admin_client.post(f"/sales/new/?lot={lot.pk}", {
-        "customer": customer.pk, "brand": lot.contract.brand, "kg": "500",
+        "customer": customer.pk, "brand": lot.brand, "kg": "500",
         "price": "1.60", "date": "2026-07-20", "debt_deadline": "", "note": "",
     })
     assert resp2.status_code == 302
-    new_sale = Sale.objects.get(shipment=lot, kg=Decimal("500"))
+    new_sale = Sale.objects.get(line=lot, kg=Decimal("500"))
     assert new_sale.total == Decimal("800.00")
     new_sale.refresh_from_db()
     assert new_sale.remaining == Decimal("0")       # covered by the freed advance

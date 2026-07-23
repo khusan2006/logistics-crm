@@ -17,14 +17,17 @@ from accounts.models import User
 
 from .exports import xlsx_response
 from .forms import (
-    ContractForm, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
-    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm,
+    ContractForm, ContractLineFormSet, CustomerForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
+    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, Customer, CustomerPayment, Partner, PaymentAllocation, PayMethod, Reservation,
-    Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg, ShipmentStatus, SupplierPayment,
-    allocate_customer_payment, apply_customer_advance, fifo_lots, trim_sale_allocations,
+    AuditLog, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
+    PaymentAllocation,
+    PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
+    ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
+    apply_customer_advance, arrived_lots, commission_total, fifo_lots,
+    trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
@@ -34,9 +37,10 @@ def dashboard(request):
         return redirect("shipment_list")
     shipments = Shipment.objects.select_related("contract__partner", "status")
     contracts = Contract.objects.select_related("partner")
-    total_kg = contracts.aggregate(s=Sum("kg"))["s"] or 0
-    shipped_kg = shipments.aggregate(s=Sum("kg"))["s"] or 0
-    arrived_kg = shipments.filter(arrived__isnull=False).aggregate(s=Sum("kg"))["s"] or 0
+    total_kg = ContractLine.objects.aggregate(s=Sum("kg"))["s"] or 0
+    shipped_kg = ShipmentLine.objects.aggregate(s=Sum("kg"))["s"] or 0
+    arrived_kg = ShipmentLine.objects.filter(
+        shipment__arrived__isnull=False).aggregate(s=Sum("kg"))["s"] or 0
     paid_total = SupplierPayment.objects.aggregate(s=Sum("amount"))["s"] or 0
     debt_total = sum((c.debt for c in contracts), Decimal("0"))
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
@@ -218,10 +222,12 @@ def customer_delete(request, pk):
 # To'lov holati of a kelishuv, read off debt = shipped_value − paid_total. A
 # kelishuv with nothing shipped yet has no payable, so it matches none of these —
 # it only appears under "Hammasi" (calling it unpaid would invent a debt).
+# Keyed to the kelishuv's own value: paying before a yuk is sent is normal, so
+# chips that keyed off shipped value left every prepaid kelishuv matching none.
 CONTRACT_PAY_FILTERS = {
-    "paid": lambda c: c.shipped_value > 0 and c.debt <= 0,
-    "partial": lambda c: c.paid_total > 0 and c.debt > 0,
-    "unpaid": lambda c: c.paid_total == 0 and c.debt > 0,
+    "paid": lambda c: c.total_value > 0 and c.payable_left <= 0,
+    "partial": lambda c: 0 < c.paid_total < c.total_value,
+    "unpaid": lambda c: c.total_value > 0 and c.paid_total == 0,
 }
 CONTRACT_PAY_LABELS = [("", "Hammasi"), ("paid", "To'langan"),
                        ("partial", "Qisman to'langan"), ("unpaid", "To'lanmagan")]
@@ -252,12 +258,16 @@ def contract_list(request):
     delivery = request.GET.get("delivery", "open").strip()
     overdue = request.GET.get("overdue") == "1"
 
+    # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
+    # instead of two per product per kelishuv as the filters walk every row.
     contracts = (Contract.objects.select_related("partner")
-                 .prefetch_related("shipments", "supplier_payments"))
+                 .prefetch_related("lines__shipment_lines", "supplier_payments"))
     if q:
-        filters = (Q(brand__icontains=q) | Q(partner__name__icontains=q)
+        # lines__brand spans a multi-valued relation, so a kelishuv whose products
+        # both match would otherwise come back twice.
+        filters = (Q(lines__brand__icontains=q) | Q(partner__name__icontains=q)
                    | Q(code_slug__icontains=q) | _contract_code_filter(q))
-        contracts = contracts.filter(filters)
+        contracts = contracts.filter(filters).distinct()
     if partner_id.isdigit():
         contracts = contracts.filter(partner_id=int(partner_id))
 
@@ -290,47 +300,72 @@ def contract_list(request):
     })
 
 
+def _save_lines(formset, parent):
+    """Persist a product formset and keep its display order matching the screen."""
+    formset.instance = parent
+    lines = formset.save(commit=False)
+    for obj in formset.deleted_objects:
+        obj.delete()
+    for position, form in enumerate(formset.forms):
+        if form.instance.pk or form.instance in lines:
+            form.instance.position = position
+    for obj in lines:
+        obj.save()
+    formset.save_m2m()
+
+
 @role_required(User.Role.ADMIN)
 def contract_create(request):
     form = ContractForm(request.POST or None)
+    lines = ContractLineFormSet(request.POST or None)
     if request.method == "POST":
-        if form.is_valid():
-            contract = form.save(commit=False)
-            contract.created_by = request.user
-            contract.save()
+        if form.is_valid() and lines.is_valid():
+            with transaction.atomic():
+                contract = form.save(commit=False)
+                contract.created_by = request.user
+                contract.save()
+                _save_lines(lines, contract)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Kelishuv", contract.pk,
-                f"Yangi kelishuv: {contract.code} · {contract.brand}",
+                f"Yangi kelishuv: {contract.code} · {contract.brand_summary}",
             )
             messages.success(request, "Kelishuv qo'shildi")
             return form_success(request, reverse("contract_list"))
-        return form_response(request, form, "Yangi kelishuv", invalid=True)
-    return form_response(request, form, "Yangi kelishuv")
+        return _contract_form_response(request, form, lines, "Yangi kelishuv", invalid=True)
+    return _contract_form_response(request, form, lines, "Yangi kelishuv")
+
+
+def _contract_form_response(request, form, lines, title, invalid=False):
+    return form_response(request, form, title, invalid=invalid,
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
 
 
 @role_required(User.Role.ADMIN)
 def contract_edit(request, pk):
     contract = get_object_or_404(Contract, pk=pk)
     form = ContractForm(request.POST or None, instance=contract)
+    lines = ContractLineFormSet(request.POST or None, instance=contract)
     title = "Kelishuvni tahrirlash"
     if request.method == "POST":
-        if form.is_valid():
-            form.save()
+        if form.is_valid() and lines.is_valid():
+            with transaction.atomic():
+                form.save()
+                _save_lines(lines, contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
-                f"Kelishuv tahrirlandi: {contract.code} · {contract.brand}",
+                f"Kelishuv tahrirlandi: {contract.code} · {contract.brand_summary}",
             )
             messages.success(request, "Kelishuv yangilandi")
             return form_reload(request, reverse("contract_list"))
-        return form_response(request, form, title, invalid=True)
-    return form_response(request, form, title)
+        return _contract_form_response(request, form, lines, title, invalid=True)
+    return _contract_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN)
 def contract_delete(request, pk):
     contract = get_object_or_404(Contract, pk=pk)
     if request.method == "POST":
-        label = f"{contract.code} · {contract.brand}"
+        label = f"{contract.code} · {contract.brand_summary}"
         try:
             contract.delete()
             AuditLog.record(request.user, AuditLog.Action.DELETE, "Kelishuv", pk,
@@ -342,7 +377,7 @@ def contract_delete(request, pk):
     return render_confirm(
         request,
         "Kelishuvni o'chirish",
-        f"“{contract.code} · {contract.brand}” o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        f"“{contract.code} · {contract.brand_summary}” o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="contract_list",
@@ -620,7 +655,7 @@ def shipment_list(request):
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
-            | Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q))
+            | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q))
     shipments = list(shipments)
 
     counts = {}
@@ -665,7 +700,7 @@ def shipment_done_list(request):
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
-            | Q(contract__brand__icontains=q) | Q(contract__partner__name__icontains=q))
+            | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q))
     page = Paginator(shipments, 30).get_page(request.GET.get("page"))
     return render(request, "crm/shipment_done_list.html", {"page": page, "q": q})
 
@@ -678,21 +713,20 @@ def ombor(request):
     row — each still sellable on its own (a lot's own tan narx follows the sale)."""
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
-    lots = (Shipment.objects.filter(arrived__isnull=False)
-            .select_related("contract__partner")
-            .prefetch_related("expenses", "reservations", "sales__returns")
-            .order_by("arrived", "id"))
+    lots = (arrived_lots()
+            .prefetch_related("shipment__expenses", "reservations", "sales__returns")
+            .order_by("shipment__arrived", "id"))
     if q:
-        filters = (Q(contract__brand__icontains=q)
-                   | Q(contract__partner__name__icontains=q))
+        filters = (Q(contract_line__brand__icontains=q)
+                   | Q(shipment__contract__partner__name__icontains=q))
         if q.isdigit():
-            filters |= Q(contract_id=int(q))
+            filters |= Q(shipment__contract_id=int(q))
         lots = lots.filter(filters)
 
     groups = []
     by_brand = {}
     for lot in lots:
-        brand = lot.contract.brand
+        brand = lot.brand
         g = by_brand.get(brand)
         if g is None:
             g = by_brand[brand] = {"brand": brand, "lots": [], "partners": [],
@@ -704,8 +738,9 @@ def ombor(request):
         g["sold"] += lot.sold_kg
         g["reserved"] += lot.reserved_kg
         g["available"] += lot.available_kg
-        if lot.contract.partner.name not in g["partners"]:
-            g["partners"].append(lot.contract.partner.name)
+        partner = lot.shipment.contract.partner.name
+        if partner not in g["partners"]:
+            g["partners"].append(partner)
     for g in groups:
         costs = [lot.landed_cost_per_kg for lot in g["lots"]]
         g["cost_min"], g["cost_max"] = min(costs), max(costs)
@@ -715,42 +750,53 @@ def ombor(request):
     return render(request, "crm/ombor.html", {"page": page, "q": q})
 
 
+def _shipment_form_response(request, form, lines, title, invalid=False):
+    return form_response(request, form, title, invalid=invalid,
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+
+
 @role_required(User.Role.ADMIN)
 def shipment_create(request):
     form = ShipmentForm(request.POST or None)
+    lines = ShipmentLineFormSet(request.POST or None)
     if request.method == "POST":
-        if form.is_valid():
-            shipment = form.save(commit=False)
-            shipment.created_by = request.user
-            if shipment.status.is_arrival:
-                shipment.arrived = timezone.localdate()
-            shipment.save()
+        if form.is_valid() and lines.is_valid():
+            with transaction.atomic():
+                shipment = form.save(commit=False)
+                shipment.created_by = request.user
+                if shipment.status.is_arrival:
+                    shipment.arrived = timezone.localdate()
+                shipment.save()
+                _save_lines(lines, shipment)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Yuk", shipment.pk,
-                f"Yangi yuk: {shipment.contract.brand} · {shipment.kg} kg",
+                f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
             )
             messages.success(request, "Yuk qo'shildi")
             return form_success(request, reverse("shipment_list"))
-        return form_response(request, form, "Yangi yuk", invalid=True)
-    return form_response(request, form, "Yangi yuk")
+        return _shipment_form_response(request, form, lines, "Yangi yuk", invalid=True)
+    return _shipment_form_response(request, form, lines, "Yangi yuk")
 
 
 @role_required(User.Role.ADMIN)
 def shipment_edit(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
     form = ShipmentForm(request.POST or None, instance=shipment)
+    lines = ShipmentLineFormSet(request.POST or None, instance=shipment)
     title = "Yukni tahrirlash"
     if request.method == "POST":
-        if form.is_valid():
-            form.save()
+        if form.is_valid() and lines.is_valid():
+            with transaction.atomic():
+                form.save()
+                _save_lines(lines, shipment)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
-                f"Yuk tahrirlandi: {shipment.contract.brand} · {shipment.kg} kg",
+                f"Yuk tahrirlandi: {shipment.brand_summary} · {shipment.kg} kg",
             )
             messages.success(request, "Yuk yangilandi")
             return form_reload(request, reverse("shipment_list"))
-        return form_response(request, form, title, invalid=True)
-    return form_response(request, form, title)
+        return _shipment_form_response(request, form, lines, title, invalid=True)
+    return _shipment_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
@@ -882,7 +928,7 @@ def shipment_set_status(request, pk):
 def shipment_delete(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
     if request.method == "POST":
-        label = f"{shipment.contract.brand} · {shipment.kg} kg"
+        label = f"{shipment.brand_summary} · {shipment.kg} kg"
         try:
             shipment.delete()
             AuditLog.record(request.user, AuditLog.Action.DELETE, "Yuk", pk, f"Yuk o'chirildi: {label}")
@@ -893,7 +939,7 @@ def shipment_delete(request, pk):
     return render_confirm(
         request,
         "Yukni o'chirish",
-        f"“{shipment.contract.brand} · {shipment.kg} kg” yuki o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        f"“{shipment.brand_summary} · {shipment.kg} kg” yuki o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="shipment_list",
@@ -963,11 +1009,11 @@ def expense_delete(request, pk):
 @role_required(User.Role.ADMIN)
 def sale_list(request):
     q = request.GET.get("q", "").strip()
-    sales = Sale.objects.select_related("customer", "shipment__contract__partner")
+    sales = Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
     if q:
-        filters = (Q(customer__name__icontains=q) | Q(shipment__contract__brand__icontains=q))
+        filters = (Q(customer__name__icontains=q) | Q(line__contract_line__brand__icontains=q))
         if q.isdigit():
-            filters |= Q(shipment_id=int(q))
+            filters |= Q(line__shipment_id=int(q))
         sales = sales.filter(filters)
     page = Paginator(sales, 30).get_page(request.GET.get("page"))
     return render(request, "crm/sale_list.html", {"page": page, "q": q})
@@ -1002,7 +1048,7 @@ def sale_create(request):
                         break
                     take = min(lot.available_kg, remaining)
                     sale = Sale.objects.create(
-                        customer=data["customer"], shipment=lot, kg=take,
+                        customer=data["customer"], line=lot, kg=take,
                         price=data["price"], cost_price=lot.landed_cost_per_kg,
                         date=data["date"], debt_deadline=data["debt_deadline"],
                         note=data["note"], created_by=request.user,
@@ -1029,12 +1075,12 @@ def sale_create_lot(request, lot_id):
     deliberately bypassed: the operator opened this lot because it is the one being
     sold — with several lots of the same marka at different landed costs, FIFO would
     silently bill a different lot's cost."""
-    lot = get_object_or_404(Shipment, pk=lot_id, arrived__isnull=False)
+    lot = get_object_or_404(ShipmentLine, pk=lot_id, shipment__arrived__isnull=False)
     initial = {"lot": lot.pk}
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
-    title = f"Sotish · {lot.contract.brand} (lot #{lot.pk})"
+    title = f"Sotish · {lot.brand} (lot #{lot.pk})"
     # The lot is settled by the URL/hidden field before the form is bound, so a post
     # that lost the query string (the modal posts to a bare path) still hits the
     # same lot, and the body can never redirect the sale to another one.
@@ -1047,15 +1093,15 @@ def sale_create_lot(request, lot_id):
         if form.is_valid():
             data = form.cleaned_data
             sale = Sale.objects.create(
-                customer=data["customer"], shipment=data["lot"], kg=data["kg"],
+                customer=data["customer"], line=data["lot"], kg=data["kg"],
                 price=data["price"], cost_price=data["lot"].landed_cost_per_kg,
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
             )
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
-                f"Yangi sotuv (lot #{sale.shipment_id}): {sale.kg} kg "
-                f"{sale.shipment.contract.brand} · {sale.customer.name}",
+                f"Yangi sotuv (lot #{sale.line_id}): {sale.kg} kg "
+                f"{sale.line.brand} · {sale.customer.name}",
             )
             apply_customer_advance(sale)
             messages.success(request, "Sotuv qo'shildi")
@@ -1072,7 +1118,7 @@ def sale_edit(request, pk):
     if request.method == "POST":
         if form.is_valid():
             sale = form.save(commit=False)
-            sale.cost_price = sale.shipment.landed_cost_per_kg
+            sale.cost_price = sale.line.landed_cost_per_kg
             sale.save()
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Sotuv", sale.pk,
@@ -1109,13 +1155,13 @@ def sale_delete(request, pk):
 @role_required(User.Role.ADMIN)
 def sale_detail(request, pk):
     sale = get_object_or_404(
-        Sale.objects.select_related("customer", "shipment__contract__partner"), pk=pk)
+        Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner"), pk=pk)
     return render(request, "crm/sale_detail.html", {"sale": sale})
 
 
 @role_required(User.Role.ADMIN)
 def reservation_list(request):
-    reservations = Reservation.objects.select_related("customer", "shipment__contract__partner")
+    reservations = Reservation.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
     page = Paginator(reservations, 30).get_page(request.GET.get("page"))
     return render(request, "crm/reservation_list.html", {"page": page})
 
@@ -1125,7 +1171,7 @@ def reservation_create(request):
     initial = {}
     lot_id = request.GET.get("lot")
     if lot_id and lot_id.isdigit():
-        initial["shipment"] = int(lot_id)
+        initial["line"] = int(lot_id)
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
@@ -1171,7 +1217,7 @@ def reservation_cancel(request, pk):
 @role_required(User.Role.ADMIN)
 def reservation_convert(request, pk):
     reservation = get_object_or_404(Reservation, pk=pk)
-    if reservation.shipment.arrived is None:
+    if reservation.line.arrived is None:
         messages.error(request, "Lot hali omborga yetib kelmagan")
         return form_reload(request, reverse("reservation_list"))
     price = reservation.price
@@ -1187,12 +1233,12 @@ def reservation_convert(request, pk):
     # Defense-in-depth: reserved kg was validated at reservation time and convert is
     # net-neutral, but refuse if the lot has since become over-committed (e.g. its kg
     # was edited down) so a convert can never oversell.
-    if reservation.shipment.available_kg < 0:
+    if reservation.line.available_kg < 0:
         messages.error(request, "Lot kg yetarli emas")
         return form_reload(request, reverse("reservation_list"))
     sale = Sale.objects.create(
-        customer=reservation.customer, shipment=reservation.shipment, kg=reservation.kg,
-        price=price, cost_price=reservation.shipment.landed_cost_per_kg,
+        customer=reservation.customer, line=reservation.line, kg=reservation.kg,
+        price=price, cost_price=reservation.line.landed_cost_per_kg,
         date=timezone.localdate(), reservation=reservation, created_by=request.user,
     )
     reservation.status = Reservation.Status.CONVERTED
@@ -1265,7 +1311,7 @@ def debt_list(request):
 @role_required(User.Role.ADMIN)
 def debt_customer(request, pk):
     customer = get_object_or_404(Customer, pk=pk)
-    sales = [s for s in customer.sales.select_related("shipment__contract").all() if s.remaining > 0]
+    sales = [s for s in customer.sales.select_related("line__contract_line").all() if s.remaining > 0]
     return render(request, "crm/debt_customer.html", {"customer": customer, "sales": sales})
 
 
@@ -1292,6 +1338,7 @@ def kassa(request):
     # Joriy holat (all-time, filter-independent): money physically in the till.
     cash_total = (_sum(CustomerPayment.objects.all())
                   - _sum(SupplierPayment.objects.all())
+                  - commission_total(SupplierPayment.objects.all())
                   - _sum(ShipmentExpense.objects.all()))
 
     cust_pays = _range(CustomerPayment.objects.select_related("customer"))
@@ -1302,7 +1349,9 @@ def kassa(request):
     net_in = net_out = Decimal("0")
     for value, label in PayMethod.choices:
         m_in = _sum(cust_pays.filter(method=value))
-        m_out = _sum(sup_pays.filter(method=value)) + _sum(expenses.filter(method=value))
+        m_out = (_sum(sup_pays.filter(method=value))
+                 + commission_total(sup_pays.filter(method=value))
+                 + _sum(expenses.filter(method=value)))
         balances[value] = {"label": label, "in": m_in, "out": m_out, "balance": m_in - m_out}
         net_in += m_in
         net_out += m_out
@@ -1316,10 +1365,21 @@ def kassa(request):
         outflow_rows.append({
             "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
             # The hamkor is already inside the code, so the brand is the useful half here
-            "title": f"Kelishuv {p.contract.code} · {p.contract.brand}",
+            "title": f"Kelishuv {p.contract.code} · {p.contract.brand_summary}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_original": p.amount_original, "amount": p.amount,
+        })
+    for p in sup_pays:
+        if not p.commission_amount:
+            continue
+        outflow_rows.append({
+            "kind": "commission", "pk": p.pk, "date": p.date, "obj": p,
+            "title": (f"Vositachi ({p.commission_percent}%) · "
+                      f"kelishuv {p.contract.code}"),
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": Currency.USD, "exchange_rate": Decimal("0"),
+            "amount_original": p.commission_amount, "amount": p.commission_amount,
         })
     for e in expenses:
         outflow_rows.append({
@@ -1382,7 +1442,7 @@ def _report_querysets(request):
     if partner_id:
         contracts = contracts.filter(partner_id=partner_id)
     if brand:
-        contracts = contracts.filter(brand=brand)
+        contracts = contracts.filter(lines__brand=brand).distinct()
     if date_from:
         contracts = contracts.filter(created__gte=date_from)
     if date_to:
@@ -1404,15 +1464,15 @@ def _report_querysets(request):
     if date_to:
         sup_pays = sup_pays.filter(date__lte=date_to)
 
-    sales = Sale.objects.select_related("customer", "shipment__contract__partner")
+    sales = Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
     if date_from:
         sales = sales.filter(date__gte=date_from)
     if date_to:
         sales = sales.filter(date__lte=date_to)
     if partner_id:
-        sales = sales.filter(shipment__contract__partner_id=partner_id)
+        sales = sales.filter(line__shipment__contract__partner_id=partner_id)
     if brand:
-        sales = sales.filter(shipment__contract__brand=brand)
+        sales = sales.filter(line__contract_line__brand=brand)
 
     cust_pays = CustomerPayment.objects.select_related("customer")
     if date_from:
@@ -1441,9 +1501,10 @@ def reports(request):
         return qs.aggregate(s=Sum(field))["s"] or Decimal("0")
 
     # KPIs
-    kelishilgan_kg = _sum(contracts, "kg")
-    yuborilgan_kg = _sum(shipments, "kg")
-    omborga_kelgan_kg = _sum(shipments.filter(arrived__isnull=False), "kg")
+    kelishilgan_kg = _sum(ContractLine.objects.filter(contract__in=contracts), "kg")
+    yuborilgan_kg = _sum(ShipmentLine.objects.filter(shipment__in=shipments), "kg")
+    omborga_kelgan_kg = _sum(ShipmentLine.objects.filter(
+        shipment__in=shipments.filter(arrived__isnull=False)), "kg")
     kontrakt_summasi = sum((c.total_value for c in contracts), Decimal("0"))
     hamkorga_tolangan = _sum(sup_pays)
     hamkor_qarzi = sum((c.debt for c in contracts), Decimal("0"))
@@ -1459,7 +1520,7 @@ def reports(request):
         partner_rows.append({
             "partner": partner,
             "contracts_count": p_contracts.count(),
-            "kg": _sum(p_contracts, "kg"),
+            "kg": _sum(ContractLine.objects.filter(contract__in=p_contracts), "kg"),
             "kontrakt_summasi": sum((c.total_value for c in p_contracts), Decimal("0")),
             "tolangan": _sum(sup_pays.filter(contract__partner=partner)),
             "qarz": sum((c.debt for c in p_contracts), Decimal("0")),
@@ -1487,7 +1548,7 @@ def reports(request):
         "mijoz_qarzi": mijoz_qarzi, "profit_total": profit_total,
         "kechikkan_soni": kechikkan_soni, "late_shipments": late_shipments,
         "partner_rows": partner_rows, "customer_rows": customer_rows,
-        "partners": Partner.objects.all(), "brands": Contract.objects.values_list(
+        "partners": Partner.objects.all(), "brands": ContractLine.objects.values_list(
             "brand", flat=True).distinct().order_by("brand"),
         "statuses": ShipmentStatus.objects.all(),
         "date_from": date_from, "date_to": date_to,
@@ -1500,10 +1561,13 @@ def export_contracts(request):
     contracts = _report_querysets(request)["contracts"]
     headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg",
                "To'langan", "Qarz"]
+    # One row per product, so a multi-product kelishuv is readable in Excel. The
+    # money columns are per kelishuv, so they repeat down its rows.
     rows = (
-        [c.code, c.created, c.partner.name, c.brand, c.kg, c.price, c.total_value,
-         c.shipped_kg, c.paid_total, c.debt]
-        for c in contracts
+        [c.code, c.created, c.partner.name, ln.brand, ln.kg, ln.price, ln.total_value,
+         ln.shipped_kg, c.paid_total, c.debt]
+        for c in contracts.prefetch_related("lines__shipment_lines", "supplier_payments")
+        for ln in c.lines.all()
     )
     return xlsx_response("kelishuvlar.xlsx", headers, rows)
 
@@ -1511,9 +1575,11 @@ def export_contracts(request):
 @role_required(User.Role.ADMIN)
 def export_supplier_payments(request):
     sup_pays = _report_querysets(request)["sup_pays"]
-    headers = ["Sana", "Kelishuv", "Hamkor", "Summa", "Usul"]
+    headers = ["Sana", "Kelishuv", "Hamkor", "Hamkorga", "Vositachi %", "Vositachi",
+               "Kassadan", "Usul"]
     rows = (
-        [p.date, p.contract.code, p.contract.partner.name, p.amount, p.get_method_display()]
+        [p.date, p.contract.code, p.contract.partner.name, p.amount, p.commission_percent,
+         p.commission_amount, p.total_out, p.get_method_display()]
         for p in sup_pays
     )
     return xlsx_response("hamkor-tolovlari.xlsx", headers, rows)
@@ -1527,9 +1593,10 @@ def export_shipments(request):
         "Yetib kelgan", "Transport", "Konteyner",
     ]
     rows = (
-        [s.pk, s.contract.code, s.contract.partner.name, s.contract.brand, s.kg, s.status.name,
+        [s.pk, s.contract.code, s.contract.partner.name, ln.brand, ln.kg, s.status.name,
          s.sent, s.eta, s.arrived, s.transport, s.container]
-        for s in shipments
+        for s in shipments.prefetch_related("lines__contract_line")
+        for ln in s.lines.all()
     )
     return xlsx_response("yuklar.xlsx", headers, rows)
 
@@ -1539,7 +1606,7 @@ def export_sales(request):
     sales = _report_querysets(request)["sales"]
     headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Tan narx", "Sotuv narx", "Jami", "Foyda", "Qoldiq"]
     rows = (
-        [s.date, s.customer.name, s.shipment_id, s.shipment.contract.brand, s.kg, s.cost_price,
+        [s.date, s.customer.name, s.line_id, s.line.brand, s.kg, s.cost_price,
          s.price, s.total, s.profit, s.remaining]
         for s in sales
     )

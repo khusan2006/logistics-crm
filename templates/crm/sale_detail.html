@@ -17,7 +17,7 @@
     </div>
     <div class="stat">
       <div class="muted">Lot</div>
-      <div>#{{ sale.shipment_id }} · {{ sale.shipment.contract.brand }}</div>
+      <div>#{{ sale.line.shipment_id }} · {{ sale.line.brand }}</div>
     </div>
     {% if sale.reservation_id %}
     <div class="stat">
