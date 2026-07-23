@@ -36,7 +36,7 @@
       <div class="load-partner">{{ s.contract.partner.name }}</div>
       <div class="muted load-sub">{{ s.contract.brand }}</div>
     </td>
-    <td>#{{ s.contract_id }}</td>
+    <td>{{ s.contract.code }}</td>
     <td class="num">{{ s.kg|floatformat:"-3" }}</td>
     {% if user.is_admin_role %}
     <td class="num">

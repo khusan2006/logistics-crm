@@ -67,7 +67,7 @@
           {% for lot in g.lots %}
           <tr>
             <td><a class="load-id" href="{% url 'shipment_detail' lot.pk %}">#{{ lot.pk }}</a></td>
-            <td>#{{ lot.contract_id }}</td>
+            <td>{{ lot.contract.code }}</td>
             <td>{{ lot.contract.partner.name }}</td>
             <td>{{ lot.arrived }}</td>
             <td class="num">{{ lot.kg|floatformat:"-3" }}</td>

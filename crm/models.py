@@ -1,12 +1,20 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import models, transaction
-from django.db.models import DecimalField, Sum
+from django.db import IntegrityError, models, transaction
+from django.db.models import DecimalField, Max, Sum
 from django.utils import timezone
+from django.utils.text import slugify
 
 MONEY = DecimalField(max_digits=14, decimal_places=2)   # USD
 QTY = DecimalField(max_digits=12, decimal_places=3)     # kg
+
+
+def partner_code_slug(name):
+    """The name half of a kelishuv code: "Ali Valiyev" → ali-valiyev, "G'ayrat" → gayrat.
+    Cyrillic survives; a name that slugifies to nothing falls back so no code is a
+    bare "-3"."""
+    return slugify(name, allow_unicode=True) or "hamkor"
 
 
 class PayMethod(models.TextChoices):
@@ -62,12 +70,31 @@ class Partner(models.Model):
     phone = models.CharField("Telefon", max_length=30, blank=True)
     city = models.CharField("Shahar", max_length=100, blank=True)
     note = models.TextField("Izoh", blank=True)
+    # Kelishuv codes are frozen once issued, so the high-water mark has to outlive the
+    # rows themselves — deleting sobir-3 must not hand 3 out again. The counter only
+    # ever climbs; the slug tracks the current name so a rename picks up the sequence.
+    code_slug = models.CharField(max_length=120, db_index=True, editable=False)
+    code_counter = models.PositiveIntegerField(default=0, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["name"]
         verbose_name = "Hamkor"
         verbose_name_plural = "Hamkorlar"
+
+    def save(self, *args, **kwargs):
+        self.code_slug = partner_code_slug(self.name)
+        if (fields := kwargs.get("update_fields")) is not None:
+            kwargs["update_fields"] = {*fields, "code_slug"}
+        elif self.pk:
+            # Contract.save() bumps code_counter with a targeted UPDATE, so an
+            # instance loaded before that bump still holds the old value. Writing it
+            # back would reset the hamkor's numbering and mint a duplicate code.
+            stored = Partner.objects.filter(pk=self.pk).values_list(
+                "code_counter", flat=True).first()
+            if stored is not None:
+                self.code_counter = max(self.code_counter, stored)
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -113,6 +140,10 @@ class Contract(models.Model):
 
     partner = models.ForeignKey(Partner, on_delete=models.PROTECT,
                                 related_name="contracts", verbose_name="Hamkor")
+    # The code the client reads — sobir-3 — split so "next number for sobir" is a
+    # Max() instead of parsing integers back out of strings (sobir-10 < sobir-9).
+    code_slug = models.CharField(max_length=120, db_index=True, editable=False)
+    code_number = models.PositiveIntegerField(editable=False)
     brand = models.CharField("Granula markasi", max_length=100)
     kg = models.DecimalField("Kelishilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
@@ -128,6 +159,55 @@ class Contract(models.Model):
         ordering = ["-created", "-id"]
         verbose_name = "Kelishuv"
         verbose_name_plural = "Kelishuvlar"
+        constraints = [models.UniqueConstraint(fields=["code_slug", "code_number"],
+                                               name="unique_contract_code")]
+
+    @property
+    def code(self):
+        return f"{self.code_slug}-{self.code_number}"
+
+    def _next_code_number(self, slug):
+        """One past the highest number this hamkor — or anyone sharing their slug —
+        has ever been issued. Counters live on Partner and never go down, so a
+        deleted or moved-away kelishuv leaves a permanent gap instead of recycling.
+
+        The slug half matters when two hamkorlar have different names that collapse
+        to the same slug ("G'ayrat" and "Gayrat"): they share one number line, so
+        neither can mint a code the other already used."""
+        top = Partner.objects.filter(
+            models.Q(code_slug=slug) | models.Q(pk=self.partner_id)
+        ).aggregate(top=Max("code_counter"))["top"]
+        return (top or 0) + 1
+
+    def save(self, *args, **kwargs):
+        # A code is stamped once and then frozen. It is re-issued only when the
+        # kelishuv is deliberately moved to another hamkor — the old code retires.
+        if self.pk:
+            was = Contract.objects.filter(pk=self.pk).values_list("partner_id", flat=True).first()
+            needs_code = was is not None and was != self.partner_id
+        else:
+            needs_code = True
+        if not needs_code:
+            return super().save(*args, **kwargs)
+
+        # Two admins saving at once compute the same number; the unique constraint
+        # rejects the loser, so recompute and retry rather than surfacing an error.
+        for attempt in range(5):
+            slug = partner_code_slug(self.partner.name)
+            self.code_slug, self.code_number = slug, self._next_code_number(slug)
+            try:
+                with transaction.atomic():
+                    result = super().save(*args, **kwargs)
+                    Partner.objects.filter(pk=self.partner_id,
+                                           code_counter__lt=self.code_number
+                                           ).update(code_counter=self.code_number)
+                    return result
+            except IntegrityError:
+                if attempt == 4:
+                    raise
+                # A retried INSERT must stay an INSERT: kwargs may carry the caller's
+                # force_insert, and a failed insert leaves the pk unset either way.
+                kwargs.pop("force_insert", None)
 
     @property
     def total_value(self):
@@ -166,7 +246,7 @@ class Contract(models.Model):
         return self.shipped_value - self.paid_total
 
     def __str__(self):
-        return f"#{self.pk} · {self.brand} · {self.partner}"
+        return f"{self.code} · {self.brand}"   # the hamkor is already in the code
 
 
 class ShipmentStatus(models.Model):

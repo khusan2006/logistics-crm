@@ -11,11 +11,12 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 EXPORT_URLS = {
     "/reports/export/contracts.xlsx": [
-        "ID", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg", "To'langan", "Qarz",
+        "Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg",
+        "To'langan", "Qarz",
     ],
-    "/reports/export/supplier-payments.xlsx": ["Sana", "Kelishuv ID", "Hamkor", "Summa", "Usul"],
+    "/reports/export/supplier-payments.xlsx": ["Sana", "Kelishuv", "Hamkor", "Summa", "Usul"],
     "/reports/export/shipments.xlsx": [
-        "Yuk ID", "Kelishuv ID", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
+        "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "Transport", "Konteyner",
     ],
     "/reports/export/sales.xlsx": [

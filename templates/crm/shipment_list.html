@@ -137,7 +137,7 @@
         {# ── Panel head: which load + quick jump ── #}
         <div class="load-panel-head">
           <strong>Yuk #{{ s.pk }}</strong>
-          <span class="muted">{{ s.contract.brand }} · {{ s.contract.partner.name }} · Kelishuv #{{ s.contract_id }}</span>
+          <span class="muted">{{ s.contract.brand }} · {{ s.contract.partner.name }} · Kelishuv {{ s.contract.code }}</span>
           {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>{% endif %}
           <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="{% url 'shipment_detail' s.pk %}">To'liq sahifa &rarr;</a>
         </div>

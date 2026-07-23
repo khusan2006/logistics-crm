@@ -64,7 +64,7 @@ hidden field); the chips themselves are links, so the two never fight over the
   {% for c in page %}
   <tr>
     <td class="sticky-col">
-      <a href="{% url 'contract_edit' c.pk %}" data-modal>#{{ c.pk }}</a>
+      <a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
     </td>
     <td>{{ c.created }}</td>
     <td>{{ c.partner.name }}</td>

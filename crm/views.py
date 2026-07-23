@@ -227,6 +227,17 @@ CONTRACT_PAY_LABELS = [("", "Hammasi"), ("paid", "To'langan"),
                        ("partial", "Qisman to'langan"), ("unpaid", "To'lanmagan")]
 
 
+def _contract_code_filter(q):
+    """Match a kelishuv code: `sobir-3` pins one kelishuv, a bare `3` finds every
+    kelishuv numbered 3. Returns an empty Q for anything else, which OR's away."""
+    if q.isdigit():
+        return Q(code_number=int(q))
+    slug, _, number = q.rpartition("-")
+    if slug and number.isdigit():
+        return Q(code_slug=slug, code_number=int(number))
+    return Q()
+
+
 @role_required(User.Role.ADMIN)
 def contract_list(request):
     """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
@@ -242,9 +253,8 @@ def contract_list(request):
     contracts = (Contract.objects.select_related("partner")
                  .prefetch_related("shipments", "supplier_payments"))
     if q:
-        filters = Q(brand__icontains=q) | Q(partner__name__icontains=q)
-        if q.isdigit():
-            filters |= Q(pk=int(q))
+        filters = (Q(brand__icontains=q) | Q(partner__name__icontains=q)
+                   | Q(code_slug__icontains=q) | _contract_code_filter(q))
         contracts = contracts.filter(filters)
     if partner_id.isdigit():
         contracts = contracts.filter(partner_id=int(partner_id))
@@ -286,7 +296,7 @@ def contract_create(request):
             contract.save()
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Kelishuv", contract.pk,
-                f"Yangi kelishuv: {contract.brand}",
+                f"Yangi kelishuv: {contract.code} · {contract.brand}",
             )
             messages.success(request, "Kelishuv qo'shildi")
             return form_success(request, reverse("contract_list"))
@@ -304,7 +314,7 @@ def contract_edit(request, pk):
             form.save()
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
-                f"Kelishuv tahrirlandi: {contract.brand}",
+                f"Kelishuv tahrirlandi: {contract.code} · {contract.brand}",
             )
             messages.success(request, "Kelishuv yangilandi")
             return form_reload(request, reverse("contract_list"))
@@ -316,10 +326,11 @@ def contract_edit(request, pk):
 def contract_delete(request, pk):
     contract = get_object_or_404(Contract, pk=pk)
     if request.method == "POST":
-        brand = contract.brand
+        label = f"{contract.code} · {contract.brand}"
         try:
             contract.delete()
-            AuditLog.record(request.user, AuditLog.Action.DELETE, "Kelishuv", pk, f"Kelishuv o'chirildi: {brand}")
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Kelishuv", pk,
+                            f"Kelishuv o'chirildi: {label}")
             messages.success(request, "Kelishuv o'chirildi")
         except ProtectedError:
             messages.error(request, "Kelishuvga to'lov yoki yuk biriktirilgan")
@@ -327,7 +338,7 @@ def contract_delete(request, pk):
     return render_confirm(
         request,
         "Kelishuvni o'chirish",
-        f"“#{contract.pk} · {contract.brand}” o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        f"“{contract.code} · {contract.brand}” o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="contract_list",
@@ -1300,7 +1311,7 @@ def kassa(request):
     for p in sup_pays:
         outflow_rows.append({
             "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
-            "title": f"Kelishuv #{p.contract_id} · {p.contract.partner.name}",
+            "title": f"Kelishuv {p.contract.code} · {p.contract.partner.name}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_original": p.amount_original, "amount": p.amount,
@@ -1482,9 +1493,10 @@ def reports(request):
 @role_required(User.Role.ADMIN)
 def export_contracts(request):
     contracts = _report_querysets(request)["contracts"]
-    headers = ["ID", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg", "To'langan", "Qarz"]
+    headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg",
+               "To'langan", "Qarz"]
     rows = (
-        [c.pk, c.created, c.partner.name, c.brand, c.kg, c.price, c.total_value,
+        [c.code, c.created, c.partner.name, c.brand, c.kg, c.price, c.total_value,
          c.shipped_kg, c.paid_total, c.debt]
         for c in contracts
     )
@@ -1494,9 +1506,9 @@ def export_contracts(request):
 @role_required(User.Role.ADMIN)
 def export_supplier_payments(request):
     sup_pays = _report_querysets(request)["sup_pays"]
-    headers = ["Sana", "Kelishuv ID", "Hamkor", "Summa", "Usul"]
+    headers = ["Sana", "Kelishuv", "Hamkor", "Summa", "Usul"]
     rows = (
-        [p.date, p.contract_id, p.contract.partner.name, p.amount, p.get_method_display()]
+        [p.date, p.contract.code, p.contract.partner.name, p.amount, p.get_method_display()]
         for p in sup_pays
     )
     return xlsx_response("hamkor-tolovlari.xlsx", headers, rows)
@@ -1506,11 +1518,11 @@ def export_supplier_payments(request):
 def export_shipments(request):
     shipments = _report_querysets(request)["shipments"]
     headers = [
-        "Yuk ID", "Kelishuv ID", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
+        "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "Transport", "Konteyner",
     ]
     rows = (
-        [s.pk, s.contract_id, s.contract.partner.name, s.contract.brand, s.kg, s.status.name,
+        [s.pk, s.contract.code, s.contract.partner.name, s.contract.brand, s.kg, s.status.name,
          s.sent, s.eta, s.arrived, s.transport, s.container]
         for s in shipments
     )
