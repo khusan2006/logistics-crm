@@ -42,9 +42,12 @@ def test_debt_accrues_per_truck_at_its_own_price(admin_client, db):
         shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal("100"), price=Decimal("2.00"))
     assert c.shipped_value == Decimal("600.00")            # 400 + 200
     assert c.debt == Decimal("600.00")
-    # The payment ceiling is the kelishuv's own value (1,000$), not the 600$ shipped
-    resp = admin_client.post("/supplier-payments/new/", {  # 1001 > 1000 → blocked
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1001",
+    # The ceiling is what the kelishuv will really cost, not the 600$ shipped so
+    # far and not the signed 1 000$: 600$ gone + 500 kg still due at 1.00 = 1 100$,
+    # raised above the estimate by the truck that shipped at 2.00.
+    assert c.payable_left == Decimal("1100.00")
+    resp = admin_client.post("/supplier-payments/new/", {  # 1101 > 1100 → blocked
+        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1101",
         "exchange_rate": "", "commission_percent": "", "method": "cash", "note": "",
     })
     assert resp.status_code == 200 and not SupplierPayment.objects.exists()
@@ -204,3 +207,55 @@ def test_the_list_shows_what_is_left_to_pay(admin_client, db):
                                    amount=Decimal("800"), method="cash")
     html = admin_client.get("/contracts/", {"delivery": ""}).content.decode()
     assert "$1,200.00" in html and "-800" not in html
+
+
+# --- qolgan to'lov follows the real cost, not the signed estimate -----------
+
+def _one_truck(contract, kg, price=None):
+    return make_shipment(contract=contract, kg=kg, price=price,
+                         status=ShipmentStatus.arrival(), arrived="2026-07-10")
+
+
+def test_a_cheaper_truck_lowers_what_is_left_to_pay(db):
+    """Yuk kelishilganidan arzonroq kelsa, qolgan to'lov ham kamayadi — kelishuv
+    qiymati faqat reja edi."""
+    c = make_contract(kg="1000", price="1.00")          # reja: 1 000$
+    _one_truck(c, "1000", price="0.50")                 # haqiqatda: 500$
+    SupplierPayment.objects.create(contract=c, date="2026-07-11",
+                                   amount=Decimal("500"), method="cash")
+    assert c.payable_left == Decimal("0.00")
+    assert c.is_settled                                  # yopilgan
+
+
+def test_a_dearer_truck_raises_what_is_left_to_pay(db):
+    c = make_contract(kg="1000", price="1.00")
+    _one_truck(c, "1000", price="2.00")                 # haqiqatda: 2 000$
+    SupplierPayment.objects.create(contract=c, date="2026-07-11",
+                                   amount=Decimal("1000"), method="cash")
+    assert c.payable_left == Decimal("1000.00")
+    assert not c.is_settled
+
+
+def test_goods_still_to_come_are_counted_at_the_agreed_narx(db):
+    c = make_contract(kg="1000", price="1.00")
+    _one_truck(c, "400")                                 # 400$ ketdi
+    SupplierPayment.objects.create(contract=c, date="2026-07-11",
+                                   amount=Decimal("400"), method="cash")
+    # 600 kg hali kelishilgan narxda kutilmoqda
+    assert c.payable_left == Decimal("600.00")
+
+
+def test_the_column_and_the_filter_never_disagree(db):
+    """Ustunda "to'lash kerak" turib, qator Yakunlangan ga tushmasligi kerak."""
+    for price, paid in [("0.50", "500"), ("2.00", "1000"), (None, "1000")]:
+        c = make_contract(kg="1000", price="1.00")
+        _one_truck(c, "1000", price=price)
+        SupplierPayment.objects.create(contract=c, date="2026-07-11",
+                                       amount=Decimal(paid), method="cash")
+        assert c.is_settled == (c.payable_left <= 0)
+
+
+def test_the_payment_cap_follows_the_real_cost(admin_client, db):
+    c = make_contract(kg="1000", price="1.00")
+    _one_truck(c, "1000", price="2.00")                 # haqiqatda 2 000$ turadi
+    assert _post_payment(admin_client, c, "2000").status_code == 302

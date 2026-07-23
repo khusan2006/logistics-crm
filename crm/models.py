@@ -264,18 +264,28 @@ class Contract(models.Model):
         return self.shipments.count(), self.planned_trucks
 
     @property
+    def expected_value(self):
+        """The kelishuv's real cost — see ContractLine.expected_value. Equals
+        total_value while every truck goes at the agreed narx."""
+        return sum((ln.expected_value for ln in self.lines.all()), Decimal("0"))
+
+    @property
     def payable_left(self):
-        """How much more may be paid on this kelishuv. Paying before a yuk is sent
-        is normal (avans), so the ceiling is the whole kelishuv's value rather than
-        the goods shipped so far — but you still cannot pay past the agreement."""
-        return self.total_value - self.paid_total
+        """How much more will be paid on this kelishuv. Paying before a yuk is sent
+        is normal (avans), so the ceiling is the whole kelishuv rather than the
+        goods shipped so far — but measured at what the goods really cost, so the
+        figure on screen and the Qolgan/Yakunlangan filter can never disagree."""
+        return self.expected_value - self.paid_total
 
     @property
     def is_settled(self):
-        """Yopilgan: every kg has gone out AND the partner is paid off. Anything
+        """Yopilgan: every kg has gone out AND nothing is left to pay. Anything
         else is still open business — goods owed to us, money owed to them, or
-        both — which is what the default Kelishuvlar view shows."""
-        return self.remaining_kg <= 0 and self.debt <= 0
+        both — which is what the default Kelishuvlar view shows.
+
+        Uses payable_left rather than debt so it is the same number the Qolgan
+        to'lov column shows; with every kg shipped the two are equal anyway."""
+        return self.remaining_kg <= 0 and self.payable_left <= 0
 
     def __str__(self):
         # the hamkor is already in the code
@@ -315,6 +325,15 @@ class ContractLine(models.Model):
     @property
     def shipped_value(self):
         return sum((sl.goods_value for sl in self.shipment_lines.all()), Decimal("0"))
+
+    @property
+    def expected_value(self):
+        """What this product will really cost: the trucks that went at the prices
+        they actually went at, plus whatever is still to come at the agreed narx.
+        The kelishuv's own total is only the estimate — a truck may be priced up
+        or down against it."""
+        left = self.remaining_kg if self.remaining_kg > 0 else Decimal("0")
+        return (self.shipped_value + left * self.price).quantize(Decimal("0.01"))
 
     def __str__(self):
         return f"{self.brand} · {self.kg} kg"
