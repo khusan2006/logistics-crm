@@ -9,7 +9,7 @@ from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, 
 
 def _contract(db):
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-07-28")
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01")
     _contract_obj_line = ContractLine.objects.create(
         contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
     return _contract_obj

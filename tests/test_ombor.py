@@ -5,7 +5,7 @@ from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, 
 
 def _contract(kg="1000", brand="LLDPE"):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01")
     _contract_obj_line = ContractLine.objects.create(
         contract=_contract_obj, brand=brand, kg=Decimal(kg), price=Decimal("1.00"))
     return _contract_obj
@@ -63,7 +63,7 @@ def test_admin_sees_lot_brand(admin_client, db):
 def _lot(brand="LLDPE", kg="400", price=None, arrived="2026-07-16", partner="Pars"):
     """One arrived lot of `brand`, optionally at its own USD/kg (its landed cost)."""
     p = Partner.objects.create(name=partner, phone="1", city="T")
-    c = Contract.objects.create(partner=p, created="2026-07-01", deadline="2026-08-01")
+    c = Contract.objects.create(partner=p, created="2026-07-01")
     c_line = ContractLine.objects.create(
         contract=c, brand=brand, kg=Decimal("100000"), price=Decimal("1.00"))
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=arrived)

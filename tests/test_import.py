@@ -90,7 +90,6 @@ def test_imports_partners_customers_contracts(tmp_path):
     assert line.kg == 5000
     assert line.price == 1.25
     assert contract.created == date(2026, 1, 10)
-    assert contract.deadline == date(2026, 3, 1)
     assert contract.note == "birinchi partiya"
 
 

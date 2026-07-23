@@ -17,7 +17,7 @@ Usage:
 Sheets (all optional — a missing sheet is skipped, not an error):
     Partners             name, phone, city, note
     Customers            name, phone, address, note
-    Contracts            partner, brand, kg, price, created, deadline, note
+    Contracts            partner, brand, kg, price, created, note
     CustomerOpeningDebt  customer, amount   (reported only — see doc for why)
 
 Bad rows (e.g. a blank required field) are skipped with a logged warning; the
@@ -201,9 +201,8 @@ class Command(BaseCommand):
             kg, kg_error = _to_decimal(row.get("kg"), row_num, "kg")
             price, price_error = _to_decimal(row.get("price"), row_num, "price")
             created_date, created_error = _to_date(row.get("created"), row_num, "created")
-            deadline_date, deadline_error = _to_date(row.get("deadline"), row_num, "deadline")
 
-            error = kg_error or price_error or created_error or deadline_error
+            error = kg_error or price_error or created_error
             if error:
                 self.stdout.write(self.style.WARNING(f"  Contracts {error} — o'tkazib yuborildi"))
                 skipped += 1
@@ -214,7 +213,6 @@ class Command(BaseCommand):
             contract, was_created = Contract.objects.get_or_create(
                 partner=partner, lines__brand=brand, created=created_date,
                 defaults={
-                    "deadline": deadline_date,
                     "note": row.get("note") or "",
                 },
             )

@@ -6,7 +6,7 @@ from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, 
 
 def test_dashboard_kpis(admin_client, db):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    c = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    c = Contract.objects.create(partner=partner, created="2026-07-01")
     c_line = ContractLine.objects.create(
         contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"))
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first(), eta=date.today() - timedelta(days=2))

@@ -19,7 +19,7 @@ def make_contract(partner=None, brand="LLDPE", kg="1000", price="1.00", **kw):
     """A kelishuv with a single product. Returns the Contract."""
     if partner is None:
         partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    fields = {"created": "2026-07-01", "deadline": "2026-08-01"}
+    fields = {"created": "2026-07-01"}
     fields.update(kw)
     contract = Contract.objects.create(partner=partner, **fields)
     ContractLine.objects.create(contract=contract, brand=brand,

@@ -10,7 +10,7 @@ def _contract(db, ship_kg="1000"):
     """Contract with (by default) its full kg already on a truck — the payable
     to the partner accrues per shipped truck, so tests that pay need shipped value."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
-    c = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-07-28")
+    c = Contract.objects.create(partner=partner, created="2026-07-01")
     c_line = ContractLine.objects.create(
         contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
     if ship_kg:

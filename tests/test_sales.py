@@ -13,7 +13,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
     """An arrived 10,000 kg lot @ contract price $1.00/kg + $2,000 expenses
     => landed cost = 1.00 + 2000/10000 = $1.20/kg."""
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract = Contract.objects.create(partner=partner, created="2026-07-01")
     contract_line = ContractLine.objects.create(
         contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(contract_price))
     shipment = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")
@@ -26,7 +26,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
 
 def _non_arrived_lot(kg="1000", brand="HDPE"):
     partner = Partner.objects.create(name="Basir", phone="1", city="T")
-    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract = Contract.objects.create(partner=partner, created="2026-07-01")
     contract_line = ContractLine.objects.create(
         contract=contract, brand=brand, kg=Decimal(kg), price=Decimal("1.00"))
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), sent="2026-07-05", eta="2026-08-01")
@@ -211,7 +211,7 @@ def test_ombor_sotish_button_present_for_available_lot(admin_client, db):
 def _second_lot(brand="LLDPE", kg="5000", price="1.50", arrived="2026-07-20"):
     """A NEWER arrived lot of the same brand from another partner."""
     partner = Partner.objects.create(name="Arya", phone="2", city="T")
-    contract = Contract.objects.create(partner=partner, created="2026-07-10", deadline="2026-08-10")
+    contract = Contract.objects.create(partner=partner, created="2026-07-10")
     contract_line = ContractLine.objects.create(
         contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(price))
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-12", arrived=arrived, container="MSCU-2")
@@ -262,7 +262,7 @@ def test_ombor_listed_oldest_arrival_first(admin_client, db):
 def _lot_at(brand, kg, price, arrived):
     """An arrived lot of `brand` carrying its own USD/kg."""
     p = Partner.objects.create(name=f"P-{price}", phone="1", city="T")
-    c = Contract.objects.create(partner=p, created="2026-07-01", deadline="2026-08-01")
+    c = Contract.objects.create(partner=p, created="2026-07-01")
     c_line = ContractLine.objects.create(
         contract=c, brand=brand, kg=Decimal("100000"), price=Decimal("1.00"))
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.arrival(), arrived=arrived)

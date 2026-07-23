@@ -38,7 +38,7 @@ def test_anonymous_redirected(client, db):
 @pytest.fixture
 def crm_objects(db):
     partner = Partner.objects.create(name="Pars Polymer", phone="+998900000000", city="Tehran")
-    contract = Contract.objects.create(partner=partner, created=date(2026, 1, 1), deadline=date(2026, 8, 1))
+    contract = Contract.objects.create(partner=partner, created=date(2026, 1, 1))
     contract_line = ContractLine.objects.create(
         contract=contract, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.5"))
     payment = SupplierPayment.objects.create(contract=contract, amount=Decimal("500"))

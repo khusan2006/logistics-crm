@@ -32,7 +32,6 @@ hidden field); the chips themselves are links, so the two never fight over the
       <option value="sent"{% if delivery == "sent" %} selected{% endif %}>Yakunlangan</option>
     </select>
   </label>
-  <label><input type="checkbox" name="overdue" value="1"{% if overdue %} checked{% endif %}> Muddati o'tgan</label>
   <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
   {% if has_filters or q %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
 </form>

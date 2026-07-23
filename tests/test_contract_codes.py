@@ -17,7 +17,7 @@ def _partner(name):
 
 
 def _contract(partner, brand="LLDPE 209AA", **kw):
-    defaults = dict(kg="50000", price="0.96", created="2026-07-01", deadline="2026-07-28")
+    defaults = dict(kg="50000", price="0.96", created="2026-07-01")
     defaults.update(kw)
     return make_contract(partner=partner, brand=brand, **defaults)
 
@@ -222,7 +222,7 @@ def test_audit_note_names_the_code(admin_client, db):
     umumiy), shuning uchun kod o'qiladigan izohga yoziladi."""
     sobir = _partner("Sobir")
     admin_client.post("/contracts/new/", {
-        "partner": sobir.pk, "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        "partner": sobir.pk, "created": "2026-07-04", "note": "",
         **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert "sobir-1" in AuditLog.objects.get(target_type="Kelishuv").summary

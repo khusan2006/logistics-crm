@@ -10,7 +10,7 @@ from crm.models import (
 @pytest.fixture
 def shipment(db):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract = Contract.objects.create(partner=partner, created="2026-07-01")
     contract_line = ContractLine.objects.create(
         contract=contract, brand="LLDPE", kg=Decimal("20000"), price=Decimal("1.00"))
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first())

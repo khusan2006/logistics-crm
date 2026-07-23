@@ -16,7 +16,7 @@ def partner():
 
 @pytest.fixture
 def contract(partner):
-    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01")
     _contract_obj_line = ContractLine.objects.create(
         contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"))
     return _contract_obj

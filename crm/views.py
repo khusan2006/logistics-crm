@@ -256,7 +256,6 @@ def contract_list(request):
     # Unfinished business is the working view, so it is what you land on; "Hammasi"
     # (delivery="all") is the deliberate step out of it, not the default.
     delivery = request.GET.get("delivery", "open").strip()
-    overdue = request.GET.get("overdue") == "1"
 
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
@@ -278,9 +277,6 @@ def contract_list(request):
         # Qolgan = still owed goods OR still owed money — a kelishuv shipped in full
         # but not paid off is unfinished business too.
         rows = [c for c in rows if not c.is_settled]
-    if overdue:
-        today = timezone.localdate()
-        rows = [c for c in rows if c.deadline < today and c.remaining_kg > 0]
 
     # Chip counts are faceted: computed before the payment filter narrows the rows,
     # so each chip shows what picking it would yield.
@@ -294,9 +290,9 @@ def contract_list(request):
     page = Paginator(rows, 30).get_page(request.GET.get("page"))
     return render(request, "crm/contract_list.html", {
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
-        "delivery": delivery, "overdue": overdue, "pay_tabs": pay_tabs,
+        "delivery": delivery, "pay_tabs": pay_tabs,
         "partners": Partner.objects.all(),
-        "has_filters": bool(pay or partner_id or delivery != "open" or overdue),
+        "has_filters": bool(pay or partner_id or delivery != "open"),
     })
 
 

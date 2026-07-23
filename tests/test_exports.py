@@ -31,7 +31,7 @@ EXPORT_URLS = {
 
 def _contract(partner=None, brand="LLDPE", created="2026-07-01"):
     partner = partner or Partner.objects.create(name="Pars", phone="1", city="T")
-    _contract_obj = Contract.objects.create(partner=partner, created=created, deadline="2026-08-01")
+    _contract_obj = Contract.objects.create(partner=partner, created=created)
     _contract_obj_line = ContractLine.objects.create(
         contract=_contract_obj, brand=brand, kg=Decimal("1000"), price=Decimal("1"))
     return _contract_obj

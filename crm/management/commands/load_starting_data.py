@@ -113,7 +113,7 @@ class Command(BaseCommand):
         for row in CONTRACTS:
             contract = Contract.objects.create(
                 partner=partners[row["partner"]],
-                created=_d(row["created"]), deadline=_d(row["deadline"]),
+                created=_d(row["created"]),
                 created_by=owner,
             )
             contracts[row["brand"]] = ContractLine.objects.create(

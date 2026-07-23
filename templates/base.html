@@ -997,29 +997,6 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
-  // Shipment form: prefill Taxminiy kelish from the selected kelishuv, whose
-  // option carries data-deadline (see ContractChoiceSelect). On load only empty
-  // fields are filled (so editing a saved yuk isn't clobbered); on an explicit
-  // change the date is refreshed from the newly chosen kelishuv.
-  (function () {
-    function apply(sel, overwrite) {
-      var o = sel.options[sel.selectedIndex]; if (!o) { return; }
-      var eta = document.getElementById('id_eta');
-      var dl = o.getAttribute('data-deadline');
-      if (eta && (overwrite || !eta.value)) { eta.value = dl || (overwrite ? '' : eta.value); }
-    }
-    function enhance(root) {
-      (root || document).querySelectorAll('select[data-contract-source]').forEach(function (sel) {
-        if (sel.dataset.contractReady) { return; }
-        sel.dataset.contractReady = '1';
-        sel.addEventListener('change', function () { apply(sel, true); });
-        if (sel.value) { apply(sel, false); }
-      });
-    }
-    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
-    enhance(document);   // the form is also reachable as a full page (no-JS fallback)
-  })();
-
   // Repeating product rows (Mahsulotlar) on the kelishuv and yuk forms. Adds and
   // removes rows client-side by cloning the formset's empty_form and rewriting its
   // __prefix__ indexes; saved rows are hidden and flagged DELETE instead of being

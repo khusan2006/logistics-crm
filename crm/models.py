@@ -147,7 +147,6 @@ class Contract(models.Model):
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
     code_number = models.PositiveIntegerField(editable=False)
     created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
-    deadline = models.DateField("Yetkazish muddati")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, blank=True, related_name="contracts",

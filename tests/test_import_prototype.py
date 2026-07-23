@@ -23,9 +23,9 @@ SAMPLE = {
         {"id": 222, "name": "sobir", "phone": "+998 33 095 50 50", "city": "teh", "note": ""},
     ],
     "contracts": [
-        {"id": 1, "partnerId": 111, "brand": "2102 kampaund", "created": "2026-07-01", "kg": 48000, "price": 1, "deadline": "2026-07-31"},
-        {"id": 2, "partnerId": 111, "brand": "2102 kampaund", "created": "2026-07-02", "kg": 72000, "price": 1.1, "deadline": "2026-07-30"},
-        {"id": 3, "partnerId": 222, "brand": "2102 repak", "created": "2026-07-02", "kg": 50000, "price": 1.455, "deadline": "2026-07-10"},
+        {"id": 1, "partnerId": 111, "brand": "2102 kampaund", "created": "2026-07-01", "kg": 48000, "price": 1},
+        {"id": 2, "partnerId": 111, "brand": "2102 kampaund", "created": "2026-07-02", "kg": 72000, "price": 1.1},
+        {"id": 3, "partnerId": 222, "brand": "2102 repak", "created": "2026-07-02", "kg": 50000, "price": 1.455},
     ],
     "payments": [
         {"contractId": 1, "amount": 48000, "date": "2026-07-06", "method": "Naqd"},
@@ -86,7 +86,7 @@ def test_unknown_method_rolls_back(tmp_path, db):
     bad = {
         "partners": [{"id": 1, "name": "x"}],
         "contracts": [{"id": 1, "partnerId": 1, "brand": "b", "created": "2026-07-01",
-                       "kg": 1, "price": 1, "deadline": "2026-07-02"}],
+                       "kg": 1, "price": 1}],
         "payments": [{"contractId": 1, "amount": 1, "date": "2026-07-01", "method": "Bitcoin"}],
         "shipments": [],
     }
@@ -138,8 +138,7 @@ def test_curly_apostrophes_still_match(tmp_path, db):
     curly = {
         "partners": [{"id": 1, "name": "Pars Polymer Co."}],
         "contracts": [{"id": 101, "partnerId": 1, "brand": "LLDPE 209AA",
-                       "kg": 50000, "price": 0.96, "created": "2026-07-28",
-                       "deadline": "2026-07-28"}],
+                       "kg": 50000, "price": 0.96, "created": "2026-07-28"}],
         "payments": [{"contractId": 101, "amount": 18000, "date": "2026-07-02",
                       "method": "Bank o‘tkazmasi"}],
         "shipments": [{"contractId": 101, "kg": 20000, "status": "Yo‘lda",
@@ -179,8 +178,7 @@ SCHEMA_B = {  # "agreements" generation: grade / type / sentDate / numeric costs
     "partners": [{"id": "P-100001", "name": "Pars Polymer Co.", "phone": "+98 912 345 67 89",
                   "city": "Tehron", "note": "HDPE va LLDPE"}],
     "agreements": [{"id": "K-200001", "partnerId": "P-100001", "grade": "HDPE 7000F",
-                    "kg": 50000, "price": 0.91, "total": 45500, "date": "2026-07-01",
-                    "deadline": "2026-07-28", "note": "2 ta mashinada"}],
+                    "kg": 50000, "price": 0.91, "total": 45500, "date": "2026-07-01", "note": "2 ta mashinada"}],
     "payments": [{"id": "T-300001", "agreementId": "K-200001", "amount": 15000,
                   "date": "2026-07-02", "type": "Bank o‘tkazmasi", "note": "1-to‘lov"}],
     "shipments": [{"id": "Y-400002", "agreementId": "K-200001", "kg": 18000,
@@ -193,8 +191,7 @@ SCHEMA_A = {  # gl_* generation: separate keys, no expenses at all
     "gl_partners": [{"id": "P178", "name": "SARDOR", "phone": "558882552255",
                      "city": "SAMARQAND", "note": ""}],
     "gl_agreements": [{"id": "A490", "partnerId": "P178", "grade": "2102",
-                       "date": "2026-07-01", "kg": 100000, "price": 1,
-                       "deadline": "2026-07-30"}],
+                       "date": "2026-07-01", "kg": 100000, "price": 1}],
     "gl_payments": [{"id": 1784, "agreementId": "A490", "amount": 25000,
                      "date": "2026-07-30", "type": "Naqd", "note": ""}],
     "gl_shipments": [{"id": 1784, "agreementId": "A490", "kg": 25000,

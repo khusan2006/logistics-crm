@@ -12,7 +12,7 @@ from crm.models import (
 def _contract(**kw):
     partner = kw.pop("partner", None) or Partner.objects.create(name="Pars", phone="1", city="Tehron")
     defaults = dict(brand="LLDPE 209AA", kg="50000", price="0.96",
-                    created="2026-07-01", deadline="2026-07-28")
+                    created="2026-07-01")
     defaults.update(kw)
     return make_contract(partner=partner, **defaults)
 
@@ -44,21 +44,12 @@ def test_total_value(db):
 def test_create_via_view(admin_client, admin_user):
     p = Partner.objects.create(name="Arya", phone="1", city="Shiroz")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "created": "2026-07-04", "deadline": "2026-08-05", "note": "",
+        "partner": p.pk, "created": "2026-07-04", "note": "",
         **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert resp.status_code == 302
     c = Contract.objects.get(lines__brand="HDPE 7000F")
     assert c.created_by == admin_user
-
-
-def test_deadline_before_created_rejected(admin_client):
-    p = Partner.objects.create(name="X", phone="1", city="Y")
-    resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
-        **line_data({"brand": "B", "kg": "10", "price": "1"}),
-    })
-    assert resp.status_code == 200 and not Contract.objects.exists()
 
 
 def test_create_contract_modal_get_returns_partial(admin_client):
@@ -74,7 +65,7 @@ def test_create_contract_modal_post_valid_returns_204_with_redirect(admin_client
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "created": "2026-07-05", "deadline": "2026-08-01", "note": "",
+            "partner": p.pk, "created": "2026-07-05", "note": "",
             **line_data({"brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
@@ -89,8 +80,8 @@ def test_create_contract_modal_post_invalid_returns_422(admin_client):
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "created": "2026-07-10", "deadline": "2026-07-01", "note": "",
-            **line_data({"brand": "B", "kg": "10", "price": "1"}),
+            "partner": p.pk, "created": "2026-07-10", "note": "",
+            **line_data({"brand": "B", "kg": "0", "price": "1"}),   # kg musbat emas
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
@@ -177,21 +168,6 @@ def test_finished_kelishuvlar_are_hidden_by_default(admin_client, db):
     assert set(_listed(admin_client, delivery="")[1]) == {done.pk, open_one.pk}
 
 
-def test_filter_overdue_needs_undelivered_kg(admin_client, db):
-    """Muddati o'tgan chases what is still owed in goods — a kelishuv whose trucks
-    all went out is not late even if its deadline has passed."""
-    today = timezone.localdate()
-    late = _contract(kg=Decimal("100"), created=today - timedelta(days=30),
-                     deadline=today - timedelta(days=1))
-    _ship(late, kg="40")
-    done = _contract(kg=Decimal("100"), created=today - timedelta(days=30),
-                     deadline=today - timedelta(days=1))
-    _ship(done, kg="100")
-    _contract(kg=Decimal("100"), created=today, deadline=today + timedelta(days=5))
-
-    assert _listed(admin_client, overdue="1")[1] == [late.pk]
-
-
 def test_filters_combine_with_search(admin_client, db):
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     hit = _contract(partner=partner, brand="LLDPE 209AA")
@@ -237,3 +213,25 @@ def test_dropdowns_name_every_marka(db):
     assert c.brand_summary == "2102 repak, ftor oq"
     assert str(c) == f"{c.code} · 2102 repak, ftor oq"
 
+
+
+def test_kelishuv_option_shows_the_price(db):
+    """Yuk ochayotganda narx ham ko'rinsin — bitta mahsulot bo'lsa o'z narxi,
+    bir nechta bo'lsa oralig'i."""
+    from crm.forms import contract_option_label
+
+    one = _contract(kg="1000", price="1.25")
+    assert "1.25 $/kg" in contract_option_label(one)
+
+    many = _contract(kg="1000", price="1.00")
+    ContractLine.objects.create(contract=many, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("2.50"))
+    assert "1–2.5 $/kg" in contract_option_label(many)
+
+
+def test_kelishuv_has_no_deadline(db):
+    """Yetkazish muddati olib tashlandi."""
+    from crm.forms import ContractForm
+
+    assert not hasattr(_contract(), "deadline")
+    assert "deadline" not in ContractForm().fields

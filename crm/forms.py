@@ -41,14 +41,13 @@ class ContractForm(forms.ModelForm):
         widget=forms.NumberInput(attrs={"data-som-rate": "", "step": "1",
                                         "placeholder": "Masalan: 12650"}))
 
-    field_order = ["partner", "som_rate", "created", "deadline", "note"]
+    field_order = ["partner", "som_rate", "created", "note"]
 
     class Meta:
         model = Contract
-        fields = ["partner", "created", "deadline", "note"]
+        fields = ["partner", "created", "note"]
         widgets = {
             "created": forms.DateInput(attrs={"type": "date"}),
-            "deadline": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 3}),
         }
 
@@ -57,18 +56,19 @@ class ContractForm(forms.ModelForm):
         if not self.instance.pk:  # new contract → default the date to today
             self.fields["created"].initial = timezone.localdate
 
-    def clean(self):
-        cleaned = super().clean()
-        created, deadline = cleaned.get("created"), cleaned.get("deadline")
-        if created and deadline and deadline < created:
-            self.add_error("deadline", "Muddat kelishuv sanasidan oldin bo'la olmaydi")
-        return cleaned
-
 
 def contract_option_label(contract):
-    """Kelishuv <option>: code, hamkor, products, and what is still owed."""
+    """Kelishuv <option>: code, hamkor, products, what is still owed, and the
+    agreed price — a range when the products are priced differently."""
+    prices = sorted({ln.price for ln in contract.lines.all()})
+    if not prices:
+        price = "—"
+    elif len(prices) == 1:
+        price = f"{_clean_number(prices[0])} $/kg"
+    else:
+        price = f"{_clean_number(prices[0])}–{_clean_number(prices[-1])} $/kg"
     return (f"{contract.code} · {contract.partner.name} · {contract.brand_summary} · "
-            f"{_clean_number(contract.remaining_kg)} kg qolgan")
+            f"{_clean_number(contract.remaining_kg)} kg qolgan · {price}")
 
 
 class ContractLineForm(forms.ModelForm):
@@ -184,18 +184,6 @@ def _clean_number(value):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-class ContractChoiceSelect(forms.Select):
-    """A contract <select> whose options carry data-deadline, so the shipment form's
-    JS can prefill Taxminiy kelish from the chosen kelishuv."""
-
-    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
-        option = super().create_option(name, value, label, selected, index, subindex, attrs)
-        instance = getattr(value, "instance", None)  # blank choice has a plain "" value
-        if instance is not None and instance.deadline:
-            option["attrs"]["data-deadline"] = instance.deadline.isoformat()
-        return option
-
-
 class ContractLineChoiceSelect(forms.Select):
     """A product <select> listing every kelishuv's products at once. Each option
     carries the kelishuv it belongs to, its qolgan kg and its agreed price, so the
@@ -219,7 +207,7 @@ class ShipmentForm(forms.ModelForm):
         fields = ["contract", "status", "sent", "eta", "responsible",
                   "driver_name", "driver_phone", "transport", "container", "note"]
         widgets = {
-            "contract": ContractChoiceSelect(attrs={"data-contract-source": ""}),
+            "contract": forms.Select(attrs={"data-contract-source": ""}),
             "sent": forms.DateInput(attrs={"type": "date"}),
             "eta": forms.DateInput(attrs={"type": "date"}),
             "note": forms.Textarea(attrs={"rows": 2}),

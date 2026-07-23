@@ -234,7 +234,6 @@ class Command(BaseCommand):
             contract = Contract.objects.create(
                 partner=partner,
                 created=_d(_first(row, "created", "date")),
-                deadline=_d(row.get("deadline")),
                 note=row.get("note", ""),
                 created_by=owner,
             )

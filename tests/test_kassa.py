@@ -7,7 +7,7 @@ from crm.models import (
 
 def _contract(partner_name="Pars"):
     partner = Partner.objects.create(name=partner_name, phone="1", city="T")
-    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01")
     _contract_obj_line = ContractLine.objects.create(
         contract=_contract_obj, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1"))
     return _contract_obj
@@ -93,7 +93,7 @@ def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
     from crm.models import Contract, Partner, Shipment, ShipmentStatus, SupplierPayment
 
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    c = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    c = Contract.objects.create(partner=partner, created="2026-07-01")
     c_line = ContractLine.objects.create(
         contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())

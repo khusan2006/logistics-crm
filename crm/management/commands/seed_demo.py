@@ -114,7 +114,6 @@ class Command(BaseCommand):
         c1, _ = Contract.objects.get_or_create(
             partner=partners["pars"], created=today - timedelta(days=60),
             defaults={
-                "deadline": today + timedelta(days=10),
                 "note": "Demo kelishuv", "created_by": admin,
             },
         )
@@ -125,7 +124,6 @@ class Command(BaseCommand):
         c2, _ = Contract.objects.get_or_create(
             partner=partners["jam"], created=today - timedelta(days=30),
             defaults={
-                "deadline": today + timedelta(days=20),
                 "note": "Demo kelishuv", "created_by": admin,
             },
         )

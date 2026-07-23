@@ -7,7 +7,7 @@ from crm.models import (
 
 def _shipment():
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract = Contract.objects.create(partner=partner, created="2026-07-01")
     contract_line = ContractLine.objects.create(
         contract=contract, brand="LLDPE", kg=Decimal("5000"), price=Decimal("1"))
     _ship_obj = Shipment.objects.create(contract=contract, status=ShipmentStatus.objects.first(), transport="OLD-1")

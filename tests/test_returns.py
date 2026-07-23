@@ -13,7 +13,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
     """An arrived 10,000 kg lot @ contract price $1.00/kg + $2,000 expenses
     => landed cost = 1.00 + 2000/10000 = $1.20/kg."""
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    contract = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    contract = Contract.objects.create(partner=partner, created="2026-07-01")
     contract_line = ContractLine.objects.create(
         contract=contract, brand=brand, kg=Decimal(kg), price=Decimal(contract_price))
     shipment = Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival(), sent="2026-07-05", eta="2026-07-15", arrived="2026-07-16", transport="01A111AA", container="MSCU-1")

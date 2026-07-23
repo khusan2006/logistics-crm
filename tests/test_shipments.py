@@ -7,7 +7,7 @@ from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, 
 
 def _contract(kg="1000"):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
-    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01", deadline="2026-08-01")
+    _contract_obj = Contract.objects.create(partner=partner, created="2026-07-01")
     _contract_obj_line = ContractLine.objects.create(
         contract=_contract_obj, brand="LLDPE", kg=Decimal(kg), price=Decimal("1.00"))
     return _contract_obj
@@ -176,12 +176,12 @@ def test_shipment_transport_accepts_uz_plate(db):
 
 
 def test_shipment_contract_select_carries_prefill_data(db):
-    """The kelishuv <select> exposes the deadline (to prefill Taxminiy kelish) and
-    each product option carries its qolgan kg, so the form JS can prefill the row."""
+    """Each product option carries its qolgan kg and narx, so the form JS can
+    filter the list by kelishuv and prefill the row."""
     from crm.forms import ShipmentForm, ShipmentLineForm
-    _contract()  # has kg (remaining) and a deadline
+    _contract()
     head, row = str(ShipmentForm()), str(ShipmentLineForm())
-    assert "data-deadline" in head and "data-contract-source" in head
+    assert "data-contract-source" in head
     assert "data-remaining" in row and "data-line-source" in row
 
 
