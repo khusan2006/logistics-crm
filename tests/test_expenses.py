@@ -7,12 +7,12 @@ from crm.models import (
 )
 
 
-def rows(*entries, shipment):
-    """POST payload for the xarajat row formset."""
-    data = {"shipment": shipment.pk,
+def rows(*entries, shipment, date="2026-07-10"):
+    """POST payload for the xarajat modal: one shared sana plus the rows."""
+    data = {"shipment": shipment.pk, "date": date,
             "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
             "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
-    defaults = {"date": "2026-07-10", "category": "customs", "currency": "usd",
+    defaults = {"category": "customs", "currency": "usd",
                 "amount": "0", "exchange_rate": "", "method": "cash", "note": ""}
     for i, entry in enumerate(entries):
         for key, value in {**defaults, **entry}.items():
@@ -93,8 +93,22 @@ def test_several_xarajatlar_save_from_one_modal(admin_client, shipment):
 
 
 def test_an_empty_xarajat_modal_is_rejected(admin_client, shipment):
+    resp = admin_client.post("/expenses/new/", rows({"amount": ""}, shipment=shipment))
+    assert resp.status_code == 200 and not ShipmentExpense.objects.exists()
+
+
+def test_the_shared_sana_lands_on_every_row(admin_client, shipment):
+    """Sana bir marta so'raladi va barcha qatorlarga yoziladi."""
+    admin_client.post("/expenses/new/", rows(
+        {"category": "transport", "amount": "500"},
+        {"category": "customs", "amount": "120"},
+        shipment=shipment, date="2026-08-02"))
+    assert {e.date.isoformat() for e in ShipmentExpense.objects.all()} == {"2026-08-02"}
+
+
+def test_the_sana_is_required(admin_client, shipment):
     resp = admin_client.post("/expenses/new/", rows(
-        {"date": "", "amount": ""}, shipment=shipment))
+        {"amount": "500"}, shipment=shipment, date=""))
     assert resp.status_code == 200 and not ShipmentExpense.objects.exists()
 
 

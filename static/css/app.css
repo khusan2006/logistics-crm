@@ -1894,7 +1894,7 @@ ul.errorlist li::before { content: "⚠ "; }
    usuli together on the second — the three that describe how the money moved. */
 @media (min-width: 560px) {
   .lineset--expense .lineset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
-  .lineset--expense .lineset-field--date { grid-column: span 2; }
+  .lineset--expense .lineset-field--amount { grid-column: span 3; }
   .lineset--expense .lineset-field--rm { grid-row: 1; grid-column: 4; }
   .lineset--expense .lineset-field--note { grid-column: span 2; }
   /* The rate only appears for so'm; on its own line it cannot squeeze the three

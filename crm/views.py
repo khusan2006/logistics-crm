@@ -1085,6 +1085,7 @@ def expense_create(request):
                         continue
                     expense = form.save(commit=False)
                     expense.shipment = shipment
+                    expense.date = target.cleaned_data["date"]
                     expense.amount = form.cleaned_data["amount"]
                     expense.amount_original = form.cleaned_data["amount_original"]
                     expense.exchange_rate = form.cleaned_data["exchange_rate"]

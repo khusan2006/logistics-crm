@@ -1033,6 +1033,10 @@
       total.value = index + 1;
       syncRemoveButtons(set);
       filterLineOptions(set);
+      // A cloned row has never been through the field enhancers, so its currency
+      // toggle (and phone/plate helpers) would sit inert — the rate field stayed
+      // visible on a Dollar row. Same event the modal loader fires.
+      document.dispatchEvent(new CustomEvent('modal:loaded', { detail: row }));
       var first = row.querySelector('input, select');
       if (first) { first.focus(); }
     }

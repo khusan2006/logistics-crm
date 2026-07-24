@@ -679,27 +679,30 @@ class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
 
 
 class ExpenseTargetForm(forms.Form):
-    """Carries the yuk for a multi-row xarajat modal — the rows themselves say
-    nothing about which load they belong to, and the modal posts to a path with
-    no query string."""
+    """The header of a multi-row xarajat modal: which yuk, and the date they all
+    share. Xarajatlar are entered per trip, so repeating the date on every row
+    only invited them to disagree.
+
+    The yuk rides here because the rows say nothing about which load they belong
+    to and the modal posts to a path with no query string."""
 
     shipment = forms.ModelChoiceField(queryset=Shipment.objects.all(),
                                       widget=forms.HiddenInput)
+    date = forms.DateField(label="Sana", widget=date_widget(),
+                           initial=timezone.localdate)
 
 
 class ShipmentExpenseRowForm(MoneyEntryFormMixin, forms.ModelForm):
     """One xarajat row. Ordered so Turkum / Valyuta / To'lov usuli land on a line
     of their own — see .lineset--expense in the stylesheet."""
 
-    field_order = ["date", "amount", "category", "currency", "method",
-                   "exchange_rate", "note"]
+    field_order = ["amount", "category", "currency", "method", "exchange_rate", "note"]
 
     class Meta:
         model = ShipmentExpense
-        fields = ["date", "category", "currency", "amount", "exchange_rate",
-                  "method", "note"]
-        widgets = {"date": date_widget(),
-                   "note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+        # No date: it is shared, so the modal asks once in ExpenseTargetForm.
+        fields = ["category", "currency", "amount", "exchange_rate", "method", "note"]
+        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
 
 
 class BaseExpenseFormSet(forms.BaseModelFormSet):
