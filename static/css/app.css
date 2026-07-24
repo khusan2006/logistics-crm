@@ -1866,8 +1866,10 @@ ul.errorlist li::before { content: "⚠ "; }
 .lineset-field[hidden] { display: none; }
 .lineset-field > span { font-size: 12px; color: var(--text-muted); }
 .lineset-field input, .lineset-field select { width: 100%; }
-.lineset-field--rm > span { display: none; }
-.lineset-rm { padding: 0 14px; line-height: 34px; }
+.lineset-field--rm > span { visibility: hidden; }
+/* Same box model as an input (9px padding + 21px line-height + borders = 41px)
+   so the button's baseline and bottom line up with the field beside it. */
+.lineset-rm { padding: 9px 14px; line-height: 21px; }
 .lineset-rm[disabled] { opacity: 0.35; cursor: not-allowed; }
 .lineset-del { display: none; }        /* the − button drives DELETE */
 .lineset-add { margin-top: 10px; }
@@ -1878,7 +1880,7 @@ ul.errorlist li::before { content: "⚠ "; }
     grid-template-columns: 1fr 1fr auto;
   }
   .lineset-field--brand, .lineset-field--contract_line { grid-column: 1 / -1; }
-  .lineset-field--rm { align-self: end; }
+
 }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
