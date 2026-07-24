@@ -57,6 +57,16 @@ class ContractForm(forms.ModelForm):
             self.fields["created"].initial = timezone.localdate
 
 
+def _keep_if(queryset, predicate, keep_pk=None):
+    """Narrow a select to rows the predicate accepts — plus one already-chosen row
+    kept regardless, so editing an entry whose kelishuv has since closed does not
+    silently drop it. The predicate reads Python properties (remaining_kg,
+    payable_left), so it runs in Python and the result is re-expressed as a pk
+    filter to stay a queryset the field can page and order."""
+    ids = [obj.pk for obj in queryset if predicate(obj) or obj.pk == keep_pk]
+    return queryset.filter(pk__in=ids)
+
+
 def contract_option_label(contract):
     """Kelishuv <option>: code, products, what is still owed, the agreed price —
     a range when the products are priced differently — and the whole agreement.
@@ -249,9 +259,12 @@ class ShipmentForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["contract"].queryset = (
-            Contract.objects.select_related("partner")
-            .prefetch_related("lines__shipment_lines"))
+        # A kelishuv with every kg already on the road has nothing left to load, so
+        # it drops off the new-yuk list — but stays when editing its own yuk.
+        base = (Contract.objects.select_related("partner")
+                .prefetch_related("lines__shipment_lines"))
+        self.fields["contract"].queryset = _keep_if(
+            base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_transport(self):
@@ -295,10 +308,13 @@ class ShipmentLineForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["contract_line"].queryset = (
-            ContractLine.objects.select_related("contract")
-            .prefetch_related("shipment_lines")
-            .order_by("contract__code_slug", "contract__code_number", "position", "id"))
+        # Likewise per product: a fully-shipped line is not offered as a lot, but
+        # the line already on this yuk stays selectable while editing it.
+        base = (ContractLine.objects.select_related("contract")
+                .prefetch_related("shipment_lines")
+                .order_by("contract__code_slug", "contract__code_number", "position", "id"))
+        self.fields["contract_line"].queryset = _keep_if(
+            base, lambda ln: ln.remaining_kg > 0, self.instance.contract_line_id)
         # Everything needed to pick the right row without leaving the dropdown:
         # which kelishuv, which marka, how much is still owed, at what price.
         self.fields["contract_line"].label_from_instance = (
@@ -416,10 +432,13 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
         # The kassa total is driven by this, so the operator should see it named.
         self.fields["amount"].widget.attrs["data-commission-base"] = ""
         # Same rich option as the yuk form: which kelishuv, whose, what marka,
-        # what is still owed in goods and at what price.
-        self.fields["contract"].queryset = (
-            Contract.objects.select_related("partner")
-            .prefetch_related("lines__shipment_lines"))
+        # what is still owed in goods and at what price. A fully-paid kelishuv has
+        # nothing left to pay, so it drops off — but stays when editing its own
+        # to'lov.
+        base = (Contract.objects.select_related("partner")
+                .prefetch_related("lines__shipment_lines", "supplier_payments"))
+        self.fields["contract"].queryset = _keep_if(
+            base, lambda c: c.payable_left > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_commission_percent(self):

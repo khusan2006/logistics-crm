@@ -476,3 +476,41 @@ def test_progress_bar_only_appears_when_a_truck_plan_exists(admin_client, db):
     Contract.objects.filter(pk=c.pk).update(planned_trucks=2)
     html = admin_client.get("/shipments/").content.decode()
     assert "kelishuv-progress" in html and ">1/2<" in html
+
+
+def _codes(field):
+    return sorted(c.code for c in field.queryset)
+
+
+def test_closed_kelishuv_is_not_offered_when_creating_a_yuk(db):
+    """Hamma kg yo'lga chiqqan kelishuv yangi yukda tanlovda ko'rinmaydi."""
+    from crm.forms import ShipmentForm
+
+    open_c = _contract(kg="1000")
+    closed = _contract(kg="1000")
+    make_shipment(contract=closed, kg="1000")          # to'liq yuborilgan → yopiq
+
+    codes = _codes(ShipmentForm().fields["contract"])
+    assert open_c.code in codes and closed.code not in codes
+
+
+def test_editing_a_yuk_keeps_its_own_kelishuv_selectable(db):
+    """Tahrirlashda o'z kelishuvi yopiq bo'lsa ham tanlovda qoladi."""
+    from crm.forms import ShipmentForm
+
+    c = _contract(kg="1000")
+    s = make_shipment(contract=c, kg="1000")           # kelishuvni yopadi
+    assert c.code in _codes(ShipmentForm(instance=s).fields["contract"])
+
+
+def test_fully_shipped_product_is_not_offered_as_a_lot(db):
+    """Mahsulot qatorida ham to'liq yuborilgan mahsulot ko'rinmaydi."""
+    from crm.forms import ShipmentLineForm
+
+    c = _contract(kg="1000")
+    ContractLine.objects.create(contract=c, brand="Bor", kg=Decimal("500"), price=Decimal("1"))
+    make_shipment(contract=c, kg="1000",
+                  contract_line=c.lines.first())        # birinchi mahsulot tugadi
+
+    brands = [ln.brand for ln in ShipmentLineForm().fields["contract_line"].queryset]
+    assert "Bor" in brands and "LLDPE" not in brands

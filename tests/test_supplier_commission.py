@@ -129,3 +129,29 @@ def test_payment_modal_kelishuv_option_shows_narx(admin_client, db):
     assert "jami 1000 kg" in label
     # the code already opens with the hamkor (pars-1), so naming them again stutters
     assert label.lower().count(contract.partner.name.lower()) == 1
+
+
+def _pcodes(field):
+    return sorted(c.code for c in field.queryset)
+
+
+def test_fully_paid_kelishuv_is_not_offered_in_the_tolov_modal(db):
+    """To'liq to'langan kelishuv yangi to'lovda tanlovda ko'rinmaydi."""
+    from crm.forms import SupplierPaymentForm
+
+    owing = _contract(kg="1000", price="1.00")             # 1000$ qarz
+    paid = _contract(kg="1000", price="1.00")
+    SupplierPayment.objects.create(contract=paid, date="2026-07-11",
+                                   amount=Decimal("1000"), method="cash")   # to'liq
+
+    codes = _pcodes(SupplierPaymentForm().fields["contract"])
+    assert owing.code in codes and paid.code not in codes
+
+
+def test_editing_a_tolov_keeps_its_fully_paid_kelishuv_selectable(db):
+    from crm.forms import SupplierPaymentForm
+
+    c = _contract(kg="1000", price="1.00")
+    p = SupplierPayment.objects.create(contract=c, date="2026-07-11",
+                                       amount=Decimal("1000"), method="cash")
+    assert c.code in _pcodes(SupplierPaymentForm(instance=p).fields["contract"])
