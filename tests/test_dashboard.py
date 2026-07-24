@@ -115,15 +115,22 @@ def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):
     assert names == [used.name]
 
 
-def test_truck_plan_lists_what_each_hamkor_still_owes(admin_client, db):
-    """Rejalashtirilgan mashinalardan nechtasi hali jo'natilmagani."""
-    c = make_contract(kg="9000")
-    Contract.objects.filter(pk=c.pk).update(planned_trucks=3)
-    make_shipment(contract=c, kg="100")
+def test_truck_plan_totals_per_hamkor(admin_client, db):
+    """Hamkor bo'yicha jamlanadi: bir hamkorning bir necha kelishuvidagi qolgan
+    mashinalar bitta qatorda."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="T")
+    arya = Partner.objects.create(name="Arya", phone="2", city="S")
+    a = make_contract(partner=pars, kg="9000")
+    b = make_contract(partner=pars, kg="9000")
+    c = make_contract(partner=arya, kg="9000")
+    Contract.objects.filter(pk=a.pk).update(planned_trucks=3)
+    Contract.objects.filter(pk=b.pk).update(planned_trucks=2)
+    Contract.objects.filter(pk=c.pk).update(planned_trucks=1)
+    make_shipment(contract=a, kg="100")                 # 3 dan 1 tasi ketdi
 
-    row = admin_client.get("/").context["truck_plan_rows"][0]
-    assert row["contract"].pk == c.pk
-    assert (row["sent"], row["planned"], row["left"]) == (1, 3, 2)
+    resp = admin_client.get("/")
+    assert resp.context["truck_plan_rows"] == [("Pars", 4), ("Arya", 1)]
+    assert "4 ta" in resp.content.decode()
 
 
 def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, db):
@@ -133,13 +140,3 @@ def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, d
     make_contract(kg="9000")                        # rejasi yo'q
 
     assert admin_client.get("/").context["truck_plan_rows"] == []
-
-
-def test_truck_plan_puts_the_biggest_shortfall_first(admin_client, db):
-    small = make_contract(kg="9000")
-    Contract.objects.filter(pk=small.pk).update(planned_trucks=2)
-    big = make_contract(kg="9000")
-    Contract.objects.filter(pk=big.pk).update(planned_trucks=5)
-
-    rows = admin_client.get("/").context["truck_plan_rows"]
-    assert [r["contract"].pk for r in rows] == [big.pk, small.pk]

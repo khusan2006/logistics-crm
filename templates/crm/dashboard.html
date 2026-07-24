@@ -116,18 +116,9 @@
   <div class="card chart-card">
     <div class="card-head"><h2>Yuboriladigan mashinalar</h2></div>
     {% if truck_plan_rows %}
-    <ul class="truck-plan">
-      {% for row in truck_plan_rows %}
-      <li>
-        <span class="truck-plan-who">
-          <a href="{% url 'contract_list' %}?q={{ row.contract.code|urlencode }}&state=">{{ row.contract.code }}</a>
-          <span class="muted">{{ row.contract.partner.name }}</span>
-        </span>
-        <span class="truck-plan-count">
-          <strong>{{ row.left }}</strong>
-          <span class="muted">{{ row.sent }}/{{ row.planned }}</span>
-        </span>
-      </li>
+    <ul class="status-breakdown-list">
+      {% for name, count in truck_plan_rows %}
+      <li><span>{{ name }}</span><strong>{{ count }} ta</strong></li>
       {% endfor %}
     </ul>
     {% else %}

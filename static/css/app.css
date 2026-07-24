@@ -1917,20 +1917,3 @@ ul.errorlist li::before { content: "⚠ "; }
 .status-breakdown-list span { color: var(--text-muted); }
 .status-breakdown-list .load-id { font-variant-numeric: tabular-nums; }
 .status-breakdown-more { justify-content: flex-end; font-size: 12px; }
-
-/* Yuboriladigan mashinalar: kelishuv, whose it is, and how many trucks are left. */
-.truck-plan { list-style: none; margin: 0; padding: 0; }
-.truck-plan li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 0;
-  border-bottom: 1px dashed var(--border);
-}
-.truck-plan li:last-child { border-bottom: none; }
-.truck-plan-who { display: flex; flex-direction: column; gap: 2px; font-size: 13px; min-width: 0; }
-.truck-plan-who .muted { font-size: 12px; }
-.truck-plan-count { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
-.truck-plan-count strong { font-size: 17px; }
-.truck-plan-count .muted { font-size: 12px; }

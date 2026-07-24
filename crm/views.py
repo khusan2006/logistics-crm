@@ -65,15 +65,16 @@ def dashboard(request):
         for st in ShipmentStatus.objects.all() if st.pk in by_status
     ]
 
-    # What each hamkor still owes in trucks: only kelishuvlar that set a plan and
-    # have not met it yet, biggest shortfall first — that is the chase list.
-    truck_plan_rows = []
+    # What each hamkor still owes in trucks, summed across their kelishuvlar —
+    # read the same way as Yuk holatlari: a hamkor and a count. Only kelishuvlar
+    # that set a plan and have not met it yet count toward it.
+    owed = {}
     for contract in contracts:
         sent, planned = contract.truck_progress
         if planned and planned > sent:
-            truck_plan_rows.append({"contract": contract, "sent": sent,
-                                    "planned": planned, "left": planned - sent})
-    truck_plan_rows.sort(key=lambda r: (-r["left"], r["contract"].pk))
+            name = contract.partner.name
+            owed[name] = owed.get(name, 0) + (planned - sent)
+    truck_plan_rows = sorted(owed.items(), key=lambda kv: (-kv[1], kv[0]))
 
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
