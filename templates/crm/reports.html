@@ -5,9 +5,9 @@
 {% block content %}
 
 <form method="get" class="searchbar" style="margin-bottom: 16px;">
-  <label>Boshlanish<br><input type="date" name="from" value="{{ date_from }}"></label>
-  <label>Tugash<br><input type="date" name="to" value="{{ date_to }}"></label>
-  <label>Hamkor<br>
+  <label>Boshlanish <input type="date" name="from" value="{{ date_from }}"></label>
+  <label>Tugash <input type="date" name="to" value="{{ date_to }}"></label>
+  <label>Hamkor
     <select name="partner">
       <option value="">Barchasi</option>
       {% for p in partners %}
@@ -15,7 +15,7 @@
       {% endfor %}
     </select>
   </label>
-  <label>Marka<br>
+  <label>Marka
     <select name="brand">
       <option value="">Barchasi</option>
       {% for b in brands %}
@@ -23,7 +23,7 @@
       {% endfor %}
     </select>
   </label>
-  <label>Holat<br>
+  <label>Holat
     <select name="status">
       <option value="">Barchasi</option>
       {% for st in statuses %}

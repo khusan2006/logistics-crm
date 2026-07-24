@@ -1042,10 +1042,17 @@ ul.errorlist li::before { content: "⚠ "; }
   flex-wrap: wrap;
 }
 /* Standalone-page search (Mijozlar / Ombor) reuses the toolbar pill component,
-   just a touch wider, so every search box on the app looks identical. */
-.searchbar .toolbar-search { flex: 0 1 420px; }
+   just a touch wider, so every search box on the app looks identical.
+   It starts narrow and grows into whatever the filters leave over, so a page
+   with six filters (To'lovlar) still keeps them all on one row. */
+.searchbar .toolbar-search { flex: 1 1 120px; min-width: 110px; max-width: 420px; }
 .searchbar input[type=text] { max-width: 320px; }
-.searchbar input[type=date] { max-width: 170px; }
+.searchbar input[type=date] { max-width: 122px; }
+.searchbar select { max-width: 140px; }
+/* the Hamkor filter is a searchable combobox, so cap the input it renders too */
+.searchbar .combobox { width: 140px; }
+.searchbar select,
+.searchbar input[type=date] { padding-left: 9px; padding-right: 9px; }
 .searchbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
 
 /* Location cell in the client list: pin icon + address, easy to scan */

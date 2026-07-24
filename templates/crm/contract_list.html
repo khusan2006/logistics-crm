@@ -103,14 +103,4 @@ under Tugallangan, where a kelishuv is fully paid by definition.
 <p class="muted">Kelishuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}
 
-<script>
-// Filtrni tanlash — darhol qo'llanadi (qidiruv maydoni o'zining live-search'i bilan).
-document.querySelectorAll('[data-autosubmit] select, [data-autosubmit] input[type=checkbox]')
-  .forEach(function (el) {
-    el.addEventListener('change', function () {
-      var form = el.closest('form');
-      if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
-    });
-  });
-</script>
 {% endblock %}

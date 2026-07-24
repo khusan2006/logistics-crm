@@ -1442,6 +1442,19 @@
     });
   })();
 
+  // Filtrni tanlash — darhol qo'llanadi. Delegated from the document so every
+  // [data-autosubmit] form gets it; it used to live inside contract_list.html,
+  // so the same markup on other pages silently did nothing.
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el.matches || !el.matches('[data-autosubmit] select, [data-autosubmit] input[type=checkbox], [data-autosubmit] input[type=date]')) {
+      return;
+    }
+    var form = el.closest('form');
+    if (!form) { return; }
+    if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+  });
+
   // Live search: forms marked [data-live-search] submit themselves ~350ms after
   // the user stops typing, so the list filters without a button. Clearing the box
   // submits an empty query (removing the filter). After the reload we restore focus
