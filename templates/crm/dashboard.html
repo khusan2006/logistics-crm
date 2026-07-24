@@ -97,10 +97,17 @@
 
   <div class="card chart-card">
     <div class="card-head"><h2>Yuk holatlari</h2></div>
-    {% if status_counts %}
-    <div class="legend legend-col">
-      {% for s in status_counts %}
-      <span class="badge badge-neutral">{{ s.name }} <strong>{{ s.n }}</strong></span>
+    {% if status_rows %}
+    <div class="status-breakdown">
+      {% for row in status_rows %}
+      <div class="status-breakdown-group">
+        <span class="badge badge-neutral">{{ row.status.name }} <strong>{{ row.total }}</strong></span>
+        <ul class="status-breakdown-list">
+          {% for name, count in row.partners %}
+          <li><span>{{ name }}</span><strong>{{ count }}</strong></li>
+          {% endfor %}
+        </ul>
+      </div>
       {% endfor %}
     </div>
     {% else %}<p class="muted">Hozircha yuklar yo'q.</p>{% endif %}

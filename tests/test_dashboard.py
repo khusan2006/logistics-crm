@@ -85,3 +85,29 @@ def test_kelishuvlar_chart_labels_every_marka(admin_client, db):
                                 price=Decimal("1"))
     html = admin_client.get("/").content.decode()
     assert "2102 repak, ftor oq" in html
+
+
+def test_yuk_holatlari_breaks_down_by_hamkor(admin_client, db):
+    """Har holat ostida qaysi hamkorning nechta yuki borligi ko'rinadi."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="T")
+    arya = Partner.objects.create(name="Arya", phone="2", city="S")
+    loading = ShipmentStatus.objects.first()
+
+    a = make_contract(partner=pars, kg="9000")
+    b = make_contract(partner=arya, kg="9000")
+    make_shipment(contract=a, kg="100", status=loading)
+    make_shipment(contract=a, kg="100", status=loading)
+    make_shipment(contract=b, kg="100", status=loading)
+
+    rows = {r["status"].name: r for r in admin_client.get("/").context["status_rows"]}
+    row = rows[loading.name]
+    assert row["total"] == 3
+    assert row["partners"] == [("Arya", 1), ("Pars", 2)]   # nom bo'yicha tartibda
+
+
+def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):
+    c = make_contract(kg="9000")
+    used = ShipmentStatus.objects.first()
+    make_shipment(contract=c, kg="100", status=used)
+    names = [r["status"].name for r in admin_client.get("/").context["status_rows"]]
+    assert names == [used.name]
