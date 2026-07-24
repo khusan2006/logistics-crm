@@ -489,14 +489,72 @@ def contract_delete(request, pk):
     )
 
 
+# Sorted in SQL — every key here is a real column, unlike the kelishuv list.
+SUPPLIER_PAYMENT_SORTS = [
+    ("-date", "Sana — yangi avval", ["-date", "-created_at"]),
+    ("date", "Sana — eski avval", ["date", "created_at"]),
+    ("-amount", "Summa — kattadan", ["-amount", "-date"]),
+    ("amount", "Summa — kichikdan", ["amount", "-date"]),
+    ("partner", "Hamkor — A-Z", ["contract__partner__name", "-date"]),
+]
+SUPPLIER_PAYMENT_SORT_DEFAULT = "-date"
+
+
 @role_required(User.Role.ADMIN)
 def supplier_payment_list(request):
+    q = request.GET.get("q", "").strip()
+    partner_id = request.GET.get("partner", "").strip()
+    method = request.GET.get("method", "").strip()
+    date_from = request.GET.get("date_from", "").strip()
+    date_to = request.GET.get("date_to", "").strip()
+    sort = request.GET.get("sort", "").strip()
+    if sort not in {key for key, *_ in SUPPLIER_PAYMENT_SORTS}:
+        sort = SUPPLIER_PAYMENT_SORT_DEFAULT
+
     payments = SupplierPayment.objects.select_related("contract__partner")
     contract_id = request.GET.get("contract")
     if contract_id and contract_id.isdigit():
         payments = payments.filter(contract_id=contract_id)
-    page = Paginator(payments, 30).get_page(request.GET.get("page"))
-    return render(request, "crm/supplier_payment_list.html", {"page": page})
+    if q:
+        payments = payments.filter(
+            Q(contract__code_slug__icontains=q) | Q(contract__partner__name__icontains=q)
+            | Q(note__icontains=q) | Q(contract__lines__brand__icontains=q)
+            | _payment_code_filter(q)).distinct()
+    if partner_id.isdigit():
+        payments = payments.filter(contract__partner_id=int(partner_id))
+    if method in dict(PayMethod.choices):
+        payments = payments.filter(method=method)
+    if date_from:
+        payments = payments.filter(date__gte=date_from)
+    if date_to:
+        payments = payments.filter(date__lte=date_to)
+
+    ordering = next(e[2] for e in SUPPLIER_PAYMENT_SORTS if e[0] == sort)
+    payments = payments.order_by(*ordering)
+
+    # Totals for what the filters left, not just this page — the reason to filter
+    # is usually to add something up.
+    rows = list(payments)
+    total_paid = sum((p.amount for p in rows), Decimal("0"))
+    total_out = sum((p.total_out for p in rows), Decimal("0"))
+
+    page = Paginator(rows, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/supplier_payment_list.html", {
+        "page": page, "q": q, "partner_id": partner_id, "method": method,
+        "date_from": date_from, "date_to": date_to, "sort": sort,
+        "sort_options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS],
+        "methods": PayMethod.choices, "partners": Partner.objects.all(),
+        "total_paid": total_paid, "total_out": total_out,
+        "has_filters": bool(q or partner_id or method or date_from or date_to),
+    })
+
+
+def _payment_code_filter(q):
+    """`sobir-3` in the search box means that kelishuv."""
+    slug, _, number = q.rpartition("-")
+    if slug and number.isdigit():
+        return Q(contract__code_slug=slug, contract__code_number=int(number))
+    return Q()
 
 
 @role_required(User.Role.ADMIN)
