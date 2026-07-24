@@ -43,7 +43,10 @@ def dashboard(request):
     arrived_kg = ShipmentLine.objects.filter(
         shipment__arrived__isnull=False).aggregate(s=Sum("kg"))["s"] or 0
     paid_total = SupplierPayment.objects.aggregate(s=Sum("amount"))["s"] or 0
-    debt_total = sum((c.debt for c in contracts), Decimal("0"))
+    # Across every kelishuv, not only the goods already sent: this is the whole
+    # remaining obligation to hamkorlar. Kassa keeps its own narrower figure for
+    # what is due right now — that one is captioned as such.
+    debt_total = sum((c.payable_left for c in contracts), Decimal("0"))
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
     status_counts = (ShipmentStatus.objects

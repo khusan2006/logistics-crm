@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from conftest import make_contract, make_shipment
-from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus
+from crm.models import SupplierPayment, Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus
 
 
 def test_dashboard_kpis(admin_client, db):
@@ -58,3 +58,30 @@ def test_monthly_table_renders(admin_client, db):
     _lot(c, "1000", sent="2026-07-10", arrived="2026-07-15")
     html = admin_client.get("/").content.decode()
     assert "Oylik" in html
+
+
+def test_hamkor_qarzi_covers_every_kelishuv_not_just_shipped_goods(admin_client, db):
+    """Dashboarddagi Hamkor qarzi butun kelishuv bo'yicha qoladigan to'lovni
+    ko'rsatadi — faqat yo'lga chiqqan yuklarni emas."""
+    c = make_contract(kg="1000", price="1.00")          # jami 1 000$
+    make_shipment(contract=c, kg="200")                 # 200$ yuborildi
+
+    resp = admin_client.get("/")
+    assert c.debt == Decimal("200")                     # yuborilgani bo'yicha
+    assert resp.context["debt_total"] == Decimal("1000")   # butun kelishuv bo'yicha
+
+
+def test_hamkor_qarzi_drops_as_payments_land(admin_client, db):
+    c = make_contract(kg="1000", price="1.00")
+    SupplierPayment.objects.create(contract=c, date="2026-07-20",
+                                   amount=Decimal("300"), method="cash")
+    assert admin_client.get("/").context["debt_total"] == Decimal("700")
+
+
+def test_kelishuvlar_chart_labels_every_marka(admin_client, db):
+    """Grafik yorlig'i c.brand ni o'qirdi — u endi mahsulot qatorlarida."""
+    c = make_contract(brand="2102 repak", kg="1000", price="1.00")
+    ContractLine.objects.create(contract=c, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("1"))
+    html = admin_client.get("/").content.decode()
+    assert "2102 repak, ftor oq" in html

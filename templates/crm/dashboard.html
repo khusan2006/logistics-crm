@@ -43,6 +43,7 @@
       <span class="kpi-label">Hamkor qarzi</span>
     </div>
     <div class="kpi-value">{{ debt_total|usd }}</div>
+    <div class="kpi-meta muted">barcha kelishuvlar bo'yicha</div>
   </div>
 
   <div class="kpi {% if overdue %}kpi--red{% else %}kpi--green{% endif %}">
@@ -84,8 +85,8 @@
     {% if contracts %}
     <div class="hbars">
       {% for c in contracts %}
-      <a class="hbar-row xf-row" href="{% url 'contract_list' %}" title="{{ c.brand }}">
-        <span class="hbar-label">{{ c.brand }} · {{ c.partner.name }}</span>
+      <a class="hbar-row xf-row" href="{% url 'contract_list' %}" title="{{ c.brand_summary }}">
+        <span class="hbar-label">{{ c.brand_summary }} · {{ c.partner.name }}</span>
         <div class="hbar-track"><div class="hbar-fill" style="width:{% widthratio c.shipped_kg c.kg 100 %}%"></div></div>
         <span class="hbar-value">{{ c.shipped_kg|floatformat:"0g" }} / {{ c.kg|floatformat:"0g" }} kg</span>
       </a>
