@@ -1862,6 +1862,8 @@ ul.errorlist li::before { content: "⚠ "; }
   align-items: end;
 }
 .lineset-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* the class beats the UA rule for [hidden], so restate it */
+.lineset-field[hidden] { display: none; }
 .lineset-field > span { font-size: 12px; color: var(--text-muted); }
 .lineset-field input, .lineset-field select { width: 100%; }
 .lineset-field--rm > span { display: none; }
@@ -1881,3 +1883,15 @@ ul.errorlist li::before { content: "⚠ "; }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
+
+/* Xarajat rows: sana + summa on the first line, then Turkum / Valyuta / To'lov
+   usuli together on the second — the three that describe how the money moved. */
+@media (min-width: 560px) {
+  .lineset--expense .lineset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+  .lineset--expense .lineset-field--date { grid-column: span 2; }
+  .lineset--expense .lineset-field--rm { grid-row: 1; grid-column: 4; }
+  .lineset--expense .lineset-field--note { grid-column: span 2; }
+  /* The rate only appears for so'm; on its own line it cannot squeeze the three
+     selects above it down to "Bo⌄ So⌄ Na⌄". */
+  .lineset--expense .lineset-field--exchange_rate { grid-column: 1 / -1; }
+}

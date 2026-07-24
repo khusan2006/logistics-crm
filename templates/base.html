@@ -1255,11 +1255,16 @@
       return parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')) || 0;
     }
     function update(currencyEl) {
-      var root = currencyEl.closest('form') || document;
+      // Scope to the row first: a multi-row modal (xarajatlar) has one currency,
+      // rate and amount per row, and 'form' would find the first of each.
+      var root = currencyEl.closest('[data-line-row]')
+              || currencyEl.closest('form') || document;
       var rateEl = root.querySelector('[data-money-rate]');
       var amountEl = root.querySelector('[data-money-amount]');
       if (!rateEl || !amountEl) { return; }
-      var ratePara = rateEl.closest('p') || rateEl;
+      // In a formset row the field sits in a label, not the <p> as_p emits —
+      // hiding just the input would leave its caption stranded.
+      var ratePara = rateEl.closest('.lineset-field') || rateEl.closest('p') || rateEl;
       var isUzs = currencyEl.value === 'uzs';
       ratePara.hidden = !isUzs;
 
@@ -1296,7 +1301,7 @@
     });
     document.addEventListener('input', function (e) {
       if (e.target.matches && e.target.matches('[data-money-rate], [data-money-amount]')) {
-        var root = e.target.closest('form') || document;
+        var root = e.target.closest('[data-line-row]') || e.target.closest('form') || document;
         var currencyEl = root.querySelector('[data-money-currency]');
         if (currencyEl) { update(currencyEl); }
       }

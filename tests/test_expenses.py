@@ -7,6 +7,19 @@ from crm.models import (
 )
 
 
+def rows(*entries, shipment):
+    """POST payload for the xarajat row formset."""
+    data = {"shipment": shipment.pk,
+            "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
+    defaults = {"date": "2026-07-10", "category": "customs", "currency": "usd",
+                "amount": "0", "exchange_rate": "", "method": "cash", "note": ""}
+    for i, entry in enumerate(entries):
+        for key, value in {**defaults, **entry}.items():
+            data[f"form-{i}-{key}"] = str(value)
+    return data
+
+
 @pytest.fixture
 def shipment(db):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
@@ -20,12 +33,8 @@ def shipment(db):
 
 
 def test_landed_cost(admin_client, shipment):
-    for amount in ("1200", "800"):
-        admin_client.post("/expenses/new/?shipment=%d" % shipment.pk, {
-            "shipment": shipment.pk, "date": "2026-07-10", "category": "customs",
-            "currency": "usd", "amount": amount, "exchange_rate": "",
-            "method": "cash", "note": "",
-        })
+    admin_client.post("/expenses/new/", rows(
+        {"amount": "1200"}, {"amount": "800"}, shipment=shipment))
     assert shipment.expenses_total == Decimal("2000.00")
     # 1.00 + 2000/10000 = 1.20 per kg
     assert shipment.lines.first().landed_cost_per_kg == Decimal("1.2000")
@@ -52,11 +61,7 @@ def test_create_modal_get_returns_partial(admin_client, shipment):
 def test_create_modal_post_valid_returns_204_with_redirect(admin_client, shipment):
     resp = admin_client.post(
         "/expenses/new/?shipment=%d" % shipment.pk,
-        {
-            "shipment": shipment.pk, "date": "2026-07-10", "category": "customs",
-            "currency": "usd", "amount": "500", "exchange_rate": "",
-            "method": "cash", "note": "",
-        },
+        rows({"amount": "500"}, shipment=shipment),
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
@@ -67,12 +72,38 @@ def test_create_modal_post_valid_returns_204_with_redirect(admin_client, shipmen
 
 
 def test_uzs_converted_to_usd(admin_client, shipment):
-    admin_client.post("/expenses/new/?shipment=%d" % shipment.pk, {
-        "shipment": shipment.pk, "date": "2026-07-10", "category": "transport",
-        "currency": "uzs", "amount": "1265000", "exchange_rate": "12650",
-        "method": "cash", "note": "",
-    })
+    admin_client.post("/expenses/new/", rows(
+        {"category": "transport", "currency": "uzs", "amount": "1265000",
+         "exchange_rate": "12650"}, shipment=shipment))
     e = ShipmentExpense.objects.get()
     assert e.amount == Decimal("100.00")
     assert e.amount_original == Decimal("1265000")
     assert e.exchange_rate == Decimal("12650")
+
+
+def test_several_xarajatlar_save_from_one_modal(admin_client, shipment):
+    """Bitta yukka bir nechta xarajat — transport, bojxona — bir modalda."""
+    resp = admin_client.post("/expenses/new/", rows(
+        {"category": "transport", "amount": "500"},
+        {"category": "customs", "amount": "120", "note": "bojxona"},
+        shipment=shipment))
+    assert resp.status_code == 302
+    assert ShipmentExpense.objects.count() == 2
+    assert shipment.expenses_total == Decimal("620.00")
+
+
+def test_an_empty_xarajat_modal_is_rejected(admin_client, shipment):
+    resp = admin_client.post("/expenses/new/", rows(
+        {"date": "", "amount": ""}, shipment=shipment))
+    assert resp.status_code == 200 and not ShipmentExpense.objects.exists()
+
+
+def test_each_row_converts_its_own_currency(admin_client, shipment):
+    """Har qator o'z valyutasi bo'yicha alohida hisoblanadi."""
+    admin_client.post("/expenses/new/", rows(
+        {"category": "transport", "amount": "100"},
+        {"category": "customs", "currency": "uzs", "amount": "1265000",
+         "exchange_rate": "12650"},
+        shipment=shipment))
+    amounts = sorted(e.amount for e in ShipmentExpense.objects.all())
+    assert amounts == [Decimal("100.00"), Decimal("100.00")]   # 1 265 000 / 12 650

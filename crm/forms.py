@@ -664,6 +664,46 @@ class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
         return obj
 
 
+class ExpenseTargetForm(forms.Form):
+    """Carries the yuk for a multi-row xarajat modal — the rows themselves say
+    nothing about which load they belong to, and the modal posts to a path with
+    no query string."""
+
+    shipment = forms.ModelChoiceField(queryset=Shipment.objects.all(),
+                                      widget=forms.HiddenInput)
+
+
+class ShipmentExpenseRowForm(MoneyEntryFormMixin, forms.ModelForm):
+    """One xarajat row. Ordered so Turkum / Valyuta / To'lov usuli land on a line
+    of their own — see .lineset--expense in the stylesheet."""
+
+    field_order = ["date", "amount", "category", "currency", "method",
+                   "exchange_rate", "note"]
+
+    class Meta:
+        model = ShipmentExpense
+        fields = ["date", "category", "currency", "amount", "exchange_rate",
+                  "method", "note"]
+        widgets = {"date": forms.DateInput(attrs={"type": "date"}),
+                   "note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+
+
+class BaseExpenseFormSet(forms.BaseModelFormSet):
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        kept = [f for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+        if not kept:
+            raise forms.ValidationError("Kamida bitta xarajat kiritilishi kerak")
+
+
+ShipmentExpenseFormSet = forms.modelformset_factory(
+    ShipmentExpense, form=ShipmentExpenseRowForm, formset=BaseExpenseFormSet,
+    extra=1, can_delete=True)
+
+
 class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = ShipmentExpense

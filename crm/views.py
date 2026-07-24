@@ -18,7 +18,8 @@ from accounts.models import User
 from .exports import xlsx_response
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
-    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
+    ExpenseTargetForm, SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
+    ShipmentExpenseFormSet, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
@@ -1023,22 +1024,48 @@ def shipment_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def expense_create(request):
-    initial = {"shipment": request.GET.get("shipment")}
-    form = ShipmentExpenseForm(request.POST or None, initial=initial)
+    """Several xarajatlar at once: a yuk usually collects transport, bojxona and
+    a couple of others on the same day, so the modal takes rows."""
+    target = ExpenseTargetForm(request.POST or None,
+                               initial={"shipment": request.GET.get("shipment")})
+    rows = ShipmentExpenseFormSet(request.POST or None,
+                                  queryset=ShipmentExpense.objects.none())
+
+    def respond(invalid=False):
+        return form_response(request, target, "Yangi xarajat", invalid=invalid,
+                             extra_context={"lines": rows, "lines_legend": "Xarajatlar",
+                                            "lines_class": "lineset--expense",
+                                            "lines_add_label": "+ Xarajat qo'shish"})
+
     if request.method == "POST":
-        if form.is_valid():
-            expense = form.save(commit=False)
-            expense.created_by = request.user
-            expense.save()
+        if target.is_valid() and rows.is_valid():
+            shipment = target.cleaned_data["shipment"]
+            saved = []
+            with transaction.atomic():
+                for form in rows.forms:
+                    if not form.cleaned_data or form.cleaned_data.get("DELETE"):
+                        continue
+                    expense = form.save(commit=False)
+                    expense.shipment = shipment
+                    expense.amount = form.cleaned_data["amount"]
+                    expense.amount_original = form.cleaned_data["amount_original"]
+                    expense.exchange_rate = form.cleaned_data["exchange_rate"]
+                    expense.created_by = request.user
+                    expense.save()
+                    saved.append(expense)
+            total = sum((e.amount for e in saved), Decimal("0"))
             AuditLog.record(
-                request.user, AuditLog.Action.CREATE, "Yuk xarajati", expense.pk,
-                f"Yangi xarajat: {expense.amount}$ · yuk #{expense.shipment_id}",
+                request.user, AuditLog.Action.CREATE, "Yuk xarajati",
+                saved[0].pk if saved else None,
+                f"Yangi xarajat: {len(saved)} ta · {total}$ · yuk #{shipment.pk}",
             )
-            messages.success(request, "Xarajat qo'shildi")
+            messages.success(
+                request,
+                f"{len(saved)} ta xarajat qo'shildi" if len(saved) > 1 else "Xarajat qo'shildi")
             # reload whichever page it was opened from (loads list or the load detail)
-            return form_reload(request, reverse("shipment_detail", args=[expense.shipment_id]))
-        return form_response(request, form, "Yangi xarajat", invalid=True)
-    return form_response(request, form, "Yangi xarajat")
+            return form_reload(request, reverse("shipment_detail", args=[shipment.pk]))
+        return respond(invalid=True)
+    return respond()
 
 
 @role_required(User.Role.ADMIN)

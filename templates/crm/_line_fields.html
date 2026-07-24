@@ -3,7 +3,7 @@ Repeating product rows for a kelishuv or a yuk. Each row is a card so the label
 of every field stays visible on a phone; the empty_form at the bottom is the
 template the JS clones when "+ Mahsulot qo'shish" is pressed.
 {% endcomment %}
-<fieldset class="lineset" data-lineset>
+<fieldset class="lineset {{ lines_class }}" data-lineset>
   <legend>{{ lines_legend }}</legend>
   {{ lines.management_form }}
   {% if lines.non_form_errors %}
@@ -61,6 +61,6 @@ template the JS clones when "+ Mahsulot qo'shish" is pressed.
     </div>
   </template>
 
-  <button type="button" class="btn btn-ghost lineset-add" data-line-add>+ Mahsulot qo'shish</button>
+  <button type="button" class="btn btn-ghost lineset-add" data-line-add>{{ lines_add_label|default:"+ Mahsulot qo'shish" }}</button>
 </fieldset>
 {% if lines_after %}{{ lines_after.as_p }}{% endif %}
