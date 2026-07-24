@@ -87,22 +87,31 @@ def test_kelishuvlar_chart_labels_every_marka(admin_client, db):
     assert "2102 repak, ftor oq" in html
 
 
-def test_yuk_holatlari_breaks_down_by_hamkor(admin_client, db):
-    """Har holat ostida qaysi hamkorning nechta yuki borligi ko'rinadi."""
-    pars = Partner.objects.create(name="Pars", phone="1", city="T")
-    arya = Partner.objects.create(name="Arya", phone="2", city="S")
+def test_yuk_holatlari_lists_the_loads_themselves(admin_client, db):
+    """Har holat ostida yuklar o'z raqami bilan — eng yangisi yuqorida."""
+    c = make_contract(kg="9000")
     loading = ShipmentStatus.objects.first()
-
-    a = make_contract(partner=pars, kg="9000")
-    b = make_contract(partner=arya, kg="9000")
-    make_shipment(contract=a, kg="100", status=loading)
-    make_shipment(contract=a, kg="100", status=loading)
-    make_shipment(contract=b, kg="100", status=loading)
+    first = make_shipment(contract=c, kg="100", status=loading)
+    second = make_shipment(contract=c, kg="100", status=loading)
 
     rows = {r["status"].name: r for r in admin_client.get("/").context["status_rows"]}
     row = rows[loading.name]
-    assert row["total"] == 3
-    assert row["partners"] == [("Arya", 1), ("Pars", 2)]   # nom bo'yicha tartibda
+    assert row["total"] == 2
+    assert [s.pk for s in row["shipments"]] == [second.pk, first.pk]
+    assert f"#{second.pk}" in admin_client.get("/").content.decode()
+
+
+def test_yuk_holatlari_caps_a_long_list(admin_client, db):
+    """Dashboard qisqa qolishi kerak — ortiqchasi "+N ta" bo'lib yig'iladi."""
+    c = make_contract(kg="90000")
+    loading = ShipmentStatus.objects.first()
+    for _ in range(9):
+        make_shipment(contract=c, kg="100", status=loading)
+
+    row = admin_client.get("/").context["status_rows"][0]
+    assert row["total"] == 9
+    assert len(row["shipments"]) == 6
+    assert row["more"] == 3
 
 
 def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):

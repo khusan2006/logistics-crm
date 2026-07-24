@@ -1911,4 +1911,5 @@ ul.errorlist li::before { content: "⚠ "; }
 }
 .status-breakdown-list li:last-child { border-bottom: none; }
 .status-breakdown-list span { color: var(--text-muted); }
-.status-breakdown-list strong { font-variant-numeric: tabular-nums; }
+.status-breakdown-list .load-id { font-variant-numeric: tabular-nums; }
+.status-breakdown-more { justify-content: flex-end; font-size: 12px; }

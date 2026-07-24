@@ -49,17 +49,17 @@ def dashboard(request):
     debt_total = sum((c.payable_left for c in contracts), Decimal("0"))
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
-    # Each holat with the hamkorlar sitting in it — "3 ta yuklanmoqda" says less
-    # than knowing whose they are when you are chasing a partner.
+    # Each holat with the loads sitting in it, newest first — a yuk number is
+    # something you can act on, where a count only tells you how many to look for.
+    # Capped so one busy status cannot push the rest of the dashboard off-screen.
+    STATUS_ROW_LIMIT = 6
     by_status = {}
-    for shipment in shipments:
-        row = by_status.setdefault(shipment.status_id, {"total": 0, "partners": {}})
-        row["total"] += 1
-        name = shipment.contract.partner.name
-        row["partners"][name] = row["partners"].get(name, 0) + 1
+    for shipment in sorted(shipments, key=lambda s: s.pk, reverse=True):
+        by_status.setdefault(shipment.status_id, []).append(shipment)
     status_rows = [
-        {"status": st, "total": by_status[st.pk]["total"],
-         "partners": sorted(by_status[st.pk]["partners"].items())}
+        {"status": st, "total": len(by_status[st.pk]),
+         "shipments": by_status[st.pk][:STATUS_ROW_LIMIT],
+         "more": max(0, len(by_status[st.pk]) - STATUS_ROW_LIMIT)}
         for st in ShipmentStatus.objects.all() if st.pk in by_status
     ]
 

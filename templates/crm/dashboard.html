@@ -103,9 +103,13 @@
       <div class="status-breakdown-group">
         <span class="badge badge-neutral">{{ row.status.name }} <strong>{{ row.total }}</strong></span>
         <ul class="status-breakdown-list">
-          {% for name, count in row.partners %}
-          <li><span>{{ name }}</span><strong>{{ count }}</strong></li>
+          {% for s in row.shipments %}
+          <li>
+            <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
+            <span>{{ s.contract.partner.name }}</span>
+          </li>
           {% endfor %}
+          {% if row.more %}<li class="status-breakdown-more"><span>yana {{ row.more }} ta</span></li>{% endif %}
         </ul>
       </div>
       {% endfor %}
