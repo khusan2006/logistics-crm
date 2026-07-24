@@ -269,6 +269,23 @@ CONTRACT_PAY_FILTERS = {
 CONTRACT_PAY_LABELS = [("", "Hammasi"), ("paid", "To'langan"),
                        ("partial", "Qisman to'langan"), ("unpaid", "To'lanmagan")]
 
+# Sorted in Python, not SQL: jami and qolgan to'lov are computed properties, and
+# the rows are already a list by this point because the holat/to'lov filters read
+# the same properties. Each entry is (key, label, sort key, reverse).
+CONTRACT_SORTS = [
+    ("-created", "Sana — yangi avval", lambda c: (c.created, c.pk), True),
+    ("created", "Sana — eski avval", lambda c: (c.created, c.pk), False),
+    ("code", "Kod — A-Z", lambda c: (c.code_slug, c.code_number), False),
+    ("-code", "Kod — Z-A", lambda c: (c.code_slug, c.code_number), True),
+    ("partner", "Hamkor — A-Z",
+     lambda c: (c.partner.name.casefold(), c.code_slug, c.code_number), False),
+    ("-total", "Jami — kattadan", lambda c: (c.total_value, c.pk), True),
+    ("total", "Jami — kichikdan", lambda c: (c.total_value, c.pk), False),
+    ("-left", "Qolgan to'lov — kattadan", lambda c: (c.payable_left, c.pk), True),
+    ("-kg", "Qolgan kg — kattadan", lambda c: (c.remaining_kg, c.pk), True),
+]
+CONTRACT_SORT_DEFAULT = "-created"
+
 
 def _contract_code_filter(q):
     """Match a kelishuv code: `sobir-3` pins one kelishuv, a bare `3` finds every
@@ -293,6 +310,9 @@ def contract_list(request):
     # Unfinished business is the working view, so it is what you land on; Hammasi
     # is the deliberate step out of it, not the default.
     state = request.GET.get("state", "open").strip()
+    sort = request.GET.get("sort", "").strip()
+    if sort not in {key for key, *_ in CONTRACT_SORTS}:
+        sort = CONTRACT_SORT_DEFAULT
 
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
@@ -327,10 +347,14 @@ def contract_list(request):
     if pay_applies and pay in CONTRACT_PAY_FILTERS:
         rows = [c for c in rows if CONTRACT_PAY_FILTERS[pay](c)]
 
+    _, _, sort_key, sort_reverse = next(e for e in CONTRACT_SORTS if e[0] == sort)
+    rows.sort(key=sort_key, reverse=sort_reverse)
+
     page = Paginator(rows, 30).get_page(request.GET.get("page"))
     return render(request, "crm/contract_list.html", {
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
+        "sort": sort, "sort_options": [(key, label) for key, label, *_ in CONTRACT_SORTS],
         "partners": Partner.objects.all(),
         "has_filters": bool((pay and pay_applies) or partner_id or state != "open"),
     })

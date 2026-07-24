@@ -303,3 +303,39 @@ def test_tolov_filter_hidden_and_ignored_for_tugallangan(admin_client, db):
     assert 'name="pay"' not in resp.content.decode()
     # hatto so'ralganda ham qatorni yo'qotmaydi
     assert _listed(admin_client, state="done", pay="unpaid")[1] == [done.pk]
+
+
+def _sorted_codes(client, sort):
+    resp = client.get("/contracts/", {"state": "", "sort": sort})
+    return [c.code for c in resp.context["page"].object_list]
+
+
+def test_sorting_options(admin_client, db):
+    """Saralash: sana, kod, hamkor, jami — har biri o'z tartibida."""
+    zeta = Partner.objects.create(name="Zeta", phone="1", city="T")
+    alfa = Partner.objects.create(name="Alfa", phone="1", city="T")
+    old = _contract(partner=zeta, created="2026-01-05", kg="100", price="1.00")   # jami 100
+    new = _contract(partner=alfa, created="2026-09-09", kg="100", price="9.00")   # jami 900
+
+    assert _sorted_codes(admin_client, "-created") == [new.code, old.code]
+    assert _sorted_codes(admin_client, "created") == [old.code, new.code]
+    assert _sorted_codes(admin_client, "partner") == [new.code, old.code]   # Alfa < Zeta
+    assert _sorted_codes(admin_client, "code") == [new.code, old.code]      # alfa-1 < zeta-1
+    assert _sorted_codes(admin_client, "-total") == [new.code, old.code]    # 900 > 100
+    assert _sorted_codes(admin_client, "total") == [old.code, new.code]
+
+
+def test_sort_defaults_to_newest_and_is_offered_in_the_toolbar(admin_client, db):
+    old = _contract(created="2026-01-05")
+    new = _contract(created="2026-09-09")
+    resp = admin_client.get("/contracts/", {"state": ""})
+    assert [c.code for c in resp.context["page"].object_list] == [new.code, old.code]
+
+    html = resp.content.decode()
+    assert 'name="sort"' in html and "Saralash" in html
+
+
+def test_an_unknown_sort_falls_back_to_the_default(admin_client, db):
+    old = _contract(created="2026-01-05")
+    new = _contract(created="2026-09-09")
+    assert _sorted_codes(admin_client, "junk") == [new.code, old.code]

@@ -40,6 +40,13 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     </select>
   </label>
   {% endif %}
+  <label>Saralash
+    <select name="sort">
+      {% for key, label in sort_options %}
+      <option value="{{ key }}"{% if sort == key %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
   {% if has_filters or q %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
 </form>
