@@ -87,18 +87,21 @@ def test_kelishuvlar_chart_labels_every_marka(admin_client, db):
     assert "2102 repak, ftor oq" in html
 
 
-def test_yuk_holatlari_lists_the_loads_themselves(admin_client, db):
-    """Har holat ostida yuklar o'z raqami bilan — eng yangisi yuqorida."""
+def test_yuk_holatlari_labels_loads_with_the_kelishuv_kod(admin_client, db):
+    """Har holat ostida yuk kelishuv kodi bilan ko'rsatiladi — eng yangisi
+    yuqorida. Bir kelishuvning ikki yuki bo'lsa, raqami ularni ajratadi."""
     c = make_contract(kg="9000")
     loading = ShipmentStatus.objects.first()
     first = make_shipment(contract=c, kg="100", status=loading)
     second = make_shipment(contract=c, kg="100", status=loading)
 
-    rows = {r["status"].name: r for r in admin_client.get("/").context["status_rows"]}
-    row = rows[loading.name]
-    assert row["total"] == 2
+    resp = admin_client.get("/")
+    row = {r["status"].name: r for r in resp.context["status_rows"]}[loading.name]
     assert [s.pk for s in row["shipments"]] == [second.pk, first.pk]
-    assert f"#{second.pk}" in admin_client.get("/").content.decode()
+
+    html = resp.content.decode()
+    assert c.code in html                      # kelishuv kodi
+    assert f"#{second.pk}" in html             # va qaysi yuk ekani
 
 
 def test_yuk_holatlari_caps_a_long_list(admin_client, db):

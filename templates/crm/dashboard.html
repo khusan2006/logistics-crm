@@ -104,9 +104,14 @@
         <span class="badge badge-neutral">{{ row.status.name }} <strong>{{ row.total }}</strong></span>
         <ul class="status-breakdown-list">
           {% for s in row.shipments %}
+          {% comment %}
+          Labelled by kelishuv kod; the yuk number rides along muted because two
+          loads of the same kelishuv in one holat would otherwise be two
+          identical rows.
+          {% endcomment %}
           <li>
-            <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
-            <span>{{ s.contract.partner.name }}</span>
+            <a class="load-id" href="{% url 'shipment_detail' s.pk %}">{{ s.contract.code }}</a>
+            <span>#{{ s.pk }}</span>
           </li>
           {% endfor %}
           {% if row.more %}<li class="status-breakdown-more"><span>yana {{ row.more }} ta</span></li>{% endif %}
