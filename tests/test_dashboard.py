@@ -164,3 +164,28 @@ def test_progress_chart_says_when_it_is_showing_a_subset(admin_client, db):
     assert resp.context["contracts_shown"] == 8
     assert resp.context["contracts_total"] == 10
     assert "10 tadan 8 tasi" in resp.content.decode()
+
+
+def test_monthly_sent_counts_every_load_with_a_date_in_that_month(admin_client, db):
+    """To'qqizta yuk iyulda jo'natilsa, iyul qatorida 9 turishi kerak."""
+    c = make_contract(kg="90000")
+    for day in range(1, 10):
+        make_shipment(contract=c, kg="100", sent=date(2026, 7, day))
+
+    rows = {r["month"]: r for r in admin_client.get("/").context["monthly"]}
+    assert rows[date(2026, 7, 1)]["sent"] == 9
+
+
+def test_a_load_sent_in_another_month_lands_in_that_month(admin_client, db):
+    """Iyunda jo'natilib iyulda kelgan yuk iyul 'jo'natilgan' iga kirmaydi —
+    hisobot kamaygandek ko'rinishining eng ehtimolli sababi shu."""
+    c = make_contract(kg="90000")
+    for day in range(1, 9):
+        make_shipment(contract=c, kg="100", sent=date(2026, 7, day))
+    make_shipment(contract=c, kg="100", sent=date(2026, 6, 28), arrived=date(2026, 7, 3),
+                  status=ShipmentStatus.arrival())
+
+    rows = {r["month"]: r for r in admin_client.get("/").context["monthly"]}
+    assert rows[date(2026, 7, 1)]["sent"] == 8      # iyulda jo'natilganlar
+    assert rows[date(2026, 6, 1)]["sent"] == 1      # to'qqizinchisi iyunda
+    assert rows[date(2026, 7, 1)]["arrived"] == 1   # lekin iyulda yetib kelgan
