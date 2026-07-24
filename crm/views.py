@@ -49,17 +49,19 @@ def dashboard(request):
     debt_total = sum((c.payable_left for c in contracts), Decimal("0"))
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
-    # Each holat with the loads sitting in it, newest first — a yuk number is
-    # something you can act on, where a count only tells you how many to look for.
-    # Capped so one busy status cannot push the rest of the dashboard off-screen.
-    STATUS_ROW_LIMIT = 6
+    # Each holat with how many trucks each hamkor has sitting in it. Listing the
+    # loads themselves repeated the same kelishuv kod once per truck; the question
+    # being asked is "whose trucks are on the road", which is a count per hamkor.
     by_status = {}
-    for shipment in sorted(shipments, key=lambda s: s.pk, reverse=True):
-        by_status.setdefault(shipment.status_id, []).append(shipment)
+    for shipment in shipments:
+        row = by_status.setdefault(shipment.status_id, {"total": 0, "partners": {}})
+        row["total"] += 1
+        name = shipment.contract.partner.name
+        row["partners"][name] = row["partners"].get(name, 0) + 1
     status_rows = [
-        {"status": st, "total": len(by_status[st.pk]),
-         "shipments": by_status[st.pk][:STATUS_ROW_LIMIT],
-         "more": max(0, len(by_status[st.pk]) - STATUS_ROW_LIMIT)}
+        {"status": st, "total": by_status[st.pk]["total"],
+         # busiest hamkor first, ties by name
+         "partners": sorted(by_status[st.pk]["partners"].items(), key=lambda kv: (-kv[1], kv[0]))}
         for st in ShipmentStatus.objects.all() if st.pk in by_status
     ]
 

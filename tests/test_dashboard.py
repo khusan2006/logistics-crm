@@ -87,34 +87,24 @@ def test_kelishuvlar_chart_labels_every_marka(admin_client, db):
     assert "2102 repak, ftor oq" in html
 
 
-def test_yuk_holatlari_labels_loads_with_the_kelishuv_kod(admin_client, db):
-    """Har holat ostida yuk kelishuv kodi bilan ko'rsatiladi — eng yangisi
-    yuqorida. Bir kelishuvning ikki yuki bo'lsa, raqami ularni ajratadi."""
-    c = make_contract(kg="9000")
+def test_yuk_holatlari_counts_trucks_per_hamkor(admin_client, db):
+    """Har holat ostida qaysi hamkorning nechta mashinasi shu holatda ekani —
+    yuklarni birma-bir sanab chiqish o'rniga."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="T")
+    arya = Partner.objects.create(name="Arya", phone="2", city="S")
     loading = ShipmentStatus.objects.first()
-    first = make_shipment(contract=c, kg="100", status=loading)
-    second = make_shipment(contract=c, kg="100", status=loading)
+    a = make_contract(partner=pars, kg="9000")
+    b = make_contract(partner=arya, kg="9000")
+    for _ in range(4):
+        make_shipment(contract=a, kg="100", status=loading)
+    make_shipment(contract=b, kg="100", status=loading)
 
     resp = admin_client.get("/")
     row = {r["status"].name: r for r in resp.context["status_rows"]}[loading.name]
-    assert [s.pk for s in row["shipments"]] == [second.pk, first.pk]
-
-    html = resp.content.decode()
-    assert c.code in html                      # kelishuv kodi
-    assert f"#{second.pk}" in html             # va qaysi yuk ekani
-
-
-def test_yuk_holatlari_caps_a_long_list(admin_client, db):
-    """Dashboard qisqa qolishi kerak — ortiqchasi "+N ta" bo'lib yig'iladi."""
-    c = make_contract(kg="90000")
-    loading = ShipmentStatus.objects.first()
-    for _ in range(9):
-        make_shipment(contract=c, kg="100", status=loading)
-
-    row = admin_client.get("/").context["status_rows"][0]
-    assert row["total"] == 9
-    assert len(row["shipments"]) == 6
-    assert row["more"] == 3
+    assert row["total"] == 5
+    # eng ko'pi yuqorida, tenglashsa nom bo'yicha
+    assert row["partners"] == [("Pars", 4), ("Arya", 1)]
+    assert "4 ta" in resp.content.decode()
 
 
 def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):
