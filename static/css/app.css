@@ -1341,7 +1341,11 @@ ul.errorlist li::before { content: "⚠ "; }
    ============================================================ */
 .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 20px; }
 .chart-grid--split { grid-template-columns: 1.7fr 1fr; }
-@media (max-width: 900px) { .chart-grid, .chart-grid--split { grid-template-columns: 1fr; } }
+.chart-grid--three { grid-template-columns: 1.6fr 1fr 1fr; }
+@media (max-width: 1200px) { .chart-grid--three { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) {
+  .chart-grid, .chart-grid--split, .chart-grid--three { grid-template-columns: 1fr; }
+}
 .chart-card { margin-bottom: 0; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .card-head h2 { margin: 0; }
@@ -1417,8 +1421,8 @@ ul.errorlist li::before { content: "⚠ "; }
 
 /* Horizontal bars (top products / clients) */
 .hbars { display: flex; flex-direction: column; gap: 15px; }
-.hbar-row { display: grid; grid-template-columns: minmax(84px, 1.1fr) 2fr auto; align-items: center; gap: 12px; }
-.hbar-label { font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hbar-row { display: grid; grid-template-columns: minmax(96px, 1.2fr) 1.6fr auto; align-items: center; gap: 12px; }
+.hbar-label { font-size: 13px; font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
 .hbar-track { height: 9px; background: var(--surface-2); border-radius: var(--r-pill); overflow: hidden; }
 .hbar-fill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: width 0.35s ease; }
 .hbar-fill--gold { background: var(--warning); }
@@ -1913,3 +1917,20 @@ ul.errorlist li::before { content: "⚠ "; }
 .status-breakdown-list span { color: var(--text-muted); }
 .status-breakdown-list .load-id { font-variant-numeric: tabular-nums; }
 .status-breakdown-more { justify-content: flex-end; font-size: 12px; }
+
+/* Yuboriladigan mashinalar: kelishuv, whose it is, and how many trucks are left. */
+.truck-plan { list-style: none; margin: 0; padding: 0; }
+.truck-plan li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.truck-plan li:last-child { border-bottom: none; }
+.truck-plan-who { display: flex; flex-direction: column; gap: 2px; font-size: 13px; min-width: 0; }
+.truck-plan-who .muted { font-size: 12px; }
+.truck-plan-count { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
+.truck-plan-count strong { font-size: 17px; }
+.truck-plan-count .muted { font-size: 12px; }

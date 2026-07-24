@@ -123,3 +123,33 @@ def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):
     make_shipment(contract=c, kg="100", status=used)
     names = [r["status"].name for r in admin_client.get("/").context["status_rows"]]
     assert names == [used.name]
+
+
+def test_truck_plan_lists_what_each_hamkor_still_owes(admin_client, db):
+    """Rejalashtirilgan mashinalardan nechtasi hali jo'natilmagani."""
+    c = make_contract(kg="9000")
+    Contract.objects.filter(pk=c.pk).update(planned_trucks=3)
+    make_shipment(contract=c, kg="100")
+
+    row = admin_client.get("/").context["truck_plan_rows"][0]
+    assert row["contract"].pk == c.pk
+    assert (row["sent"], row["planned"], row["left"]) == (1, 3, 2)
+
+
+def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, db):
+    done = make_contract(kg="9000")
+    Contract.objects.filter(pk=done.pk).update(planned_trucks=1)
+    make_shipment(contract=done, kg="100")          # rejasi bajarildi
+    make_contract(kg="9000")                        # rejasi yo'q
+
+    assert admin_client.get("/").context["truck_plan_rows"] == []
+
+
+def test_truck_plan_puts_the_biggest_shortfall_first(admin_client, db):
+    small = make_contract(kg="9000")
+    Contract.objects.filter(pk=small.pk).update(planned_trucks=2)
+    big = make_contract(kg="9000")
+    Contract.objects.filter(pk=big.pk).update(planned_trucks=5)
+
+    rows = admin_client.get("/").context["truck_plan_rows"]
+    assert [r["contract"].pk for r in rows] == [big.pk, small.pk]

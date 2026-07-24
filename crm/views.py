@@ -63,6 +63,16 @@ def dashboard(request):
         for st in ShipmentStatus.objects.all() if st.pk in by_status
     ]
 
+    # What each hamkor still owes in trucks: only kelishuvlar that set a plan and
+    # have not met it yet, biggest shortfall first — that is the chase list.
+    truck_plan_rows = []
+    for contract in contracts:
+        sent, planned = contract.truck_progress
+        if planned and planned > sent:
+            truck_plan_rows.append({"contract": contract, "sent": sent,
+                                    "planned": planned, "left": planned - sent})
+    truck_plan_rows.sort(key=lambda r: (-r["left"], r["contract"].pk))
+
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
     customer_debt_total = sum(
@@ -73,6 +83,7 @@ def dashboard(request):
         "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
         "paid_total": paid_total, "debt_total": debt_total, "overdue": overdue,
         "contracts": contracts[:8], "status_rows": status_rows,
+        "truck_plan_rows": truck_plan_rows,
         "stock_kg": stock_kg, "customer_debt_total": customer_debt_total,
         "sales_profit_total": sales_profit_total,
         "monthly": _monthly_rows(),
