@@ -13,6 +13,16 @@ from .models import (
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 
 
+def date_widget(**attrs):
+    """A <input type="date"> that renders ISO.
+
+    The browser only understands yyyy-mm-dd there; Django otherwise formats the
+    value for the active locale ("08.07.2026"), which the input rejects and shows
+    as blank — so an edit form looked empty and saving it wiped the date.
+    """
+    return forms.DateInput(attrs={"type": "date", **attrs}, format="%Y-%m-%d")
+
+
 class PartnerForm(forms.ModelForm):
     class Meta:
         model = Partner
@@ -47,7 +57,7 @@ class ContractForm(forms.ModelForm):
         model = Contract
         fields = ["partner", "created", "note"]
         widgets = {
-            "created": forms.DateInput(attrs={"type": "date"}),
+            "created": date_widget(),
             "note": forms.Textarea(attrs={"rows": 3}),
         }
 
@@ -239,8 +249,8 @@ class ShipmentForm(forms.ModelForm):
                   "driver_name", "driver_phone", "transport", "container", "note"]
         widgets = {
             "contract": forms.Select(attrs={"data-contract-source": ""}),
-            "sent": forms.DateInput(attrs={"type": "date"}),
-            "eta": forms.DateInput(attrs={"type": "date"}),
+            "sent": date_widget(),
+            "eta": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             "transport": forms.TextInput(attrs={
                 "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
@@ -259,6 +269,10 @@ class ShipmentForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Required on the form, still nullable on the model: a yuk with no
+        # departure date fell out of the Oylik hisobot "jo'natilgan" count, but
+        # rows imported before this rule must stay editable.
+        self.fields["sent"].required = True
         # A kelishuv with every kg already on the road has nothing left to load, so
         # it drops off the new-yuk list — but stays when editing its own yuk.
         base = (Contract.objects.select_related("partner")
@@ -382,7 +396,7 @@ ShipmentLineFormSet = forms.inlineformset_factory(
 
 class ShipmentExtendForm(forms.Form):
     new_eta = forms.DateField(label="Yangi kelish sanasi",
-                              widget=forms.DateInput(attrs={"type": "date"}))
+                              widget=date_widget())
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
 
 
@@ -392,8 +406,8 @@ class ShipmentLegForm(forms.ModelForm):
         fields = ["from_location", "to_location", "transport", "container",
                   "departed", "arrived", "note"]
         widgets = {
-            "departed": forms.DateInput(attrs={"type": "date"}),
-            "arrived": forms.DateInput(attrs={"type": "date"}),
+            "departed": date_widget(),
+            "arrived": date_widget(),
             "from_location": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "to_location": forms.TextInput(attrs={"placeholder": "Masalan: Chegara"}),
             "transport": forms.TextInput(attrs={
@@ -420,7 +434,7 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
         fields = ["contract", "date", "currency", "amount", "exchange_rate",
                   "commission_percent", "method", "note"]
         widgets = {
-            "date": forms.DateInput(attrs={"type": "date"}),
+            "date": date_widget(),
             "commission_percent": forms.NumberInput(attrs={
                 "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
                 "placeholder": "0"}),
@@ -488,8 +502,8 @@ class SaleCreateForm(forms.ModelForm):
         model = Sale
         fields = ["customer", "brand", "kg", "price", "date", "debt_deadline", "note"]
         widgets = {
-            "date": forms.DateInput(attrs={"type": "date"}),
-            "debt_deadline": forms.DateInput(attrs={"type": "date"}),
+            "date": date_widget(),
+            "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
                                             "data-quick-add-label": "Yangi mijoz"}),
@@ -527,8 +541,8 @@ class SaleLotForm(forms.ModelForm):
         model = Sale
         fields = ["lot", "customer", "kg", "price", "date", "debt_deadline", "note"]
         widgets = {
-            "date": forms.DateInput(attrs={"type": "date"}),
-            "debt_deadline": forms.DateInput(attrs={"type": "date"}),
+            "date": date_widget(),
+            "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
                                             "data-quick-add-label": "Yangi mijoz"}),
@@ -554,8 +568,8 @@ class SaleForm(forms.ModelForm):
         model = Sale
         fields = ["customer", "line", "kg", "price", "date", "debt_deadline", "note"]
         widgets = {
-            "date": forms.DateInput(attrs={"type": "date"}),
-            "debt_deadline": forms.DateInput(attrs={"type": "date"}),
+            "date": date_widget(),
+            "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             # lets the modal JS add a "+ Yangi mijoz" inline quick-create next to it
             "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
@@ -615,7 +629,7 @@ class ReturnForm(forms.ModelForm):
         model = Return
         fields = ["kg", "price", "date", "restock", "note"]
         widgets = {
-            "date": forms.DateInput(attrs={"type": "date"}),
+            "date": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
         }
 
@@ -652,7 +666,7 @@ class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = CustomerPayment
         fields = ["customer", "date", "currency", "amount", "exchange_rate", "method", "note"]
-        widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+        widgets = {"date": date_widget()}
 
     def save(self, commit=True):
         obj = super().save(commit=False)
@@ -684,7 +698,7 @@ class ShipmentExpenseRowForm(MoneyEntryFormMixin, forms.ModelForm):
         model = ShipmentExpense
         fields = ["date", "category", "currency", "amount", "exchange_rate",
                   "method", "note"]
-        widgets = {"date": forms.DateInput(attrs={"type": "date"}),
+        widgets = {"date": date_widget(),
                    "note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
 
 
@@ -709,7 +723,7 @@ class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):
         model = ShipmentExpense
         fields = ["shipment", "date", "category", "currency", "amount",
                   "exchange_rate", "method", "note"]
-        widgets = {"date": forms.DateInput(attrs={"type": "date"}),
+        widgets = {"date": date_widget(),
                    "shipment": forms.HiddenInput()}
 
     def save(self, commit=True):

@@ -171,7 +171,8 @@ def test_shipment_transport_accepts_uz_plate(db):
     c = _contract()
     st = ShipmentStatus.objects.first()
     f = ShipmentForm({"contract": c.pk, "kg": "100", "status": st.pk,
-                      "transport": "01 777 AAA", "container": "C1", "note": ""})
+                      "sent": "2026-07-08", "transport": "01 777 AAA",
+                      "container": "C1", "note": ""})
     assert f.is_valid(), f.errors
 
 
@@ -514,3 +515,40 @@ def test_fully_shipped_product_is_not_offered_as_a_lot(db):
 
     brands = [ln.brand for ln in ShipmentLineForm().fields["contract_line"].queryset]
     assert "Bor" in brands and "LLDPE" not in brands
+
+
+def test_edit_modal_prefills_every_saved_value(admin_client, db):
+    """Tahrirlash oynasi saqlangan qiymatlarni ko'rsatishi kerak."""
+    c = _contract(kg="2000")
+    s = make_shipment(contract=c, kg="100", sent=date(2026, 7, 8), eta=date(2026, 7, 19),
+                      transport="01 777 AAA", container="MSKU 123456 7",
+                      responsible="Otabek", driver_name="Akmal aka",
+                      driver_phone="+998901112233", note="Izoh matni")
+
+    html = admin_client.get(f"/shipments/{s.pk}/edit/").content.decode()
+    for label, needle in [
+        ("sent", 'value="2026-07-08"'), ("eta", 'value="2026-07-19"'),
+        ("responsible", "Otabek"), ("driver_name", "Akmal aka"),
+        ("driver_phone", "998901112233"), ("transport", "01 777 AAA"),
+        ("container", "MSKU 123456 7"), ("note", "Izoh matni"),
+    ]:
+        assert needle in html, f"{label} ko'rinmadi"
+
+
+def test_jonatilgan_sana_is_required(admin_client, db):
+    """Sanasiz yuk oylik hisobotda 'jo'natilgan' bo'lib sanalmay qolardi."""
+    c = _contract(kg="2000")
+    resp = _post_shipment(admin_client, c, sent="")
+    assert resp.status_code == 200 and not Shipment.objects.exists()
+
+    assert _post_shipment(admin_client, c, sent="2026-07-08").status_code == 302
+    assert Shipment.objects.get().sent == date(2026, 7, 8)
+
+
+def test_an_old_yuk_without_a_sana_still_opens_for_editing(admin_client, db):
+    """Model hali ham bo'sh sanaga ruxsat beradi — eski qatorlar tahrirlanadi,
+    lekin saqlash uchun sana kiritilishi kerak."""
+    c = _contract(kg="2000")
+    s = make_shipment(contract=c, kg="100")            # sanasiz, to'g'ridan-to'g'ri
+    assert s.sent is None
+    assert admin_client.get(f"/shipments/{s.pk}/edit/").status_code == 200
