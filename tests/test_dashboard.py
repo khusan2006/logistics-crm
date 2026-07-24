@@ -140,3 +140,27 @@ def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, d
     make_contract(kg="9000")                        # rejasi yo'q
 
     assert admin_client.get("/").context["truck_plan_rows"] == []
+
+
+def test_progress_chart_shows_the_kelishuvlar_that_actually_moved(admin_client, db):
+    """Chart eng yangi 8 tasini emas, harakatdagilarini ko'rsatadi — aks holda
+    yangi kelishuvlar bo'sh chiziqlar bilan chartni to'ldirib, yuk ketayotgan
+    kelishuvlarni pastga surib yuboradi."""
+    moving = make_contract(brand="Ketgan", kg="1000", price="1.00",
+                           created="2026-01-01")          # eng eskisi
+    make_shipment(contract=moving, kg="400")
+    for i in range(9):                                     # 9 ta yangi, bo'sh
+        make_contract(brand=f"Bo'sh {i}", kg="1000", price="1.00", created="2026-09-09")
+
+    shown = admin_client.get("/").context["contracts"]
+    assert moving.pk in [c.pk for c in shown]
+    assert shown[0].pk == moving.pk                        # harakatdagisi birinchi
+
+
+def test_progress_chart_says_when_it_is_showing_a_subset(admin_client, db):
+    for i in range(10):
+        make_contract(brand=f"K{i}", kg="1000", price="1.00")
+    resp = admin_client.get("/")
+    assert resp.context["contracts_shown"] == 8
+    assert resp.context["contracts_total"] == 10
+    assert "10 tadan 8 tasi" in resp.content.decode()

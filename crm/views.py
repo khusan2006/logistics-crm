@@ -76,6 +76,16 @@ def dashboard(request):
             owed[name] = owed.get(name, 0) + (planned - sent)
     truck_plan_rows = sorted(owed.items(), key=lambda kv: (-kv[1], kv[0]))
 
+    # The progress chart used to take the 8 newest kelishuvlar, so a run of fresh
+    # agreements filled it with empty bars while the ones actually shipping sat
+    # just below the cut — the dashboard read as "nothing is moving" next to a Yuk
+    # holatlari card listing nine loads. Show what has moved, most shipped first.
+    CHART_LIMIT = 8
+    chart_contracts = sorted(
+        contracts, key=lambda c: (c.shipped_kg > 0, c.shipped_kg), reverse=True)
+    contracts_total = len(chart_contracts)
+    chart_contracts = chart_contracts[:CHART_LIMIT]
+
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
     customer_debt_total = sum(
@@ -85,7 +95,8 @@ def dashboard(request):
     return render(request, "crm/dashboard.html", {
         "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
         "paid_total": paid_total, "debt_total": debt_total, "overdue": overdue,
-        "contracts": contracts[:8], "status_rows": status_rows,
+        "contracts": chart_contracts, "contracts_shown": len(chart_contracts),
+        "contracts_total": contracts_total, "status_rows": status_rows,
         "truck_plan_rows": truck_plan_rows,
         "stock_kg": stock_kg, "customer_debt_total": customer_debt_total,
         "sales_profit_total": sales_profit_total,

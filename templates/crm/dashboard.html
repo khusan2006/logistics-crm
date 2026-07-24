@@ -81,7 +81,12 @@
 
 <div class="chart-grid chart-grid--three">
   <div class="card chart-card">
-    <div class="card-head"><h2>Kelishuvlar bajarilishi</h2></div>
+    <div class="card-head">
+      <h2>Kelishuvlar bajarilishi</h2>
+      {% if contracts_total > contracts_shown %}
+      <span class="muted" style="font-size: 12px;">{{ contracts_total }} tadan {{ contracts_shown }} tasi</span>
+      {% endif %}
+    </div>
     {% if contracts %}
     <div class="hbars">
       {% for c in contracts %}
