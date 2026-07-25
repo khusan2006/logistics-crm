@@ -4,11 +4,11 @@
 {% block topbar_title %}Qarzlar{% endblock %}
 {% block content %}
 
-{% if rows %}
+{% if page.object_list %}
 <div class="table-wrap">
 <table>
   <tr><th class="sticky-col">Mijoz</th><th>Qarz</th><th>Muddati o'tgan sotuvlar</th><th></th></tr>
-  {% for row in rows %}
+  {% for row in page %}
   <tr>
     <td class="sticky-col">
       <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a>
@@ -24,6 +24,7 @@
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="mijoz" %}
 {% else %}
 <p class="muted">Qarzdor mijozlar yo'q.</p>
 {% endif %}

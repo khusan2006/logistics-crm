@@ -10,4 +10,5 @@
       <td>{{ row.summary }}</td></tr>
   {% empty %}<tr><td colspan="5" class="muted">Yozuvlar yo'q</td></tr>{% endfor %}
 </table></div>
+{% include "crm/_pagination.html" with label="yozuv" %}
 {% endblock %}

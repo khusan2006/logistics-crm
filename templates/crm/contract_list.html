@@ -99,6 +99,7 @@ under Tugallangan, where a kelishuv is fully paid by definition.
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="kelishuv" %}
 {% else %}
 <p class="muted">Kelishuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}

@@ -91,6 +91,7 @@ The totals below count everything the filters left, not just this page.
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="to'lov" %}
 {% else %}
 <p class="muted">To'lovlar topilmadi{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}

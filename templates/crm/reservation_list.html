@@ -46,6 +46,7 @@
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="bron" %}
 {% else %}
 <p class="muted">Bronlar topilmadi.</p>
 {% endif %}

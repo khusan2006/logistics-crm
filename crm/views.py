@@ -142,7 +142,7 @@ def _monthly_rows(limit=12):
 
 @role_required(User.Role.ADMIN)
 def audit_list(request):
-    page = Paginator(AuditLog.objects.select_related("user"), 50).get_page(request.GET.get("page"))
+    page = Paginator(AuditLog.objects.select_related("user"), 20).get_page(request.GET.get("page"))
     return render(request, "crm/audit_list.html", {"page": page})
 
 
@@ -152,7 +152,7 @@ def partner_list(request):
     partners = Partner.objects.all()
     if q:
         partners = partners.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(city__icontains=q))
-    page = Paginator(partners, 30).get_page(request.GET.get("page"))
+    page = Paginator(partners, 20).get_page(request.GET.get("page"))
     return render(request, "crm/partner_list.html", {"page": page, "q": q})
 
 
@@ -218,7 +218,7 @@ def customer_list(request):
         customers = customers.filter(
             Q(name__icontains=q) | Q(phone__icontains=q) | Q(address__icontains=q)
         )
-    page = Paginator(customers, 30).get_page(request.GET.get("page"))
+    page = Paginator(customers, 20).get_page(request.GET.get("page"))
     return render(request, "crm/customer_list.html", {"page": page, "q": q})
 
 
@@ -389,7 +389,7 @@ def contract_list(request):
     _, _, sort_key, sort_reverse = next(e for e in CONTRACT_SORTS if e[0] == sort)
     rows.sort(key=sort_key, reverse=sort_reverse)
 
-    page = Paginator(rows, 30).get_page(request.GET.get("page"))
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/contract_list.html", {
         "page": page, "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
@@ -538,7 +538,7 @@ def supplier_payment_list(request):
     total_paid = sum((p.amount for p in rows), Decimal("0"))
     total_out = sum((p.total_out for p in rows), Decimal("0"))
 
-    page = Paginator(rows, 30).get_page(request.GET.get("page"))
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/supplier_payment_list.html", {
         "page": page, "q": q, "partner_id": partner_id, "method": method,
         "date_from": date_from, "date_to": date_to, "sort": sort,
@@ -645,7 +645,7 @@ def customer_payment_list(request):
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         payments = payments.filter(customer_id=customer_id)
-    page = Paginator(payments, 30).get_page(request.GET.get("page"))
+    page = Paginator(payments, 20).get_page(request.GET.get("page"))
     return render(request, "crm/customer_payment_list.html", {"page": page})
 
 
@@ -836,7 +836,7 @@ def shipment_list(request):
 
     # Hammasi can grow without bound, so page it and group only what this page
     # shows; the active view stays whole, as the pipeline is meant to be scanned.
-    page = Paginator(shipments, 50).get_page(request.GET.get("page")) if show_all else None
+    page = Paginator(shipments, 20).get_page(request.GET.get("page")) if show_all else None
     rows = list(page.object_list) if page is not None else shipments
 
     # Group the rows under their kelishuv (newest contract first, newest load first
@@ -918,7 +918,7 @@ def ombor(request):
         g["cost_min"], g["cost_max"] = min(costs), max(costs)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
 
-    page = Paginator(groups, 30).get_page(request.GET.get("page"))
+    page = Paginator(groups, 20).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {"page": page, "q": q})
 
 
@@ -1214,7 +1214,7 @@ def sale_list(request):
         if q.isdigit():
             filters |= Q(line__shipment_id=int(q))
         sales = sales.filter(filters)
-    page = Paginator(sales, 30).get_page(request.GET.get("page"))
+    page = Paginator(sales, 20).get_page(request.GET.get("page"))
     return render(request, "crm/sale_list.html", {"page": page, "q": q})
 
 
@@ -1361,7 +1361,7 @@ def sale_detail(request, pk):
 @role_required(User.Role.ADMIN)
 def reservation_list(request):
     reservations = Reservation.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
-    page = Paginator(reservations, 30).get_page(request.GET.get("page"))
+    page = Paginator(reservations, 20).get_page(request.GET.get("page"))
     return render(request, "crm/reservation_list.html", {"page": page})
 
 
@@ -1504,7 +1504,8 @@ def debt_list(request):
         overdue_count = sum(1 for s in c.sales.all() if s.is_overdue)
         rows.append({"customer": c, "overdue_count": overdue_count})
     rows.sort(key=lambda r: r["customer"].balance, reverse=True)
-    return render(request, "crm/debt_list.html", {"rows": rows})
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    return render(request, "crm/debt_list.html", {"page": page})
 
 
 @role_required(User.Role.ADMIN)

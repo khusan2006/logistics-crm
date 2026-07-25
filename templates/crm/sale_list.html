@@ -51,6 +51,7 @@
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="sotuv" %}
 {% else %}
 <p class="muted">Sotuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}

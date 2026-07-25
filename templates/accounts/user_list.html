@@ -25,6 +25,7 @@
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="foydalanuvchi" %}
 {% else %}
 <p class="muted">Foydalanuvchilar topilmadi.</p>
 {% endif %}

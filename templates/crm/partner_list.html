@@ -36,6 +36,7 @@
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="hamkor" %}
 {% else %}
 <p class="muted">Hamkorlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}

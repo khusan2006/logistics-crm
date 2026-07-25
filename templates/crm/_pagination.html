@@ -1,0 +1,16 @@
+{% comment %}
+Shared list pagination control. Include with a `page` (Django Page object) in
+context; optionally pass a `label` for the count noun:
+
+    {% include "crm/_pagination.html" with label="yuk" %}
+
+{% querystring %} (Django 6) rebuilds the current query string with page= swapped
+in, so every active filter, sort and search term is carried to the next page.
+{% endcomment %}
+{% if page.has_other_pages %}
+<div class="pagination">
+  {% if page.has_previous %}<a class="btn btn-ghost" href="{% querystring page=page.previous_page_number %}">Oldingi</a>{% endif %}
+  <span class="muted">{{ page.number }} / {{ page.paginator.num_pages }} · {{ page.paginator.count }} ta{% if label %} {{ label }}{% endif %}</span>
+  {% if page.has_next %}<a class="btn btn-ghost" href="{% querystring page=page.next_page_number %}">Keyingi</a>{% endif %}
+</div>
+{% endif %}

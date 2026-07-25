@@ -92,6 +92,7 @@
   {% endfor %}
 </table>
 </div>
+{% include "crm/_pagination.html" with label="marka" %}
 {% else %}
 <p class="muted">Ombor bo'sh{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}

@@ -23,7 +23,7 @@ class LoginView(auth_views.LoginView):
 
 @role_required(User.Role.ADMIN)
 def user_list(request):
-    page = Paginator(User.objects.all().order_by("username"), 30).get_page(request.GET.get("page"))
+    page = Paginator(User.objects.all().order_by("username"), 20).get_page(request.GET.get("page"))
     return render(request, "accounts/user_list.html", {"page": page})
 
 

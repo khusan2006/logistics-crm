@@ -281,13 +281,7 @@
 </table>
 </div>
 <p class="muted loads-empty-filtered" hidden>Bu holatda yuk yo'q.</p>
-{% if page.has_other_pages %}
-<div class="pagination">
-  {% if page.has_previous %}<a class="btn btn-ghost" href="?all=1{% if q %}&q={{ q|urlencode }}{% endif %}&page={{ page.previous_page_number }}">Oldingi</a>{% endif %}
-  <span class="muted">{{ page.number }} / {{ page.paginator.num_pages }} · {{ page.paginator.count }} yuk</span>
-  {% if page.has_next %}<a class="btn btn-ghost" href="?all=1{% if q %}&q={{ q|urlencode }}{% endif %}&page={{ page.next_page_number }}">Keyingi</a>{% endif %}
-</div>
-{% endif %}
+{% include "crm/_pagination.html" with label="yuk" %}
 {% else %}
 <p class="muted">{% if show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
