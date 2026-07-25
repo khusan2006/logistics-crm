@@ -245,6 +245,24 @@ class Contract(models.Model):
         return sum((p.amount for p in self.supplier_payments.all()), Decimal("0"))
 
     @property
+    def commission_accrued(self):
+        """Total vositachi cut paid across this kelishuv's hamkor payments so far.
+        Grows as installments are paid; this is real money already out of the kassa."""
+        if not hasattr(self, "supplier_payments"):
+            return Decimal("0")
+        return sum((p.commission_amount for p in self.supplier_payments.all()), Decimal("0"))
+
+    @property
+    def commission_per_kg(self):
+        """The vositachi cut spread over the kelishuv's WHOLE agreed kg, so every
+        load carries the same commission/kg. Live: paying more (or editing a
+        payment) re-prices every load on this kelishuv, sold ones included."""
+        kg = self.kg
+        if not kg:
+            return Decimal("0")
+        return (self.commission_accrued / kg).quantize(Decimal("0.0001"))
+
+    @property
     def shipped_value(self):
         """USD value of the goods actually sent (each truck line at its own unit
         price). The payable to the partner accrues per shipped truck, not on
@@ -580,10 +598,12 @@ class ShipmentLine(models.Model):
 
     @property
     def landed_cost_per_kg(self):
-        """True cost of one kg of this product in this load: its unit price plus
-        the truck's freight share. Snapshotted into sales so later expenses never
-        retroactively change a past sale's profit."""
-        return (self.unit_price + self.shipment.expense_per_kg).quantize(Decimal("0.0001"))
+        """True cost of one kg of this product in this load: its unit price, the
+        truck's freight share, and the kelishuv's vositachi cut per kg. Fully live —
+        add a freight expense or pay the hamkor and every load re-prices at once,
+        including stock already sold (profit is computed off this, not a snapshot)."""
+        return (self.unit_price + self.shipment.expense_per_kg
+                + self.contract_line.contract.commission_per_kg).quantize(Decimal("0.0001"))
 
     @property
     def sold_kg(self):
@@ -680,9 +700,9 @@ def brand_stock_costed():
 
 class Sale(models.Model):
     """Sotuv: kg sold from one arrived lot at a sale price. A sale entered by brand
-    is split FIFO across the oldest lots (one row per lot slice). Snapshots that
-    lot's landed cost at sale time so later shipment expenses never retroactively
-    change a past sale's profit."""
+    is split FIFO across the oldest lots (one row per lot slice). Cost of goods is
+    NOT snapshotted — `cost_price` reads the lot's live tannarx, so adding a freight
+    expense or paying the hamkor's vositachi cut re-prices this sale too."""
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="sales", verbose_name="Mijoz")
@@ -692,7 +712,6 @@ class Sale(models.Model):
                                     related_name="+", verbose_name="Bron")
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
-    cost_price = models.DecimalField("1 kg tan narxi (USD)", max_digits=14, decimal_places=4)
     date = models.DateField("Sana", default=timezone.localdate)
     debt_deadline = models.DateField("To'lov muddati", null=True, blank=True)
     note = models.CharField("Izoh", max_length=255, blank=True)
@@ -704,6 +723,13 @@ class Sale(models.Model):
         ordering = ["-date", "-created_at"]
         verbose_name = "Sotuv"
         verbose_name_plural = "Sotuvlar"
+
+    @property
+    def cost_price(self):
+        """1 kg tan narxi — the lot's live landed cost (goods + freight + vositachi),
+        read fresh every time rather than frozen at sale, so cost of goods always
+        reflects the latest expenses and hamkor payments."""
+        return self.line.landed_cost_per_kg
 
     @property
     def total(self):

@@ -108,7 +108,7 @@ def test_ombor_group_totals_net_out_sales(admin_client, db):
     lot = _lot(brand="2102 kampaund", kg="1000", price="1.20")
     customer = Customer.objects.create(name="Ali")
     Sale.objects.create(customer=customer, line=lot, kg=Decimal("400"),
-                        price=Decimal("2"), cost_price=Decimal("1.20"), date="2026-07-20")
+                        price=Decimal("2"), date="2026-07-20")
 
     group = admin_client.get("/ombor/").context["page"].object_list[0]
     assert group["sold"] == Decimal("400") and group["available"] == Decimal("600")

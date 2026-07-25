@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from crm.models import (
-    AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
+    AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
 
 
@@ -59,8 +59,11 @@ def test_sale_snapshots_cost_and_computes_total_profit(admin_client, db):
     assert customer.balance == Decimal("6400.00")
 
 
-def test_cost_price_stays_frozen_after_later_expense_change(admin_client, db):
-    lot = _lot(expense="2000.00")
+def test_expense_added_after_sale_now_changes_profit(admin_client, db):
+    """Fully-dynamic tannarx: a freight expense added AFTER the sale re-prices the
+    load, so the already-recorded sale's cost and profit move with it. (This is the
+    deliberate reversal of the old frozen-cost behaviour.)"""
+    lot = _lot(expense="2000.00")                        # 1.00 + 2000/10000 = 1.20
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "4000",
@@ -68,14 +71,57 @@ def test_cost_price_stays_frozen_after_later_expense_change(admin_client, db):
     })
     sale = Sale.objects.get(line=lot)
     assert sale.cost_price == Decimal("1.2000")
+    assert sale.profit == Decimal("1600.00")             # (1.60 - 1.20) * 4000
 
-    # Add a big new expense — landed cost changes, but the snapshot must not.
+    # 8 000 more freight → 10 000/10 000 = 1.00 → tannarx 2.00, and the sale follows.
     ShipmentExpense.objects.create(shipment=lot.shipment, amount=Decimal("8000.00"), date="2026-07-19")
-    lot.refresh_from_db()
-    assert lot.landed_cost_per_kg != Decimal("1.2000")
-
     sale.refresh_from_db()
-    assert sale.cost_price == Decimal("1.2000")
+    assert sale.cost_price == Decimal("2.0000")
+    assert sale.profit == Decimal("-1600.00")            # (1.60 - 2.00) * 4000
+
+
+def test_vositachi_commission_adds_to_tannarx(db):
+    """The middleman's cut on hamkor payments rides on top of tannarx: kelishuv
+    commission ÷ the kelishuv's whole agreed kg, added per kg to every load."""
+    lot = _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00")
+    assert lot.landed_cost_per_kg == Decimal("1.2000")   # goods 1.00 + freight 0.20
+    contract = lot.contract_line.contract
+    SupplierPayment.objects.create(
+        contract=contract, date="2026-07-12", amount=Decimal("10000"),
+        commission_percent=Decimal("2"), method="cash")  # 200 cut ÷ 10 000 kg = 0.02
+    assert contract.commission_per_kg == Decimal("0.0200")
+    assert lot.landed_cost_per_kg == Decimal("1.2200")
+
+
+def test_commission_per_kg_divides_by_whole_kelishuv_kg(db):
+    """Commission spreads over the kelishuv's whole agreed kg, not one truck's."""
+    partner = Partner.objects.create(name="Multi", phone="1", city="T")
+    contract = Contract.objects.create(partner=partner, created="2026-07-01")
+    ContractLine.objects.create(contract=contract, brand="A", kg=Decimal("10000"), price=Decimal("1"))
+    ContractLine.objects.create(contract=contract, brand="B", kg=Decimal("20000"), price=Decimal("1"))
+    SupplierPayment.objects.create(
+        contract=contract, date="2026-07-10", amount=Decimal("15000"),
+        commission_percent=Decimal("2"), method="cash")  # 300 cut ÷ 30 000 kg
+    assert contract.commission_per_kg == Decimal("0.0100")
+
+
+def test_commission_after_sale_lowers_that_sales_profit(admin_client, db):
+    """Commission is retroactive: paying the hamkor after a sale lowers that sale's
+    profit — money fully reflects in COGS, no timing leak."""
+    lot = _lot(kg="10000", brand="HDPE", contract_price="1.00", expense="")   # tannarx 1.00
+    customer = _customer()
+    admin_client.post(f"/sales/new/?lot={lot.pk}", {
+        "customer": customer.pk, "brand": lot.brand, "kg": "4000",
+        "price": "1.50", "date": "2026-07-18", "debt_deadline": "", "note": "",
+    })
+    sale = Sale.objects.get(line=lot)
+    assert sale.profit == Decimal("2000.00")             # (1.50 - 1.00) * 4000
+    SupplierPayment.objects.create(
+        contract=lot.contract_line.contract, date="2026-07-19", amount=Decimal("10000"),
+        commission_percent=Decimal("2"), method="cash")  # +0.02/kg → cost 1.02
+    sale.refresh_from_db()
+    assert sale.cost_price == Decimal("1.0200")
+    assert sale.profit == Decimal("1920.00")             # (1.50 - 1.02) * 4000
 
 
 def test_selling_more_than_available_kg_rejected(admin_client, db):

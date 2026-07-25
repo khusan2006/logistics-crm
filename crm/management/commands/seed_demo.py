@@ -217,7 +217,6 @@ class Command(BaseCommand):
             customer=customers["akbar"], line=lot.lines.first(), date=today - timedelta(days=3),
             defaults={
                 "kg": Decimal("5000"), "price": Decimal("1.35"),
-                "cost_price": lot.lines.first().landed_cost_per_kg,
                 "debt_deadline": today + timedelta(days=14),
                 "note": "Demo sotuv", "created_by": admin,
             },

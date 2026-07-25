@@ -48,10 +48,10 @@ def _customer(name="Alisher Mebel"):
     return Customer.objects.create(name=name, phone="998901112233", address="Toshkent")
 
 
-def _sale(customer, shipment, kg=Decimal("100"), price=Decimal("2"), cost_price=Decimal("1"),
+def _sale(customer, shipment, kg=Decimal("100"), price=Decimal("2"),
           date="2026-07-17"):
     return Sale.objects.create(
-        customer=customer, line=shipment.lines.first(), kg=kg, price=price, cost_price=cost_price, date=date,
+        customer=customer, line=shipment.lines.first(), kg=kg, price=price, date=date,
     )
 
 

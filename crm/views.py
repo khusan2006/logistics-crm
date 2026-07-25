@@ -1248,7 +1248,7 @@ def sale_create(request):
                     take = min(lot.available_kg, remaining)
                     sale = Sale.objects.create(
                         customer=data["customer"], line=lot, kg=take,
-                        price=data["price"], cost_price=lot.landed_cost_per_kg,
+                        price=data["price"],
                         date=data["date"], debt_deadline=data["debt_deadline"],
                         note=data["note"], created_by=request.user,
                     )
@@ -1293,7 +1293,7 @@ def sale_create_lot(request, lot_id):
             data = form.cleaned_data
             sale = Sale.objects.create(
                 customer=data["customer"], line=data["lot"], kg=data["kg"],
-                price=data["price"], cost_price=data["lot"].landed_cost_per_kg,
+                price=data["price"],
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
             )
@@ -1316,9 +1316,7 @@ def sale_edit(request, pk):
     title = "Sotuvni tahrirlash"
     if request.method == "POST":
         if form.is_valid():
-            sale = form.save(commit=False)
-            sale.cost_price = sale.line.landed_cost_per_kg
-            sale.save()
+            sale = form.save()
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Sotuv", sale.pk,
                 f"Sotuv tahrirlandi: {sale.kg} kg · {sale.customer.name}",
@@ -1437,7 +1435,7 @@ def reservation_convert(request, pk):
         return form_reload(request, reverse("reservation_list"))
     sale = Sale.objects.create(
         customer=reservation.customer, line=reservation.line, kg=reservation.kg,
-        price=price, cost_price=reservation.line.landed_cost_per_kg,
+        price=price,
         date=timezone.localdate(), reservation=reservation, created_by=request.user,
     )
     reservation.status = Reservation.Status.CONVERTED

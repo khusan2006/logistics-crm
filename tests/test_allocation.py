@@ -23,7 +23,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00"):
 def _sale(customer, lot, kg, price, date):
     return Sale.objects.create(
         customer=customer, line=lot, kg=Decimal(kg), price=Decimal(price),
-        cost_price=lot.landed_cost_per_kg, date=date,
+        date=date,
     )
 
 
