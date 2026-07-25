@@ -1,5 +1,5 @@
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
@@ -10,11 +10,13 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from accounts.decorators import role_required
 from accounts.models import User
 
+from .context_processors import SESSION_KEY
 from .exports import xlsx_response
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
@@ -27,7 +29,7 @@ from .models import (
     PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
-    apply_customer_advance, arrived_lots, commission_total, fifo_lots,
+    apply_customer_advance, arrived_lots, commission_total, convert_pair, fifo_lots,
     trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
@@ -43,10 +45,12 @@ def dashboard(request):
     arrived_kg = ShipmentLine.objects.filter(
         shipment__arrived__isnull=False).aggregate(s=Sum("kg"))["s"] or 0
     paid_total = SupplierPayment.objects.aggregate(s=Sum("amount"))["s"] or 0
+    paid_total_uzs = SupplierPayment.objects.aggregate(s=Sum("amount_uzs"))["s"] or 0
     # Across every kelishuv, not only the goods already sent: this is the whole
     # remaining obligation to hamkorlar. Kassa keeps its own narrower figure for
     # what is due right now — that one is captioned as such.
     debt_total = sum((c.payable_left for c in contracts), Decimal("0"))
+    debt_total_uzs = sum((c.payable_left_uzs for c in contracts), Decimal("0"))
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
     # Each holat with how many trucks each hamkor has sitting in it. Listing the
@@ -88,13 +92,18 @@ def dashboard(request):
 
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
-    customer_debt_total = sum(
-        (c.balance for c in Customer.objects.all() if c.balance > 0), Decimal("0"))
+    in_debt = [c for c in Customer.objects.all() if c.balance > 0]
+    customer_debt_total = sum((c.balance for c in in_debt), Decimal("0"))
+    customer_debt_total_uzs = sum((c.balance_uzs for c in in_debt), Decimal("0"))
     sales_profit_total = sum((s.profit for s in Sale.objects.all()), Decimal("0"))
+    sales_profit_total_uzs = sum((s.profit_uzs for s in Sale.objects.all()), Decimal("0"))
 
     return render(request, "crm/dashboard.html", {
         "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
         "paid_total": paid_total, "debt_total": debt_total, "overdue": overdue,
+        "paid_total_uzs": paid_total_uzs, "debt_total_uzs": debt_total_uzs,
+        "customer_debt_total_uzs": customer_debt_total_uzs,
+        "sales_profit_total_uzs": sales_profit_total_uzs,
         "contracts": chart_contracts, "contracts_shown": len(chart_contracts),
         "contracts_total": contracts_total, "status_rows": status_rows,
         "truck_plan_rows": truck_plan_rows,
@@ -121,6 +130,8 @@ def _monthly_rows(limit=12):
         return months.setdefault(key, {
             "month": key, "sent": 0, "arrived": 0, "kg": Decimal("0"),
             "value": Decimal("0"), "sales": Decimal("0"), "profit": Decimal("0"),
+            "value_uzs": Decimal("0"), "sales_uzs": Decimal("0"),
+            "profit_uzs": Decimal("0"),
         })
 
     for shipment in Shipment.objects.prefetch_related("lines__contract_line"):
@@ -131,11 +142,14 @@ def _monthly_rows(limit=12):
             row["arrived"] += 1
             row["kg"] += shipment.kg
             row["value"] += shipment.goods_value
+            row["value_uzs"] += shipment.goods_value_uzs
 
     for sale in Sale.objects.prefetch_related("returns"):
         row = bucket(sale.date)
         row["sales"] += sale.net_total
         row["profit"] += sale.profit
+        row["sales_uzs"] += sale.net_total_uzs
+        row["profit_uzs"] += sale.profit_uzs
 
     return sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
 
@@ -537,6 +551,8 @@ def supplier_payment_list(request):
     rows = list(payments)
     total_paid = sum((p.amount for p in rows), Decimal("0"))
     total_out = sum((p.total_out for p in rows), Decimal("0"))
+    total_paid_uzs = sum((p.amount_uzs for p in rows), Decimal("0"))
+    total_out_uzs = sum((p.total_out_uzs for p in rows), Decimal("0"))
 
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/supplier_payment_list.html", {
@@ -545,6 +561,7 @@ def supplier_payment_list(request):
         "sort_options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS],
         "methods": PayMethod.choices, "partners": Partner.objects.all(),
         "total_paid": total_paid, "total_out": total_out,
+        "total_paid_uzs": total_paid_uzs, "total_out_uzs": total_out_uzs,
         "has_filters": bool(q or partner_id or method or date_from or date_to),
     })
 
@@ -914,8 +931,11 @@ def ombor(request):
         if partner not in g["partners"]:
             g["partners"].append(partner)
     for g in groups:
-        costs = [lot.landed_cost_per_kg for lot in g["lots"]]
-        g["cost_min"], g["cost_max"] = min(costs), max(costs)
+        # The so'm range is taken from the same lots rather than converting the
+        # dollar range, so each end is stated at the kurs its own lot was booked at.
+        costed = [(lot.landed_cost_per_kg, lot.landed_cost_per_kg_uzs) for lot in g["lots"]]
+        g["cost_min"], g["cost_min_uzs"] = min(costed)
+        g["cost_max"], g["cost_max_uzs"] = max(costed)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
 
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
@@ -1144,9 +1164,6 @@ def expense_create(request):
                     expense = form.save(commit=False)
                     expense.shipment = shipment
                     expense.date = target.cleaned_data["date"]
-                    expense.amount = form.cleaned_data["amount"]
-                    expense.amount_original = form.cleaned_data["amount_original"]
-                    expense.exchange_rate = form.cleaned_data["exchange_rate"]
                     expense.created_by = request.user
                     expense.save()
                     saved.append(expense)
@@ -1248,7 +1265,9 @@ def sale_create(request):
                     take = min(lot.available_kg, remaining)
                     sale = Sale.objects.create(
                         customer=data["customer"], line=lot, kg=take,
-                        price=data["price"],
+                        # every FIFO slice inherits the one narx that was agreed,
+                        # in the currency it was agreed in
+                        **form.money_kwargs(),
                         date=data["date"], debt_deadline=data["debt_deadline"],
                         note=data["note"], created_by=request.user,
                     )
@@ -1293,7 +1312,7 @@ def sale_create_lot(request, lot_id):
             data = form.cleaned_data
             sale = Sale.objects.create(
                 customer=data["customer"], line=data["lot"], kg=data["kg"],
-                price=data["price"],
+                **form.money_kwargs(),
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
             )
@@ -1417,16 +1436,28 @@ def reservation_convert(request, pk):
     if reservation.line.arrived is None:
         messages.error(request, "Lot hali omborga yetib kelmagan")
         return form_reload(request, reverse("reservation_list"))
-    price = reservation.price
+    # The bron's own money shape carries over whole — currency, kurs and both
+    # values. A bron struck in so'm must not become a dollar sotuv re-rated at
+    # today's kurs, which would quietly change the price the mijoz agreed to.
+    price, price_uzs = reservation.price, reservation.price_uzs
     if price is None:
         raw_price = request.POST.get("price")
         try:
-            price = Decimal(raw_price) if raw_price else None
+            typed = Decimal(raw_price) if raw_price else None
         except (ValueError, ArithmeticError):
-            price = None
+            typed = None
+        if typed is not None and typed > 0:
+            # An unpriced bron is settled now, in the currency the bron was taken in.
+            price, price_uzs = convert_pair(
+                typed, reservation.currency, reservation.exchange_rate, "0.0001")
     if price is None:
         messages.error(request, "Narx ko'rsatilishi kerak")
         return form_reload(request, reverse("reservation_list"))
+    if price_uzs is None:
+        # Reservation.price_uzs is nullable (an unpriced bron), Sale.price_uzs is
+        # not — a bron carrying a narx but no so'm twin still has to become a
+        # complete sotuv, so derive the missing side at the bron's own kurs.
+        _, price_uzs = convert_pair(price, Currency.USD, reservation.exchange_rate, "0.0001")
     # Defense-in-depth: reserved kg was validated at reservation time and convert is
     # net-neutral, but refuse if the lot has since become over-committed (e.g. its kg
     # was edited down) so a convert can never oversell.
@@ -1435,7 +1466,8 @@ def reservation_convert(request, pk):
         return form_reload(request, reverse("reservation_list"))
     sale = Sale.objects.create(
         customer=reservation.customer, line=reservation.line, kg=reservation.kg,
-        price=price,
+        price=price, price_uzs=price_uzs, currency=reservation.currency,
+        exchange_rate=reservation.exchange_rate,
         date=timezone.localdate(), reservation=reservation, created_by=request.user,
     )
     reservation.status = Reservation.Status.CONVERTED
@@ -1513,6 +1545,17 @@ def debt_customer(request, pk):
     return render(request, "crm/debt_customer.html", {"customer": customer, "sales": sales})
 
 
+def _uzs_slice(row, part):
+    """The so'm worth of `part` — a commission or a foiz carved out of `row`'s
+    amount — at that row's own kurs. Taken as a fraction of the stored so'm value
+    rather than reconverted, so a derived line can never disagree with its parent
+    over what the kurs was that day."""
+    if not row.amount:
+        return Decimal("0")
+    return (row.amount_uzs * part / row.amount).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 @role_required(User.Role.ADMIN)
 def kassa(request):
     """The till, client-crm style: a current-state hero (Kassadagi pul + what we
@@ -1530,14 +1573,31 @@ def kassa(request):
             qs = qs.filter(date__lte=date_to)
         return qs
 
-    def _sum(qs):
-        return qs.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+    # Summed per row, not in SQL: what reaches the kassa is net of the bank's foiz
+    # on the way in and gross of it (plus the vositachi cut) on the way out, and
+    # both are Python properties. Summing rows also keeps every total equal to the
+    # figures printed beside them — one SQL expression would round once at the end.
+    def _in(qs):
+        return sum((p.net_amount for p in qs), Decimal("0"))
+
+    def _out(qs):
+        return sum((r.total_out for r in qs), Decimal("0"))
+
+    def _in_uzs(qs):
+        return sum((p.net_amount_uzs for p in qs), Decimal("0"))
+
+    def _out_uzs(qs):
+        return sum((r.total_out_uzs for r in qs), Decimal("0"))
 
     # Joriy holat (all-time, filter-independent): money physically in the till.
-    cash_total = (_sum(CustomerPayment.objects.all())
-                  - _sum(SupplierPayment.objects.all())
-                  - commission_total(SupplierPayment.objects.all())
-                  - _sum(ShipmentExpense.objects.all()))
+    # The so'm figure is the sum of each row's OWN so'm value, so it is what was
+    # actually banked over time — not the dollar total re-rated at today's kurs.
+    cash_total = (_in(CustomerPayment.objects.all())
+                  - _out(SupplierPayment.objects.all())
+                  - _out(ShipmentExpense.objects.all()))
+    cash_total_uzs = (_in_uzs(CustomerPayment.objects.all())
+                      - _out_uzs(SupplierPayment.objects.all())
+                      - _out_uzs(ShipmentExpense.objects.all()))
 
     cust_pays = _range(CustomerPayment.objects.select_related("customer"))
     sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
@@ -1545,14 +1605,21 @@ def kassa(request):
 
     balances = {}
     net_in = net_out = Decimal("0")
+    net_in_uzs = net_out_uzs = Decimal("0")
     for value, label in PayMethod.choices:
-        m_in = _sum(cust_pays.filter(method=value))
-        m_out = (_sum(sup_pays.filter(method=value))
-                 + commission_total(sup_pays.filter(method=value))
-                 + _sum(expenses.filter(method=value)))
-        balances[value] = {"label": label, "in": m_in, "out": m_out, "balance": m_in - m_out}
+        m_in = _in(cust_pays.filter(method=value))
+        m_out = (_out(sup_pays.filter(method=value))
+                 + _out(expenses.filter(method=value)))
+        m_in_uzs = _in_uzs(cust_pays.filter(method=value))
+        m_out_uzs = (_out_uzs(sup_pays.filter(method=value))
+                     + _out_uzs(expenses.filter(method=value)))
+        balances[value] = {"label": label, "in": m_in, "out": m_out,
+                           "balance": m_in - m_out, "in_uzs": m_in_uzs,
+                           "out_uzs": m_out_uzs, "balance_uzs": m_in_uzs - m_out_uzs}
         net_in += m_in
         net_out += m_out
+        net_in_uzs += m_in_uzs
+        net_out_uzs += m_out_uzs
 
     # Kirim ledger: payments received from customers, newest first.
     income_rows = sorted(cust_pays, key=lambda p: (p.date, p.pk), reverse=True)
@@ -1566,7 +1633,7 @@ def kassa(request):
             "title": f"Kelishuv {p.contract.code} · {p.contract.brand_summary}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_original": p.amount_original, "amount": p.amount,
+            "amount_uzs": p.amount_uzs, "amount": p.amount,
         })
     for p in sup_pays:
         if not p.commission_amount:
@@ -1576,8 +1643,21 @@ def kassa(request):
             "title": (f"Vositachi ({p.commission_percent}%) · "
                       f"kelishuv {p.contract.code}"),
             "method_code": p.method, "method": p.get_method_display(),
-            "currency": Currency.USD, "exchange_rate": Decimal("0"),
-            "amount_original": p.commission_amount, "amount": p.commission_amount,
+            # The cut is a slice of the payment, so it inherits that row's kurs
+            # rather than being re-rated at today's.
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": _uzs_slice(p, p.commission_amount),
+            "amount": p.commission_amount,
+        })
+    for p in sup_pays:
+        if not p.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "title": f"Perechisleniya foizi ({p.fee_percent}%) · kelishuv {p.contract.code}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": _uzs_slice(p, p.fee_amount), "amount": p.fee_amount,
         })
     for e in expenses:
         outflow_rows.append({
@@ -1585,7 +1665,17 @@ def kassa(request):
             "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
             "method_code": e.method, "method": e.get_method_display(),
             "currency": e.currency, "exchange_rate": e.exchange_rate,
-            "amount_original": e.amount_original, "amount": e.amount,
+            "amount_uzs": e.amount_uzs, "amount": e.amount,
+        })
+    for e in expenses:
+        if not e.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_expense", "pk": e.pk, "date": e.date, "obj": e,
+            "title": f"Perechisleniya foizi ({e.fee_percent}%) · yuk #{e.shipment_id}",
+            "method_code": e.method, "method": e.get_method_display(),
+            "currency": e.currency, "exchange_rate": e.exchange_rate,
+            "amount_uzs": _uzs_slice(e, e.fee_amount), "amount": e.fee_amount,
         })
     outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 
@@ -1601,9 +1691,11 @@ def kassa(request):
     for c in Contract.objects.select_related("partner").prefetch_related("shipments"):
         d = c.debt
         if d > 0:
-            payables[c.partner] = payables.get(c.partner, Decimal("0")) + d
-    partner_debts = sorted(payables.items(), key=lambda kv: kv[1], reverse=True)
-    payable_total = sum((d for _, d in partner_debts), Decimal("0"))
+            usd, uzs = payables.get(c.partner, (Decimal("0"), Decimal("0")))
+            payables[c.partner] = (usd + d, uzs + c.debt_uzs)
+    partner_debts = sorted(payables.items(), key=lambda kv: kv[1][0], reverse=True)
+    payable_total = sum((d for _, (d, _u) in partner_debts), Decimal("0"))
+    payable_total_uzs = sum((u for _, (_d, u) in partner_debts), Decimal("0"))
 
     # Quick period presets for the filter bar.
     today = timezone.localdate()
@@ -1615,11 +1707,14 @@ def kassa(request):
     ]
 
     return render(request, "crm/kassa.html", {
-        "cash_total": cash_total,
+        "cash_total": cash_total, "cash_total_uzs": cash_total_uzs,
         "balances": balances, "net_in": net_in, "net_out": net_out,
         "net_total": net_in - net_out,
+        "net_in_uzs": net_in_uzs, "net_out_uzs": net_out_uzs,
+        "net_total_uzs": net_in_uzs - net_out_uzs,
         "income_page": income_page, "outflow_page": outflow_page,
         "partner_debts": partner_debts, "payable_total": payable_total,
+        "payable_total_uzs": payable_total_uzs,
         "date_from": date_from, "date_to": date_to, "presets": presets,
     })
 
@@ -1712,8 +1807,15 @@ def reports(request):
     kontrakt_summasi = sum((c.total_value for c in contracts), Decimal("0"))
     hamkorga_tolangan = _sum(sup_pays)
     hamkor_qarzi = sum((c.debt for c in contracts), Decimal("0"))
-    mijoz_qarzi = sum((c.balance for c in Customer.objects.all() if c.balance > 0), Decimal("0"))
+    in_debt = [c for c in Customer.objects.all() if c.balance > 0]
+    mijoz_qarzi = sum((c.balance for c in in_debt), Decimal("0"))
     profit_total = sum((s.profit for s in sales), Decimal("0"))
+    # so'm twins — each summed from the rows' own stored so'm values
+    kontrakt_summasi_uzs = sum((c.total_value_uzs for c in contracts), Decimal("0"))
+    hamkorga_tolangan_uzs = _sum(sup_pays, "amount_uzs")
+    hamkor_qarzi_uzs = sum((c.debt_uzs for c in contracts), Decimal("0"))
+    mijoz_qarzi_uzs = sum((c.balance_uzs for c in in_debt), Decimal("0"))
+    profit_total_uzs = sum((s.profit_uzs for s in sales), Decimal("0"))
     late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False) if s.is_overdue]
     kechikkan_soni = len(late_shipments)
 
@@ -1728,6 +1830,9 @@ def reports(request):
             "kontrakt_summasi": sum((c.total_value for c in p_contracts), Decimal("0")),
             "tolangan": _sum(sup_pays.filter(contract__partner=partner)),
             "qarz": sum((c.debt for c in p_contracts), Decimal("0")),
+            "kontrakt_summasi_uzs": sum((c.total_value_uzs for c in p_contracts), Decimal("0")),
+            "tolangan_uzs": _sum(sup_pays.filter(contract__partner=partner), "amount_uzs"),
+            "qarz_uzs": sum((c.debt_uzs for c in p_contracts), Decimal("0")),
         })
     partner_rows.sort(key=lambda r: r["qarz"], reverse=True)
 
@@ -1738,10 +1843,15 @@ def reports(request):
         c_sales = sales.filter(customer=customer)
         # net (post-returns) so the row reconciles with the net-based qarz column
         sotildi = sum((s.net_total for s in c_sales), Decimal("0"))
-        tolandi = _sum(cust_pays.filter(customer=customer))
+        tolandi = sum((p.net_amount for p in cust_pays.filter(customer=customer)),
+                      Decimal("0"))
         qarz = customer.balance if customer.balance > 0 else Decimal("0")
         customer_rows.append({
             "customer": customer, "sotildi": sotildi, "tolandi": tolandi, "qarz": qarz,
+            "sotildi_uzs": sum((s.net_total_uzs for s in c_sales), Decimal("0")),
+            "tolandi_uzs": sum((p.net_amount_uzs for p in cust_pays.filter(customer=customer)),
+                               Decimal("0")),
+            "qarz_uzs": customer.balance_uzs if customer.balance > 0 else Decimal("0"),
         })
     customer_rows.sort(key=lambda r: r["qarz"], reverse=True)
 
@@ -1750,6 +1860,10 @@ def reports(request):
         "omborga_kelgan_kg": omborga_kelgan_kg, "kontrakt_summasi": kontrakt_summasi,
         "hamkorga_tolangan": hamkorga_tolangan, "hamkor_qarzi": hamkor_qarzi,
         "mijoz_qarzi": mijoz_qarzi, "profit_total": profit_total,
+        "kontrakt_summasi_uzs": kontrakt_summasi_uzs,
+        "hamkorga_tolangan_uzs": hamkorga_tolangan_uzs,
+        "hamkor_qarzi_uzs": hamkor_qarzi_uzs, "mijoz_qarzi_uzs": mijoz_qarzi_uzs,
+        "profit_total_uzs": profit_total_uzs,
         "kechikkan_soni": kechikkan_soni, "late_shipments": late_shipments,
         "partner_rows": partner_rows, "customer_rows": customer_rows,
         "partners": Partner.objects.all(), "brands": ContractLine.objects.values_list(
@@ -1763,13 +1877,18 @@ def reports(request):
 @role_required(User.Role.ADMIN)
 def export_contracts(request):
     contracts = _report_querysets(request)["contracts"]
-    headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg",
-               "To'langan", "Qarz"]
+    headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
+               "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)", "Yuborilgan kg",
+               "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
     # One row per product, so a multi-product kelishuv is readable in Excel. The
-    # money columns are per kelishuv, so they repeat down its rows.
+    # money columns are per kelishuv, so they repeat down its rows. Both currencies
+    # ship in every export — which one the reader wants is not knowable here, and a
+    # spreadsheet cannot follow the app's toggle.
     rows = (
-        [c.code, c.created, c.partner.name, ln.brand, ln.kg, ln.price, ln.total_value,
-         ln.shipped_kg, c.paid_total, c.debt]
+        [c.code, c.created, c.partner.name, ln.brand, ln.kg,
+         ln.get_currency_display(), ln.exchange_rate, ln.price, ln.price_uzs,
+         ln.total_value, ln.total_value_uzs, ln.shipped_kg,
+         c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs]
         for c in contracts.prefetch_related("lines__shipment_lines", "supplier_payments")
         for ln in c.lines.all()
     )
@@ -1779,11 +1898,14 @@ def export_contracts(request):
 @role_required(User.Role.ADMIN)
 def export_supplier_payments(request):
     sup_pays = _report_querysets(request)["sup_pays"]
-    headers = ["Sana", "Kelishuv", "Hamkor", "Hamkorga", "Vositachi %", "Vositachi",
-               "Kassadan", "Usul"]
+    headers = ["Sana", "Kelishuv", "Hamkor", "Valyuta", "Kurs", "Hamkorga ($)",
+               "Hamkorga (so'm)", "Vositachi %", "Vositachi ($)", "Perechisleniya %",
+               "Perechisleniya ($)", "Kassadan ($)", "Kassadan (so'm)", "Usul"]
     rows = (
-        [p.date, p.contract.code, p.contract.partner.name, p.amount, p.commission_percent,
-         p.commission_amount, p.total_out, p.get_method_display()]
+        [p.date, p.contract.code, p.contract.partner.name, p.get_currency_display(),
+         p.exchange_rate, p.amount, p.amount_uzs, p.commission_percent,
+         p.commission_amount, p.fee_percent, p.fee_amount,
+         p.total_out, p.total_out_uzs, p.get_method_display()]
         for p in sup_pays
     )
     return xlsx_response("hamkor-tolovlari.xlsx", headers, rows)
@@ -1808,10 +1930,14 @@ def export_shipments(request):
 @role_required(User.Role.ADMIN)
 def export_sales(request):
     sales = _report_querysets(request)["sales"]
-    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Tan narx", "Sotuv narx", "Jami", "Foyda", "Qoldiq"]
+    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Valyuta", "Kurs", "Tan narx ($)",
+               "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
+               "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)"]
     rows = (
-        [s.date, s.customer.name, s.line_id, s.line.brand, s.kg, s.cost_price,
-         s.price, s.total, s.profit, s.remaining]
+        [s.date, s.customer.name, s.line_id, s.line.brand, s.kg,
+         s.get_currency_display(), s.exchange_rate, s.cost_price,
+         s.price, s.price_uzs, s.total, s.total_uzs,
+         s.profit, s.profit_uzs, s.remaining, s.remaining_uzs]
         for s in sales
     )
     return xlsx_response("sotuvlar.xlsx", headers, rows)
@@ -1819,9 +1945,29 @@ def export_sales(request):
 
 @role_required(User.Role.ADMIN)
 def export_debts(request):
-    headers = ["Mijoz", "Telefon", "Jami savdo", "To'langan", "Qarz"]
+    headers = ["Mijoz", "Telefon", "Jami savdo ($)", "Jami savdo (so'm)",
+               "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
     rows = (
-        [c.name, c.phone, c.sales_total, c.paid_total, c.balance]
+        [c.name, c.phone, c.sales_total, c.sales_total_uzs,
+         c.paid_total, c.paid_total_uzs, c.balance, c.balance_uzs]
         for c in Customer.objects.all() if c.balance > 0
     )
     return xlsx_response("qarzdorlar.xlsx", headers, rows)
+
+
+@require_POST
+def set_display_currency(request):
+    """Flip the whole app between dollar and so'm.
+
+    A view preference, so it lives in the session rather than on the user record —
+    the same person reads one report to a hamkor in dollars and the next to a mijoz
+    in so'm. `next` is checked against this host before redirecting so the switch
+    cannot be used as an open redirect."""
+    chosen = request.POST.get("currency")
+    if chosen in Currency.values:
+        request.session[SESSION_KEY] = chosen
+    target = request.POST.get("next") or reverse("dashboard")
+    if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()},
+                                           require_https=request.is_secure()):
+        target = reverse("dashboard")
+    return redirect(target)
