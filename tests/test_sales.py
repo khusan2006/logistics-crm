@@ -327,27 +327,33 @@ def _brand_label(brand):
 
 
 def test_sale_brand_option_is_readable_not_scientific(db):
-    """24 000 kg must read as '24000', never Decimal.normalize()'s '2.4E+4'."""
+    """24 000 kg must read as '24000', never Decimal.normalize()'s '2.4E+4'.
+    The label carries no filler words — no 'mavjud', no 'tannarx'."""
     _lot(kg="24000", brand="LLDPE", contract_price="1.00", expense="")
     label = _brand_label("LLDPE")
     assert "E+" not in label and "e+" not in label.lower()
-    assert "24000 kg mavjud" in label
+    assert "24000 kg" in label
+    assert "mavjud" not in label and "tannarx" not in label
 
 
-def test_sale_brand_option_shows_tannarx(db):
-    """Like the yuk/kelishuv modals, the option carries the cost floor (tannarx)
-    so the seller can price above it — here $1.20/kg (1.00 + 2000/10000)."""
-    _lot(kg="10000", brand="HDPE", contract_price="1.00", expense="2000.00")
+def test_sale_brand_option_shows_kelishuv_code(db):
+    """marka · kelishuv kod · remaining · tannarx — the kod ties the stock to the
+    kelishuv it came from, like the yuk/kelishuv dropdowns."""
+    lot = _lot(kg="10000", brand="HDPE", contract_price="1.00", expense="2000.00")
+    kod = lot.contract_line.contract.code
     label = _brand_label("HDPE")
-    assert "10000 kg mavjud" in label
-    assert "tannarx 1.2 $/kg" in label
+    assert kod in label
+    assert "10000 kg" in label
+    assert "1.2 $/kg" in label
+    # order is marka, then kod, then kg, then price
+    assert label.index("HDPE") < label.index(kod) < label.index("10000 kg") < label.index("1.2 $/kg")
 
 
 def test_sale_brand_option_tannarx_is_weighted_across_lots(db):
-    """Two lots of one marka at different landed costs → blended tannarx.
+    """Two lots of one marka at different landed costs → blended cost.
     10 000 kg @ $1.00 (no expense) + 10 000 kg @ $1.20 => (1.00+1.20)/2 = $1.10."""
     _lot(kg="10000", brand="PP", contract_price="1.00", expense="")
     _lot(kg="10000", brand="PP", contract_price="1.00", expense="2000.00")
     label = _brand_label("PP")
-    assert "20000 kg mavjud" in label
-    assert "tannarx 1.1 $/kg" in label
+    assert "20000 kg" in label
+    assert "1.1 $/kg" in label

@@ -511,15 +511,15 @@ class SaleCreateForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # marka · qolgan kg · tannarx — the same informative shape as the yuk and
-        # kelishuv option dropdowns. _clean_number keeps kg readable ("24000", not
-        # Decimal.normalize()'s "2.4E+4").
+        # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
+        # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
+        # readable ("24000", not Decimal.normalize()'s "2.4E+4").
         costed = brand_stock_costed()
-        self.stock = {b: avail for b, avail, _ in costed}
+        self.stock = {b: avail for b, avail, _, _ in costed}
         self.fields["brand"].choices = [
-            (b, f"{b} · {_clean_number(avail)} kg mavjud · "
-                f"tannarx {_clean_number(cost.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for b, avail, cost in costed
+            (b, f"{b} · {', '.join(kods)} · {_clean_number(avail)} kg · "
+                f"{_clean_number(cost.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
+            for b, avail, cost, kods in costed
         ]
 
     def clean(self):

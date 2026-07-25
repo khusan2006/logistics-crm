@@ -660,19 +660,22 @@ def fifo_lots(brand):
 
 
 def brand_stock_costed():
-    """[(brand, available kg, weighted-average tannarx)] across arrived lots, for the
-    sale-by-brand dropdown: availability plus the blended landed cost so the seller
-    sees the cost floor while typing a price. A brand's lots can carry different
-    landed costs, and a FIFO sale may hit any of them first, so the figure is the
-    kg-weighted average, not any single lot's cost."""
-    avail, cost = {}, {}
+    """[(brand, available kg, weighted-average tannarx, [kelishuv codes])] across
+    arrived lots, for the sale-by-brand dropdown: availability, the blended landed
+    cost (so the seller sees the cost floor while pricing), and which kelishuv(lar)
+    the stock came from. A brand's lots can carry different landed costs and come
+    from different kelishuvlar, and a FIFO sale may hit any of them first, so the
+    cost is the kg-weighted average and the codes are the full set."""
+    avail, cost, codes = {}, {}, {}
     for lot in arrived_lots():
         a = lot.available_kg
         if a > 0:
-            avail[lot.brand] = avail.get(lot.brand, Decimal("0")) + a
-            cost[lot.brand] = cost.get(lot.brand, Decimal("0")) + a * lot.landed_cost_per_kg
-    return [(brand, avail[brand], (cost[brand] / avail[brand]).quantize(Decimal("0.0001")))
-            for brand in sorted(avail)]
+            b = lot.brand
+            avail[b] = avail.get(b, Decimal("0")) + a
+            cost[b] = cost.get(b, Decimal("0")) + a * lot.landed_cost_per_kg
+            codes.setdefault(b, set()).add(lot.contract_line.contract.code)
+    return [(b, avail[b], (cost[b] / avail[b]).quantize(Decimal("0.0001")), sorted(codes[b]))
+            for b in sorted(avail)]
 
 
 class Sale(models.Model):
