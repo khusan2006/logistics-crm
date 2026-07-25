@@ -712,6 +712,11 @@ class Sale(models.Model):
                                     related_name="+", verbose_name="Bron")
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
+    # The cost that was frozen into this sale before tannarx went fully live. Kept
+    # read-only for audit/reconciliation; null on sales made after the switch. The
+    # live cost is the `cost_price` property below.
+    cost_price_snapshot = models.DecimalField(
+        "1 kg tan narxi (tarixiy)", max_digits=14, decimal_places=4, null=True, blank=True)
     date = models.DateField("Sana", default=timezone.localdate)
     debt_deadline = models.DateField("To'lov muddati", null=True, blank=True)
     note = models.CharField("Izoh", max_length=255, blank=True)

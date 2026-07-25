@@ -403,3 +403,37 @@ def test_sale_brand_option_tannarx_is_weighted_across_lots(db):
     label = _brand_label("PP")
     assert "20000 kg" in label
     assert "1.1 $/kg" in label
+
+
+def test_reconcile_reports_old_vs_new_profit(db):
+    """The reconciliation command compares each sale's frozen snapshot profit to the
+    new live profit, per month, and totals the delta — read-only."""
+    from crm.management.commands.reconcile_cost import monthly_reconciliation, old_profit
+    lot = _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="")  # live cost 1.00
+    customer = _customer()
+    sale = Sale.objects.create(customer=customer, line=lot, kg=Decimal("4000"),
+                               price=Decimal("1.50"), date="2026-07-10")
+    # Pretend this sale was booked earlier at a frozen cost of 0.90/kg.
+    Sale.objects.filter(pk=sale.pk).update(cost_price_snapshot=Decimal("0.9000"))
+    sale.refresh_from_db()
+
+    assert old_profit(sale) == Decimal("2400.00")   # (1.50 - 0.90) * 4000, as recorded
+    assert sale.profit == Decimal("2000.00")        # (1.50 - 1.00) * 4000, live now
+
+    rows, without_snapshot = monthly_reconciliation()
+    assert without_snapshot == 0
+    assert len(rows) == 1
+    assert rows[0]["old"] == Decimal("2400.00")
+    assert rows[0]["new"] == Decimal("2000.00")
+    assert rows[0]["delta"] == Decimal("-400.00")
+
+
+def test_reconcile_ignores_sales_without_a_snapshot(db):
+    """Sales created after the switch carry no snapshot and are excluded."""
+    from crm.management.commands.reconcile_cost import monthly_reconciliation
+    lot = _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="")
+    Sale.objects.create(customer=_customer(), line=lot, kg=Decimal("1000"),
+                        price=Decimal("1.50"), date="2026-07-10")  # no snapshot
+    rows, without_snapshot = monthly_reconciliation()
+    assert rows == []
+    assert without_snapshot == 1
