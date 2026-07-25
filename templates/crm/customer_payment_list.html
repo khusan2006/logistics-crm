@@ -21,8 +21,8 @@
     <td class="sticky-col">{{ p.date }}</td>
     <td><a href="{% url 'customer_edit' p.customer_id %}">{{ p.customer.name }}</a></td>
     <td>
-      {{ p.amount|usd }}
-      {% if p.currency == "uzs" %}<br><small class="muted">{{ p.amount_original }} so'm</small>{% endif %}
+      {% money p.amount p.amount_uzs %}
+      {% if not showing_som %}<br><small class="muted">{{ p.amount_uzs|floatformat:"0g" }} so'm</small>{% endif %}
     </td>
     <td>{{ p.get_method_display }}</td>
     <td>{{ p.note|default:"—" }}</td>

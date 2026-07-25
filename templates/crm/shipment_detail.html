@@ -26,7 +26,7 @@
     {% if user.is_admin_role %}
     <div class="stat">
       <div class="muted">Yuk qiymati</div>
-      <div>{{ shipment.goods_value|usd }}</div>
+      <div>{% money shipment.goods_value shipment.goods_value_uzs %}</div>
     </div>
     {% endif %}
     <div class="stat">
@@ -93,9 +93,9 @@
       <td>{{ ln.brand }}</td>
       <td class="num">{{ ln.kg|floatformat:"-3" }}</td>
       {% if user.is_admin_role %}
-      <td class="num">{{ ln.unit_price|floatformat:"-4" }} $/kg{% if ln.price is None %} <span class="muted">(kelishuvdan)</span>{% endif %}</td>
-      <td class="num">{{ ln.goods_value|usd }}</td>
-      <td class="num">{{ ln.landed_cost_per_kg }} $/kg</td>
+      <td class="num">{% rate ln.unit_price ln.unit_price_uzs %}{% if ln.price is None %} <span class="muted">(kelishuvdan)</span>{% endif %}</td>
+      <td class="num">{% money ln.goods_value ln.goods_value_uzs %}</td>
+      <td class="num">{% rate ln.landed_cost_per_kg ln.landed_cost_per_kg_uzs %}</td>
       {% endif %}
       {% if shipment.arrived %}<td class="num"><strong>{{ ln.available_kg|floatformat:"-3" }}</strong></td>{% endif %}
     </tr>
@@ -165,8 +165,8 @@
       <td>{{ e.date }}</td>
       <td>{{ e.get_category_display }}</td>
       <td>
-        {{ e.amount|usd }}
-        {% if e.currency == "uzs" %}<div class="muted" style="font-size: 12px;">{{ e.amount_original }} so'm</div>{% endif %}
+        {% money e.amount e.amount_uzs %}
+        {% if not showing_som %}<div class="muted" style="font-size: 12px;">{{ e.amount_uzs|floatformat:"0g" }} so'm</div>{% endif %}
       </td>
       <td>{{ e.get_method_display }}</td>
       <td>{{ e.note|default:"—" }}</td>
@@ -179,7 +179,7 @@
   </table>
   </div>
   <p class="muted" style="margin-top: 10px;">
-    Jami: {{ shipment.expenses_total|usd }} · 1 kg ga {{ shipment.expense_per_kg|floatformat:"-4" }} $ qo'shiladi
+    Jami: {% money shipment.expenses_total shipment.expenses_total_uzs %} · 1 kg ga {{ shipment.expense_per_kg|floatformat:"-4" }} $ qo'shiladi
   </p>
   {% else %}
   <p class="muted">Hali xarajat kiritilmagan — tan narx mahsulot narxiga teng.</p>

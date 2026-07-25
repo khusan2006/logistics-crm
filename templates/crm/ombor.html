@@ -40,8 +40,8 @@
     <td class="num">{{ g.reserved|floatformat:"-3" }}</td>
     <td class="num"><strong>{{ g.available|floatformat:"-3" }}</strong></td>
     <td class="num">
-      {% if g.cost_min == g.cost_max %}{{ g.cost_min }} $/kg
-      {% else %}<span title="Lotlar turli tan narxda keldi">{{ g.cost_min }} – {{ g.cost_max }} $/kg</span>{% endif %}
+      {% if g.cost_min == g.cost_max %}{% rate g.cost_min g.cost_min_uzs %}
+      {% else %}<span title="Lotlar turli tan narxda keldi">{% if showing_som %}{% rate g.cost_min g.cost_min_uzs %} – {% rate g.cost_max g.cost_max_uzs %}{% else %}{{ g.cost_min }} – {% rate g.cost_max g.cost_max_uzs %}{% endif %}</span>{% endif %}
     </td>
     <td class="row-actions">
       {% if g.available > 0 %}
@@ -74,7 +74,7 @@
             <td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
             <td class="num">{{ lot.reserved_kg|floatformat:"-3" }}</td>
             <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
-            <td class="num">{{ lot.landed_cost_per_kg }} $/kg</td>
+            <td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs %}</td>
             <td class="row-actions">
               {% if lot.available_kg > 0 %}
               <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal title="Shu lotdan sotish">Sotish</a>

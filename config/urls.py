@@ -67,6 +67,7 @@ urlpatterns = [
     path("debts/", crm_views.debt_list, name="debt_list"),
     path("debts/<int:pk>/", crm_views.debt_customer, name="debt_customer"),
     path("kassa/", crm_views.kassa, name="kassa"),
+    path("valyuta/", crm_views.set_display_currency, name="set_display_currency"),
     path("reports/", crm_views.reports, name="reports"),
     path("reports/export/contracts.xlsx", crm_views.export_contracts, name="export_contracts"),
     path("reports/export/supplier-payments.xlsx", crm_views.export_supplier_payments,

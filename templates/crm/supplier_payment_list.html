@@ -46,8 +46,8 @@ The totals below count everything the filters left, not just this page.
 
 {% if page.object_list %}
 <p class="muted" style="margin-bottom: 12px;">
-  {{ page.paginator.count }} ta to'lov · hamkorga <strong>{{ total_paid|usd }}</strong>
-  · kassadan <strong>{{ total_out|usd }}</strong>
+  {{ page.paginator.count }} ta to'lov · hamkorga <strong>{% money total_paid total_paid_uzs %}</strong>
+  · kassadan <strong>{% money total_out total_out_uzs %}</strong>
 </p>
 <div class="table-wrap">
 <table>
@@ -68,15 +68,15 @@ The totals below count everything the filters left, not just this page.
     <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand_summary }}</a></td>
     <td>{{ p.contract.partner.name }}</td>
     <td>
-      {{ p.amount|usd }}
-      {% if p.currency == "uzs" %}<br><small class="muted">{{ p.amount_original }} so'm</small>{% endif %}
+      {% money p.amount p.amount_uzs %}
+      {% if not showing_som %}<br><small class="muted">{{ p.amount_uzs|floatformat:"0g" }} so'm</small>{% endif %}
     </td>
     <td>
       {% if p.commission_percent %}
-      {{ p.commission_amount|usd }}<br><small class="muted">{{ p.commission_percent }}%</small>
+      {% money p.commission_amount p.commission_amount_uzs %}<br><small class="muted">{{ p.commission_percent }}%</small>
       {% else %}<span class="muted">—</span>{% endif %}
     </td>
-    <td><strong>{{ p.total_out|usd }}</strong></td>
+    <td><strong>{% money p.total_out p.total_out_uzs %}</strong></td>
     <td>{{ p.get_method_display }}</td>
     <td>{{ p.note|default:"—" }}</td>
     <td class="row-actions">

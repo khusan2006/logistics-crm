@@ -6,8 +6,8 @@
 {% block content %}
 
 <p>
-  {% if customer.balance > 0 %}<span class="late">{{ customer.balance|usd }} qarz</span>
-  {% elif customer.balance < 0 %}<span class="avans">{{ customer.balance|usd }} avans</span>
+  {% if customer.balance > 0 %}<span class="late">{% money customer.balance customer.balance_uzs %} qarz</span>
+  {% elif customer.balance < 0 %}<span class="avans">{% money customer.balance customer.balance_uzs %} avans</span>
   {% else %}Balans: 0{% endif %}
 </p>
 
@@ -29,9 +29,9 @@
     <td class="sticky-col">{{ s.date }}</td>
     <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
     <td>{{ s.kg }}</td>
-    <td>{{ s.total|usd }}</td>
-    <td>{{ s.paid|usd }}</td>
-    <td class="late">{{ s.remaining|usd }}</td>
+    <td>{% money s.total s.total_uzs %}</td>
+    <td>{% money s.paid s.paid_uzs %}</td>
+    <td class="late">{% money s.remaining s.remaining_uzs %}</td>
     <td>
       {{ s.debt_deadline|default:"—" }}
       {% if s.is_overdue %}<span class="late">muddati o'tgan</span>{% endif %}

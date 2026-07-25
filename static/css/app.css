@@ -217,6 +217,23 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; letter-spacing: -0.01e
 .user-chip .name { font-size: 13.5px; font-weight: 600; }
 .user-chip .role { font-size: 11.5px; color: var(--text-muted); }
 
+/* Dollar / so'm switch in the topbar: a segmented pair, the active half filled. */
+.currency-switch {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.currency-switch .cur-opt {
+  padding: 0 10px; height: 36px; min-width: 36px;
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  color: var(--text-muted);
+  background: transparent; border: 0; cursor: pointer;
+}
+.currency-switch .cur-opt + .cur-opt { border-left: 1px solid var(--border-strong); }
+.currency-switch .cur-opt:hover { background: var(--surface-2); color: var(--text); }
+.currency-switch .cur-opt.is-on { background: var(--accent); color: #fff; }
+
 .icon-btn {
   width: 36px; height: 36px;
   display: grid; place-items: center;
