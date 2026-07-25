@@ -11,3 +11,8 @@ staticfiles/
 .pytest_cache/
 test-results/
 dev.sqlite3
+# Database snapshots taken before a migration. These hold real customer and
+# financial data — they must never reach the repository.
+dev.sqlite3.bak-*
+*.dump
+*.sql
