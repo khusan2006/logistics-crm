@@ -78,7 +78,7 @@ def test_date_filter_excludes_out_of_range_payment(admin_client, db):
     balances = resp.context["balances"]
     assert balances["cash"]["in"] == Decimal("500.00")
 
-    income_dates = [p.date.isoformat() for p in resp.context["income_rows"]]
+    income_dates = [p.date.isoformat() for p in resp.context["income_page"]]
     assert "2026-05-01" not in income_dates
     assert "2026-07-10" in income_dates
 
@@ -125,8 +125,64 @@ def test_kassa_kirim_chiqim_ledgers_and_cash_hero(admin_client, db):
     # the hero is all-time even when the filter excludes some rows
     resp = admin_client.get("/kassa/", {"from": "2026-07-11", "to": "2026-07-12"})
     assert resp.context["cash_total"] == Decimal("200.00")   # 500 - 200 - 100
-    assert [p.amount for p in resp.context["income_rows"]] == []      # 07-10 outside range
-    kinds = [(r["kind"], r["amount"]) for r in resp.context["outflow_rows"]]
+    assert [p.amount for p in resp.context["income_page"]] == []      # 07-10 outside range
+    kinds = [(r["kind"], r["amount"]) for r in resp.context["outflow_page"]]
     assert kinds == [("expense", Decimal("100.00")), ("supplier", Decimal("200.00"))]
     html = resp.content.decode()
     assert "Kirim" in html and "Chiqim" in html and "Kassadagi pul" in html
+
+
+def test_kassa_income_ledger_paginates_at_20(admin_client, db):
+    """Kirim ledger pages at 20; the +total still counts the whole period."""
+    customer = _customer()
+    for _ in range(25):
+        CustomerPayment.objects.create(
+            customer=customer, date="2026-07-10", amount=Decimal("10.00"), method="cash")
+
+    resp = admin_client.get("/kassa/")
+    page = resp.context["income_page"]
+    assert page.paginator.per_page == 20
+    assert len(page.object_list) == 20
+    assert page.paginator.count == 25
+    assert resp.context["net_in"] == Decimal("250.00")   # totals ignore paging
+
+    page2 = admin_client.get("/kassa/?ipage=2").context["income_page"]
+    assert page2.number == 2
+    assert len(page2.object_list) == 5
+
+
+def test_kassa_outflow_ledger_paginates_at_20(admin_client, db):
+    """Chiqim ledger pages at 20 under its own ?opage param."""
+    contract = _contract()
+    for _ in range(25):
+        SupplierPayment.objects.create(
+            contract=contract, date="2026-07-11", amount=Decimal("5.00"), method="cash")
+
+    resp = admin_client.get("/kassa/")
+    page = resp.context["outflow_page"]
+    assert page.paginator.per_page == 20
+    assert len(page.object_list) == 20
+    assert page.paginator.count == 25
+
+    page2 = admin_client.get("/kassa/?opage=2").context["outflow_page"]
+    assert page2.number == 2
+    assert len(page2.object_list) == 5
+
+
+def test_kassa_two_ledgers_page_independently(admin_client, db):
+    """Paging one ledger doesn't move the other — separate ipage/opage params."""
+    contract = _contract()
+    customer = _customer()
+    for _ in range(25):
+        CustomerPayment.objects.create(
+            customer=customer, date="2026-07-10", amount=Decimal("10.00"), method="cash")
+        SupplierPayment.objects.create(
+            contract=contract, date="2026-07-11", amount=Decimal("5.00"), method="cash")
+
+    ctx = admin_client.get("/kassa/?ipage=2").context
+    assert ctx["income_page"].number == 2
+    assert ctx["outflow_page"].number == 1   # untouched
+
+    ctx = admin_client.get("/kassa/?ipage=2&opage=2").context
+    assert ctx["income_page"].number == 2
+    assert ctx["outflow_page"].number == 2

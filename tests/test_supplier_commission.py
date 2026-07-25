@@ -105,7 +105,7 @@ def test_kassa_takes_the_cut_out_of_the_till(admin_client, db):
 def test_kassa_lists_the_cut_as_its_own_chiqim_row(admin_client, db):
     contract = _contract(kg="20000")
     _pay(contract, amount="1000", percent="2")
-    rows = admin_client.get("/kassa/").context["outflow_rows"]
+    rows = admin_client.get("/kassa/").context["outflow_page"]
     kinds = {r["kind"]: r["amount"] for r in rows}
     assert kinds["supplier"] == Decimal("1000")
     assert kinds["commission"] == Decimal("20.00")
@@ -114,7 +114,7 @@ def test_kassa_lists_the_cut_as_its_own_chiqim_row(admin_client, db):
 def test_a_zero_percent_payment_adds_no_chiqim_row(admin_client, db):
     contract = _contract(kg="20000")
     _pay(contract, amount="1000", percent="0")
-    rows = admin_client.get("/kassa/").context["outflow_rows"]
+    rows = admin_client.get("/kassa/").context["outflow_page"]
     assert [r["kind"] for r in rows] == ["supplier"]
 
 

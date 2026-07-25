@@ -1591,6 +1591,12 @@ def kassa(request):
         })
     outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 
+    # Each ledger pages independently (?ipage / ?opage) so scrolling one doesn't
+    # reset the other. The +/- totals above are the whole-period figures, not the
+    # page's, so they stay computed from the full lists.
+    income_page = Paginator(income_rows, 20).get_page(request.GET.get("ipage"))
+    outflow_page = Paginator(outflow_rows, 20).get_page(request.GET.get("opage"))
+
     # What we owe hamkorlar RIGHT NOW (not date-filtered — a current-state figure):
     # per contract the debt accrues per shipped truck (shipped value − paid).
     payables = {}
@@ -1614,7 +1620,7 @@ def kassa(request):
         "cash_total": cash_total,
         "balances": balances, "net_in": net_in, "net_out": net_out,
         "net_total": net_in - net_out,
-        "income_rows": income_rows, "outflow_rows": outflow_rows,
+        "income_page": income_page, "outflow_page": outflow_page,
         "partner_debts": partner_debts, "payable_total": payable_total,
         "date_from": date_from, "date_to": date_to, "presets": presets,
     })
