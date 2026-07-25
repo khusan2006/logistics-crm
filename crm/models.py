@@ -659,14 +659,20 @@ def fifo_lots(brand):
     return [lot for lot in lots if lot.available_kg > 0]
 
 
-def brand_stock():
-    """[(brand, available kg)] across arrived lots, for the FIFO sale form."""
-    totals = {}
+def brand_stock_costed():
+    """[(brand, available kg, weighted-average tannarx)] across arrived lots, for the
+    sale-by-brand dropdown: availability plus the blended landed cost so the seller
+    sees the cost floor while typing a price. A brand's lots can carry different
+    landed costs, and a FIFO sale may hit any of them first, so the figure is the
+    kg-weighted average, not any single lot's cost."""
+    avail, cost = {}, {}
     for lot in arrived_lots():
-        avail = lot.available_kg
-        if avail > 0:
-            totals[lot.brand] = totals.get(lot.brand, Decimal("0")) + avail
-    return sorted(totals.items())
+        a = lot.available_kg
+        if a > 0:
+            avail[lot.brand] = avail.get(lot.brand, Decimal("0")) + a
+            cost[lot.brand] = cost.get(lot.brand, Decimal("0")) + a * lot.landed_cost_per_kg
+    return [(brand, avail[brand], (cost[brand] / avail[brand]).quantize(Decimal("0.0001")))
+            for brand in sorted(avail)]
 
 
 class Sale(models.Model):

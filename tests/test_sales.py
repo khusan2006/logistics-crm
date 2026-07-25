@@ -317,3 +317,37 @@ def test_sale_without_a_lot_still_runs_fifo_by_brand(admin_client, db):
     assert resp.status_code == 302
     assert [(s.line_id, s.kg) for s in Sale.objects.order_by("id")] == [
         (old.pk, Decimal("200.000")), (new.pk, Decimal("100.000"))]
+
+
+def _brand_label(brand):
+    """The <option> label the sale-by-brand dropdown shows for a marka."""
+    from crm.forms import SaleCreateForm
+    choices = dict(SaleCreateForm().fields["brand"].choices)
+    return choices[brand]
+
+
+def test_sale_brand_option_is_readable_not_scientific(db):
+    """24 000 kg must read as '24000', never Decimal.normalize()'s '2.4E+4'."""
+    _lot(kg="24000", brand="LLDPE", contract_price="1.00", expense="")
+    label = _brand_label("LLDPE")
+    assert "E+" not in label and "e+" not in label.lower()
+    assert "24000 kg mavjud" in label
+
+
+def test_sale_brand_option_shows_tannarx(db):
+    """Like the yuk/kelishuv modals, the option carries the cost floor (tannarx)
+    so the seller can price above it — here $1.20/kg (1.00 + 2000/10000)."""
+    _lot(kg="10000", brand="HDPE", contract_price="1.00", expense="2000.00")
+    label = _brand_label("HDPE")
+    assert "10000 kg mavjud" in label
+    assert "tannarx 1.2 $/kg" in label
+
+
+def test_sale_brand_option_tannarx_is_weighted_across_lots(db):
+    """Two lots of one marka at different landed costs → blended tannarx.
+    10 000 kg @ $1.00 (no expense) + 10 000 kg @ $1.20 => (1.00+1.20)/2 = $1.10."""
+    _lot(kg="10000", brand="PP", contract_price="1.00", expense="")
+    _lot(kg="10000", brand="PP", contract_price="1.00", expense="2000.00")
+    label = _brand_label("PP")
+    assert "20000 kg mavjud" in label
+    assert "tannarx 1.1 $/kg" in label

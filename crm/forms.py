@@ -8,7 +8,7 @@ from django.utils import timezone
 from .models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation, Return,
     Sale, Shipment, ShipmentExpense, ShipmentLeg, ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_stock,
+    arrived_lots, brand_stock_costed,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 
@@ -511,9 +511,15 @@ class SaleCreateForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.stock = dict(brand_stock())
+        # marka · qolgan kg · tannarx — the same informative shape as the yuk and
+        # kelishuv option dropdowns. _clean_number keeps kg readable ("24000", not
+        # Decimal.normalize()'s "2.4E+4").
+        costed = brand_stock_costed()
+        self.stock = {b: avail for b, avail, _ in costed}
         self.fields["brand"].choices = [
-            (b, f"{b} — {avail.normalize()} kg mavjud") for b, avail in self.stock.items()
+            (b, f"{b} · {_clean_number(avail)} kg mavjud · "
+                f"tannarx {_clean_number(cost.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
+            for b, avail, cost in costed
         ]
 
     def clean(self):
