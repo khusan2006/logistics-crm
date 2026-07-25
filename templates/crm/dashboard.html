@@ -177,6 +177,8 @@
       <th>Marka</th>
       <th>Kg</th>
       <th>Holat</th>
+      <th>Haydovchi</th>
+      <th>Konteyner</th>
       <th>Reja sana</th>
       <th>Kechikish</th>
     </tr>
@@ -187,6 +189,11 @@
       <td>{{ s.brand_summary }}</td>
       <td>{{ s.kg }}</td>
       <td>{{ s.status.name }}</td>
+      <td>
+        {{ s.driver_name|default:"—" }}
+        {% if s.driver_phone %}<div class="muted" style="font-size: 12px;">{{ s.driver_phone }}</div>{% endif %}
+      </td>
+      <td>{{ s.container|default:"—" }}</td>
       <td>{{ s.eta }}</td>
       <td><span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span></td>
     </tr>
