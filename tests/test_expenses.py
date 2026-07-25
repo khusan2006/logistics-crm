@@ -13,7 +13,7 @@ def rows(*entries, shipment, date="2026-07-10"):
             "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
             "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
     defaults = {"category": "customs", "currency": "usd",
-                "amount": "0", "exchange_rate": "", "method": "cash", "note": ""}
+                "amount": "0", "exchange_rate": "12000", "method": "cash", "note": ""}
     for i, entry in enumerate(entries):
         for key, value in {**defaults, **entry}.items():
             data[f"form-{i}-{key}"] = str(value)
@@ -77,7 +77,7 @@ def test_uzs_converted_to_usd(admin_client, shipment):
          "exchange_rate": "12650"}, shipment=shipment))
     e = ShipmentExpense.objects.get()
     assert e.amount == Decimal("100.00")
-    assert e.amount_original == Decimal("1265000")
+    assert e.amount_uzs == Decimal("1265000")
     assert e.exchange_rate == Decimal("12650")
 
 

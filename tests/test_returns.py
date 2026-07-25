@@ -27,7 +27,7 @@ def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
 def _sale(admin_client, lot, customer, kg="4000", price="1.60"):
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": kg,
-        "price": price, "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": price, "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     return Sale.objects.get(line=lot, kg=Decimal(kg))
 
@@ -46,7 +46,7 @@ def test_return_credits_debt_and_restocks_lot(admin_client, db):
     assert sale.profit == Decimal("1600.00")  # (1.60 − 1.20) × 4000
 
     resp = admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "1000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "1000", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     })
     assert resp.status_code == 302
 
@@ -78,7 +78,7 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
     # pay in full
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-18", "currency": "usd",
-        "amount": "6400", "exchange_rate": "", "method": "cash", "note": "",
+        "amount": "6400", "exchange_rate": "12000", "method": "cash", "note": "",
     })
     sale.refresh_from_db()
     assert sale.remaining == Decimal("0")
@@ -87,7 +87,7 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
 
     # return 1,000 kg @ $1.60 = $1,600 credit
     resp = admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "1000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "1000", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     })
     assert resp.status_code == 302
 
@@ -104,7 +104,7 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
     # Reachability: the freed advance auto-applies to a NEW sale
     resp2 = admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "500",
-        "price": "1.60", "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-20", "debt_deadline": "", "note": "",
     })
     assert resp2.status_code == 302
     new_sale = Sale.objects.get(line=lot, kg=Decimal("500"))
@@ -123,7 +123,7 @@ def test_return_without_restock_does_not_flow_kg_back(admin_client, db):
     available_before = lot.available_kg
 
     admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "1000", "price": "1.60", "date": "2026-07-19", "restock": "", "note": "",
+        "kg": "1000", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "", "note": "",
     })
 
     sale.refresh_from_db()
@@ -140,7 +140,7 @@ def test_return_kg_cannot_exceed_sold_kg(admin_client, db):
     sale = _sale(admin_client, lot, customer, kg="1000", price="1.60")
 
     resp = admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "1500", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "1500", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     })
     assert resp.status_code == 200
     assert not Return.objects.filter(sale=sale).exists()
@@ -152,13 +152,13 @@ def test_return_kg_cannot_exceed_remaining_after_prior_return(admin_client, db):
     sale = _sale(admin_client, lot, customer, kg="1000", price="1.60")
 
     resp1 = admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "600", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "600", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     })
     assert resp1.status_code == 302
 
     # only 400 kg left un-returned; asking for 500 must fail
     resp2 = admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "500", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "500", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     })
     assert resp2.status_code == 200
     assert Return.objects.filter(sale=sale).count() == 1
@@ -169,7 +169,7 @@ def test_return_delete(admin_client, db):
     customer = _customer()
     sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")
     admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "1000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "1000", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     })
     ret = Return.objects.get(sale=sale)
 
@@ -188,7 +188,7 @@ def test_translator_forbidden(translator_client, admin_client, db):
     sale = _sale(admin_client, lot, customer, kg="1000", price="1.60")
     assert translator_client.get(f"/returns/new/?sale={sale.pk}").status_code == 403
     assert translator_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "100", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
+        "kg": "100", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "",
     }).status_code == 403
     # the delete path is admin-only too
     ret = Return.objects.create(sale=sale, kg=Decimal("100"), price=Decimal("1.60"), date="2026-07-19")
@@ -213,7 +213,7 @@ def test_return_create_modal_post_valid_returns_204_with_redirect(admin_client, 
     sale = _sale(admin_client, lot, customer, kg="1000", price="1.60")
     resp = admin_client.post(
         f"/returns/new/?sale={sale.pk}",
-        {"kg": "100", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": ""},
+        {"kg": "100", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
@@ -227,7 +227,7 @@ def test_return_create_modal_post_invalid_returns_422(admin_client, db):
     sale = _sale(admin_client, lot, customer, kg="1000", price="1.60")
     resp = admin_client.post(
         f"/returns/new/?sale={sale.pk}",
-        {"kg": "99999", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": ""},
+        {"kg": "99999", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     html = resp.content.decode()
@@ -240,7 +240,7 @@ def test_sale_detail_shows_returns_section(admin_client, db):
     customer = _customer()
     sale = _sale(admin_client, lot, customer, kg="1000", price="1.60")
     admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "200", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "sifat",
+        "kg": "200", "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-19", "restock": "on", "note": "sifat",
     })
     html = admin_client.get(f"/sales/{sale.pk}/").content.decode()
     assert "320" in html or "320.00" in html  # 200 * 1.60

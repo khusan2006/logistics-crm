@@ -9,23 +9,33 @@ from crm.models import (
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+# Every money column ships in BOTH currencies: a spreadsheet leaves the app behind,
+# so it cannot follow the dollar/so'm toggle, and guessing which one the reader
+# wanted would make the other unrecoverable.
 EXPORT_URLS = {
     "/reports/export/contracts.xlsx": [
-        "Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Narx", "Jami", "Yuborilgan kg",
-        "To'langan", "Qarz",
+        "Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
+        "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)", "Yuborilgan kg",
+        "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)",
     ],
     "/reports/export/supplier-payments.xlsx": [
-        "Sana", "Kelishuv", "Hamkor", "Hamkorga", "Vositachi %", "Vositachi",
-        "Kassadan", "Usul",
+        "Sana", "Kelishuv", "Hamkor", "Valyuta", "Kurs", "Hamkorga ($)",
+        "Hamkorga (so'm)", "Vositachi %", "Vositachi ($)", "Perechisleniya %",
+        "Perechisleniya ($)", "Kassadan ($)", "Kassadan (so'm)", "Usul",
     ],
     "/reports/export/shipments.xlsx": [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "Transport", "Konteyner",
     ],
     "/reports/export/sales.xlsx": [
-        "Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Tan narx", "Sotuv narx", "Jami", "Foyda", "Qoldiq",
+        "Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Valyuta", "Kurs", "Tan narx ($)",
+        "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
+        "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)",
     ],
-    "/reports/export/debts.xlsx": ["Mijoz", "Telefon", "Jami savdo", "To'langan", "Qarz"],
+    "/reports/export/debts.xlsx": [
+        "Mijoz", "Telefon", "Jami savdo ($)", "Jami savdo (so'm)",
+        "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)",
+    ],
 }
 
 

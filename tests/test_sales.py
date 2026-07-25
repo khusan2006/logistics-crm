@@ -42,7 +42,7 @@ def test_sale_snapshots_cost_and_computes_total_profit(admin_client, db):
 
     resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "4000",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
     sale = Sale.objects.get(line=lot)
@@ -67,7 +67,7 @@ def test_expense_added_after_sale_now_changes_profit(admin_client, db):
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "4000",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     sale = Sale.objects.get(line=lot)
     assert sale.cost_price == Decimal("1.2000")
@@ -112,7 +112,7 @@ def test_commission_after_sale_lowers_that_sales_profit(admin_client, db):
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "4000",
-        "price": "1.50", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.50", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     sale = Sale.objects.get(line=lot)
     assert sale.profit == Decimal("2000.00")             # (1.50 - 1.00) * 4000
@@ -129,7 +129,7 @@ def test_selling_more_than_available_kg_rejected(admin_client, db):
     customer = _customer()
     resp = admin_client.post("/sales/new/", {
         "customer": customer.pk, "brand": lot.brand, "kg": "1500",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 200
     assert not Sale.objects.filter(line=lot).exists()
@@ -140,7 +140,7 @@ def test_selling_from_non_arrived_shipment_rejected(admin_client, db):
     customer = _customer()
     resp = admin_client.post("/sales/new/", {
         "customer": customer.pk, "brand": lot.brand, "kg": "100",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 200
     assert not Sale.objects.filter(line=lot).exists()
@@ -156,7 +156,7 @@ def test_list_and_search(admin_client, db):
     customer = _customer(name="Findable Customer")
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "500",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     html = admin_client.get("/sales/?q=Findable").content.decode()
     assert "Findable Customer" in html
@@ -177,7 +177,7 @@ def test_sale_create_modal_post_valid_returns_204_with_redirect(admin_client, db
     resp = admin_client.post(
         "/sales/new/",
         {"customer": customer.pk, "brand": lot.brand, "kg": "100",
-         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": ""},
+         "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
@@ -191,7 +191,7 @@ def test_sale_create_modal_post_invalid_returns_422(admin_client, db):
     resp = admin_client.post(
         "/sales/new/",
         {"customer": customer.pk, "brand": lot.brand, "kg": "99999",
-         "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": ""},
+         "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     html = resp.content.decode()
@@ -204,7 +204,7 @@ def test_sale_edit_re_snapshots_cost_from_current_shipment(admin_client, db):
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "1000",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     sale = Sale.objects.get(line=lot)
     assert sale.cost_price == Decimal("1.2000")
@@ -216,7 +216,7 @@ def test_sale_edit_re_snapshots_cost_from_current_shipment(admin_client, db):
 
     resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
         "customer": customer.pk, "line": lot.pk, "kg": "1000",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
     sale.refresh_from_db()
@@ -228,7 +228,7 @@ def test_sale_delete(admin_client, db):
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "500",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     sale = Sale.objects.get(line=lot)
     resp = admin_client.post(f"/sales/{sale.pk}/delete/")
@@ -241,7 +241,7 @@ def test_sale_detail(admin_client, db):
     customer = _customer()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "500",
-        "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
     sale = Sale.objects.get(line=lot)
     resp = admin_client.get(f"/sales/{sale.pk}/")
@@ -275,7 +275,7 @@ def test_fifo_sale_splits_across_lots_oldest_first(admin_client, db):
     customer = _customer()
     resp = admin_client.post("/sales/new/", {
         "customer": customer.pk, "brand": "LLDPE", "kg": "11000",
-        "price": "1.60", "date": "2026-07-21", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-21", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
     s_old = Sale.objects.get(line=old)
@@ -293,7 +293,7 @@ def test_fifo_sale_capped_at_brand_total(admin_client, db):
     customer = _customer()
     resp = admin_client.post("/sales/new/", {
         "customer": customer.pk, "brand": "LLDPE", "kg": "1501",
-        "price": "1.60", "date": "2026-07-21", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-21", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 200 and not Sale.objects.exists()
 
@@ -326,7 +326,7 @@ def test_sale_from_a_chosen_lot_ignores_fifo(admin_client, db):
     customer = Customer.objects.create(name="Ali")
 
     resp = admin_client.post(f"/sales/new/?lot={dear.pk}", {
-        "lot": dear.pk, "customer": customer.pk, "kg": "300", "price": "2.00",
+        "lot": dear.pk, "customer": customer.pk, "kg": "300", "currency": "usd", "exchange_rate": "12000", "price": "2.00",
         "date": "2026-07-24", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
@@ -344,7 +344,7 @@ def test_sale_from_a_lot_cannot_exceed_that_lot(admin_client, db):
     customer = Customer.objects.create(name="Ali")
 
     resp = admin_client.post(f"/sales/new/?lot={small.pk}", {
-        "lot": small.pk, "customer": customer.pk, "kg": "300", "price": "2.00",
+        "lot": small.pk, "customer": customer.pk, "kg": "300", "currency": "usd", "exchange_rate": "12000", "price": "2.00",
         "date": "2026-07-24", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 200 and not Sale.objects.exists()
@@ -357,7 +357,7 @@ def test_sale_without_a_lot_still_runs_fifo_by_brand(admin_client, db):
     customer = Customer.objects.create(name="Ali")
 
     resp = admin_client.post("/sales/new/", {
-        "brand": "2102 kampaund", "customer": customer.pk, "kg": "300", "price": "2.00",
+        "brand": "2102 kampaund", "customer": customer.pk, "kg": "300", "currency": "usd", "exchange_rate": "12000", "price": "2.00",
         "date": "2026-07-24", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302

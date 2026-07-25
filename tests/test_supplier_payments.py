@@ -27,7 +27,7 @@ def test_paying_before_anything_ships_is_allowed_as_avans(admin_client, db):
     assert c.debt == Decimal("0")
     resp = admin_client.post("/supplier-payments/new/", {
         "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
-        "exchange_rate": "", "commission_percent": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
     })
     assert resp.status_code == 302
     assert c.paid_total == Decimal("100")
@@ -48,7 +48,7 @@ def test_debt_accrues_per_truck_at_its_own_price(admin_client, db):
     assert c.payable_left == Decimal("1100.00")
     resp = admin_client.post("/supplier-payments/new/", {  # 1101 > 1100 → blocked
         "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1101",
-        "exchange_rate": "", "commission_percent": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
     })
     assert resp.status_code == 200 and not SupplierPayment.objects.exists()
 
@@ -57,7 +57,7 @@ def test_payment_reduces_debt(admin_client, db):
     c = _contract(db)
     resp = admin_client.post("/supplier-payments/new/", {
         "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "400",
-        "exchange_rate": "", "method": "transfer", "note": "",
+        "exchange_rate": "12000", "method": "transfer", "note": "",
     })
     assert resp.status_code == 302
     assert c.debt == Decimal("600.00")
@@ -67,7 +67,7 @@ def test_overpay_blocked(admin_client, db):
     c = _contract(db)
     resp = admin_client.post("/supplier-payments/new/", {
         "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1500",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     assert resp.status_code == 200 and not SupplierPayment.objects.exists()
 
@@ -80,17 +80,41 @@ def test_uzs_converted_to_usd(admin_client, db):
     })
     p = SupplierPayment.objects.get()
     assert p.amount == Decimal("100.00")
-    assert p.amount_original == Decimal("1265000")
+    # the typed so'm figure is kept exact, not re-derived from the rounded dollars
+    assert p.amount_uzs == Decimal("1265000")
     assert p.exchange_rate == Decimal("12650")
+
+
+def test_usd_entry_also_stores_a_som_value(admin_client, db):
+    """The kurs is asked in both directions, so a dollar to'lov is reportable in
+    so'm too — the gap that made every pre-existing dollar row unconvertible."""
+    c = _contract(db)
+    admin_client.post("/supplier-payments/new/", {
+        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
+        "exchange_rate": "12650", "method": "cash", "note": "",
+    })
+    p = SupplierPayment.objects.get()
+    assert p.amount == Decimal("100.00")
+    assert p.amount_uzs == Decimal("1265000")
+
+
+def test_a_money_entry_without_a_kurs_is_rejected(admin_client, db):
+    c = _contract(db)
+    resp = admin_client.post("/supplier-payments/new/", {
+        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
+        "exchange_rate": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 200          # redisplayed, not saved
+    assert SupplierPayment.objects.count() == 0
 
 
 def test_edit_excludes_own_amount_from_debt_check(admin_client, db):
     c = _contract(db)
     p = SupplierPayment.objects.create(contract=c, date="2026-07-02", amount=Decimal("1000"),
-                                       amount_original=Decimal("1000"), method="cash")
+                                       amount_uzs=Decimal("12000000"), method="cash")
     resp = admin_client.post(f"/supplier-payments/{p.pk}/edit/", {
         "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "900",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     assert resp.status_code == 302
     p.refresh_from_db()
@@ -111,7 +135,7 @@ def test_create_modal_post_valid_returns_204_with_redirect(admin_client, db):
         "/supplier-payments/new/",
         {
             "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "400",
-            "exchange_rate": "", "method": "transfer", "note": "",
+            "exchange_rate": "12000", "method": "transfer", "note": "",
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
@@ -126,7 +150,7 @@ def test_create_modal_post_invalid_returns_422(admin_client, db):
         "/supplier-payments/new/",
         {
             "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1500",
-            "exchange_rate": "", "method": "cash", "note": "",
+            "exchange_rate": "12000", "method": "cash", "note": "",
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
@@ -152,7 +176,7 @@ def _fresh_contract(kg="1000", price="2.00"):
 
 def _post_payment(client, contract, amount, **extra):
     data = {"contract": contract.pk, "date": "2026-07-23", "currency": "usd",
-            "amount": amount, "exchange_rate": "", "commission_percent": "",
+            "amount": amount, "exchange_rate": "12000", "commission_percent": "",
             "method": "cash", "note": ""}
     data.update(extra)
     return client.post("/supplier-payments/new/", data)

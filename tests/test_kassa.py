@@ -95,17 +95,19 @@ def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
     partner = Partner.objects.create(name="Pars", phone="1", city="T")
     c = Contract.objects.create(partner=partner, created="2026-07-01")
     c_line = ContractLine.objects.create(
-        contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"))
+        contract=c, brand="LLDPE", kg=Decimal("1000"), price=Decimal("1.00"),
+        price_uzs=Decimal("12000"))
     _ship_obj = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first())
     _ship_obj_line = ShipmentLine.objects.create(
         shipment=_ship_obj, contract_line=c.lines.first(), kg=Decimal("600"))   # owe 600
     SupplierPayment.objects.create(contract=c, date="2026-07-02",
-                                   amount=Decimal("250"), amount_original=Decimal("250"),
+                                   amount=Decimal("250"), amount_uzs=Decimal("3000000"),
                                    method="cash")                    # paid 250
     resp = admin_client.get("/kassa/")
     assert resp.context["payable_total"] == Decimal("350.00")
+    # each partner carries (dollar debt, so'm debt) so the screen can show either
     debts = {p.name: d for p, d in resp.context["partner_debts"]}
-    assert debts == {"Pars": Decimal("350.00")}
+    assert debts == {"Pars": (Decimal("350.00"), Decimal("4200000.00"))}
     assert "Hamkorlarga qarzimiz" in resp.content.decode()
 
 

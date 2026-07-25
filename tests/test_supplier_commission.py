@@ -59,7 +59,7 @@ def test_rounding_lands_on_cents(db):
 
 def _post(client, contract, **extra):
     data = {"contract": contract.pk, "date": "2026-07-20", "currency": "usd",
-            "amount": "500", "exchange_rate": "", "commission_percent": "2",
+            "amount": "500", "exchange_rate": "12000", "commission_percent": "2",
             "method": "cash", "note": ""}
     data.update(extra)
     return client.post("/supplier-payments/new/", data)

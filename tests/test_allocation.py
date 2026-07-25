@@ -29,8 +29,8 @@ def _sale(customer, lot, kg, price, date):
 
 def _payment(customer, amount, date="2026-07-20"):
     return CustomerPayment.objects.create(
-        customer=customer, date=date, amount=Decimal(amount), amount_original=Decimal(amount),
-        method="cash",
+        customer=customer, date=date, amount=Decimal(amount),
+        amount_uzs=Decimal(amount) * 12000, method="cash",
     )
 
 
@@ -92,7 +92,7 @@ def test_advance_auto_applies_to_new_sale(admin_client, db):
 
     resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": customer.pk, "brand": lot.brand, "kg": "800",
-        "price": "1.00", "date": "2026-07-19", "debt_deadline": "", "note": "",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.00", "date": "2026-07-19", "debt_deadline": "", "note": "",
     })
     assert resp.status_code == 302
     sale = Sale.objects.get(line=lot)
@@ -171,7 +171,7 @@ def test_edit_payment_decrease_reallocates(admin_client, db):
 
     resp = admin_client.post(f"/customer-payments/{payment.pk}/edit/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "1000", "exchange_rate": "", "method": "cash", "note": "",
+        "amount": "1000", "exchange_rate": "12000", "method": "cash", "note": "",
     })
     assert resp.status_code == 302
 
