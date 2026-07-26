@@ -141,9 +141,14 @@
             <div class="role">{{ user.get_role_display }}</div>
           </div>
         </div>
-        {# Which currency the figures are read in. Nothing is converted on the fly —
-           each row stores both values at its own entry-time kurs, so this picks a
-           column rather than re-rating history. #}
+        {% comment %}
+        Which currency the figures are read in. Nothing is converted on the fly —
+        each row stores both values at its own entry-time kurs, so this picks a
+        column rather than re-rating history.
+
+        Block form, because the hash form is single-line only: a wrapped one is
+        not a comment at all and prints itself into the page.
+        {% endcomment %}
         <form method="post" action="{% url 'set_display_currency' %}" class="inline-form currency-switch">
           {% csrf_token %}
           <input type="hidden" name="next" value="{{ request.get_full_path }}">

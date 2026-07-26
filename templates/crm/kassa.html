@@ -138,10 +138,12 @@
         <td class="num muted">{{ t.amount_uzs|floatformat:"0g" }} so'm · {{ t.exchange_rate|floatformat:"0g" }}</td>
         <td class="num amt-out"><strong>−{% money t.amount t.amount_uzs %}</strong></td>
         <td class="row-actions">
-          {# Vositachi and foiz rows are derived from a parent to'lov, not stored in
-             their own right — they change only by editing that parent, so they get no
-             action icons. They used to fall through to the expense links below and
-             carry a SupplierPayment pk into expense_edit. #}
+          {% comment %}
+          Vositachi and foiz rows are derived from a parent to'lov, not stored in
+          their own right — they change only by editing that parent, so they get no
+          action icons. They used to fall through to the expense links below and
+          carry a SupplierPayment pk into expense_edit.
+          {% endcomment %}
           {% if t.kind == 'commission' or t.kind == 'fee_supplier' or t.kind == 'fee_expense' %}
           {% elif t.kind == 'supplier' %}
           <a class="icon-action" href="{% url 'supplier_payment_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
