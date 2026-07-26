@@ -1887,14 +1887,37 @@ ul.errorlist li::before { content: "⚠ "; }
   display: grid;
   grid-template-columns: 1fr;
   gap: 10px;
-  align-items: end;
+  /* Top-aligned, not bottom: the live "≈ … so'm" preview appears under the narx
+     as soon as a figure is typed, and with end-alignment it dragged every other
+     field in the row down with it. */
+  align-items: start;
 }
-.lineset-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* `form.stacked label { display: block; margin-bottom: 6px }` outranks a lone
+   class, so the <label> fields were never actually flex and their gap was dead —
+   while the <div> holding the − button was flex and did get it, leaving that one
+   button 4px below every input beside it. Stated at matching specificity so all
+   fields in a row lay out the same way. */
+.lineset-field,
+form.stacked .lineset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin-bottom: 0;
+}
 /* the class beats the UA rule for [hidden], so restate it */
 .lineset-field[hidden] { display: none; }
 .lineset-field > span { font-size: 12px; color: var(--text-muted); }
 .lineset-field input, .lineset-field select { width: 100%; }
 .lineset-field--rm > span { visibility: hidden; }
+/* The live counter-currency hint under a narx or a summa. Sits in the field's
+   normal flow so it pushes nothing sideways, and is allowed to wrap rather than
+   widen its column — "≈ 279 876 000 so'm" is a lot of characters. */
+.lineset-field [data-money-preview] {
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 /* Same box model as an input (9px padding + 21px line-height + borders = 41px)
    so the button's baseline and bottom line up with the field beside it. */
 .lineset-rm { padding: 9px 14px; line-height: 21px; }
@@ -1902,13 +1925,37 @@ ul.errorlist li::before { content: "⚠ "; }
 .lineset-del { display: none; }        /* the − button drives DELETE */
 .lineset-add { margin-top: 10px; }
 
-/* Wide enough for a row: the product spans the top, the numbers sit beside it. */
+/* Wide enough for a row: the product spans the top, the numbers sit beneath it.
+   Four columns, placed explicitly rather than left to auto-flow — the row grew a
+   Valyuta and a Dollar kursi, and with the old three columns the narx was pushed
+   into the narrow slot reserved for the − button, which then wrapped onto its own
+   line beside the kurs. */
 @media (min-width: 560px) {
   .lineset-grid {
-    grid-template-columns: 1fr 1fr auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
   }
-  .lineset-field--brand, .lineset-field--contract_line { grid-column: 1 / -1; }
 
+  /* Product rows (kelishuv Mahsulotlar, yuk Mahsulotlar). Scoped away from the
+     xarajat rows below, which hold a different set of fields and place their own. */
+  .lineset:not(.lineset--expense) .lineset-field--brand,
+  .lineset:not(.lineset--expense) .lineset-field--contract_line { grid-column: 1 / -1; }
+  .lineset:not(.lineset--expense) .lineset-field--kg { grid-column: 1; grid-row: 2; }
+  .lineset:not(.lineset--expense) .lineset-field--currency { grid-column: 2; grid-row: 2; }
+  .lineset:not(.lineset--expense) .lineset-field--price { grid-column: 3; grid-row: 2; }
+  .lineset:not(.lineset--expense) .lineset-field--rm { grid-column: 4; grid-row: 2; }
+  .lineset:not(.lineset--expense) .lineset-field--exchange_rate {
+    grid-column: 1 / 3;
+    grid-row: 3;
+  }
+
+  /* Reserve two lines for every caption so a wrapped one ("Dollar kursi (1$ =
+     so'm)") cannot shove its own input below its neighbours'. Only needed once the
+     columns are narrow enough to wrap — the single-column phone layout is fine. */
+  .lineset-field > span {
+    min-height: 2.6em;
+    display: flex;
+    align-items: flex-end;
+  }
 }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
