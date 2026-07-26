@@ -940,11 +940,10 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
-  // Car / truck plate (data-plate-intl): a UZ/IR picker that sets the example and
-  // (for IR) allows Persian letters. Light, lenient formatting — uppercase live,
-  // tidy spacing on blur — so unusual plates still save. The country is a
-  // formatting hint; the plate string itself is what's stored (server keeps its
-  // own lenient clean_transport). On edit the country is auto-detected.
+  // Car / truck plate (data-plate-intl): a UZ/IR picker that sets the example
+  // placeholder. Formatting only — uppercase live, tidy spacing on blur. The
+  // country is a hint, not a rule; the plate string itself is what's stored, and
+  // the server accepts it as typed. On edit the country is auto-detected.
   (function () {
     var PERSIAN = /[؀-ۿ]/;
     var EXAMPLE = { uz: '01 777 AAA', ir: '12 A 345 67' };
@@ -984,9 +983,9 @@
   })();
 
   // Container (data-container-iso): uppercase live; on blur, when the value is
-  // ISO 6346 (4 letters + 7 digits) group it as "MSKU 123456 7". No hard check —
-  // the server's normalize_container produces the identical string for the
-  // uniqueness test, so what you see is what's stored.
+  // ISO 6346 (4 letters + 7 digits) group it as "MSKU 123456 7". Formatting only,
+  // never a check — anything that is not ISO is simply left alone. The server's
+  // normalize_container produces the identical string, so what you see is stored.
   (function () {
     var ISO = /^([A-Z]{4})(\d{6})(\d)$/;
     function fmt(v) {

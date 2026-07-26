@@ -342,26 +342,16 @@ class ShipmentForm(forms.ModelForm):
         self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_transport(self):
-        t = (self.cleaned_data.get("transport") or "").strip()
-        if t:
-            compact = re.sub(r"[\s\-]", "", t)
-            # a plate is short, alphanumeric (Latin or Persian letters), and has a digit
-            if (not re.fullmatch(r"[A-Za-z0-9؀-ۿ]{5,12}", compact)
-                    or not any(c.isdigit() for c in compact)):
-                raise forms.ValidationError(
-                    "Transport O'zbekiston yoki Eron avto raqami bo'lishi kerak "
-                    "(masalan: 01 777 AAA)")
-        return t
+        """Free text. There used to be a plate-shaped regex here, which rejected
+        anything that was not 5–12 alphanumerics with a digit — no help to an
+        operator holding a waybill that says something else."""
+        return (self.cleaned_data.get("transport") or "").strip()
 
     def clean_container(self):
-        container = normalize_container(self.cleaned_data.get("container"))
-        if container:
-            clash = Shipment.objects.filter(container__iexact=container)
-            if self.instance.pk:
-                clash = clash.exclude(pk=self.instance.pk)
-            if clash.exists():
-                raise forms.ValidationError("Bu konteyner raqami avval kiritilgan")
-        return container
+        """Tidied, never rejected: uppercased and grouped when it looks like ISO
+        6346, left as typed otherwise. The duplicate check that lived here is gone
+        too — the same container legitimately comes back on a later yuk."""
+        return normalize_container(self.cleaned_data.get("container"))
 
     def clean(self):
         cleaned = super().clean()
