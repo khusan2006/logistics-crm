@@ -121,3 +121,23 @@ def test_each_row_converts_its_own_currency(admin_client, shipment):
         shipment=shipment))
     amounts = sorted(e.amount for e in ShipmentExpense.objects.all())
     assert amounts == [Decimal("100.00"), Decimal("100.00")]   # 1 265 000 / 12 650
+
+
+@pytest.mark.parametrize("category,label", [
+    ("declarant", "Deklarant"),
+    ("loader", "Gruzchi"),
+])
+def test_declarant_and_gruzchi_are_offered_and_saved(admin_client, shipment, category, label):
+    html = admin_client.get(
+        "/expenses/new/?shipment=%d" % shipment.pk,
+        HTTP_X_REQUESTED_WITH="XMLHttpRequest").content.decode()
+    assert f'value="{category}"' in html
+    assert label in html
+
+    admin_client.post("/expenses/new/", rows(
+        {"category": category, "amount": "300"}, shipment=shipment))
+    expense = ShipmentExpense.objects.get()
+    assert expense.category == category
+    assert expense.get_category_display() == label
+    # a xarajat is a xarajat: the new turkumlar price the load like any other
+    assert shipment.expenses_total == Decimal("300.00")
