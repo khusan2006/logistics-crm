@@ -78,6 +78,21 @@ def translator_client(translator_user):
     return client
 
 
+def payment_rows(*entries, customer, date="2026-07-20"):
+    """POST payload for the mijoz to'lov modal: the shared mijoz and sana, plus one
+    row per way the money arrived. Rows default to a dollar naqd at 12,000 so a test
+    only spells out what it is actually testing."""
+    data = {"customer": getattr(customer, "pk", customer), "date": date,
+            "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
+    defaults = {"currency": "usd", "amount": "0", "exchange_rate": "12000",
+                "method": "cash", "fee_percent": "0", "note": ""}
+    for i, entry in enumerate(entries):
+        for key, value in {**defaults, **entry}.items():
+            data[f"form-{i}-{key}"] = str(value)
+    return data
+
+
 def line_data(*rows, initial=0, prefix="lines"):
     """POST payload for a Mahsulotlar formset: management fields plus one dict per
     product row, e.g. line_data({"brand": "LLDPE", "kg": "100", "price": "1"}).

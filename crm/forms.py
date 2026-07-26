@@ -11,6 +11,7 @@ from .models import (
     arrived_lots, brand_stock_costed, convert_pair,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
+from .templatetags.crm_extras import usd
 
 
 def date_widget(**attrs):
@@ -190,6 +191,19 @@ def contract_option_label(contract):
     return (f"{contract.code} · {contract.brand_summary} · "
             f"{_clean_number(contract.remaining_kg)} kg qolgan · {price} · "
             f"jami {_clean_number(contract.kg)} kg")
+
+
+def customer_option_label(customer):
+    """Mijoz <option>: the name and their ostatka — the very figure the to'lov is
+    being taken against, so it does not have to be looked up on the Qarzlar screen
+    first. An overpaid mijoz reads as avans rather than a negative qarz, which is
+    the difference between "collect this" and "we owe them this"."""
+    balance = customer.balance
+    if balance > 0:
+        return f"{customer.name} · qarz {usd(balance)}"
+    if balance < 0:
+        return f"{customer.name} · avans {usd(-balance)}"
+    return f"{customer.name} · qarzsiz"
 
 
 class TruckPlanForm(forms.ModelForm):
@@ -725,12 +739,75 @@ class ReturnForm(PriceEntryFormMixin, forms.ModelForm):
         return obj
 
 
+def _customer_payer_field(field):
+    """Point a mijoz select at the balance-annotated options.
+
+    balance walks sotuvlar (minus qaytarishlar) and past to'lovlar in Python, so the
+    rows every option needs are fetched once rather than per mijoz."""
+    field.queryset = Customer.objects.prefetch_related("sales__returns", "customer_payments")
+    field.label_from_instance = customer_option_label
+
+
 class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
+    """One to'lov, edited on its own. The create screen uses the target + rows pair
+    below instead — a single settlement often arrives in two currencies."""
+
     class Meta:
         model = CustomerPayment
         fields = ["customer", "date", "currency", "amount", "exchange_rate",
                   "method", "fee_percent", "note"]
         widgets = {"date": date_widget()}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _customer_payer_field(self.fields["customer"])
+
+
+class CustomerPaymentTargetForm(forms.Form):
+    """The header of a multi-row to'lov modal: who paid, and on what date.
+
+    Both are shared by every row because they describe the one settlement: a mijoz
+    clearing 10 000$ by handing over 5 000$ naqd and the rest in so'm has made one
+    payment on one day, in two currencies. Splitting them into rows is about how the
+    money arrived, not about when or from whom."""
+
+    customer = forms.ModelChoiceField(queryset=Customer.objects.all(), label="Mijoz")
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _customer_payer_field(self.fields["customer"])
+
+
+class CustomerPaymentRowForm(MoneyEntryFormMixin, forms.ModelForm):
+    """One slice of a settlement: a sum, the currency it came in, and how it moved.
+    Same shape as a xarajat row — see .lineset--payment in the stylesheet."""
+
+    # A to'lov row carries one select fewer than a xarajat (no turkum), so the foiz
+    # joins Valyuta and To'lov usuli on the second line rather than being stranded.
+    field_order = ["amount", "currency", "method", "fee_percent", "exchange_rate", "note"]
+
+    class Meta:
+        model = CustomerPayment
+        # No mijoz, no sana: they are shared, so the modal asks once in the header.
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent", "note"]
+        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+
+
+class BaseCustomerPaymentFormSet(forms.BaseModelFormSet):
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        kept = [f for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+        if not kept:
+            raise forms.ValidationError("Kamida bitta to'lov kiritilishi kerak")
+
+
+CustomerPaymentFormSet = forms.modelformset_factory(
+    CustomerPayment, form=CustomerPaymentRowForm, formset=BaseCustomerPaymentFormSet,
+    extra=1, can_delete=True)
 
 
 class ExpenseTargetForm(forms.Form):

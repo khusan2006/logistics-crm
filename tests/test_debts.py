@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from conftest import payment_rows
+
 from crm.models import (
     Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentLine, ShipmentStatus,
 )
@@ -41,10 +43,8 @@ def test_fully_paid_customer_not_in_debt_list(admin_client, db):
     customer = _customer(name="Paid Customer")
     lot = _lot()
     sale = _sale(customer, lot, "1000", "1.60", "2026-07-17")
-    admin_client.post("/customer-payments/new/", {
-        "customer": customer.pk, "date": "2026-07-18", "currency": "usd", "amount": "1600",
-        "exchange_rate": "12000", "method": "cash", "note": "",
-    })
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "1600"}, customer=customer, date="2026-07-18"))
     sale.refresh_from_db()
     assert sale.remaining == Decimal("0")
 
@@ -54,10 +54,8 @@ def test_fully_paid_customer_not_in_debt_list(admin_client, db):
 
 def test_advance_customer_not_in_debt_list(admin_client, db):
     customer = _customer(name="Avans Customer")
-    admin_client.post("/customer-payments/new/", {
-        "customer": customer.pk, "date": "2026-07-18", "currency": "usd", "amount": "500",
-        "exchange_rate": "12000", "method": "cash", "note": "",
-    })
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "500"}, customer=customer, date="2026-07-18"))
     customer.refresh_from_db()
     assert customer.balance < 0
 
@@ -70,10 +68,8 @@ def test_debt_customer_lists_outstanding_sales_and_excludes_paid(admin_client, d
     lot = _lot()
     unpaid = _sale(customer, lot, "1000", "1.60", "2026-07-17")
     paid = _sale(customer, lot, "500", "1.00", "2026-07-16")
-    admin_client.post("/customer-payments/new/", {
-        "customer": customer.pk, "date": "2026-07-18", "currency": "usd", "amount": "500",
-        "exchange_rate": "12000", "method": "cash", "note": "",
-    })
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "500"}, customer=customer, date="2026-07-18"))
     paid.refresh_from_db()
     unpaid.refresh_from_db()
     assert paid.remaining == Decimal("0")

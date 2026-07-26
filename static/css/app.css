@@ -1936,22 +1936,27 @@ form.stacked .lineset-field {
   }
 
   /* Product rows (kelishuv Mahsulotlar, yuk Mahsulotlar). Scoped away from the
-     xarajat rows below, which hold a different set of fields and place their own. */
-  .lineset:not(.lineset--expense) .lineset-field--brand,
-  .lineset:not(.lineset--expense) .lineset-field--contract_line { grid-column: 1 / -1; }
-  .lineset:not(.lineset--expense) .lineset-field--kg { grid-column: 1; grid-row: 2; }
-  .lineset:not(.lineset--expense) .lineset-field--currency { grid-column: 2; grid-row: 2; }
-  .lineset:not(.lineset--expense) .lineset-field--price { grid-column: 3; grid-row: 2; }
-  .lineset:not(.lineset--expense) .lineset-field--rm { grid-column: 4; grid-row: 2; }
-  .lineset:not(.lineset--expense) .lineset-field--exchange_rate {
+     money rows below, which hold a different set of fields and place their own. */
+  .lineset:not(.lineset--money) .lineset-field--brand,
+  .lineset:not(.lineset--money) .lineset-field--contract_line { grid-column: 1 / -1; }
+  .lineset:not(.lineset--money) .lineset-field--kg { grid-column: 1; grid-row: 2; }
+  .lineset:not(.lineset--money) .lineset-field--currency { grid-column: 2; grid-row: 2; }
+  .lineset:not(.lineset--money) .lineset-field--price { grid-column: 3; grid-row: 2; }
+  .lineset:not(.lineset--money) .lineset-field--rm { grid-column: 4; grid-row: 2; }
+  .lineset:not(.lineset--money) .lineset-field--exchange_rate {
     grid-column: 1 / 3;
     grid-row: 3;
   }
 
   /* Reserve two lines for every caption so a wrapped one ("Dollar kursi (1$ =
      so'm)") cannot shove its own input below its neighbours'. Only needed once the
-     columns are narrow enough to wrap — the single-column phone layout is fine. */
-  .lineset-field > span {
+     columns are narrow enough to wrap — the single-column phone layout is fine.
+
+     :first-child, because the caption is not the only <span> in a field: the live
+     "≈ … so'm" hint is one too, and matching it here gave the empty hint a
+     display:flex that outranked the UA rule for [hidden] — so it kept its 2.6em and
+     sat as a band of dead space under every Summa and Narx. */
+  .lineset-field > span:first-child {
     min-height: 2.6em;
     display: flex;
     align-items: flex-end;
@@ -1961,16 +1966,18 @@ form.stacked .lineset-field {
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
 
-/* Xarajat rows: sana + summa on the first line, then Turkum / Valyuta / To'lov
-   usuli together on the second — the three that describe how the money moved. */
+/* Money rows — a xarajat, a slice of a mijoz to'lov. The summa takes the first
+   line, then the selects describing how the money moved sit together on the
+   second: Turkum / Valyuta / To'lov usuli on a xarajat, Valyuta / To'lov usuli on
+   a to'lov, which has no turkum. */
 @media (min-width: 560px) {
-  .lineset--expense .lineset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
-  .lineset--expense .lineset-field--amount { grid-column: span 3; }
-  .lineset--expense .lineset-field--rm { grid-row: 1; grid-column: 4; }
-  .lineset--expense .lineset-field--note { grid-column: span 2; }
-  /* The rate only appears for so'm; on its own line it cannot squeeze the three
-     selects above it down to "Bo⌄ So⌄ Na⌄". */
-  .lineset--expense .lineset-field--exchange_rate { grid-column: 1 / -1; }
+  .lineset--money .lineset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+  .lineset--money .lineset-field--amount { grid-column: span 3; }
+  .lineset--money .lineset-field--rm { grid-row: 1; grid-column: 4; }
+  .lineset--money .lineset-field--note { grid-column: span 2; }
+  /* Kept off the line of selects above it: on a narrow modal the long caption
+     ("Dollar kursi (1$ = so'm)") squeezed them down to "Bo⌄ So⌄ Na⌄". */
+  .lineset--money .lineset-field--exchange_rate { grid-column: 1 / -1; }
 }
 
 /* Yuk holatlari: each holat badge with the hamkorlar sitting in it beneath. */
