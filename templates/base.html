@@ -851,17 +851,24 @@
   })();
 
   // International phone (data-phone-intl): injects a country picker (🇺🇿 +998 /
-  // 🇮🇷 +98) joined to the left of the field. The visible box holds only the
-  // national digits, auto-grouped as you type. A hidden mirror carries the
+  // 🇮🇷 +98 / 🇹🇷 +90) joined to the left of the field. The visible box holds only
+  // the national digits, auto-grouped as you type. A hidden mirror carries the
   // canonical "+998 90 123 45 67" under the field's name, so whatever submit
   // path runs (normal POST or the modal's FormData) sends the canonical string
   // that validate_intl_phone accepts. Empty stays empty (phone is optional).
+  //
+  // Keep this list in step with _PHONE_PATTERNS in crm/formatting.py — the server
+  // is what actually decides, and a country offered here but missing there would
+  // hand the operator a picker whose numbers are then rejected.
   (function () {
     var COUNTRIES = {
       '998': { label: '+998', flag: '🇺🇿', sizes: [2, 3, 2, 2], ph: '90 123 45 67' },
-      '98':  { label: '+98',  flag: '🇮🇷', sizes: [3, 3, 4],    ph: '912 345 6789' }
+      '98':  { label: '+98',  flag: '🇮🇷', sizes: [3, 3, 4],    ph: '912 345 6789' },
+      '90':  { label: '+90',  flag: '🇹🇷', sizes: [3, 3, 2, 2], ph: '532 123 45 67' }
     };
-    var ORDER = ['998', '98'];
+    // Longest prefix first: parse() takes the first match, and '998' would
+    // otherwise never be reached past '98'.
+    var ORDER = ['998', '98', '90'];
     function maxLen(cc) { return COUNTRIES[cc].sizes.reduce(function (a, b) { return a + b; }, 0); }
     function digitsOnly(s) { return String(s).replace(/\D/g, ''); }
     function group(nat, sizes) {
@@ -872,8 +879,9 @@
     }
     function parse(value) {
       var d = digitsOnly(value);
-      if (d.indexOf('998') === 0) { return { cc: '998', nat: d.slice(3) }; }
-      if (d.indexOf('98') === 0)  { return { cc: '98',  nat: d.slice(2) }; }
+      for (var i = 0; i < ORDER.length; i++) {
+        if (d.indexOf(ORDER[i]) === 0) { return { cc: ORDER[i], nat: d.slice(ORDER[i].length) }; }
+      }
       return { cc: null, nat: d };
     }
     function display(cc, nat) { return group(nat.slice(0, maxLen(cc)), COUNTRIES[cc].sizes); }

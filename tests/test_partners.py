@@ -53,14 +53,14 @@ def test_create_partner_modal_post_invalid_returns_422(admin_client):
     assert "modal-head" in html
 
 
-def test_partner_phone_accepts_uz_and_ir(db):
+def test_partner_phone_accepts_uz_ir_and_tr(db):
     from crm.forms import PartnerForm
-    for phone in ["+998 90 123 45 67", "+98 912 345 6789"]:
+    for phone in ["+998 90 123 45 67", "+98 912 345 6789", "+90 532 123 45 67"]:
         f = PartnerForm({"name": "X", "phone": phone, "city": "", "note": ""})
         assert f.is_valid(), (phone, f.errors)
 
 
-def test_partner_phone_rejects_non_uz_ir(db):
+def test_partner_phone_rejects_other_countries(db):
     from crm.forms import PartnerForm
     f = PartnerForm({"name": "X", "phone": "+82343905395034355", "city": "", "note": ""})
     assert not f.is_valid() and "phone" in f.errors
