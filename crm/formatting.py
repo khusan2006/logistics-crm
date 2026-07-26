@@ -4,25 +4,44 @@ import re
 
 from django import forms
 
-# Uzbek (+998 + 9 national digits) or Iranian (+98 + 10 national digits).
-_PHONE_UZ = re.compile(r"998\d{9}")
-_PHONE_IR = re.compile(r"98\d{10}")
+# The countries the business actually calls. Each pattern is the full international
+# digit string with no punctuation, so "+998 90 123 45 67" and "998901234567" are
+# the same number here.
+#
+# The three prefixes cannot be confused with one another even though UZ, IR and TR
+# all come to 12 digits: they differ by the second digit (99 / 98 / 90), and
+# fullmatch anchors both ends.
+_PHONE_PATTERNS = (
+    ("UZ", re.compile(r"998\d{9}")),    # +998 + 9 national digits
+    ("IR", re.compile(r"98\d{10}")),    # +98  + 10
+    ("TR", re.compile(r"90\d{10}")),    # +90  + 10
+)
 
 # ISO 6346: 4 owner/category letters + 6 serial digits + 1 check digit.
 _CONTAINER_ISO = re.compile(r"^([A-Z]{4})(\d{6})(\d)$")
 
 
+def phone_country(value):
+    """"UZ" / "IR" / "TR" for a recognised number, else None. Punctuation is
+    ignored, so it reads the same value the operator sees."""
+    digits = re.sub(r"\D", "", value or "")
+    for code, pattern in _PHONE_PATTERNS:
+        if pattern.fullmatch(digits):
+            return code
+    return None
+
+
 def validate_intl_phone(value):
-    """Blank, or a valid Uzbek/Iranian number. Formatting (spaces, +, -) is ignored."""
+    """Blank, or an Uzbek / Iranian / Turkish number. Formatting (spaces, +, -) is
+    ignored — only the digits are checked."""
     v = (value or "").strip()
     if not v:
         return v
-    digits = re.sub(r"\D", "", v)
-    if _PHONE_UZ.fullmatch(digits) or _PHONE_IR.fullmatch(digits):
+    if phone_country(v):
         return v
     raise forms.ValidationError(
-        "Telefon O'zbekiston (+998 XX XXX XX XX) yoki Eron (+98 XXX XXX XXXX) "
-        "formatida bo'lishi kerak")
+        "Telefon O'zbekiston (+998 XX XXX XX XX), Eron (+98 XXX XXX XXXX) yoki "
+        "Turkiya (+90 XXX XXX XX XX) formatida bo'lishi kerak")
 
 
 def phone_intl_widget():
@@ -30,7 +49,7 @@ def phone_intl_widget():
     base.html data-phone-intl enhancer turns this into an inline country picker."""
     return forms.TextInput(attrs={
         "data-phone-intl": "", "inputmode": "tel", "autocomplete": "tel",
-        "placeholder": "+998 90 123 45 67  yoki  +98 912 345 6789",
+        "placeholder": "+998 90 123 45 67  ·  +98 912 345 6789  ·  +90 532 123 45 67",
     })
 
 
