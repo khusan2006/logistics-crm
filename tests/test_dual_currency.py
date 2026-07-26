@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import line_data
+from conftest import line_data, payment_rows
 from crm.templatetags.crm_extras import NBSP
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Sale, Shipment,
@@ -141,11 +141,9 @@ def test_a_contract_price_can_be_agreed_in_som(admin_client, db):
 def test_an_incoming_foiz_is_the_mijozs_loss(admin_client, db):
     """1000 sent by perechisleniya at 2% → we received 980, and the mijoz's qarz
     falls by 980, not 1000. The 20 never reached us, so it cannot pay anything."""
-    resp = admin_client.post("/customer-payments/new/", {
-        "customer": _customer().pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "1000", "exchange_rate": "12000", "method": "transfer",
-        "fee_percent": "2", "note": "",
-    })
+    resp = admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "1000", "method": "transfer", "fee_percent": "2"},
+        customer=_customer()))
     assert resp.status_code == 302
     payment = CustomerPayment.objects.get()
     assert payment.amount == Decimal("1000.00")      # what they sent
@@ -161,11 +159,8 @@ def test_an_incoming_foiz_only_pays_down_what_arrived(admin_client, db):
         "currency": "usd", "price": "1.00", "exchange_rate": "12000",
         "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    admin_client.post("/customer-payments/new/", {
-        "customer": customer.pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "1000", "exchange_rate": "12000", "method": "transfer",
-        "fee_percent": "2", "note": "",
-    })
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "1000", "method": "transfer", "fee_percent": "2"}, customer=customer))
     sale = Sale.objects.get()
     assert sale.paid == Decimal("980.00")
     assert sale.remaining == Decimal("20.00")        # still owes the fee's worth

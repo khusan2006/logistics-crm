@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from conftest import payment_rows
+
 from crm.models import (
     AuditLog, Contract, ContractLine, Customer, Partner, Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
 )
@@ -76,10 +78,8 @@ def test_return_after_full_payment_frees_reachable_advance(admin_client, db):
     customer = _customer()
     sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")  # $6,400
     # pay in full
-    admin_client.post("/customer-payments/new/", {
-        "customer": customer.pk, "date": "2026-07-18", "currency": "usd",
-        "amount": "6400", "exchange_rate": "12000", "method": "cash", "note": "",
-    })
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "6400"}, customer=customer, date="2026-07-18"))
     sale.refresh_from_db()
     assert sale.remaining == Decimal("0")
     customer.refresh_from_db()

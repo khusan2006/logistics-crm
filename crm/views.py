@@ -19,7 +19,8 @@ from accounts.models import User
 from .context_processors import SESSION_KEY
 from .exports import xlsx_response
 from .forms import (
-    ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm, PartnerForm, ReservationForm, ReturnForm,
+    ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm,
+    CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     ExpenseTargetForm, SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
     ShipmentExpenseFormSet, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
@@ -668,30 +669,70 @@ def customer_payment_list(request):
 
 @role_required(User.Role.ADMIN)
 def customer_payment_create(request):
-    initial = {}
-    customer_id = request.GET.get("customer")
-    customer = None
-    if customer_id and customer_id.isdigit():
-        initial["customer"] = int(customer_id)
-        customer = Customer.objects.filter(pk=customer_id).first()
-    form = CustomerPaymentForm(request.POST or None, initial=initial)
-    alloc_sales = [s for s in customer.sales.all() if s.remaining > 0] if customer else None
+    """Several to'lovlar at once: a mijoz settling 10 000$ commonly hands over part
+    in dollars and the rest in so'm, sometimes naqd against perechisleniya. Each
+    arrival is its own row — its own valyuta, kurs, usul and foiz — because they
+    convert and charge differently; the mijoz and the sana are shared."""
+    target = CustomerPaymentTargetForm(request.POST or None,
+                                       initial={"customer": request.GET.get("customer")})
+    rows = CustomerPaymentFormSet(request.POST or None,
+                                  queryset=CustomerPayment.objects.none())
+
+    def respond(invalid=False):
+        # On a re-render the mijoz is whatever the header holds, not the query
+        # string: the modal posts to a bare path, so ?customer= is gone by then.
+        customer = _bound_customer(target, request)
+        alloc_sales = [s for s in customer.sales.all() if s.remaining > 0] if customer else None
+        return form_response(request, target, "Yangi to'lov", invalid=invalid,
+                             extra_context={"lines": rows, "lines_legend": "To'lovlar",
+                                            "lines_class": "lineset--money lineset--payment",
+                                            "lines_add_label": "+ To'lov qo'shish",
+                                            "alloc_sales": alloc_sales})
+
     if request.method == "POST":
-        if form.is_valid():
-            payment = form.save(commit=False)
-            payment.created_by = request.user
-            payment.save()
-            picks = _parse_alloc_picks(request.POST) if customer else None
-            allocate_customer_payment(payment, picks)
+        if target.is_valid() and rows.is_valid():
+            customer = target.cleaned_data["customer"]
+            # One pick list for the whole settlement. Applying it to each row in turn
+            # is what makes that correct: every allocation lowers the sotuv's qoldiq,
+            # so the second row picks up the same pick where the first ran out.
+            picks = _parse_alloc_picks(request.POST)
+            saved = []
+            with transaction.atomic():
+                for form in rows.forms:
+                    if not form.cleaned_data or form.cleaned_data.get("DELETE"):
+                        continue
+                    payment = form.save(commit=False)
+                    payment.customer = customer
+                    payment.date = target.cleaned_data["date"]
+                    payment.created_by = request.user
+                    payment.save()
+                    allocate_customer_payment(payment, picks)
+                    saved.append(payment)
+            total = sum((p.amount for p in saved), Decimal("0"))
             AuditLog.record(
-                request.user, AuditLog.Action.PAYMENT, "Mijoz to'lovi", payment.pk,
-                f"To'lov: {payment.amount}$ · mijoz {payment.customer.name}",
+                request.user, AuditLog.Action.PAYMENT, "Mijoz to'lovi",
+                saved[0].pk if saved else None,
+                f"To'lov: {len(saved)} ta · {total}$ · mijoz {customer.name}",
             )
-            messages.success(request, "To'lov qo'shildi")
+            messages.success(
+                request,
+                f"{len(saved)} ta to'lov qo'shildi" if len(saved) > 1 else "To'lov qo'shildi")
             return form_success(request, reverse("customer_payment_list"))
-        return form_response(request, form, "Yangi to'lov", invalid=True,
-                             extra_context={"alloc_sales": alloc_sales})
-    return form_response(request, form, "Yangi to'lov", extra_context={"alloc_sales": alloc_sales})
+        return respond(invalid=True)
+    return respond()
+
+
+def _bound_customer(target, request):
+    """The mijoz the Taqsimlash table should list sotuvlar for — the posted one on a
+    re-render, the ?customer= one when the modal first opens."""
+    if target.is_bound:
+        if target.is_valid():
+            return target.cleaned_data["customer"]
+        return None
+    customer_id = request.GET.get("customer")
+    if customer_id and customer_id.isdigit():
+        return Customer.objects.filter(pk=customer_id).first()
+    return None
 
 
 @role_required(User.Role.ADMIN)
@@ -1150,7 +1191,7 @@ def expense_create(request):
     def respond(invalid=False):
         return form_response(request, target, "Yangi xarajat", invalid=invalid,
                              extra_context={"lines": rows, "lines_legend": "Xarajatlar",
-                                            "lines_class": "lineset--expense",
+                                            "lines_class": "lineset--money lineset--expense",
                                             "lines_add_label": "+ Xarajat qo'shish"})
 
     if request.method == "POST":
