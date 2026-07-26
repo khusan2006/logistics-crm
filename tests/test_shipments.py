@@ -39,25 +39,29 @@ def test_kg_over_contract_blocked(admin_client, db):
     assert resp.status_code == 200 and not Shipment.objects.exists()
 
 
-def test_container_unique(admin_client, db):
-    c = _contract()
-    _post_shipment(admin_client, c)
-    resp = _post_shipment(admin_client, c, kg="100", container="mscu-1")
-    assert Shipment.objects.count() == 1 and resp.status_code == 200
-
-
-def test_container_unique_ignores_spacing(admin_client, db):
+def test_the_same_container_can_come_back_on_a_later_yuk(admin_client, db):
+    """Containers are reused; a repeat is normal, not an error. This used to be
+    rejected as a duplicate, which blocked entering a perfectly real load."""
     c = _contract()
     _post_shipment(admin_client, c, kg="100", container="MSKU 123456 7")
     resp = _post_shipment(admin_client, c, kg="100", container="msku1234567")
-    assert Shipment.objects.count() == 1 and resp.status_code == 200
-    assert Shipment.objects.first().container == "MSKU 123456 7"
+    assert resp.status_code == 302
+    assert Shipment.objects.count() == 2
 
 
 def test_container_stored_normalized(admin_client, db):
+    """Still tidied — uppercased and grouped when it looks like ISO 6346 — so the
+    same container reads the same way however it was typed. Tidying is not
+    rejecting: nothing is refused for failing to match."""
     c = _contract()
     _post_shipment(admin_client, c, kg="100", container="mscu1234567")
     assert Shipment.objects.get().container == "MSCU 123456 7"
+
+
+def test_a_container_that_is_not_iso_is_kept_as_typed(admin_client, db):
+    c = _contract()
+    _post_shipment(admin_client, c, kg="100", container="konteyner yo'q")
+    assert Shipment.objects.get().container == "KONTEYNER YO'Q"
 
 
 def test_overdue(db, admin_user):
@@ -157,13 +161,18 @@ def test_create_shipment_modal_post_invalid_returns_422(admin_client, db):
     assert not Shipment.objects.exists()
 
 
-def test_shipment_transport_rejects_non_plate(db):
+def test_transport_is_free_text(db):
+    """A plate-shaped regex used to reject anything that was not 5-12 alphanumerics
+    containing a digit. Waybills say all sorts of things, and the operator copying
+    one is not helped by being told it is the wrong shape."""
     from crm.forms import ShipmentForm
     c = _contract()
     st = ShipmentStatus.objects.first()
     f = ShipmentForm({"contract": c.pk, "kg": "100", "status": st.pk,
-                      "transport": "hello world text", "container": "", "note": ""})
-    assert not f.is_valid() and "transport" in f.errors
+                      "sent": "2026-07-08", "transport": "hello world text",
+                      "container": "", "note": ""})
+    assert f.is_valid(), f.errors
+    assert "transport" not in f.errors
 
 
 def test_shipment_transport_accepts_uz_plate(db):

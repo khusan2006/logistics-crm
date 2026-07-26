@@ -8,7 +8,7 @@ from django.utils import timezone
 from .models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation, Return,
     Sale, Shipment, ShipmentExpense, ShipmentLeg, ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_stock_costed,
+    arrived_lots, brand_stock_costed, convert_pair,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 
@@ -21,6 +21,105 @@ def date_widget(**attrs):
     as blank — so an edit form looked empty and saving it wiped the date.
     """
     return forms.DateInput(attrs={"type": "date", **attrs}, format="%Y-%m-%d")
+
+
+class MoneyEntryFormMixin:
+    """Shared two-way conversion for a lump sum. The user types `amount` in
+    `currency`; after clean(), cleaned_data holds BOTH `amount` (USD) and
+    `amount_uzs` (so'm), the typed side exact and the other derived at
+    `exchange_rate`.
+
+    The kurs is required in both directions, not just for so'm. That is the whole
+    point: a dollar row without one has no so'm value and could never be counted in
+    a so'm total — which is exactly what the old `exchange_rate = 0` rows did.
+
+    Also marks the currency/amount/exchange_rate widgets with data-money-*
+    hooks so the base.html JS enhancer can render a live counter-currency preview."""
+
+    #: cleaned_data key holding the converted so'm value
+    uzs_field = "amount_uzs"
+    #: the field the operator types into
+    typed_field = "amount"
+    #: quantum of the USD side — lump sums are cents, per-kg prices are finer
+    usd_places = "0.01"
+    #: shown when the typed value is zero or negative
+    positive_error = "Summa musbat bo'lishi kerak"
+    #: a blank value is an error unless the underlying field is nullable
+    allow_blank = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "currency" in self.fields:
+            self.fields["currency"].widget.attrs["data-money-currency"] = ""
+        if "exchange_rate" in self.fields:
+            self.fields["exchange_rate"].widget.attrs["data-money-rate"] = ""
+            # Deliberately NOT required at field level: a bron with no narx agreed
+            # yet has nothing to convert, so demanding a kurs there would block a
+            # legitimate entry. clean() raises whenever a value IS present.
+            self.fields["exchange_rate"].required = False
+        if self.typed_field in self.fields:
+            field = self.fields[self.typed_field]
+            field.widget.attrs["data-money-amount"] = ""
+            # The column is canonical USD, but the operator now types whichever
+            # currency the Valyuta picker says — a hard-coded "(USD)" on the input
+            # would be a lie the moment they choose So'm.
+            field.label = re.sub(r"\s*\((USD|so'm)\)", "", str(field.label))
+
+    def clean(self):
+        cleaned = super().clean()
+        currency = cleaned.get("currency")
+        typed = cleaned.get(self.typed_field)
+        rate = cleaned.get("exchange_rate") or Decimal("0")
+        if typed is None:
+            # A nullable narx (a truck line falling back to the kelishuv price) has
+            # no so'm twin of its own either — it inherits the parent's.
+            if self.allow_blank:
+                cleaned[self.uzs_field] = None
+            return cleaned
+        if typed <= 0:
+            self.add_error(self.typed_field, self.positive_error)
+            return cleaned
+        if rate <= 0:
+            self.add_error("exchange_rate", "Dollar kursini kiriting")
+            return cleaned
+        usd, uzs = convert_pair(typed, currency, rate, self.usd_places)
+        cleaned[self.typed_field] = usd
+        cleaned[self.uzs_field] = uzs
+        return cleaned
+
+    def _post_clean(self):
+        """Put the derived so'm value on the instance.
+
+        This has to happen here rather than in save(): the so'm side is not a form
+        field (it is computed, never typed), so ModelForm would not write it — and
+        the Mahsulotlar formsets never call our save() at all, they go through
+        formset.save(). _post_clean is the one hook every save path passes through."""
+        super()._post_clean()
+        if self.uzs_field in self.cleaned_data:
+            setattr(self.instance, self.uzs_field, self.cleaned_data[self.uzs_field])
+
+    def money_kwargs(self):
+        """The converted money as kwargs, for the views that build their model
+        instance by hand (the FIFO sotuv split, bron→sotuv) instead of via save()."""
+        return {
+            self.typed_field: self.cleaned_data[self.typed_field],
+            self.uzs_field: self.cleaned_data.get(self.uzs_field),
+            "currency": self.cleaned_data["currency"],
+            "exchange_rate": self.cleaned_data["exchange_rate"],
+        }
+
+
+class PriceEntryFormMixin(MoneyEntryFormMixin):
+    """The per-kg twin of MoneyEntryFormMixin: a narx rather than a lump sum.
+
+    Prices carry four decimals where sums carry two — rounding a $/kg to cents
+    would move a 24-tonne lot by dollars — so only the quantum and the field names
+    differ; the conversion itself is the same."""
+
+    typed_field = "price"
+    uzs_field = "price_uzs"
+    usd_places = "0.0001"
+    positive_error = "Narx musbat bo'lishi kerak"
 
 
 class PartnerForm(forms.ModelForm):
@@ -44,14 +143,12 @@ class CustomerForm(forms.ModelForm):
 
 
 class ContractForm(forms.ModelForm):
-    # Not stored — a helper so the operator can see the so'm value of the USD price
-    # (and total) at today's rate. The contract price itself stays canonical USD.
-    som_rate = forms.DecimalField(
-        label="Dollar kursi (1$ = so'm, ixtiyoriy)", required=False, min_value=0,
-        widget=forms.NumberInput(attrs={"data-som-rate": "", "step": "1",
-                                        "placeholder": "Masalan: 12650"}))
+    """The kelishuv header. The dollar kursi used to live here as a display-only
+    helper that showed a so'm preview and stored nothing; each Mahsulot row now
+    carries its own real kurs, so the fake one has been dropped rather than left
+    beside a field that looks identical but actually saves."""
 
-    field_order = ["partner", "som_rate", "created", "note"]
+    field_order = ["partner", "created", "note"]
 
     class Meta:
         model = Contract
@@ -112,17 +209,19 @@ class TruckPlanForm(forms.ModelForm):
         return count
 
 
-class ContractLineForm(forms.ModelForm):
-    """One "Mahsulot" row on the kelishuv form."""
+class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
+    """One "Mahsulot" row on the kelishuv form. The narx is entered in whichever
+    currency the kelishuv was struck in."""
 
     class Meta:
         model = ContractLine
-        fields = ["brand", "kg", "price"]
+        fields = ["brand", "kg", "currency", "price", "exchange_rate"]
         widgets = {
             "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
-            "kg": forms.NumberInput(attrs={"data-som-kg": "", "placeholder": "0"}),
-            "price": forms.NumberInput(attrs={"data-som-price": "", "step": "0.0001",
-                                              "placeholder": "0.0000"}),
+            "kg": forms.NumberInput(attrs={"placeholder": "0"}),
+            "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "0.0000"}),
+            "exchange_rate": forms.NumberInput(attrs={"step": "1",
+                                                      "placeholder": "Masalan: 12650"}),
         }
 
     def clean_kg(self):
@@ -178,45 +277,6 @@ class ShipmentStatusForm(forms.ModelForm):
     class Meta:
         model = ShipmentStatus
         fields = ["name", "is_arrival"]
-
-
-class MoneyEntryFormMixin:
-    """Shared so'm→USD conversion. The user types `amount` in `currency`; after
-    clean(), cleaned_data["amount"] is canonical USD and amount_original/exchange_rate
-    carry the entry-time facts. Reused by the expense form.
-
-    Also marks the currency/amount/exchange_rate widgets with data-money-*
-    hooks so the base.html JS enhancer can show/hide the rate field and
-    render a live USD preview (Phase 3 Task 7)."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if "currency" in self.fields:
-            self.fields["currency"].widget.attrs["data-money-currency"] = ""
-        if "exchange_rate" in self.fields:
-            self.fields["exchange_rate"].widget.attrs["data-money-rate"] = ""
-        if "amount" in self.fields:
-            self.fields["amount"].widget.attrs["data-money-amount"] = ""
-
-    def clean(self):
-        cleaned = super().clean()
-        currency, amount = cleaned.get("currency"), cleaned.get("amount")
-        rate = cleaned.get("exchange_rate") or Decimal("0")
-        if amount is None:
-            return cleaned
-        if amount <= 0:
-            self.add_error("amount", "Summa musbat bo'lishi kerak")
-            return cleaned
-        if currency == Currency.UZS:
-            if rate <= 0:
-                self.add_error("exchange_rate", "So'mdagi summa uchun dollar kursini kiriting")
-                return cleaned
-            cleaned["amount_original"] = amount
-            cleaned["amount"] = (amount / rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        else:
-            cleaned["amount_original"] = amount
-            cleaned["exchange_rate"] = Decimal("0")
-        return cleaned
 
 
 def _clean_number(value):
@@ -282,26 +342,16 @@ class ShipmentForm(forms.ModelForm):
         self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_transport(self):
-        t = (self.cleaned_data.get("transport") or "").strip()
-        if t:
-            compact = re.sub(r"[\s\-]", "", t)
-            # a plate is short, alphanumeric (Latin or Persian letters), and has a digit
-            if (not re.fullmatch(r"[A-Za-z0-9؀-ۿ]{5,12}", compact)
-                    or not any(c.isdigit() for c in compact)):
-                raise forms.ValidationError(
-                    "Transport O'zbekiston yoki Eron avto raqami bo'lishi kerak "
-                    "(masalan: 01 777 AAA)")
-        return t
+        """Free text. There used to be a plate-shaped regex here, which rejected
+        anything that was not 5–12 alphanumerics with a digit — no help to an
+        operator holding a waybill that says something else."""
+        return (self.cleaned_data.get("transport") or "").strip()
 
     def clean_container(self):
-        container = normalize_container(self.cleaned_data.get("container"))
-        if container:
-            clash = Shipment.objects.filter(container__iexact=container)
-            if self.instance.pk:
-                clash = clash.exclude(pk=self.instance.pk)
-            if clash.exists():
-                raise forms.ValidationError("Bu konteyner raqami avval kiritilgan")
-        return container
+        """Tidied, never rejected: uppercased and grouped when it looks like ISO
+        6346, left as typed otherwise. The duplicate check that lived here is gone
+        too — the same container legitimately comes back on a later yuk."""
+        return normalize_container(self.cleaned_data.get("container"))
 
     def clean(self):
         cleaned = super().clean()
@@ -311,14 +361,18 @@ class ShipmentForm(forms.ModelForm):
         return cleaned
 
 
-class ShipmentLineForm(forms.ModelForm):
+class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
     """One product on the truck."""
+
+    #: blank narx means "use the kelishuv's" — see ShipmentLine.unit_price
+    allow_blank = True
 
     class Meta:
         model = ShipmentLine
-        fields = ["contract_line", "kg", "price"]
-        widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""})}
-        labels = {"kg": "Yuboriladigan kg", "price": "1 kg narxi (USD)"}
+        fields = ["contract_line", "kg", "currency", "price", "exchange_rate"]
+        widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""}),
+                   "exchange_rate": forms.NumberInput(attrs={"step": "1"})}
+        labels = {"kg": "Yuboriladigan kg", "price": "1 kg narxi"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -432,7 +486,7 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = SupplierPayment
         fields = ["contract", "date", "currency", "amount", "exchange_rate",
-                  "commission_percent", "method", "note"]
+                  "commission_percent", "method", "fee_percent", "note"]
         widgets = {
             "date": date_widget(),
             "commission_percent": forms.NumberInput(attrs={
@@ -481,17 +535,8 @@ class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
                     f"Kelishuv qiymatidan oshib ketdi (to'lash mumkin: {left} $)")
         return cleaned
 
-    def save(self, commit=True):
-        obj = super().save(commit=False)
-        obj.amount = self.cleaned_data["amount"]
-        obj.amount_original = self.cleaned_data["amount_original"]
-        obj.exchange_rate = self.cleaned_data["exchange_rate"]
-        if commit:
-            obj.save()
-        return obj
 
-
-class SaleCreateForm(forms.ModelForm):
+class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
     """New sales are entered by BRAND, not lot: the view consumes the oldest
     arrived lots first (FIFO), splitting the kg across lots — one Sale row per
     lot slice, each snapshotting its own lot's landed cost."""
@@ -500,7 +545,8 @@ class SaleCreateForm(forms.ModelForm):
 
     class Meta:
         model = Sale
-        fields = ["customer", "brand", "kg", "price", "date", "debt_deadline", "note"]
+        fields = ["customer", "brand", "kg", "currency", "price", "exchange_rate",
+                  "date", "debt_deadline", "note"]
         widgets = {
             "date": date_widget(),
             "debt_deadline": date_widget(),
@@ -534,7 +580,7 @@ class SaleCreateForm(forms.ModelForm):
         return cleaned
 
 
-class SaleLotForm(forms.ModelForm):
+class SaleLotForm(PriceEntryFormMixin, forms.ModelForm):
     """Sale from ONE chosen lot, entered from inside a marka in the ombor. The same
     granula can sit in several lots at different landed costs, so picking the lot
     has to beat FIFO here — otherwise you could never sell the dearer one. The lot
@@ -545,7 +591,8 @@ class SaleLotForm(forms.ModelForm):
 
     class Meta:
         model = Sale
-        fields = ["lot", "customer", "kg", "price", "date", "debt_deadline", "note"]
+        fields = ["lot", "customer", "kg", "currency", "price", "exchange_rate",
+                  "date", "debt_deadline", "note"]
         widgets = {
             "date": date_widget(),
             "debt_deadline": date_widget(),
@@ -569,10 +616,11 @@ class SaleLotForm(forms.ModelForm):
         return cleaned
 
 
-class SaleForm(forms.ModelForm):
+class SaleForm(PriceEntryFormMixin, forms.ModelForm):
     class Meta:
         model = Sale
-        fields = ["customer", "line", "kg", "price", "date", "debt_deadline", "note"]
+        fields = ["customer", "line", "kg", "currency", "price", "exchange_rate",
+                  "date", "debt_deadline", "note"]
         widgets = {
             "date": date_widget(),
             "debt_deadline": date_widget(),
@@ -602,13 +650,16 @@ class SaleForm(forms.ModelForm):
         return cleaned
 
 
-class ReservationForm(forms.ModelForm):
+class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     """A reservation can target an arrived OR in-transit lot — sold_kg is 0 on an
     in-transit lot, so reservable there is simply kg minus other active reservations."""
 
+    #: the narx is optional on a bron — the price can be agreed later
+    allow_blank = True
+
     class Meta:
         model = Reservation
-        fields = ["customer", "line", "kg", "price", "note"]
+        fields = ["customer", "line", "kg", "currency", "price", "exchange_rate", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 2})}
 
     def clean(self):
@@ -627,13 +678,13 @@ class ReservationForm(forms.ModelForm):
         return cleaned
 
 
-class ReturnForm(forms.ModelForm):
+class ReturnForm(PriceEntryFormMixin, forms.ModelForm):
     """Sale comes from the view (URL `?sale=`), not from the form — the field list
     deliberately excludes it."""
 
     class Meta:
         model = Return
-        fields = ["kg", "price", "date", "restock", "note"]
+        fields = ["kg", "currency", "price", "exchange_rate", "date", "restock", "note"]
         widgets = {
             "date": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
@@ -642,8 +693,14 @@ class ReturnForm(forms.ModelForm):
     def __init__(self, *args, sale=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.sale = sale or getattr(self.instance, "sale", None)
-        if self.sale and not self.instance.pk and not self.initial.get("price"):
-            self.initial["price"] = self.sale.price
+        # Default to the sale's own narx AND its currency + kurs: crediting a so'm
+        # sale back at today's rate would refund a different sum than was charged.
+        if self.sale and not self.instance.pk:
+            self.initial.setdefault("price", self.sale.price)
+            self.initial.setdefault("currency", self.sale.currency)
+            self.initial.setdefault("exchange_rate", self.sale.exchange_rate)
+            if self.sale.currency == Currency.UZS:
+                self.initial["price"] = self.sale.price_uzs
 
     def clean(self):
         cleaned = super().clean()
@@ -671,17 +728,9 @@ class ReturnForm(forms.ModelForm):
 class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = CustomerPayment
-        fields = ["customer", "date", "currency", "amount", "exchange_rate", "method", "note"]
+        fields = ["customer", "date", "currency", "amount", "exchange_rate",
+                  "method", "fee_percent", "note"]
         widgets = {"date": date_widget()}
-
-    def save(self, commit=True):
-        obj = super().save(commit=False)
-        obj.amount = self.cleaned_data["amount"]
-        obj.amount_original = self.cleaned_data["amount_original"]
-        obj.exchange_rate = self.cleaned_data["exchange_rate"]
-        if commit:
-            obj.save()
-        return obj
 
 
 class ExpenseTargetForm(forms.Form):
@@ -702,12 +751,14 @@ class ShipmentExpenseRowForm(MoneyEntryFormMixin, forms.ModelForm):
     """One xarajat row. Ordered so Turkum / Valyuta / To'lov usuli land on a line
     of their own — see .lineset--expense in the stylesheet."""
 
-    field_order = ["amount", "category", "currency", "method", "exchange_rate", "note"]
+    field_order = ["amount", "category", "currency", "method", "exchange_rate",
+                   "fee_percent", "note"]
 
     class Meta:
         model = ShipmentExpense
         # No date: it is shared, so the modal asks once in ExpenseTargetForm.
-        fields = ["category", "currency", "amount", "exchange_rate", "method", "note"]
+        fields = ["category", "currency", "amount", "exchange_rate", "method",
+                  "fee_percent", "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
 
 
@@ -731,15 +782,12 @@ class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = ShipmentExpense
         fields = ["shipment", "date", "category", "currency", "amount",
-                  "exchange_rate", "method", "note"]
+                  "exchange_rate", "method", "fee_percent", "note"]
         widgets = {"date": date_widget(),
                    "shipment": forms.HiddenInput()}
 
     def save(self, commit=True):
         obj = super().save(commit=False)
-        obj.amount = self.cleaned_data["amount"]
-        obj.amount_original = self.cleaned_data["amount_original"]
-        obj.exchange_rate = self.cleaned_data["exchange_rate"]
         if commit:
             obj.save()
         return obj

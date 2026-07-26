@@ -35,19 +35,19 @@
     </div>
     <div class="stat">
       <div class="muted">Tan narx</div>
-      <div>{{ sale.cost_price }} $/kg</div>
+      <div>{% rate sale.cost_price sale.cost_price_uzs %}</div>
     </div>
     <div class="stat">
       <div class="muted">Sotuv narxi</div>
-      <div>{{ sale.price }} $/kg</div>
+      <div>{% rate sale.price sale.price_uzs %}</div>
     </div>
     <div class="stat">
       <div class="muted">Jami</div>
-      <div>{{ sale.total|usd }}</div>
+      <div>{% money sale.total sale.total_uzs %}</div>
     </div>
     <div class="stat">
       <div class="muted">Foyda</div>
-      <div>{{ sale.profit|usd }}</div>
+      <div>{% money sale.profit sale.profit_uzs %}</div>
     </div>
     <div class="stat">
       <div class="muted">To'lov muddati</div>
@@ -58,7 +58,7 @@
     </div>
     <div class="stat">
       <div class="muted">Qoldiq/qarz</div>
-      <div{% if sale.remaining > 0 %} class="late"{% endif %}>{{ sale.remaining|usd }}</div>
+      <div{% if sale.remaining > 0 %} class="late"{% endif %}>{% money sale.remaining sale.remaining_uzs %}</div>
     </div>
   </div>
   {% if sale.note %}<p class="muted" style="margin-top: 14px;">{{ sale.note }}</p>{% endif %}
@@ -85,8 +85,8 @@
       <tr>
         <td>{{ r.date }}</td>
         <td>{{ r.kg }}</td>
-        <td>{{ r.price }} $/kg</td>
-        <td>{{ r.amount|usd }}</td>
+        <td>{% rate r.price r.price_uzs %}</td>
+        <td>{% money r.amount r.amount_uzs %}</td>
         <td>{% if r.restock %}Ha{% else %}Yo'q{% endif %}</td>
         <td>{{ r.note|default:"—" }}</td>
         <td class="row-actions">
@@ -112,7 +112,7 @@
         <td>{{ a.payment.date }}</td>
         <td><a href="{% url 'customer_payment_edit' a.payment_id %}" data-modal>#{{ a.payment_id }}</a></td>
         <td>{{ a.payment.get_method_display }}</td>
-        <td>{{ a.amount|usd }}</td>
+        <td>{% money a.amount a.amount_uzs %}</td>
       </tr>
       {% endfor %}
     </table>
@@ -121,7 +121,7 @@
   <p class="muted">Hali to'lov qilinmagan.</p>
   {% endif %}
   <p style="margin-top: 12px;">
-    Qoldiq: <strong{% if sale.remaining > 0 %} class="late"{% endif %}>{{ sale.remaining|usd }}</strong>
+    Qoldiq: <strong{% if sale.remaining > 0 %} class="late"{% endif %}>{% money sale.remaining sale.remaining_uzs %}</strong>
   </p>
 </div>
 

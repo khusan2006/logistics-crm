@@ -96,7 +96,7 @@
     <td class="num">{{ s.kg|floatformat:"-3" }}</td>
     {% if user.is_admin_role %}
     <td class="num">
-      <div>{{ s.goods_value|usd }}</div>
+      <div>{% money s.goods_value s.goods_value_uzs %}</div>
       <div class="muted load-sub">{{ s.lines.all|length }} mahsulot</div>
     </td>
     {% endif %}
@@ -121,7 +121,7 @@
     <td class="num load-expense">
       {% with n=s.expenses.all|length %}
       {% if n %}
-        <div>{{ s.expenses_total|usd }}</div>
+        <div>{% money s.expenses_total s.expenses_total_uzs %}</div>
         <div class="muted load-sub">{{ n }} ta</div>
       {% else %}<span class="muted">—</span>{% endif %}
       {% endwith %}
@@ -200,13 +200,13 @@
           {% if user.is_admin_role %}
           <div class="lf">
             <span class="lf-label">Yuk qiymati</span>
-            <span class="lf-value">{{ s.goods_value|usd }}</span>
+            <span class="lf-value">{% money s.goods_value s.goods_value_uzs %}</span>
             <span class="lf-sub">{{ s.kg|floatformat:"-3" }} kg</span>
           </div>
           {% for ln in s.lines.all %}
           <div class="lf{% if forloop.first %} lf--accent{% endif %}">
             <span class="lf-label">{{ ln.brand }}</span>
-            <span class="lf-value">{{ ln.landed_cost_per_kg }} $/kg</span>
+            <span class="lf-value">{% rate ln.landed_cost_per_kg ln.landed_cost_per_kg_uzs %}</span>
             <span class="lf-sub">{{ ln.kg|floatformat:"-3" }} kg × {{ ln.unit_price|floatformat:"-4" }} $ · tan narx</span>
           </div>
           {% endfor %}
@@ -258,14 +258,14 @@
               <tr>
                 <td>{{ e.date }}</td>
                 <td>{{ e.get_category_display }}{% if e.note %}<div class="muted load-sub">{{ e.note }}</div>{% endif %}</td>
-                <td class="num"><strong>{{ e.amount|usd }}</strong></td>
+                <td class="num"><strong>{% money e.amount e.amount_uzs %}</strong></td>
                 <td class="row-actions">
                   <a class="icon-action act-edit" href="{% url 'expense_edit' e.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></a>
                   <a class="icon-action act-delete" href="{% url 'expense_delete' e.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
                 </td>
               </tr>
               {% endfor %}
-              <tr class="lf-total-row"><td colspan="2"><strong>Jami</strong> <span class="muted">· 1 kg ga {{ s.expense_per_kg|floatformat:"-4" }} $ qo'shiladi</span></td><td class="num"><strong>{{ s.expenses_total|usd }}</strong></td><td></td></tr>
+              <tr class="lf-total-row"><td colspan="2"><strong>Jami</strong> <span class="muted">· 1 kg ga {{ s.expense_per_kg|floatformat:"-4" }} $ qo'shiladi</span></td><td class="num"><strong>{% money s.expenses_total s.expenses_total_uzs %}</strong></td><td></td></tr>
             </table>
             {% else %}
             <p class="muted" style="margin: 6px 0 0;">Xarajat yo'q. Yo'l, bojxona va boshqa sarflar shu yukning tan narxiga qo'shiladi.</p>

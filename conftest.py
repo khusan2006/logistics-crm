@@ -80,7 +80,11 @@ def translator_client(translator_user):
 
 def line_data(*rows, initial=0, prefix="lines"):
     """POST payload for a Mahsulotlar formset: management fields plus one dict per
-    product row, e.g. line_data({"brand": "LLDPE", "kg": "100", "price": "1"})."""
+    product row, e.g. line_data({"brand": "LLDPE", "kg": "100", "price": "1"}).
+
+    Every priced row carries a currency and a kurs since dual currency landed; both
+    default to dollar at 12,000 so a test only spells them out when the currency is
+    what it is testing."""
     data = {
         f"{prefix}-TOTAL_FORMS": str(len(rows)),
         f"{prefix}-INITIAL_FORMS": str(initial),
@@ -88,6 +92,7 @@ def line_data(*rows, initial=0, prefix="lines"):
         f"{prefix}-MAX_NUM_FORMS": "1000",
     }
     for i, row in enumerate(rows):
+        row = {"currency": "usd", "exchange_rate": "12000", **row}
         for key, value in row.items():
             data[f"{prefix}-{i}-{key}"] = "" if value is None else str(value)
     return data

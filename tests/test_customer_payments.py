@@ -35,18 +35,22 @@ def test_uzs_converted_to_usd(admin_client, db):
     })
     p = CustomerPayment.objects.get()
     assert p.amount == Decimal("100.00")
-    assert p.amount_original == Decimal("1265000")
+    assert p.amount_uzs == Decimal("1265000")
     assert p.exchange_rate == Decimal("12650")
 
 
-def test_usd_payment_passes_with_blank_rate(admin_client, db):
+def test_usd_payment_also_records_a_som_value(admin_client, db):
+    """A dollar to'lov carries its so'm twin. This used to pass with a blank kurs,
+    which is precisely why old dollar rows could never appear in a so'm total."""
     customer = _customer()
     resp = admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "400",
-        "exchange_rate": "", "method": "transfer", "note": "",
+        "exchange_rate": "12000", "method": "transfer", "note": "",
     })
     assert resp.status_code == 302
-    assert CustomerPayment.objects.filter(customer=customer, amount=Decimal("400.00")).exists()
+    p = CustomerPayment.objects.get(customer=customer)
+    assert p.amount == Decimal("400.00")
+    assert p.amount_uzs == Decimal("4800000")
 
 
 def test_payment_fifo_allocates_across_customer_sales(admin_client, db):
@@ -56,7 +60,7 @@ def test_payment_fifo_allocates_across_customer_sales(admin_client, db):
     s2 = _sale(customer, lot, "2000", "1.00", "2026-07-18")
     resp = admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "4000",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     assert resp.status_code == 302
     s1.refresh_from_db()
@@ -72,7 +76,7 @@ def test_manual_pick_via_view(admin_client, db):
     s2 = _sale(customer, lot, "2000", "1.00", "2026-07-18")
     resp = admin_client.post(f"/customer-payments/new/?customer={customer.pk}", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "2000",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
         f"alloc_{s2.pk}": "2000",
     })
     assert resp.status_code == 302
@@ -113,7 +117,7 @@ def test_create_modal_post_valid_returns_204_with_redirect(admin_client, db):
     resp = admin_client.post(
         "/customer-payments/new/",
         {"customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "400",
-         "exchange_rate": "", "method": "transfer", "note": ""},
+         "exchange_rate": "12000", "method": "transfer", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
@@ -125,7 +129,7 @@ def test_create_modal_post_invalid_returns_422(admin_client, db):
     resp = admin_client.post(
         "/customer-payments/new/",
         {"customer": "", "date": "2026-07-20", "currency": "usd", "amount": "400",
-         "exchange_rate": "", "method": "transfer", "note": ""},
+         "exchange_rate": "12000", "method": "transfer", "note": ""},
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     html = resp.content.decode()
@@ -140,7 +144,7 @@ def test_edit_reallocates_after_amount_change(admin_client, db):
     s1 = _sale(customer, lot, "3000", "1.00", "2026-07-17")
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "1000",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     payment = CustomerPayment.objects.get()
     s1.refresh_from_db()
@@ -148,7 +152,7 @@ def test_edit_reallocates_after_amount_change(admin_client, db):
 
     resp = admin_client.post(f"/customer-payments/{payment.pk}/edit/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "3000",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     assert resp.status_code == 302
     s1.refresh_from_db()
@@ -163,7 +167,7 @@ def test_delete_removes_allocations(admin_client, db):
     s1 = _sale(customer, lot, "3000", "1.00", "2026-07-17")
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "1000",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     payment = CustomerPayment.objects.get()
     resp = admin_client.post(f"/customer-payments/{payment.pk}/delete/")
@@ -183,7 +187,7 @@ def test_list_shows_payment(admin_client, db):
     customer = _customer()
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-20", "currency": "usd", "amount": "400",
-        "exchange_rate": "", "method": "transfer", "note": "",
+        "exchange_rate": "12000", "method": "transfer", "note": "",
     })
     html = admin_client.get("/customer-payments/").content.decode()
     assert customer.name in html

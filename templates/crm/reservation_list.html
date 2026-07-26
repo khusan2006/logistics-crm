@@ -20,7 +20,7 @@
     <td class="sticky-col">{{ r.customer.name }}</td>
     <td>#{{ r.line.shipment_id }} · {{ r.line.brand }}{% if not r.line.arrived %} <span class="muted">(yo'lda)</span>{% endif %}</td>
     <td>{{ r.kg }}</td>
-    <td>{% if r.price %}{{ r.price }} $/kg{% else %}—{% endif %}</td>
+    <td>{% if r.price %}{% rate r.price r.price_uzs %}{% else %}—{% endif %}</td>
     <td>
       {% if r.status == "active" %}<span class="daybadge">Faol</span>
       {% elif r.status == "converted" %}<span class="daybadge ok">Sotuvga aylandi</span>

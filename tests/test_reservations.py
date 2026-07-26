@@ -31,9 +31,11 @@ def _in_transit_lot(kg="5000", brand="HDPE"):
     return _ship_obj_line
 
 
-def _reserve(admin_client, lot, customer, kg="5000", price=""):
+def _reserve(admin_client, lot, customer, kg="5000", price="", currency="usd",
+             exchange_rate="12000"):
     return admin_client.post(f"/reservations/new/?lot={lot.pk}", {
-        "customer": customer.pk, "line": lot.pk, "kg": kg, "price": price, "note": "",
+        "customer": customer.pk, "line": lot.pk, "kg": kg, "currency": currency,
+        "price": price, "exchange_rate": exchange_rate, "note": "",
     })
 
 

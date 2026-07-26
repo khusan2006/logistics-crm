@@ -43,7 +43,7 @@ def test_fully_paid_customer_not_in_debt_list(admin_client, db):
     sale = _sale(customer, lot, "1000", "1.60", "2026-07-17")
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-18", "currency": "usd", "amount": "1600",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     sale.refresh_from_db()
     assert sale.remaining == Decimal("0")
@@ -56,7 +56,7 @@ def test_advance_customer_not_in_debt_list(admin_client, db):
     customer = _customer(name="Avans Customer")
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-18", "currency": "usd", "amount": "500",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     customer.refresh_from_db()
     assert customer.balance < 0
@@ -72,7 +72,7 @@ def test_debt_customer_lists_outstanding_sales_and_excludes_paid(admin_client, d
     paid = _sale(customer, lot, "500", "1.00", "2026-07-16")
     admin_client.post("/customer-payments/new/", {
         "customer": customer.pk, "date": "2026-07-18", "currency": "usd", "amount": "500",
-        "exchange_rate": "", "method": "cash", "note": "",
+        "exchange_rate": "12000", "method": "cash", "note": "",
     })
     paid.refresh_from_db()
     unpaid.refresh_from_db()
