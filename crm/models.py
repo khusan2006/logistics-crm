@@ -1277,8 +1277,13 @@ class ShipmentExpense(CashEntry):
     kassa really loses, while `amount` stays the cost of the thing bought."""
 
     class Category(models.TextChoices):
+        # Ordered the way the money is spent on a load: cleared, hauled, unloaded,
+        # then the rest. Deklarant sits by Bojxona and Gruzchi by Transport because
+        # that is the pair each is asked about.
         CUSTOMS = "customs", "Bojxona"
+        DECLARANT = "declarant", "Deklarant"
         TRANSPORT = "transport", "Transport"
+        LOADER = "loader", "Gruzchi"
         ROAD = "road", "Yo'l xarajati"
         CERT = "cert", "Sertifikat"
         OTHER = "other", "Boshqa"
