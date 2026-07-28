@@ -327,14 +327,19 @@ def test_set_status_ajax_returns_json_in_place_update(admin_client, db):
     resp = admin_client.post(f"/shipments/{s.pk}/status/", {"status": other.pk},
                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
     assert resp.status_code == 200
-    assert resp.json() == {"status_id": other.pk, "arrived": False}
+    data = resp.json()
+    assert data["status_id"] == other.pk and data["arrived"] is False
+    # The re-rendered date cell drives the in-place swap; not arrived yet.
+    assert "Yetib keldi" not in data["date_html"]
     s.refresh_from_db()
     assert s.status_id == other.pk
 
     arrival = ShipmentStatus.arrival()
     resp = admin_client.post(f"/shipments/{s.pk}/status/", {"status": arrival.pk},
                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
-    assert resp.json() == {"status_id": arrival.pk, "arrived": True}
+    data = resp.json()
+    assert data["status_id"] == arrival.pk and data["arrived"] is True
+    assert "Yetib keldi" in data["date_html"]
     s.refresh_from_db()
     assert s.arrived is not None
 
@@ -347,7 +352,7 @@ def _expense_cell(html):
 
 def test_loads_table_totals_expenses_after_transport(admin_client, translator_client, db):
     """Yuklar carries the load's xarajat total in its own column, right after
-    Transport / Konteyner. It is money, so translators never see it."""
+    Transport / Haydovchi. It is money, so translators never see it."""
     from crm.models import ShipmentExpense
     c = _contract()
     s = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first(), transport="01A111AA", container="MSCU-1")
@@ -357,11 +362,22 @@ def test_loads_table_totals_expenses_after_transport(admin_client, translator_cl
     ShipmentExpense.objects.create(shipment=s, amount=Decimal("79.50"), category="customs")
 
     html = admin_client.get("/shipments/").content.decode()
-    assert html.index("Transport / Konteyner") < html.index("Xarajat</th>") < html.index("Kelish</th>")
+    assert html.index("Transport / Haydovchi") < html.index("Xarajat</th>") < html.index("Kelish</th>")
     assert "$200.00" in _expense_cell(html) and "2 ta" in _expense_cell(html)
 
     tr = translator_client.get("/shipments/").content.decode()
     assert "Xarajat</th>" not in tr and "$200.00" not in tr
+
+
+def test_loads_table_shows_driver_name_and_phone(admin_client, db):
+    """The transport cell surfaces the driver + phone (as on the dashboard's
+    Kechikayotgan yuklar), so the logist can call without opening the load."""
+    c = _contract()
+    s = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first(),
+                                driver_name="Alisher Karimov", driver_phone="+998 90 123 45 67")
+    ShipmentLine.objects.create(shipment=s, contract_line=c.lines.first(), kg=Decimal("100"))
+    html = admin_client.get("/shipments/").content.decode()
+    assert "Alisher Karimov" in html and "+998 90 123 45 67" in html
 
 
 def test_loads_table_shows_a_dash_when_no_expenses(admin_client, db):
