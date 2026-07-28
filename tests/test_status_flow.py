@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from django.utils.formats import date_format
 
 from crm.models import (
     AuditLog, Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus,
@@ -22,6 +23,11 @@ def shipment(db):
 
 def _set(client, shipment, status):
     return client.post(f"/shipments/{shipment.pk}/status/", {"status": status.pk})
+
+
+def _set_ajax(client, shipment, status):
+    return client.post(f"/shipments/{shipment.pk}/status/", {"status": status.pk},
+                       HTTP_X_REQUESTED_WITH="XMLHttpRequest")
 
 
 def test_translator_moves_nonfinal(translator_client, shipment):
@@ -50,3 +56,22 @@ def test_leaving_arrival_clears_date(admin_client, shipment):
     _set(admin_client, shipment, ShipmentStatus.objects.get(name="Bojxona"))
     shipment.refresh_from_db()
     assert shipment.arrived is None
+
+
+def test_ajax_arrival_returns_exact_date(admin_client, shipment):
+    """Reaching the arrival status swaps the tahminiy ETA for the exact date."""
+    resp = _set_ajax(admin_client, shipment, ShipmentStatus.arrival())
+    data = resp.json()
+    assert data["arrived"] is True
+    assert "Yetib keldi" in data["date_html"]
+    # The exact arrival date is rendered (in the app's localized date format).
+    assert date_format(date.today(), "DATE_FORMAT") in data["date_html"]
+
+
+def test_ajax_move_back_drops_date(admin_client, shipment):
+    """Moving the status back clears the date and the ETA view returns."""
+    _set_ajax(admin_client, shipment, ShipmentStatus.arrival())
+    resp = _set_ajax(admin_client, shipment, ShipmentStatus.objects.get(name="Bojxona"))
+    data = resp.json()
+    assert data["arrived"] is False
+    assert "Yetib keldi" not in data["date_html"]

@@ -46,7 +46,7 @@
     <th class="num">Kg</th>
     {% if user.is_admin_role %}<th class="num">Qiymati</th>{% endif %}
     <th>Holat</th>
-    <th>Transport / Konteyner</th>
+    <th>Transport / Haydovchi</th>
     {% if user.is_admin_role %}<th class="num">Xarajat</th>{% endif %}
     <th>Kelish</th>
     <th></th>
@@ -116,6 +116,11 @@
     <td>
       <div>{{ s.current_transport|default:"—" }}</div>
       <div class="muted load-sub">{{ s.container|default:"—" }}</div>
+      {% if s.driver_name or s.driver_phone %}
+      <div class="load-driver">{{ s.driver_name|default:"—" }}
+        {% if s.driver_phone %}<div class="muted load-sub">{{ s.driver_phone }}</div>{% endif %}
+      </div>
+      {% endif %}
     </td>
     {% if user.is_admin_role %}
     <td class="num load-expense">
@@ -127,12 +132,8 @@
       {% endwith %}
     </td>
     {% endif %}
-    <td>
-      {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
-      {% elif s.days_left is not None %}<span class="daybadge {% if s.days_left <= 7 %}today{% else %}soon{% endif %}">{{ s.days_left }} kun qoldi</span>
-      {% else %}<span class="muted">—</span>{% endif %}
-      {% if s.eta %}<div class="muted load-sub">{{ s.eta }}</div>{% endif %}
-      {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}
+    <td class="load-date">
+      {% include "crm/_load_date_cell.html" with s=s %}
     </td>
     <td class="row-actions">
       <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
@@ -171,6 +172,14 @@
             {% if s.sent %}<span class="lf-sub">Jo'natilgan: {{ s.sent }}</span>{% endif %}
           </div>
           <div class="lf">
+            {% if s.arrived %}
+            <span class="lf-label">Yetib keldi</span>
+            <span class="lf-value">{{ s.arrived }}</span>
+            <span class="lf-sub">
+              <span class="daybadge arrived">Omborga keldi</span>
+              {% if s.eta %}<span class="muted">Taxminiy: {{ s.eta }}</span>{% endif %}
+            </span>
+            {% else %}
             <span class="lf-label">Kelish (ETA)</span>
             <span class="lf-value">{{ s.eta|default:"—" }}</span>
             <span class="lf-sub">
@@ -178,6 +187,7 @@
               {% elif s.days_left is not None %}<span class="daybadge {% if s.days_left <= 7 %}today{% else %}soon{% endif %}">{{ s.days_left }} kun qoldi</span>{% endif %}
               {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }} uzaytirish</span>{% endif %}
             </span>
+            {% endif %}
           </div>
           <div class="lf">
             <span class="lf-label">Transport</span>
@@ -423,6 +433,10 @@
           row.remove();
         } else {
           row.setAttribute('data-status', String(data.status_id));
+          // Refresh the date cell: an arrived load now shows its exact
+          // "Yetib keldi" date; moving the status back brings the ETA back.
+          var dateCell = row.querySelector('.load-date');
+          if (dateCell && data.date_html) { dateCell.innerHTML = data.date_html; }
           sel.dataset.prev = sel.value;
           sel.classList.add('is-saved');           // brief green flash = saqlandi
           setTimeout(function () { sel.classList.remove('is-saved'); }, 900);

@@ -1,0 +1,16 @@
+{% comment %}
+Date/ETA cell for one load row. Single source of truth for both the initial
+render and the in-place AJAX swap after a status change (see shipment_set_status).
+An arrived load shows the exact "Yetib keldi" date; moving the status back clears
+`arrived` on the server, so the tahminiy (ETA) view returns here automatically.
+{% endcomment %}
+{% if s.arrived %}
+  <span class="daybadge arrived">Yetib keldi</span>
+  <div class="muted load-sub">{{ s.arrived }}</div>
+{% else %}
+  {% if s.is_overdue %}<span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span>
+  {% elif s.days_left is not None %}<span class="daybadge {% if s.days_left <= 7 %}today{% else %}soon{% endif %}">{{ s.days_left }} kun qoldi</span>
+  {% else %}<span class="muted">—</span>{% endif %}
+  {% if s.eta %}<div class="muted load-sub">{{ s.eta }}</div>{% endif %}
+{% endif %}
+{% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}

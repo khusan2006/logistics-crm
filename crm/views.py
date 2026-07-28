@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -1151,8 +1152,14 @@ def shipment_set_status(request, pk):
                     f"{old_name} → {status.name}")
     if is_ajax(request):
         # The list JS updates the row in place (or drops it, if the load just
-        # arrived and moved to Yakunlangan) — no page reload, never stale.
-        return JsonResponse({"status_id": status.pk, "arrived": shipment.arrived is not None})
+        # arrived and moved to Yakunlangan) — no page reload, never stale. The
+        # date cell is re-rendered server-side so the exact "Yetib keldi" date
+        # (or, on move-back, the returned ETA) always matches the page load.
+        return JsonResponse({
+            "status_id": status.pk,
+            "arrived": shipment.arrived is not None,
+            "date_html": render_to_string("crm/_load_date_cell.html", {"s": shipment}),
+        })
     messages.success(request, "Holat yangilandi")
     return redirect(request.POST.get("next") or "shipment_list")
 
