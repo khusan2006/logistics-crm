@@ -242,14 +242,14 @@ def test_switching_to_som_redraws_the_figures(admin_client, db):
         amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"), method="cash")
 
     html = admin_client.get("/kassa/").content.decode()
-    assert "$1,000.00" in html
+    assert f"$1{NBSP}000" in html
 
     resp = admin_client.post("/valyuta/", {"currency": "uzs", "next": "/kassa/"})
     assert resp.status_code == 302
     html = admin_client.get("/kassa/").content.decode()
     # non-breaking spaces group the figure, and the apostrophe is HTML-escaped
     assert f"12{NBSP}500{NBSP}000 so&#x27;m" in html
-    assert "$1,000.00" not in html
+    assert f"$1{NBSP}000" not in html
 
 
 def test_the_choice_survives_the_next_page(admin_client, db):

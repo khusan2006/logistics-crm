@@ -31,7 +31,7 @@
     </div>
     <div class="stat">
       <div class="muted">Kg</div>
-      <div>{{ sale.kg }}</div>
+      <div>{{ sale.kg|floatformat:"-3" }}</div>
     </div>
     <div class="stat">
       <div class="muted">Tan narx</div>
@@ -84,7 +84,7 @@
       {% for r in sale.returns.all %}
       <tr>
         <td>{{ r.date }}</td>
-        <td>{{ r.kg }}</td>
+        <td>{{ r.kg|floatformat:"-3" }}</td>
         <td>{% rate r.price r.price_uzs %}</td>
         <td>{% money r.amount r.amount_uzs %}</td>
         <td>{% if r.restock %}Ha{% else %}Yo'q{% endif %}</td>

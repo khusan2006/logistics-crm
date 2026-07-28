@@ -73,7 +73,7 @@ The totals below count everything the filters left, not just this page.
     </td>
     <td>
       {% if p.commission_percent %}
-      {% money p.commission_amount p.commission_amount_uzs %}<br><small class="muted">{{ p.commission_percent }}%</small>
+      {% money p.commission_amount p.commission_amount_uzs %}<br><small class="muted">{{ p.commission_percent|floatformat:"-2" }}%</small>
       {% else %}<span class="muted">—</span>{% endif %}
     </td>
     <td><strong>{% money p.total_out p.total_out_uzs %}</strong></td>

@@ -210,7 +210,7 @@ def test_translator_sees_no_price_on_loads(translator_client, admin_client, db):
     tr = content(translator_client.get("/shipments/").content.decode())
     assert "Qiymati" not in tr and "$" not in tr and "Xarajat" not in tr
     ad = content(admin_client.get("/shipments/").content.decode())
-    assert "Qiymati" in ad and "$100.00" in ad and "Xarajat" in ad
+    assert "Qiymati" in ad and "$100" in ad and "Xarajat" in ad
 
 
 def test_yuklar_list_has_inline_legs_panel(admin_client, db):
@@ -364,10 +364,10 @@ def test_loads_table_totals_expenses_after_transport(admin_client, translator_cl
     html = admin_client.get("/shipments/").content.decode()
     assert (html.index("Transport</th>") < html.index("Haydovchi</th>")
             < html.index("Xarajat</th>") < html.index("Kelish</th>"))
-    assert "$200.00" in _expense_cell(html) and "2 ta" in _expense_cell(html)
+    assert "$200" in _expense_cell(html) and "2 ta" in _expense_cell(html)
 
     tr = translator_client.get("/shipments/").content.decode()
-    assert "Xarajat</th>" not in tr and "$200.00" not in tr
+    assert "Xarajat</th>" not in tr and "$200" not in tr
 
 
 def test_loads_table_shows_driver_name_and_phone(admin_client, db):

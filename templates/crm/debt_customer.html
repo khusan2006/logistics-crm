@@ -28,7 +28,7 @@
   <tr>
     <td class="sticky-col">{{ s.date }}</td>
     <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
-    <td>{{ s.kg }}</td>
+    <td>{{ s.kg|floatformat:"-3" }}</td>
     <td>{% money s.total s.total_uzs %}</td>
     <td>{% money s.paid s.paid_uzs %}</td>
     <td class="late">{% money s.remaining s.remaining_uzs %}</td>

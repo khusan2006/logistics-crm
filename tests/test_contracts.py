@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.utils import timezone
 
 from conftest import line_data, make_contract, make_shipment
+from crm.templatetags.crm_extras import NBSP
 from crm.models import (
     Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
@@ -200,8 +201,8 @@ def test_list_shows_every_marka_with_its_kg_and_narx(admin_client, db):
 
     html = admin_client.get("/contracts/").content.decode()
     assert "2102 repak" in html and "ftor oq" in html
-    assert "1.25" in html and "0.80" in html          # each product's own narx
-    assert "$1,650.00" in html                        # 1000×1.25 + 500×0.80
+    assert "1.25" in html and "0.8" in html           # each product's own narx (no trailing zeros)
+    assert f"$1{NBSP}650" in html                      # 1000×1.25 + 500×0.80
 
 
 def test_dropdowns_name_every_marka(db):

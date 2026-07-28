@@ -49,7 +49,7 @@ def test_reports_page_renders_kpis(admin_client, db):
     assert "Sotuvdan foyda" in html
     # profit = (2 - 1) * 100 = 100.00
     assert resp.context["profit_total"] == Decimal("100.00")
-    assert "100.00" in html
+    assert "$100" in html
 
 
 def test_partner_filter_narrows_per_partner_table(admin_client, db):

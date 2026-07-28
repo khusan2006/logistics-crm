@@ -96,7 +96,7 @@
         <td class="num muted">{{ p.net_amount_uzs|floatformat:"0g" }} so'm · {{ p.exchange_rate|floatformat:"0g" }}</td>
         {# What landed, not what was sent: a perechisleniya foiz never reached the kassa. #}
         <td class="num amt-in"><strong>+{% money p.net_amount p.net_amount_uzs %}</strong>
-          {% if p.fee_amount %}<br><small class="muted">{% money p.amount p.amount_uzs %} − {{ p.fee_percent }}%</small>{% endif %}</td>
+          {% if p.fee_amount %}<br><small class="muted">{% money p.amount p.amount_uzs %} − {{ p.fee_percent|floatformat:"-2" }}%</small>{% endif %}</td>
         <td class="row-actions">
           <a class="icon-action" href="{% url 'customer_payment_edit' p.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
         </td>

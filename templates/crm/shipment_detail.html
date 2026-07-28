@@ -21,7 +21,7 @@
     </div>
     <div class="stat">
       <div class="muted">Kg</div>
-      <div>{{ shipment.kg }}</div>
+      <div>{{ shipment.kg|floatformat:"-3" }}</div>
     </div>
     {% if user.is_admin_role %}
     <div class="stat">

@@ -33,7 +33,7 @@
     <td class="sticky-col">{{ s.date }}</td>
     <td><a href="{% url 'sale_detail' s.pk %}">{{ s.customer.name }}</a></td>
     <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
-    <td>{{ s.kg }}</td>
+    <td>{{ s.kg|floatformat:"-3" }}</td>
     <td>{% rate s.cost_price s.cost_price_uzs %}</td>
     <td>{% rate s.price s.price_uzs %}</td>
     <td>{% money s.total s.total_uzs %}</td>

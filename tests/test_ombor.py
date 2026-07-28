@@ -100,7 +100,7 @@ def test_ombor_row_carries_every_lot_for_selling_separately(admin_client, db):
     html = admin_client.get("/ombor/").content.decode()
     assert f"/sales/new/?lot={cheap.pk}" in html
     assert f"/sales/new/?lot={dear.pk}" in html
-    assert "1,2000" in html or "1.2000" in html      # per-lot tan narx is shown inside
+    assert "1.2" in html and "1.3" in html           # per-lot tan narx, no trailing zeros
 
 
 def test_ombor_group_totals_net_out_sales(admin_client, db):

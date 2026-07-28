@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from conftest import payment_rows
+from crm.templatetags.crm_extras import NBSP
 
 from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus,
@@ -196,7 +197,7 @@ def test_customer_options_show_remaining_debt(admin_client, db):
     admin_client.post("/customer-payments/new/", payment_rows(
         {"amount": "1000"}, customer=customer))
     html = admin_client.get("/customer-payments/new/").content.decode()
-    assert f"{customer.name} · qarz $2,000.00" in html
+    assert f"{customer.name} · qarz $2{NBSP}000" in html
 
 
 def test_customer_options_show_advance_and_settled(admin_client, db):
@@ -207,7 +208,7 @@ def test_customer_options_show_advance_and_settled(admin_client, db):
     admin_client.post("/customer-payments/new/", payment_rows(
         {"amount": "1500"}, customer=overpaid))
     html = admin_client.get("/customer-payments/new/").content.decode()
-    assert f"{overpaid.name} · avans $500.00" in html
+    assert f"{overpaid.name} · avans $500" in html
     assert f"{paid_up.name} · qarzsiz" in html
 
 

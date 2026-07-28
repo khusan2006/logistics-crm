@@ -82,7 +82,7 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}</td>
     <td>{% for ln in c.lines.all %}<div class="cell-line">{% money ln.price ln.price_uzs %}</div>{% endfor %}</td>
     <td>{% money c.total_value c.total_value_uzs %}</td>
-    <td><span class="badge {% if c.is_settled %}badge-ok{% else %}badge-warning{% endif %}">{{ c.remaining_kg }}</span></td>
+    <td><span class="badge {% if c.is_settled %}badge-ok{% else %}badge-warning{% endif %}">{{ c.remaining_kg|floatformat:"-3" }}</span></td>
     <td><span class="badge {% if c.payable_left > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money c.payable_left c.payable_left_uzs %}</span></td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">

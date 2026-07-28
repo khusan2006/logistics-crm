@@ -41,7 +41,7 @@
     <td class="num"><strong>{{ g.available|floatformat:"-3" }}</strong></td>
     <td class="num">
       {% if g.cost_min == g.cost_max %}{% rate g.cost_min g.cost_min_uzs %}
-      {% else %}<span title="Lotlar turli tan narxda keldi">{% if showing_som %}{% rate g.cost_min g.cost_min_uzs %} – {% rate g.cost_max g.cost_max_uzs %}{% else %}{{ g.cost_min }} – {% rate g.cost_max g.cost_max_uzs %}{% endif %}</span>{% endif %}
+      {% else %}<span title="Lotlar turli tan narxda keldi">{% if showing_som %}{% rate g.cost_min g.cost_min_uzs %} – {% rate g.cost_max g.cost_max_uzs %}{% else %}{{ g.cost_min|floatformat:"-4" }} – {% rate g.cost_max g.cost_max_uzs %}{% endif %}</span>{% endif %}
     </td>
     <td class="row-actions">
       {% if g.available > 0 %}

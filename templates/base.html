@@ -209,6 +209,18 @@
 {% endif %}
 
 <script>
+  // One place for "money the way we show it": space-grouped thousands, up to two
+  // decimals, no trailing zeros — 1234.5 → "$1 234.5", 1200 → "$1 200". Mirrors
+  // the server-side `usd` filter so a live JS preview reads like the saved figure.
+  window.fmtUsd = function (n) {
+    if (!isFinite(n)) { return '$0'; }
+    var sign = n < 0 ? '-' : '';
+    var s = Math.abs(n).toFixed(2).replace(/\.?0+$/, '');   // 1200.00 → 1200 · 1234.50 → 1234.5
+    var parts = s.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return '$' + sign + parts.join('.');
+  };
+
   // Theme toggle (light default, dark saved in localStorage)
   (function () {
     var toggle = document.getElementById('theme-toggle');
@@ -748,7 +760,7 @@
         if (isUsd && entered > 0 && rate > 0) {
           usdOut.hidden = false;
           usdOut.innerHTML =
-            "<span>$" + entered + " × " + money(rate) + "</span><strong>" + money(amount) + " so'm</strong>";
+            "<span>" + window.fmtUsd(entered) + " × " + money(rate) + "</span><strong>" + money(amount) + " so'm</strong>";
         } else { usdOut.hidden = true; usdOut.innerHTML = ''; }
       }
       var isTransfer = methodEl.value === 'transfer';
@@ -832,7 +844,14 @@
         el.type = 'text';                       // number inputs can't show grouping
         el.setAttribute('inputmode', 'decimal');
         el.autocomplete = 'off';
-        if (el.value) { el.value = format(el.value); }
+        // On first paint drop a stored value's padding (1000.00 → "1 000",
+        // 0.80 → "0.8") so an edit form shows what was typed, not the column's
+        // zero-padding. Typing keeps decimals live — reformat() never strips.
+        if (el.value) {
+          var v = format(el.value);
+          if (v.indexOf('.') !== -1) { v = v.replace(/\.?0+$/, ''); }
+          el.value = v;
+        }
       });
     }
     document.addEventListener('input', function (e) {
@@ -1105,8 +1124,13 @@
       var price = row.querySelector('input[name$="-price"]');
       var rem = o.getAttribute('data-remaining');
       var pr = o.getAttribute('data-price');
-      if (kg && rem !== null && !kg.value) { kg.value = rem; }
-      if (price && pr !== null && !price.value) { price.value = pr; }
+      // Dispatch input so the data-money formatter re-groups the prefilled figure.
+      if (kg && rem !== null && !kg.value) {
+        kg.value = rem; kg.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      if (price && pr !== null && !price.value) {
+        price.value = pr; price.dispatchEvent(new Event('input', { bubbles: true }));
+      }
     }
     function enhance(root) {
       (root || document).querySelectorAll('[data-lineset]').forEach(function (set) {
@@ -1140,7 +1164,7 @@
   // middleman's percentage rides on top — so show what the kassa actually pays
   // before the operator saves.
   (function () {
-    function money(n) { return '$' + n.toFixed(2); }
+    function money(n) { return window.fmtUsd(n); }
     function update(scope) {
       var base = scope.querySelector('[data-commission-base]');
       var pct = scope.querySelector('[data-commission-percent]');
@@ -1152,7 +1176,9 @@
         hint.style.fontSize = '12px'; hint.style.marginTop = '4px';
         pct.parentNode.appendChild(hint);
       }
-      var a = parseFloat(base.value), r = parseFloat(pct.value);
+      // base is a data-money input, so its value may be space-grouped ("1 000").
+      var a = parseFloat(String(base.value).replace(/\s/g, '').replace(',', '.'));
+      var r = parseFloat(pct.value);
       if (a > 0 && r > 0) {
         var cut = a * r / 100;
         hint.textContent = 'Vositachi ' + money(cut) + ' · kassadan ' + money(a + cut)
@@ -1270,7 +1296,7 @@
       if (amount > 0 && rate > 0) {
         preview.hidden = false;
         preview.textContent = currencyEl.value === 'uzs'
-          ? '≈ $' + (amount / rate).toFixed(2)
+          ? '≈ ' + window.fmtUsd(amount / rate)
           : '≈ ' + som.format(Math.round(amount * rate)) + " so'm";
       } else {
         preview.hidden = true;

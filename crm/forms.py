@@ -24,6 +24,13 @@ def date_widget(**attrs):
     return forms.DateInput(attrs={"type": "date", **attrs}, format="%Y-%m-%d")
 
 
+def _group_thousands(field):
+    """Mark a numeric field so base.html renders "1 000 000" as the operator types
+    (data-money). The JS strips the spaces back to a plain number right before the
+    form is submitted, so the server still receives 1000000."""
+    field.widget.attrs["data-money"] = ""
+
+
 class MoneyEntryFormMixin:
     """Shared two-way conversion for a lump sum. The user types `amount` in
     `currency`; after clean(), cleaned_data holds BOTH `amount` (USD) and
@@ -54,6 +61,7 @@ class MoneyEntryFormMixin:
             self.fields["currency"].widget.attrs["data-money-currency"] = ""
         if "exchange_rate" in self.fields:
             self.fields["exchange_rate"].widget.attrs["data-money-rate"] = ""
+            _group_thousands(self.fields["exchange_rate"])
             # Deliberately NOT required at field level: a bron with no narx agreed
             # yet has nothing to convert, so demanding a kurs there would block a
             # legitimate entry. clean() raises whenever a value IS present.
@@ -61,10 +69,15 @@ class MoneyEntryFormMixin:
         if self.typed_field in self.fields:
             field = self.fields[self.typed_field]
             field.widget.attrs["data-money-amount"] = ""
+            _group_thousands(field)
             # The column is canonical USD, but the operator now types whichever
             # currency the Valyuta picker says — a hard-coded "(USD)" on the input
             # would be a lie the moment they choose So'm.
             field.label = re.sub(r"\s*\((USD|so'm)\)", "", str(field.label))
+        # kg is not money, but it is the other figure that runs to five digits
+        # (24 000 kg on a truck), so it gets the same as-you-type grouping.
+        if "kg" in self.fields:
+            _group_thousands(self.fields["kg"])
 
     def clean(self):
         cleaned = super().clean()

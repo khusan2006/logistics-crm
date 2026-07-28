@@ -21,19 +21,30 @@ def static_v(path):
     return url
 
 
-@register.filter
-def usd(value):
-    """Format a number as USD: $1,234.56 (2 dp, thousands separator). Blank-safe."""
-    try:
-        return "${:,.2f}".format(Decimal(value or 0))
-    except (TypeError, ValueError, ArithmeticError):
-        return "$0.00"
-
-
 #: Groups a so'm figure. Written as an escape rather than typed so it is
 #: visible in the source: so'm runs to nine digits, and a normal space lets a
 #: table wrap mid-number, which reads as two separate figures.
 NBSP = "\u00a0"
+
+
+@register.filter
+def usd(value):
+    """Format a number as USD: $1 200, $1 234.56, $0.8 \u2014 space-grouped thousands
+    and no trailing zeros. Blank-safe.
+
+    Two deliberate choices, both to match how the operator reads a figure:
+    thousands are grouped with a space, not a comma, because a comma is the
+    DECIMAL mark here \u2014 "$1,200" reads as a dollar and change, not twelve hundred.
+    And a padded .00 is dropped: the value carries decimals only if someone typed
+    them, so $1 200 means exactly that and $0.8 is not pretending to be $0.80."""
+    try:
+        amount = Decimal(value or 0)
+    except (TypeError, ValueError, ArithmeticError):
+        return "$0"
+    text = "{:,.2f}".format(amount)          # 2 dp is the column's precision
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")  # 1,200.00 \u2192 1,200 \u00b7 0.80 \u2192 0.8
+    return "$" + text.replace(",", NBSP)
 
 
 @register.filter

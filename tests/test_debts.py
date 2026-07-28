@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from conftest import payment_rows
+from crm.templatetags.crm_extras import NBSP
 
 from crm.models import (
     Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentLine, ShipmentStatus,
@@ -36,7 +37,7 @@ def test_customer_with_unpaid_sale_appears_with_correct_total(admin_client, db):
 
     html = admin_client.get("/debts/").content.decode()
     assert customer.name in html
-    assert "1,600" in html or "1600" in html
+    assert f"1{NBSP}600" in html
 
 
 def test_fully_paid_customer_not_in_debt_list(admin_client, db):
@@ -82,7 +83,7 @@ def test_debt_customer_lists_outstanding_sales_and_excludes_paid(admin_client, d
     # Exactly one outstanding sale row: the unpaid one is listed, the fully-paid
     # sale is excluded. (Dates render localized, so count rows rather than date strings.)
     assert html.count('class="row-actions"') == 1
-    assert "$1,600.00" in html             # the outstanding sale's total is shown
+    assert f"$1{NBSP}600" in html          # the outstanding sale's total is shown
 
 
 def test_overdue_sale_shows_overdue_indicator(admin_client, db):
