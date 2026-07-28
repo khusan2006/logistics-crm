@@ -352,7 +352,7 @@ def _expense_cell(html):
 
 def test_loads_table_totals_expenses_after_transport(admin_client, translator_client, db):
     """Yuklar carries the load's xarajat total in its own column, right after
-    Transport / Haydovchi. It is money, so translators never see it."""
+    the Transport and Haydovchi columns. It is money, so translators never see it."""
     from crm.models import ShipmentExpense
     c = _contract()
     s = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first(), transport="01A111AA", container="MSCU-1")
@@ -362,7 +362,8 @@ def test_loads_table_totals_expenses_after_transport(admin_client, translator_cl
     ShipmentExpense.objects.create(shipment=s, amount=Decimal("79.50"), category="customs")
 
     html = admin_client.get("/shipments/").content.decode()
-    assert html.index("Transport / Haydovchi") < html.index("Xarajat</th>") < html.index("Kelish</th>")
+    assert (html.index("Transport</th>") < html.index("Haydovchi</th>")
+            < html.index("Xarajat</th>") < html.index("Kelish</th>"))
     assert "$200.00" in _expense_cell(html) and "2 ta" in _expense_cell(html)
 
     tr = translator_client.get("/shipments/").content.decode()
