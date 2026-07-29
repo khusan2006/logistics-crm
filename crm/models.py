@@ -128,6 +128,16 @@ class CashEntry(MoneyEntry):
         return (self.amount * self.fee_percent / 100).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    @property
+    def fee_amount_uzs(self):
+        """The foiz in so'm, taken as a slice of the row's stored so'm value rather
+        than reconverted — the cut was charged at the kurs of the day the money
+        moved, so it cannot be allowed to drift from the amount it came out of."""
+        if not self.amount:
+            return Decimal("0")
+        return (self.amount_uzs * self.fee_amount / self.amount).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+
 
 class AuditLog(models.Model):
     """Append-only trail of money- and status-relevant actions (client-crm pattern)."""

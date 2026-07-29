@@ -192,6 +192,42 @@ def test_the_foiz_is_ignored_on_naqd(db):
     assert payment.net_amount == Decimal("1000.00")
 
 
+def test_the_foiz_carries_its_own_som_value(db):
+    """The cut is a slice of the row, so it is worth the same slice of the row's
+    stored so'm value — not a reconversion at some other kurs."""
+    payment = CustomerPayment.objects.create(
+        customer=_customer(), date="2026-07-20", amount=Decimal("1000"),
+        amount_uzs=Decimal("12650000"), exchange_rate=Decimal("12650"),
+        method="transfer", fee_percent=Decimal("2"))
+    assert payment.fee_amount_uzs == Decimal("253000.00")
+    assert payment.net_amount_uzs == Decimal("12397000.00")
+
+
+def test_a_foiz_over_100_is_refused(admin_client, db):
+    """A typo'd foiz is not a small error: 200% turns a to'lov into a negative one.
+    The arithmetic accepts it happily, so the form has to be the one to say no."""
+    customer = _customer()
+    resp = admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "1000", "method": "transfer", "fee_percent": "200"},
+        customer=customer))
+    assert resp.status_code == 200                   # re-rendered, not saved
+    assert not CustomerPayment.objects.exists()
+    assert "100 dan oshmasligi" in resp.content.decode()
+
+
+def test_the_list_shows_what_arrived_beside_what_was_sent(admin_client, db):
+    """The screen the client reads: 1000 sent, 980 in hand. Showing only the 1000
+    is what made the foiz look like it was being ignored — the qarz fell by 980
+    while every to'lov row still read 1000."""
+    CustomerPayment.objects.create(
+        customer=_customer(), date="2026-07-20", amount=Decimal("1000"),
+        amount_uzs=Decimal("12000000"), method="transfer", fee_percent=Decimal("2"))
+    html = admin_client.get("/customer-payments/").content.decode()
+    assert f"$1{NBSP}000" in html                     # to'lagan summa
+    assert "$980" in html                            # qo'lga tegdi
+    assert "bank foizi 2% · −$20" in html
+
+
 def test_both_foizlar_can_ride_the_same_payment(db):
     """The vositachi's cut and the bank's foiz are different money to different
     people, so they stack rather than replace one another."""

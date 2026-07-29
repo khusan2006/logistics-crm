@@ -1271,7 +1271,12 @@
   //
   // Fields are marked server-side with data-money-currency/-rate/-amount.
   (function () {
-    var som = new Intl.NumberFormat('uz-UZ');
+    // Grouped by hand rather than by Intl: the locale hands back "120,000,000",
+    // and a comma is the DECIMAL mark on these screens (see the `usd` filter), so
+    // the preview has to group the way every saved figure is printed.
+    function som(n) {
+      return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    }
     function num(el) {
       if (!el) { return 0; }
       return parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')) || 0;
@@ -1297,7 +1302,7 @@
         preview.hidden = false;
         preview.textContent = currencyEl.value === 'uzs'
           ? '≈ ' + window.fmtUsd(amount / rate)
-          : '≈ ' + som.format(Math.round(amount * rate)) + " so'm";
+          : '≈ ' + som(amount * rate) + " so'm";
       } else {
         preview.hidden = true;
         preview.textContent = '';
@@ -1350,6 +1355,76 @@
     document.addEventListener('change', function (e) {
       if (e.target.matches && e.target.matches('[name$=method]')) { update(e.target); }
     });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Mijoz to'lovi: the Summa is what the mijoz SENT, and a perechisleniya foiz is
+  // taken out of it before the money reaches us — so the qarz falls by less than
+  // the figure being typed. Shown live under the summa, because "I paid 10 000, why
+  // do I still owe 200?" is a question the form has to answer BEFORE it is saved,
+  // not one the qarz screen should spring afterwards (CustomerPayment.net_amount).
+  //
+  // Marked server-side with data-fee-base / data-fee-percent — the mijoz forms only.
+  // On the way OUT a foiz rides on top of the summa instead, so the same hint would
+  // be a lie on a hamkor to'lovi or a xarajat.
+  (function () {
+    // Written as an escape so it is visible in the source, same as the `som`
+    // filter: a plain space would let the hint wrap mid-figure.
+    var NBSP = '\u00a0';
+    function num(el) {
+      if (!el) { return 0; }
+      return parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')) || 0;
+    }
+    // The typed currency, not the stored one: the kurs is a separate field the
+    // operator may not have filled yet, and the foiz is a share of the sum either
+    // way — so the hint reads back in whatever they are typing.
+    function money(value, currencyEl) {
+      if (currencyEl && currencyEl.value === 'uzs') {
+        return String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, NBSP) + " so'm";
+      }
+      return window.fmtUsd(value);
+    }
+    function update(pctEl) {
+      var root = pctEl.closest('[data-line-row]') || pctEl.closest('form') || document;
+      var baseEl = root.querySelector('[data-fee-base]');
+      if (!baseEl) { return; }
+      var methodEl = root.querySelector('[name$=method]');
+      var currencyEl = root.querySelector('[data-money-currency]');
+      // Under the summa rather than the foiz: the summa is the full-width field, and
+      // the figure the hint corrects is the one sitting right above it.
+      var hint = baseEl.parentNode.querySelector('.fee-preview');
+      if (!hint) {
+        hint = document.createElement('span');
+        hint.className = 'fee-preview field-hint';
+        baseEl.parentNode.appendChild(hint);
+      }
+      var amount = num(baseEl), pct = num(pctEl);
+      // Naqd and karta never charge one, and the server ignores the foiz there too
+      // (CashEntry.fee_amount) — promising a cut it will not take would be worse
+      // than saying nothing.
+      var charged = (!methodEl || methodEl.value === 'transfer')
+                    && amount > 0 && pct > 0 && pct <= 100;
+      if (!charged) { hint.hidden = true; hint.textContent = ''; return; }
+      var fee = amount * pct / 100;
+      hint.hidden = false;
+      hint.textContent = 'Bank foizi −' + money(fee, currencyEl)
+                       + " · qo'lga tegadi " + money(amount - fee, currencyEl)
+                       + ' · qarzdan shuncha ayiriladi';
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-fee-percent]').forEach(function (el) {
+        if (el.dataset.feePreviewReady) { return; }
+        el.dataset.feePreviewReady = '1';
+        // Scoped to the row: a settlement entered as naqd + perechisleniya has one
+        // summa, usul and foiz per row, and 'form' would find the first of each.
+        var scope = el.closest('[data-line-row]') || el.closest('form') || document;
+        scope.addEventListener('input', function () { update(el); });
+        scope.addEventListener('change', function () { update(el); });
+        update(el);
+      });
+    }
     if (document.readyState !== 'loading') { enhance(); }
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });

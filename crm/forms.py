@@ -31,6 +31,37 @@ def _group_thousands(field):
     field.widget.attrs["data-money"] = ""
 
 
+class FeePercentFormMixin:
+    """The shared rule for a perechisleniya foizi, on every form that carries one.
+
+    A foiz outside 0–100 is a typo, and it does not fail loudly on its own: the
+    arithmetic happily accepts 200%, which turns an incoming to'lov into a negative
+    one and bills the kassa twice over on the way out."""
+
+    def clean_fee_percent(self):
+        percent = self.cleaned_data.get("fee_percent")
+        if percent is None:
+            return Decimal("0")
+        if percent < 0:
+            raise forms.ValidationError("Foiz manfiy bo'la olmaydi")
+        if percent > 100:
+            raise forms.ValidationError("Foiz 100 dan oshmasligi kerak")
+        return percent
+
+
+def _mark_incoming_fee(form):
+    """Wire a mijoz to'lovi's summa and foiz to the live "qo'lga tegadi" hint.
+
+    Only the incoming side gets it. A bank's foiz on money coming IN is carved out
+    of the summa — the mijoz sends 10 000 at 2%, we receive 9 800, and only that
+    9 800 settles their qarz. The operator types the 10 000, so without the hint the
+    fee is invisible until it shows up as an unexplained 200 still owed."""
+    form.fields["amount"].widget.attrs["data-fee-base"] = ""
+    form.fields["fee_percent"].widget.attrs.update({
+        "data-fee-percent": "", "step": "0.01", "min": "0", "max": "100",
+    })
+
+
 class MoneyEntryFormMixin:
     """Shared two-way conversion for a lump sum. The user types `amount` in
     `currency`; after clean(), cleaned_data holds BOTH `amount` (USD) and
@@ -509,7 +540,7 @@ class ShipmentLegForm(forms.ModelForm):
         return cleaned
 
 
-class SupplierPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
+class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = SupplierPayment
         fields = ["contract", "date", "currency", "amount", "exchange_rate",
@@ -761,7 +792,7 @@ def _customer_payer_field(field):
     field.label_from_instance = customer_option_label
 
 
-class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
+class CustomerPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     """One to'lov, edited on its own. The create screen uses the target + rows pair
     below instead — a single settlement often arrives in two currencies."""
 
@@ -774,6 +805,7 @@ class CustomerPaymentForm(MoneyEntryFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _customer_payer_field(self.fields["customer"])
+        _mark_incoming_fee(self)
 
 
 class CustomerPaymentTargetForm(forms.Form):
@@ -792,7 +824,7 @@ class CustomerPaymentTargetForm(forms.Form):
         _customer_payer_field(self.fields["customer"])
 
 
-class CustomerPaymentRowForm(MoneyEntryFormMixin, forms.ModelForm):
+class CustomerPaymentRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     """One slice of a settlement: a sum, the currency it came in, and how it moved.
     Same shape as a xarajat row — see .lineset--payment in the stylesheet."""
 
@@ -805,6 +837,10 @@ class CustomerPaymentRowForm(MoneyEntryFormMixin, forms.ModelForm):
         # No mijoz, no sana: they are shared, so the modal asks once in the header.
         fields = ["currency", "amount", "exchange_rate", "method", "fee_percent", "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _mark_incoming_fee(self)
 
 
 class BaseCustomerPaymentFormSet(forms.BaseModelFormSet):
@@ -837,7 +873,7 @@ class ExpenseTargetForm(forms.Form):
                            initial=timezone.localdate)
 
 
-class ShipmentExpenseRowForm(MoneyEntryFormMixin, forms.ModelForm):
+class ShipmentExpenseRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     """One xarajat row. Ordered so Turkum / Valyuta / To'lov usuli land on a line
     of their own — see .lineset--expense in the stylesheet."""
 
@@ -868,7 +904,7 @@ ShipmentExpenseFormSet = forms.modelformset_factory(
     extra=1, can_delete=True)
 
 
-class ShipmentExpenseForm(MoneyEntryFormMixin, forms.ModelForm):
+class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = ShipmentExpense
         fields = ["shipment", "date", "category", "currency", "amount",

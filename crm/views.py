@@ -1705,7 +1705,7 @@ def kassa(request):
             "title": f"Perechisleniya foizi ({p.fee_percent}%) · kelishuv {p.contract.code}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": _uzs_slice(p, p.fee_amount), "amount": p.fee_amount,
+            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
         })
     for e in expenses:
         outflow_rows.append({
@@ -1723,7 +1723,7 @@ def kassa(request):
             "title": f"Perechisleniya foizi ({e.fee_percent}%) · yuk #{e.shipment_id}",
             "method_code": e.method, "method": e.get_method_display(),
             "currency": e.currency, "exchange_rate": e.exchange_rate,
-            "amount_uzs": _uzs_slice(e, e.fee_amount), "amount": e.fee_amount,
+            "amount_uzs": e.fee_amount_uzs, "amount": e.fee_amount,
         })
     outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 

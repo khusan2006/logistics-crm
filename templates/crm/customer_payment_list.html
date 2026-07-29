@@ -11,7 +11,9 @@
   <tr>
     <th class="sticky-col">Sana</th>
     <th>Mijoz</th>
-    <th>Summa</th>
+    {# Two figures: a perechisleniya foiz never reached us, so what the mijoz sent and what settled their qarz are different money. #}
+    <th>To'lagan summa</th>
+    <th>Qo'lga tegdi</th>
     <th>Usul</th>
     <th>Izoh</th>
     <th></th>
@@ -23,6 +25,10 @@
     <td>
       {% money p.amount p.amount_uzs %}
       {% if not showing_som %}<br><small class="muted">{{ p.amount_uzs|floatformat:"0g" }} so'm</small>{% endif %}
+    </td>
+    <td>
+      <strong>{% money p.net_amount p.net_amount_uzs %}</strong>
+      {% if p.fee_amount %}<br><small class="muted">bank foizi {{ p.fee_percent|floatformat:"-2" }}% · −{% money p.fee_amount p.fee_amount_uzs %}</small>{% endif %}
     </td>
     <td>{{ p.get_method_display }}</td>
     <td>{{ p.note|default:"—" }}</td>

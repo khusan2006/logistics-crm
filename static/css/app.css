@@ -1906,8 +1906,14 @@ form.stacked .lineset-field {
   min-width: 0;
   margin-bottom: 0;
 }
-/* the class beats the UA rule for [hidden], so restate it */
-.lineset-field[hidden] { display: none; }
+/* The class beats the UA rule for [hidden], so restate it — and restate it once
+   more against the `form.stacked` variant above. That one carries a type selector
+   (0,2,1) and so outranked the plain attribute form (0,2,0), which is why the
+   Perechisleniya foizi field stayed on screen for naqd and karta no matter what
+   the toggle in base.html set: the operator could type a foiz the server would
+   then ignore (CashEntry.fee_amount). */
+.lineset-field[hidden],
+form.stacked .lineset-field[hidden] { display: none; }
 .lineset-field > span { font-size: 12px; color: var(--text-muted); }
 .lineset-field input, .lineset-field select { width: 100%; }
 .lineset-field--rm > span { visibility: hidden; }
