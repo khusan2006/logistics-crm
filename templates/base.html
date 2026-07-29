@@ -1102,19 +1102,39 @@
       }
       syncRemoveButtons(set);
     }
-    // On the yuk form the product list spans every kelishuv, so hide the ones
-    // that do not belong to the kelishuv chosen above. The server re-checks.
+    // On the yuk form the product list spans every kelishuv, so drop the ones that
+    // do not belong to the kelishuv chosen above. The server re-checks.
+    //
+    // TAKEN OUT of the select, not marked [hidden]: a phone does not draw the
+    // dropdown from CSS, it hands the option list to the OS picker, which shows
+    // every option it is given — hidden ones included. So the filter looked right
+    // on a desktop dropdown and did nothing at all on mobile, which is the one
+    // place the whole list is hardest to read. The full list is parked on the
+    // element so switching kelishuv can put the others back.
+    function allLineOptions(sel) {
+      if (!sel.lineOptionsAll) {
+        sel.lineOptionsAll = Array.prototype.slice.call(sel.options);
+      }
+      return sel.lineOptionsAll;
+    }
     function filterLineOptions(set) {
       var source = document.querySelector('select[data-contract-source]');
       if (!source) { return; }
       var want = source.value;
       set.querySelectorAll('select[data-line-source]').forEach(function (sel) {
-        Array.prototype.forEach.call(sel.options, function (o) {
+        var chosen = sel.value;
+        var keep = allLineOptions(sel).filter(function (o) {
+          // The blank placeholder carries no kelishuv and always stays.
           var owner = o.getAttribute('data-contract');
-          o.hidden = !!(want && owner && owner !== want);
+          return !(want && owner && owner !== want);
         });
-        var cur = sel.options[sel.selectedIndex];
-        if (cur && cur.hidden) { sel.value = ''; }
+        while (sel.firstChild) { sel.removeChild(sel.firstChild); }
+        keep.forEach(function (o) { sel.appendChild(o); });
+        // A mahsulot picked before the kelishuv changed is no longer on offer, so
+        // the row falls back to the placeholder rather than keeping a value the
+        // list no longer shows.
+        sel.value = chosen;
+        if (sel.selectedIndex < 0) { sel.value = ''; }
       });
     }
     function prefillFromLine(sel) {
