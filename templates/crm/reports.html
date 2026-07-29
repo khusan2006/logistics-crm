@@ -58,23 +58,23 @@
   </div>
   <div class="kpi kpi--blue">
     <div class="kpi-head"><span class="kpi-label">Kontrakt summasi</span></div>
-    <div class="kpi-value">{% money kontrakt_summasi kontrakt_summasi_uzs %}</div>
+    <div class="kpi-value">{% money_both kontrakt_summasi kontrakt_summasi_uzs %}</div>
   </div>
   <div class="kpi kpi--violet">
     <div class="kpi-head"><span class="kpi-label">Hamkorga to'langan</span></div>
-    <div class="kpi-value">{% money hamkorga_tolangan hamkorga_tolangan_uzs %}</div>
+    <div class="kpi-value">{% money_both hamkorga_tolangan hamkorga_tolangan_uzs %}</div>
   </div>
   <div class="kpi kpi--red">
     <div class="kpi-head"><span class="kpi-label">Hamkor qarzi</span></div>
-    <div class="kpi-value">{% money hamkor_qarzi hamkor_qarzi_uzs %}</div>
+    <div class="kpi-value">{% money_both hamkor_qarzi hamkor_qarzi_uzs %}</div>
   </div>
   <div class="kpi kpi--red">
     <div class="kpi-head"><span class="kpi-label">Mijoz qarzi <small class="muted">(jami)</small></span></div>
-    <div class="kpi-value">{% money mijoz_qarzi mijoz_qarzi_uzs %}</div>
+    <div class="kpi-value">{% money_both mijoz_qarzi mijoz_qarzi_uzs %}</div>
   </div>
   <div class="kpi {% if profit_total < 0 %}kpi--red{% else %}kpi--green{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Sotuvdan foyda</span></div>
-    <div class="kpi-value">{% money profit_total profit_total_uzs %}</div>
+    <div class="kpi-value">{% money_both profit_total profit_total_uzs %}</div>
   </div>
   <div class="kpi {% if kechikkan_soni %}kpi--red{% else %}kpi--green{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Kechikkan yuk soni</span></div>
@@ -100,9 +100,9 @@
       <td class="sticky-col"><a href="{% url 'partner_list' %}">{{ row.partner.name }}</a></td>
       <td>{{ row.contracts_count }}</td>
       <td>{{ row.kg|floatformat:"0g" }}</td>
-      <td>{% money row.kontrakt_summasi row.kontrakt_summasi_uzs %}</td>
-      <td>{% money row.tolangan row.tolangan_uzs %}</td>
-      <td class="{% if row.qarz > 0 %}late{% endif %}">{% money row.qarz row.qarz_uzs %}</td>
+      <td>{% money_both row.kontrakt_summasi row.kontrakt_summasi_uzs %}</td>
+      <td>{% money_both row.tolangan row.tolangan_uzs %}</td>
+      <td class="{% if row.qarz > 0 %}late{% endif %}">{% money_both row.qarz row.qarz_uzs %}</td>
     </tr>
     {% endfor %}
   </table>
@@ -124,9 +124,9 @@
     {% for row in customer_rows %}
     <tr>
       <td class="sticky-col"><a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a></td>
-      <td>{% money row.sotildi row.sotildi_uzs %}</td>
-      <td>{% money row.tolandi row.tolandi_uzs %}</td>
-      <td class="{% if row.qarz > 0 %}late{% endif %}">{% money row.qarz row.qarz_uzs %}</td>
+      <td>{% money_both row.sotildi row.sotildi_uzs %}</td>
+      <td>{% money_both row.tolandi row.tolandi_uzs %}</td>
+      <td class="{% if row.qarz > 0 %}late{% endif %}">{% money_both row.qarz row.qarz_uzs %}</td>
     </tr>
     {% endfor %}
   </table>

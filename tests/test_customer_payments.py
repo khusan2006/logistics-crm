@@ -83,6 +83,73 @@ def test_manual_pick_via_view(admin_client, db):
     assert s2.remaining == Decimal("0")
 
 
+def _som_sale(customer, lot, kg, price_uzs, rate, date):
+    """A sotuv agreed in so'm — the mijoz and the operator only ever spoke in so'm,
+    and the dollar column is the derived side."""
+    return Sale.objects.create(
+        customer=customer, line=lot, kg=Decimal(kg),
+        price=Decimal(price_uzs) / Decimal(rate), price_uzs=Decimal(price_uzs),
+        currency="uzs", exchange_rate=Decimal(rate), date=date)
+
+
+def test_a_som_sotuv_is_settled_by_typing_som(admin_client, db):
+    """The Taqsimlash box takes the currency the sotuv was agreed in. 1000 kg at
+    12 000 so'm/kg is 12 000 000 so'm; typing that clears the sotuv outright."""
+    customer = _customer()
+    lot = _lot()
+    sale = _som_sale(customer, lot, "1000", "12000", "12000", "2026-07-17")
+    assert sale.remaining == Decimal("1000.00")          # $1,000 on the stored side
+
+    resp = admin_client.post("/customer-payments/new/", {
+        **payment_rows({"amount": "1000"}, customer=customer),
+        f"alloc_{sale.pk}": "12000000",
+    })
+    assert resp.status_code == 302
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("0")
+
+
+def test_a_som_figure_is_not_taken_for_dollars(admin_client, db):
+    """The guard this replaces: 12 000 000 read as dollars would allocate the whole
+    to'lov to one sotuv and starve the rest. Here it settles exactly one."""
+    customer = _customer()
+    lot = _lot()
+    som_sale = _som_sale(customer, lot, "500", "12000", "12000", "2026-07-17")
+    usd_sale = _sale(customer, lot, "2000", "1.00", "2026-07-18")
+
+    admin_client.post("/customer-payments/new/", {
+        **payment_rows({"amount": "2000"}, customer=customer),
+        f"alloc_{som_sale.pk}": "6000000",               # = $500 at this sotuv's kurs
+    })
+    som_sale.refresh_from_db()
+    usd_sale.refresh_from_db()
+    assert som_sale.remaining == Decimal("0")
+    assert usd_sale.remaining == Decimal("500.00")       # the $1,500 left over, FIFO'd
+
+
+def test_a_dollar_sotuv_still_takes_dollars(admin_client, db):
+    """The sotuv's own currency decides — a dollar sotuv is unaffected by the
+    so'm one sitting next to it in the same table."""
+    customer = _customer()
+    lot = _lot()
+    sale = _sale(customer, lot, "2000", "1.00", "2026-07-18")
+    admin_client.post("/customer-payments/new/", {
+        **payment_rows({"amount": "2000"}, customer=customer),
+        f"alloc_{sale.pk}": "2000",
+    })
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("0")
+
+
+def test_the_alloc_box_is_labelled_in_the_sotuv_currency(admin_client, db):
+    customer = _customer()
+    lot = _lot()
+    _som_sale(customer, lot, "1000", "12000", "12000", "2026-07-17")
+    html = admin_client.get(f"/customer-payments/new/?customer={customer.pk}").content.decode()
+    assert 'placeholder="so\'m"' in html
+    assert f"12{NBSP}000{NBSP}000 so&#x27;m" in html      # the qoldiq beside it
+
+
 def test_create_preselects_customer_and_shows_alloc_table(admin_client, db):
     customer = _customer()
     lot = _lot()

@@ -4,6 +4,7 @@ from decimal import Decimal
 from django import template
 from django.contrib.staticfiles import finders
 from django.templatetags.static import static
+from django.utils.html import format_html
 
 register = template.Library()
 
@@ -57,23 +58,6 @@ def som(value):
         return "0 so'm"
 
 
-@register.simple_tag(takes_context=True)
-def rate(context, usd_value, som_value=None):
-    """A per-kg narx in the active currency: "1.17 $/kg" or "14 040 so'm/kg".
-
-    Separate from `money` because a rate is read differently — the dollar side keeps
-    four decimals (a $/kg rounded to cents moves a 24-tonne lot by dollars) and both
-    sides carry the /kg suffix that makes the figure mean anything."""
-    try:
-        if context.get("display_currency") != "uzs":
-            return f"{_trim(usd_value)} $/kg"
-        if som_value is None:
-            return "—"
-        return "{:,.0f} so'm/kg".format(Decimal(som_value)).replace(",", NBSP)
-    except (TypeError, ValueError, ArithmeticError):
-        return "—"
-
-
 def _trim(value):
     """0.8140 → 0.814, 1.0000 → 1 — a narx reads as what was agreed, not padded out
     to the column's four decimals."""
@@ -81,19 +65,128 @@ def _trim(value):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-@register.simple_tag(takes_context=True)
-def money(context, usd_value, som_value=None):
-    """Render a figure in whichever currency the session is showing.
+def _som_rate(som_value):
+    return "{:,.0f} so'm/kg".format(Decimal(som_value)).replace(",", NBSP)
 
-    Takes BOTH stored values rather than converting one into the other: each row was
-    booked at its own kurs, so the so'm figure is the one that was actually agreed
-    that day, not today's rate applied after the fact. That is also why this is a
-    tag and not a filter — a filter cannot see the session.
 
-    A missing so'm twin renders as an em dash rather than a converted guess: it means
-    the row predates dual currency and genuinely has no so'm value on record."""
-    if context.get("display_currency") != "uzs":
+#: What a row's `currency` column reads as on the so'm side. Compared as a plain
+#: string rather than against models.Currency so this module keeps its "formatting
+#: only" dependency profile — the same reason crm.formatting imports no models.
+SOM = "uzs"
+
+
+def _is_som(currency):
+    return str(currency or "").lower() == SOM
+
+
+# ── One row's own figure ─────────────────────────────────────────────────────────
+#
+# A row is drawn in the currency it was BOOKED in, not in a currency the reader
+# picked: a sotuv agreed in so'm reads in so'm from the sotuv list through to the
+# to'lov modal, so the operator never converts in their head to check a figure they
+# typed themselves. Both stored columns are still passed in — the row keeps both —
+# but `currency` decides which is printed, and nothing is converted here.
+
+
+@register.simple_tag
+def money(usd_value, som_value=None, currency=None):
+    """A row's sum in the currency that row was booked in.
+
+    A so'm row with no so'm twin renders as an em dash rather than a converted
+    guess: it predates dual currency and genuinely has no so'm value on record."""
+    if not _is_som(currency):
         return usd(usd_value)
     if som_value is None:
         return "—"
     return som(som_value)
+
+
+@register.simple_tag
+def money_other(usd_value, som_value=None, currency=None):
+    """The same sum in the currency the row was NOT booked in.
+
+    The mirror of `money`, for the kassa's reference column: once the Kirim/Chiqim
+    figure is drawn in the currency the operator typed, repeating that side beside
+    it says nothing, while the twin at the row's own kurs is what a hamkor asking
+    "how much is that in dollars" wants."""
+    if _is_som(currency):
+        return usd(usd_value)
+    if som_value is None:
+        return "—"
+    return som(som_value)
+
+
+@register.simple_tag
+def rate(usd_value, som_value=None, currency=None):
+    """A row's per-kg narx in the currency that row was booked in.
+
+    Separate from `money` because a rate is read differently — the dollar side keeps
+    four decimals (a $/kg rounded to cents moves a 24-tonne lot by dollars) and both
+    sides carry the /kg suffix that makes the figure mean anything."""
+    try:
+        if not _is_som(currency):
+            return f"{_trim(usd_value)} $/kg"
+        if som_value is None:
+            return "—"
+        return _som_rate(som_value)
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+
+
+# ── Totals spanning both currencies ──────────────────────────────────────────────
+#
+# A total cannot pick a side the way a row can. A mijoz's qarz is three sotuvlar in
+# so'm minus a to'lov that arrived in dollars; bucketing those by the currency each
+# was typed in leaves two figures that never cancel, and the mijoz reads as still
+# owing after they have settled. So both are printed in full — each row having been
+# converted at ITS OWN entry-day kurs on the way in, never re-rated at today's.
+
+
+def _pair(main, alt):
+    """The two figures as one inline-block unit.
+
+    Wrapped rather than emitted loose because these land mid-sentence as often as
+    they land in a table cell ("· kassadan <strong>…</strong>"), and a bare block
+    twin would break the line it sits in. As one unit it stacks under its own
+    dollar figure and the sentence carries on beside it."""
+    return format_html('<span class="money-pair">{}<span class="money-alt">{}</span></span>',
+                       main, alt)
+
+
+@register.simple_tag
+def money_both(usd_value, som_value=None):
+    """A total in both currencies: the dollar figure with its so'm twin beneath."""
+    if som_value is None:
+        return usd(usd_value)
+    return _pair(usd(usd_value), som(som_value))
+
+
+@register.simple_tag
+def rate_both(usd_value, som_value=None):
+    """The per-kg twin of `money_both` — a tannarx blended from lots of both
+    currencies, so neither side can be called the one that was agreed."""
+    try:
+        dollars = f"{_trim(usd_value)} $/kg"
+        if som_value is None:
+            return dollars
+        return _pair(dollars, _som_rate(som_value))
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+
+
+@register.simple_tag
+def rate_range_both(usd_min, usd_max, som_min=None, som_max=None):
+    """A tannarx SPREAD — "0.94 – 1.17 $/kg" — for a marka whose lots did not all
+    arrive at the same cost, with the so'm spread beneath it.
+
+    A range rather than four separate figures: pairing each currency's own min with
+    its own max is what makes the line readable, and putting the unit on the upper
+    bound only ("0.94 – 1.17 $/kg") stops it being said twice."""
+    try:
+        dollars = f"{_trim(usd_min)} – {_trim(usd_max)} $/kg"
+        if som_min is None or som_max is None:
+            return dollars
+        spread = "{:,.0f} – {}".format(Decimal(som_min), _som_rate(som_max))
+        return _pair(dollars, spread.replace(",", NBSP))
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"

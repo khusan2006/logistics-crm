@@ -25,8 +25,8 @@
     <td>{{ c.phone|default:"—" }}</td>
     <td>{{ c.address|default:"—" }}</td>
     <td>
-      {% if c.balance > 0 %}<span class="late">{% money c.balance c.balance_uzs %} qarz</span>
-      {% elif c.balance < 0 %}<span class="avans">{% money c.balance c.balance_uzs %} avans</span>
+      {% if c.balance > 0 %}<span class="late">qarz {% money_both c.balance c.balance_uzs %}</span>
+      {% elif c.balance < 0 %}<span class="avans">avans {% money_both c.balance c.balance_uzs %}</span>
       {% else %}—{% endif %}
     </td>
     <td class="row-actions">

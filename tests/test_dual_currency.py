@@ -262,36 +262,57 @@ def test_the_kassa_counts_net_in_and_gross_out(admin_client, db):
     assert resp.context["cash_total"] == Decimal("370.00")
 
 
-# --- the dollar / so'm display toggle --------------------------------------
+# --- a row is drawn in the currency it was booked in ------------------------
 
-def test_the_app_shows_dollars_until_told_otherwise(admin_client, db):
-    resp = admin_client.get("/kassa/")
-    assert resp.context["display_currency"] == "usd"
-    assert resp.context["showing_som"] is False
-
-
-def test_switching_to_som_redraws_the_figures(admin_client, db):
-    """Same rows, different column — the toggle picks which stored value is read."""
+def test_a_row_is_drawn_in_the_currency_it_was_typed_in(admin_client, db):
+    """No sitewide switch: the row itself says which of its two stored values is
+    the one that was agreed, and that is the one printed."""
     customer = _customer()
     CustomerPayment.objects.create(
         customer=customer, date="2026-07-20", amount=Decimal("1000"),
-        amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"), method="cash")
+        amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"),
+        currency=Currency.USD, method="cash")
+    CustomerPayment.objects.create(
+        customer=customer, date="2026-07-21", amount=Decimal("200"),
+        amount_uzs=Decimal("2500000"), exchange_rate=Decimal("12500"),
+        currency=Currency.UZS, method="cash")
 
-    html = admin_client.get("/kassa/").content.decode()
-    assert f"$1{NBSP}000" in html
+    html = admin_client.get("/customer-payments/").content.decode()
+    # Both on one screen, each leading with its own currency. The Sof column is the
+    # headline (<strong>); the twin beside it is a muted reference, not the figure.
+    assert f"<strong>$1{NBSP}000</strong>" in html
+    assert f"<strong>2{NBSP}500{NBSP}000 so&#x27;m</strong>" in html
+    assert f"<strong>$200</strong>" not in html
 
-    resp = admin_client.post("/valyuta/", {"currency": "uzs", "next": "/kassa/"})
-    assert resp.status_code == 302
-    html = admin_client.get("/kassa/").content.decode()
-    # non-breaking spaces group the figure, and the apostrophe is HTML-escaped
+
+def test_a_row_also_shows_its_twin_for_reference(admin_client, db):
+    """The counter-currency is still one glance away — it is just no longer the
+    figure the row leads with."""
+    CustomerPayment.objects.create(
+        customer=_customer(), date="2026-07-20", amount=Decimal("1000"),
+        amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"),
+        currency=Currency.USD, method="cash")
+    html = admin_client.get("/customer-payments/").content.decode()
     assert f"12{NBSP}500{NBSP}000 so&#x27;m" in html
-    assert f"$1{NBSP}000" not in html
 
 
-def test_the_choice_survives_the_next_page(admin_client, db):
-    admin_client.post("/valyuta/", {"currency": "uzs", "next": "/kassa/"})
-    for url in ["/kassa/", "/sales/", "/customer-payments/", "/"]:
-        assert admin_client.get(url).context["showing_som"] is True
+def test_a_total_is_printed_in_both_currencies(admin_client, db):
+    """A total spans rows of both currencies, so it cannot pick a side: a mijoz's
+    qarz can be a so'm sotuv settled by a dollar to'lov. Both are printed, each row
+    having been converted at its own entry-day kurs on the way in."""
+    CustomerPayment.objects.create(
+        customer=_customer(), date="2026-07-20", amount=Decimal("1000"),
+        amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"),
+        currency=Currency.UZS, method="cash")
+    html = admin_client.get("/kassa/").content.decode()
+    assert f"$1{NBSP}000" in html                      # Kassadagi pul, dollar side
+    assert f"12{NBSP}500{NBSP}000 so&#x27;m" in html   # ...and its so'm twin
+    assert 'class="money-alt"' in html
+
+
+def test_the_display_switch_is_gone(admin_client, db):
+    assert admin_client.post("/valyuta/", {"currency": "uzs"}).status_code == 404
+    assert "currency-switch" not in admin_client.get("/kassa/").content.decode()
 
 
 def test_a_som_total_is_the_sum_of_entry_time_values(admin_client, db):
@@ -306,18 +327,6 @@ def test_a_som_total_is_the_sum_of_entry_time_values(admin_client, db):
     resp = admin_client.get("/kassa/")
     assert resp.context["cash_total"] == Decimal("2000.00")
     assert resp.context["cash_total_uzs"] == Decimal("25500000.00")
-
-
-def test_an_unknown_currency_is_ignored(admin_client, db):
-    admin_client.post("/valyuta/", {"currency": "eur", "next": "/kassa/"})
-    assert admin_client.get("/kassa/").context["display_currency"] == "usd"
-
-
-def test_the_switch_cannot_be_used_as_an_open_redirect(admin_client, db):
-    resp = admin_client.post("/valyuta/", {"currency": "uzs",
-                                           "next": "https://evil.example.com/"})
-    assert resp.status_code == 302
-    assert resp["Location"] == "/"
 
 
 # --- rows built in code, not through a form --------------------------------
@@ -342,24 +351,28 @@ def test_a_stored_som_value_is_never_recomputed(db):
     assert payment.amount_uzs == Decimal("2999999.00")
 
 
-# --- per-kg rates follow the toggle too ------------------------------------
+# --- per-kg rates follow the same rule -------------------------------------
 
-def test_a_per_kg_narx_switches_with_everything_else(admin_client, db):
+def test_a_per_kg_narx_follows_its_own_row(admin_client, db):
     """Tannarx and sotuv narx are rendered as "1.17 $/kg", never as a bare sum, so
-    they need their own tag — but they must still follow the same switch."""
+    they need their own tag — but the rule is the same: the sotuv's own currency."""
     lot = _lot()
     admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": _customer().pk, "brand": lot.brand, "kg": "1000",
         "currency": "usd", "price": "1.17", "exchange_rate": "12000",
         "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    html = admin_client.get("/sales/").content.decode()
-    assert "1.17 $/kg" in html
+    assert "1.17 $/kg" in admin_client.get("/sales/").content.decode()
 
-    admin_client.post("/valyuta/", {"currency": "uzs", "next": "/sales/"})
+    lot = _lot()
+    admin_client.post(f"/sales/new/?lot={lot.pk}", {
+        "customer": _customer("Zilola Mebel").pk, "brand": lot.brand, "kg": "1000",
+        "currency": "uzs", "price": "14040", "exchange_rate": "12000",
+        "date": "2026-07-18", "debt_deadline": "", "note": "",
+    })
     html = admin_client.get("/sales/").content.decode()
     assert f"14{NBSP}040 so&#x27;m/kg" in html
-    assert "$/kg" not in html
+    assert "1.17 $/kg" in html          # the dollar sotuv is untouched by it
 
 
 def test_a_narx_is_not_padded_out_to_four_decimals(db):

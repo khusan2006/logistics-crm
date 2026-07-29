@@ -13,7 +13,7 @@
     <td class="sticky-col">
       <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a>
     </td>
-    <td class="late">{% money row.customer.balance row.customer.balance_uzs %}</td>
+    <td class="late">{% money_both row.customer.balance row.customer.balance_uzs %}</td>
     <td{% if row.overdue_count > 0 %} class="late"{% endif %}>{{ row.overdue_count }}</td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'customer_payment_create' %}?customer={{ row.customer.pk }}" data-modal title="To'lov">

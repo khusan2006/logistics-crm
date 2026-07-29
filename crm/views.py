@@ -11,13 +11,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from accounts.decorators import role_required
 from accounts.models import User
 
-from .context_processors import SESSION_KEY
 from .exports import xlsx_response
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm,
@@ -640,8 +638,18 @@ def supplier_payment_delete(request, pk):
 
 def _parse_alloc_picks(post):
     """Read manual allocation picks from POST fields named alloc_<sale_id>,
-    ignoring blanks and zeros."""
-    picks = []
+    ignoring blanks and zeros. Returns (sale_id, USD amount) pairs.
+
+    The operator types each figure in the SOTUV's own currency — the Taqsimlash
+    table prints a so'm sotuv's qoldiq in so'm, so the box beside it takes so'm —
+    while PaymentAllocation.amount is the dollar column. The conversion uses the
+    SOTUV's kurs, not the to'lov's: the qoldiq on screen was rated at the sotuv's
+    kurs, so anything else would leave a residue on a debt the operator just
+    cleared to the tiyin.
+
+    The currency is read from the sotuv rather than from a posted field, so a
+    tampered form cannot make a so'm figure be taken as dollars."""
+    typed = {}
     for key, value in post.items():
         if not key.startswith("alloc_"):
             continue
@@ -649,12 +657,29 @@ def _parse_alloc_picks(post):
         if not value:
             continue
         try:
-            sale_id = int(key[len("alloc_"):])
-            amount = Decimal(value)
+            typed[int(key[len("alloc_"):])] = Decimal(value)
         except (ValueError, ArithmeticError):
             continue
-        if amount > 0:
-            picks.append((sale_id, amount))
+    if not typed:
+        return []
+
+    picks = []
+    sales = Sale.objects.in_bulk(typed)
+    for sale_id, amount in typed.items():
+        if amount <= 0:
+            continue
+        sale = sales.get(sale_id)
+        # A stale or tampered id is kept as-is and skipped downstream by
+        # allocate_customer_payment, which is the one place that checks ownership.
+        if sale is not None and sale.is_som:
+            try:
+                amount, _ = convert_pair(amount, Currency.UZS, sale.exchange_rate)
+            except ValueError:
+                # No usable kurs, so this so'm figure cannot be turned into the
+                # dollar column. Dropping the pick lets FIFO place the money
+                # instead; passing it through would book so'm as dollars.
+                continue
+        picks.append((sale_id, amount))
     return picks
 
 
@@ -2001,21 +2026,3 @@ def export_debts(request):
         for c in Customer.objects.all() if c.balance > 0
     )
     return xlsx_response("qarzdorlar.xlsx", headers, rows)
-
-
-@require_POST
-def set_display_currency(request):
-    """Flip the whole app between dollar and so'm.
-
-    A view preference, so it lives in the session rather than on the user record —
-    the same person reads one report to a hamkor in dollars and the next to a mijoz
-    in so'm. `next` is checked against this host before redirecting so the switch
-    cannot be used as an open redirect."""
-    chosen = request.POST.get("currency")
-    if chosen in Currency.values:
-        request.session[SESSION_KEY] = chosen
-    target = request.POST.get("next") or reverse("dashboard")
-    if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()},
-                                           require_https=request.is_secure()):
-        target = reverse("dashboard")
-    return redirect(target)

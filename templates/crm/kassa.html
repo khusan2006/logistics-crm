@@ -14,12 +14,12 @@
   <div class="balance-hero-grid">
     <div class="balance-cell">
       <div class="balance-cap"><span class="balance-ic balance-ic--cash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="12" cy="14" r="1.5"/></svg></span>Kassadagi pul</div>
-      <div class="balance-num">{% money cash_total cash_total_uzs %}</div>
+      <div class="balance-num">{% money_both cash_total cash_total_uzs %}</div>
       <div class="balance-note">kirim − chiqim, boshidan</div>
     </div>
     <div class="balance-cell">
       <div class="balance-cap"><span class="balance-ic balance-ic--debt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20"/><path d="M4 20V8l8-5 8 5v12"/></svg></span>Hamkorlarga qarzimiz</div>
-      <div class="balance-num">{% money payable_total payable_total_uzs %}</div>
+      <div class="balance-num">{% money_both payable_total payable_total_uzs %}</div>
       <div class="balance-note">yuborilgan yuklar bo'yicha to'lanmagani</div>
     </div>
   </div>
@@ -42,30 +42,34 @@
 <div class="kpi-grid">
   <div class="kpi {% if balances.cash.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Naqd</span></div>
-    <div class="kpi-value">{% money balances.cash.balance balances.cash.balance_uzs %}</div>
+    <div class="kpi-value">{% money_both balances.cash.balance balances.cash.balance_uzs %}</div>
     <div class="kpi-meta muted">
-      <span class="avans">+{% money balances.cash.in balances.cash.in_uzs %}</span> · <span class="late">−{% money balances.cash.out balances.cash.out_uzs %}</span>
+      <span class="avans">+{% money_both balances.cash.in balances.cash.in_uzs %}</span>
+      <span class="late">−{% money_both balances.cash.out balances.cash.out_uzs %}</span>
     </div>
   </div>
   <div class="kpi {% if balances.card.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Karta</span></div>
-    <div class="kpi-value">{% money balances.card.balance balances.card.balance_uzs %}</div>
+    <div class="kpi-value">{% money_both balances.card.balance balances.card.balance_uzs %}</div>
     <div class="kpi-meta muted">
-      <span class="avans">+{% money balances.card.in balances.card.in_uzs %}</span> · <span class="late">−{% money balances.card.out balances.card.out_uzs %}</span>
+      <span class="avans">+{% money_both balances.card.in balances.card.in_uzs %}</span>
+      <span class="late">−{% money_both balances.card.out balances.card.out_uzs %}</span>
     </div>
   </div>
   <div class="kpi {% if balances.transfer.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Bank</span></div>
-    <div class="kpi-value">{% money balances.transfer.balance balances.transfer.balance_uzs %}</div>
+    <div class="kpi-value">{% money_both balances.transfer.balance balances.transfer.balance_uzs %}</div>
     <div class="kpi-meta muted">
-      <span class="avans">+{% money balances.transfer.in balances.transfer.in_uzs %}</span> · <span class="late">−{% money balances.transfer.out balances.transfer.out_uzs %}</span>
+      <span class="avans">+{% money_both balances.transfer.in balances.transfer.in_uzs %}</span>
+      <span class="late">−{% money_both balances.transfer.out balances.transfer.out_uzs %}</span>
     </div>
   </div>
   <div class="kpi {% if net_total < 0 %}kpi--red{% else %}kpi--blue{% endif %}">
     <div class="kpi-head"><span class="kpi-label">Jami</span></div>
-    <div class="kpi-value">{% money net_total net_total_uzs %}</div>
+    <div class="kpi-value">{% money_both net_total net_total_uzs %}</div>
     <div class="kpi-meta muted">
-      <span class="avans">+{% money net_in net_in_uzs %}</span> · <span class="late">−{% money net_out net_out_uzs %}</span>
+      <span class="avans">+{% money_both net_in net_in_uzs %}</span>
+      <span class="late">−{% money_both net_out net_out_uzs %}</span>
     </div>
   </div>
 </div>
@@ -75,7 +79,7 @@
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Kirim</h2>
-      <span class="ledger-total amt-in">+{% money net_in net_in_uzs %}</span>
+      <span class="ledger-total amt-in">+{% money_both net_in net_in_uzs %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Mijozlardan qabul qilingan to'lovlar — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -84,7 +88,7 @@
         <th>Sana</th>
         <th>Kimdan</th>
         <th>Usul</th>
-        <th class="num">Kurs / asl summa</th>
+        <th class="num">Kurs / ekvivalent</th>
         <th class="num">Kirim</th>
         <th></th>
       </tr>
@@ -93,10 +97,10 @@
         <td>{{ p.date|date:"d.m.Y" }}</td>
         <td>{{ p.customer.name }}</td>
         <td>{% include "crm/_method_badge.html" with code=p.method label=p.get_method_display %}</td>
-        <td class="num muted">{{ p.net_amount_uzs|floatformat:"0g" }} so'm · {{ p.exchange_rate|floatformat:"0g" }}</td>
+        <td class="num muted">{% money_other p.net_amount p.net_amount_uzs p.currency %} · {{ p.exchange_rate|floatformat:"0g" }}</td>
         {# What landed, not what was sent: a perechisleniya foiz never reached the kassa. #}
-        <td class="num amt-in"><strong>+{% money p.net_amount p.net_amount_uzs %}</strong>
-          {% if p.fee_amount %}<br><small class="muted">{% money p.amount p.amount_uzs %} − {{ p.fee_percent|floatformat:"-2" }}%</small>{% endif %}</td>
+        <td class="num amt-in"><strong>+{% money p.net_amount p.net_amount_uzs p.currency %}</strong>
+          {% if p.fee_amount %}<br><small class="muted">{% money p.amount p.amount_uzs p.currency %} − {{ p.fee_percent|floatformat:"-2" }}%</small>{% endif %}</td>
         <td class="row-actions">
           <a class="icon-action" href="{% url 'customer_payment_edit' p.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
         </td>
@@ -117,7 +121,7 @@
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Chiqim</h2>
-      <span class="ledger-total amt-out">−{% money net_out net_out_uzs %}</span>
+      <span class="ledger-total amt-out">−{% money_both net_out net_out_uzs %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Hamkor to'lovlari va yuk xarajatlari — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -126,7 +130,7 @@
         <th>Sana</th>
         <th>Tavsif</th>
         <th>Usul</th>
-        <th class="num">Kurs / asl summa</th>
+        <th class="num">Kurs / ekvivalent</th>
         <th class="num">Chiqim</th>
         <th></th>
       </tr>
@@ -135,8 +139,8 @@
         <td>{{ t.date|date:"d.m.Y" }}</td>
         <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}</td>
         <td>{% include "crm/_method_badge.html" with code=t.method_code label=t.method %}</td>
-        <td class="num muted">{{ t.amount_uzs|floatformat:"0g" }} so'm · {{ t.exchange_rate|floatformat:"0g" }}</td>
-        <td class="num amt-out"><strong>−{% money t.amount t.amount_uzs %}</strong></td>
+        <td class="num muted">{% money_other t.amount t.amount_uzs t.currency %} · {{ t.exchange_rate|floatformat:"0g" }}</td>
+        <td class="num amt-out"><strong>−{% money t.amount t.amount_uzs t.currency %}</strong></td>
         <td class="row-actions">
           {% comment %}
           Vositachi and foiz rows are derived from a parent to'lov, not stored in
@@ -177,7 +181,7 @@
     {% for partner, debt in partner_debts %}
     <tr>
       <td class="sticky-col">{{ partner.name }}</td>
-      <td class="late">{% money debt.0 debt.1 %}</td>
+      <td class="late">{% money_both debt.0 debt.1 %}</td>
       <td class="row-actions">
         <a class="btn btn-ghost btn-sm" href="{% url 'supplier_payment_create' %}" data-modal>To'lash</a>
       </td>

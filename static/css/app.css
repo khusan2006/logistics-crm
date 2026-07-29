@@ -217,23 +217,6 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; letter-spacing: -0.01e
 .user-chip .name { font-size: 13.5px; font-weight: 600; }
 .user-chip .role { font-size: 11.5px; color: var(--text-muted); }
 
-/* Dollar / so'm switch in the topbar: a segmented pair, the active half filled. */
-.currency-switch {
-  display: inline-flex;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  overflow: hidden;
-}
-.currency-switch .cur-opt {
-  padding: 0 10px; height: 36px; min-width: 36px;
-  font: inherit; font-size: 12.5px; font-weight: 600;
-  color: var(--text-muted);
-  background: transparent; border: 0; cursor: pointer;
-}
-.currency-switch .cur-opt + .cur-opt { border-left: 1px solid var(--border-strong); }
-.currency-switch .cur-opt:hover { background: var(--surface-2); color: var(--text); }
-.currency-switch .cur-opt.is-on { background: var(--accent); color: #fff; }
-
 .icon-btn {
   width: 36px; height: 36px;
   display: grid; place-items: center;
@@ -355,8 +338,8 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   font-weight: 700;
   color: var(--text-muted);
 }
-.kpi-value { position: relative; font-size: 23px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.kpi-value .unit { font-size: 14px; font-weight: 500; color: var(--text-muted); margin-left: 3px; }
+.kpi-value { position: relative; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.kpi-value .unit { font-size: 12px; font-weight: 500; color: var(--text-muted); margin-left: 3px; }
 .kpi-meta {
   position: relative;
   display: inline-flex;
@@ -368,6 +351,14 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   color: var(--kpi);
 }
 .kpi-meta.muted { color: var(--text-muted); }
+/* The kassa cards put a kirim and a chiqim on this line, and each is a money_both
+   two lines tall. So: top-aligned rather than centred, so both dollar figures sit
+   on one line with their so'm twins beneath; nowrap on each half so the +/− sign
+   can never be orphaned from the figure it belongs to; and wrap on the row so a
+   narrow card stacks the two halves instead of overflowing. The sign and the
+   green/red do the separating — there is no "·" to strand on its own line. */
+.kpi-meta { align-items: flex-start; flex-wrap: wrap; column-gap: 14px; }
+.kpi-meta > span { white-space: nowrap; }
 /* Mini trend line under each KPI value (6-month sparkline, coloured per card) */
 .kpi-spark { position: relative; display: block; width: 100%; height: 30px; margin-top: 11px; }
 .kpi-spark polyline { vector-effect: non-scaling-stroke; }
@@ -389,7 +380,7 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .kpi-grid--compact .kpi-icon { width: 28px; height: 28px; border-radius: 8px; }
 .kpi-grid--compact .kpi-icon svg { width: 15px; height: 15px; }
 .kpi-grid--compact .kpi-label { font-size: 10px; letter-spacing: 0.04em; }
-.kpi-grid--compact .kpi-value { font-size: 18px; white-space: nowrap; }
+.kpi-grid--compact .kpi-value { font-size: 16px; white-space: nowrap; }
 .kpi-grid--compact .kpi-value .unit { font-size: 11px; margin-left: 2px; }
 .kpi-grid--compact .kpi-meta { margin-top: 7px; font-size: 11px; }
 @media (max-width: 1100px) {
@@ -425,8 +416,8 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .balance-ic svg { width: 16px; height: 16px; }
 .balance-ic--cash { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
 .balance-ic--debt { background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--warning); }
-.balance-num { margin-top: 12px; font-size: 30px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.balance-num .unit { font-size: 15px; font-weight: 500; color: var(--text-muted); margin-left: 4px; }
+.balance-num { margin-top: 12px; font-size: 24px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.balance-num .unit { font-size: 13px; font-weight: 500; color: var(--text-muted); margin-left: 4px; }
 .balance-note { margin-top: 6px; font-size: 12.5px; color: var(--text-muted); }
 @media (max-width: 640px) {
   .balance-hero-grid { grid-template-columns: 1fr; gap: 0; }
@@ -1443,6 +1434,26 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Money balance emphasis, reused across customer/debt/sale views */
 .late { color: var(--danger); font-weight: 700; }
 .avans { color: var(--success); font-weight: 700; }
+
+/* A TOTAL printed in both currencies (money_both / rate_both / rate_range_both).
+   Only totals get two figures: a single row is drawn in the one currency it was
+   booked in, so a second line there would be a conversion nobody asked for.
+
+   The pair is inline-block so it stacks as one unit — these land mid-sentence as
+   often as in a table cell, and a loose block twin would break the line it sits in.
+   top-aligned so the text carrying on beside it stays on the dollar figure's line
+   rather than dropping to the so'm one. */
+.money-pair { display: inline-block; vertical-align: top; }
+/* The so'm twin reads quieter, so the eye still takes the dollar line as the
+   headline. Inherited weight and colour are both reset: the parent is often .late
+   or .kpi-value, and the twin should not shout in red too. */
+.money-alt {
+  display: block;
+  font-size: 0.72em; font-weight: 500;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* Horizontal bars (top products / clients) */
 .hbars { display: flex; flex-direction: column; gap: 15px; }

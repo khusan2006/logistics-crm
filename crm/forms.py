@@ -11,7 +11,7 @@ from .models import (
     arrived_lots, brand_stock_costed, convert_pair,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
-from .templatetags.crm_extras import usd
+from .templatetags.crm_extras import rate, som, usd
 
 
 def date_widget(**attrs):
@@ -223,15 +223,22 @@ def contract_option_label(contract):
     """Kelishuv <option>: code, products, what is still owed, the agreed price —
     a range when the products are priced differently — and the whole agreement.
 
+    Each narx reads in the currency ITS line was agreed in, so a kelishuv struck in
+    so'm is offered in so'm. That is also why both ends of a range carry their unit
+    rather than only the upper one: with mixed lines the two ends can be in
+    different currencies, and a shared trailing "$/kg" would be a lie about one.
+
     No hamkor name: the code already starts with it (abulqosim-2 · abulqosim read
     as a stutter)."""
-    prices = sorted({ln.price for ln in contract.lines.all()})
-    if not prices:
+    lines = sorted(contract.lines.all(), key=lambda ln: ln.price or Decimal("0"))
+    narxlar = list(dict.fromkeys(rate(ln.price, ln.price_uzs, ln.currency)
+                                 for ln in lines))
+    if not narxlar:
         price = "—"
-    elif len(prices) == 1:
-        price = f"{_clean_number(prices[0])} $/kg"
+    elif len(narxlar) == 1:
+        price = narxlar[0]
     else:
-        price = f"{_clean_number(prices[0])}–{_clean_number(prices[-1])} $/kg"
+        price = f"{narxlar[0]} – {narxlar[-1]}"
     return (f"{contract.code} · {contract.brand_summary} · "
             f"{_clean_number(contract.remaining_kg)} kg qolgan · {price} · "
             f"jami {_clean_number(contract.kg)} kg")
@@ -242,11 +249,14 @@ def customer_option_label(customer):
     being taken against, so it does not have to be looked up on the Qarzlar screen
     first. An overpaid mijoz reads as avans rather than a negative qarz, which is
     the difference between "collect this" and "we owe them this"."""
-    balance = customer.balance
+    balance, balance_uzs = customer.balance, customer.balance_uzs
+    # Both currencies, because an ostatka spans sotuvlar of both and cannot pick a
+    # side. An <option> is plain text with no room for a stacked twin, so the so'm
+    # figure rides alongside on the same line.
     if balance > 0:
-        return f"{customer.name} · qarz {usd(balance)}"
+        return f"{customer.name} · qarz {usd(balance)} · {som(balance_uzs)}"
     if balance < 0:
-        return f"{customer.name} · avans {usd(-balance)}"
+        return f"{customer.name} · avans {usd(-balance)} · {som(-balance_uzs)}"
     return f"{customer.name} · qarzsiz"
 
 

@@ -23,12 +23,12 @@
     <td class="sticky-col">{{ p.date }}</td>
     <td><a href="{% url 'customer_edit' p.customer_id %}">{{ p.customer.name }}</a></td>
     <td>
-      {% money p.amount p.amount_uzs %}
-      {% if not showing_som %}<br><small class="muted">{{ p.amount_uzs|floatformat:"0g" }} so'm</small>{% endif %}
+      {% money p.amount p.amount_uzs p.currency %}
+      <br><small class="muted">{% money_other p.amount p.amount_uzs p.currency %}</small>
     </td>
     <td>
-      <strong>{% money p.net_amount p.net_amount_uzs %}</strong>
-      {% if p.fee_amount %}<br><small class="muted">bank foizi {{ p.fee_percent|floatformat:"-2" }}% · −{% money p.fee_amount p.fee_amount_uzs %}</small>{% endif %}
+      <strong>{% money p.net_amount p.net_amount_uzs p.currency %}</strong>
+      {% if p.fee_amount %}<br><small class="muted">bank foizi {{ p.fee_percent|floatformat:"-2" }}% · −{% money p.fee_amount p.fee_amount_uzs p.currency %}</small>{% endif %}
     </td>
     <td>{{ p.get_method_display }}</td>
     <td>{{ p.note|default:"—" }}</td>

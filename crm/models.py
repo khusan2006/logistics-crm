@@ -95,6 +95,13 @@ class MoneyEntry(models.Model):
                 kwargs["update_fields"] = list(update_fields) + [uzs_field]
         return super().save(*args, **kwargs)
 
+    @property
+    def is_som(self):
+        """True when the operator typed this row in so'm. The screens read it to
+        decide which of the two stored values to draw and which currency to ask the
+        next figure about — a sotuv agreed in so'm is settled in so'm."""
+        return self.currency == Currency.UZS
+
     def in_som(self, usd_value):
         """A figure derived from this row's money, in so'm at THIS row's kurs.
 
@@ -807,6 +814,16 @@ class ShipmentLine(MoneyEntry):
         return self.contract_line.price_uzs
 
     @property
+    def unit_currency(self):
+        """Which currency `unit_price` should be READ in — this line's own when it
+        set a price, else the kelishuv's, following the same fallback as the figure
+        itself. Without it a truck line inheriting a so'm kelishuv narx would print
+        that narx with a dollar sign in front of it."""
+        if self.price is not None:
+            return self.currency
+        return self.contract_line.currency
+
+    @property
     def goods_value(self):
         return (self.kg * self.unit_price).quantize(Decimal("0.01"))
 
@@ -1186,6 +1203,13 @@ class PaymentAllocation(models.Model):
             return Decimal("0")
         return (payment.amount_uzs * self.amount / payment.amount).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    @property
+    def currency(self):
+        """Read in the to'lov's currency, for the same reason `amount_uzs` is a
+        slice of the to'lov's so'm value: an allocation is not money of its own,
+        it is a part of one payment that arrived in one currency."""
+        return self.payment.currency
 
     class Meta:
         ordering = ["-created_at"]

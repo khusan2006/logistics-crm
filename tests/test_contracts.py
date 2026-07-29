@@ -227,7 +227,27 @@ def test_kelishuv_option_shows_the_price(db):
     many = _contract(kg="1000", price="1.00")
     ContractLine.objects.create(contract=many, brand="ftor oq", kg=Decimal("500"),
                                 price=Decimal("2.50"))
-    assert "1–2.5 $/kg" in contract_option_label(many)
+    assert "1 $/kg – 2.5 $/kg" in contract_option_label(many)
+
+
+def test_kelishuv_option_shows_a_som_narx_in_som(db):
+    """A kelishuv struck in so'm is offered in so'm. Both ends of a mixed range
+    carry their own unit — a shared trailing "$/kg" would misprice the so'm line."""
+    from crm.forms import contract_option_label
+
+    som_only = _contract(kg="1000", price="1.00")
+    som_only.lines.update(currency="uzs", price_uzs=Decimal("12500"),
+                          exchange_rate=Decimal("12500"))
+    assert f"12{NBSP}500 so'm/kg" in contract_option_label(som_only)
+    assert "$/kg" not in contract_option_label(som_only)
+
+    mixed = _contract(kg="1000", price="1.00")
+    ContractLine.objects.create(contract=mixed, brand="ftor oq", kg=Decimal("500"),
+                                price=Decimal("2.50"), price_uzs=Decimal("31250"),
+                                currency="uzs", exchange_rate=Decimal("12500"))
+    label = contract_option_label(mixed)
+    assert "1 $/kg" in label
+    assert f"31{NBSP}250 so'm/kg" in label
 
 
 def test_kelishuv_has_no_deadline(db):
