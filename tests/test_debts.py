@@ -99,6 +99,42 @@ def test_overdue_sale_shows_overdue_indicator(admin_client, db):
     assert "muddati o'tgan" in detail_html.lower() or "kechikkan" in detail_html.lower()
 
 
+def test_sale_without_muddat_is_due_the_day_it_was_sold(admin_client, db):
+    """A blank To'lov muddati means "pay now", not "never due" — otherwise an unpaid
+    sotuv sits outside every Qarzlar signal."""
+    customer = _customer()
+    lot = _lot()
+    sale = _sale(customer, lot, "1000", "1.60", "2026-07-17", debt_deadline=None)
+
+    sale.refresh_from_db()
+    assert str(sale.debt_deadline) == "2026-07-17"
+
+
+def test_due_customers_sort_above_bigger_debts_not_yet_owed(admin_client, db):
+    """Whoever has to pay now leads the table, oldest muddat first — even when a
+    mijoz further down owes far more on a muddat that has not arrived."""
+    from django.utils import timezone
+    from datetime import timedelta
+
+    today = timezone.localdate()
+    lot = _lot(kg="100000")
+    small_and_due = _customer(name="AAA Bugun")
+    big_but_later = _customer(name="ZZZ Keyin")
+    oldest_due = _customer(name="MMM Eski")
+
+    _sale(small_and_due, lot, "100", "1.00", str(today), debt_deadline=str(today))
+    _sale(big_but_later, lot, "50000", "1.00", str(today),
+          debt_deadline=str(today + timedelta(days=30)))
+    _sale(oldest_due, lot, "200", "1.00", str(today - timedelta(days=10)),
+          debt_deadline=str(today - timedelta(days=10)))
+
+    html = admin_client.get("/debts/").content.decode()
+    order = [html.index(c.name) for c in (oldest_due, small_and_due, big_but_later)]
+    assert order == sorted(order), "due-first, oldest muddat at the top"
+    assert "bugun to'lash kerak" in html
+    assert "muddati o'tgan" in html
+
+
 def test_translator_forbidden(translator_client, db):
     customer = _customer()
     assert translator_client.get("/debts/").status_code == 403

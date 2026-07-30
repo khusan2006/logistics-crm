@@ -1641,10 +1641,21 @@ def debt_list(request):
     debtors = [c for c in Customer.objects.all() if c.balance > 0]
     rows = []
     for c in debtors:
-        overdue_count = sum(1 for s in c.sales.all() if s.is_overdue)
-        rows.append({"customer": c, "overdue_count": overdue_count})
-    rows.sort(key=lambda r: r["customer"].balance, reverse=True)
-    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+        due = [s.debt_deadline for s in c.sales.all() if s.is_due]
+        rows.append({
+            "customer": c,
+            "overdue_count": sum(1 for s in c.sales.all() if s.is_overdue),
+            "due_count": len(due),
+            "earliest_due": min(due) if due else None,
+        })
+    # Whoever has to pay NOW comes first — oldest muddat at the very top, so the
+    # longest-waiting debt leads. Sorting the whole list by size of qarz instead
+    # buried a mijoz due today under bigger debts that are not owed yet.
+    chase = [r for r in rows if r["earliest_due"]]
+    later = [r for r in rows if not r["earliest_due"]]
+    chase.sort(key=lambda r: (r["earliest_due"], -r["customer"].balance))
+    later.sort(key=lambda r: -r["customer"].balance)
+    page = Paginator(chase + later, 20).get_page(request.GET.get("page"))
     return render(request, "crm/debt_list.html", {"page": page})
 
 

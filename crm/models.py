@@ -1069,10 +1069,29 @@ class Sale(MoneyEntry):
     def is_paid(self):
         return self.remaining <= 0
 
+    def save(self, *args, **kwargs):
+        """A sotuv with no muddat is due the day it was sold.
+
+        Leaving it null used to mean the sotuv could never be overdue and never
+        counted as due, so an unpaid sotuv the operator simply had not put a date on
+        sat outside every Qarzlar signal. "No date" in practice means "naqd, pay
+        now", which is what the sale date says."""
+        if self.debt_deadline is None:
+            self.debt_deadline = self.date
+        return super().save(*args, **kwargs)
+
     @property
     def is_overdue(self):
         return (self.remaining > 0 and self.debt_deadline is not None
                 and self.debt_deadline < timezone.localdate())
+
+    @property
+    def is_due(self):
+        """The muddat has ARRIVED — today or earlier — and the sotuv is unpaid. The
+        superset of `is_overdue`, which is only the days already past: a sotuv due
+        today is not late yet, but it is what the operator has to chase today."""
+        return (self.remaining > 0 and self.debt_deadline is not None
+                and self.debt_deadline <= timezone.localdate())
 
     @property
     def profit(self):
