@@ -62,7 +62,7 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     <th>Kelishilgan kg</th>
     <th>Narx</th>
     <th>Jami</th>
-    <th title="Yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
+    <th title="Har bir marka bo'yicha yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
     <th title="Kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th></th>
   </tr>
@@ -74,15 +74,24 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     <td>{{ c.created }}</td>
     <td>{{ c.partner.name }}</td>
     {% comment %}
-    Marka / kg / narx are per product, so each cell lists one line per product and
-    the three columns stay aligned row-for-row. Jami and the money columns below
-    are kelishuv-level totals.
+    Marka / kg / narx / qolgan kg are per product, so each cell lists one line per
+    product and the four columns stay aligned row-for-row. Trucks are booked against
+    a product, so "how much of THIS marka is still to come" is the figure the
+    operator acts on — one combined number cannot say which of the two is short.
+    Jami and Qolgan to'lov stay kelishuv-level: a hamkor to'lov is paid against the
+    kelishuv, not against one of its products, so there is nothing to split it by.
     {% endcomment %}
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.brand }}</div>{% endfor %}</td>
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}</td>
     <td>{% for ln in c.lines.all %}<div class="cell-line">{% money ln.price ln.price_uzs ln.currency %}</div>{% endfor %}</td>
     <td>{% money_both c.total_value c.total_value_uzs %}</td>
-    <td><span class="badge {% if c.is_settled %}badge-ok{% else %}badge-warning{% endif %}">{{ c.remaining_kg|floatformat:"-3" }}</span></td>
+    <td>
+      {% for ln in c.lines.all %}
+      <div class="cell-line">
+        <span class="badge {% if ln.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ ln.remaining_kg|floatformat:"-3" }}</span>
+      </div>
+      {% endfor %}
+    </td>
     <td><span class="badge {% if c.payable_left > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money_both c.payable_left c.payable_left_uzs %}</span></td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">
