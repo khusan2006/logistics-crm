@@ -30,7 +30,7 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, commission_total, convert_pair, fifo_lots,
-    trim_sale_allocations,
+    reconcile_customer_allocations, trim_sale_allocations,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
@@ -734,6 +734,9 @@ def customer_payment_create(request):
                     payment.save()
                     allocate_customer_payment(payment, picks)
                     saved.append(payment)
+                # A pick can leave an earlier sotuv short while this settlement still
+                # has money in hand — the sweep places whatever the rows did not.
+                reconcile_customer_allocations(customer)
             total = sum((p.amount for p in saved), Decimal("0"))
             AuditLog.record(
                 request.user, AuditLog.Action.PAYMENT, "Mijoz to'lovi",
@@ -764,6 +767,7 @@ def _bound_customer(target, request):
 @role_required(User.Role.ADMIN)
 def customer_payment_edit(request, pk):
     payment = get_object_or_404(CustomerPayment, pk=pk)
+    previous_customer_id = payment.customer_id
     form = CustomerPaymentForm(request.POST or None, instance=payment)
     title = "To'lovni tahrirlash"
     if request.method == "POST":
@@ -771,6 +775,15 @@ def customer_payment_edit(request, pk):
             payment = form.save()
             payment.allocations.all().delete()
             allocate_customer_payment(payment)
+            # Re-spreading THIS to'lov can leave a sotuv it used to cover short while
+            # another to'lov's avans sits unspent; the sweep pairs the two back up.
+            # Run it for the previous mijoz too when the edit moved the to'lov away
+            # from them — their sotuvlar just lost the money.
+            reconcile_customer_allocations(payment.customer)
+            if previous_customer_id != payment.customer_id:
+                previous = Customer.objects.filter(pk=previous_customer_id).first()
+                if previous:
+                    reconcile_customer_allocations(previous)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Mijoz to'lovi", payment.pk,
                 f"To'lov tahrirlandi: {payment.amount}$ · mijoz {payment.customer.name}",
@@ -786,7 +799,10 @@ def customer_payment_delete(request, pk):
     payment = get_object_or_404(CustomerPayment, pk=pk)
     if request.method == "POST":
         amount, customer_name = payment.amount, payment.customer.name
+        customer = payment.customer
         payment.delete()  # CASCADE clears its allocations
+        # The sotuvlar it covered are open again — let the mijoz's other avans in.
+        reconcile_customer_allocations(customer)
         AuditLog.record(
             request.user, AuditLog.Action.DELETE, "Mijoz to'lovi", pk,
             f"To'lov o'chirildi: {amount}$ · mijoz {customer_name}",
@@ -1404,11 +1420,26 @@ def sale_create_lot(request, lot_id):
 @role_required(User.Role.ADMIN)
 def sale_edit(request, pk):
     sale = get_object_or_404(Sale, pk=pk)
+    previous_customer_id = sale.customer_id
     form = SaleForm(request.POST or None, instance=sale)
     title = "Sotuvni tahrirlash"
     if request.method == "POST":
         if form.is_valid():
             sale = form.save()
+            moved = sale.customer_id != previous_customer_id
+            if moved:
+                # The allocations are slices of the PREVIOUS mijoz's to'lovlar. They
+                # cannot follow the sotuv to somebody else: the money would show as
+                # paid here while still counting against the mijoz who handed it over.
+                sale.allocations.all().delete()
+            # kg or narx may have moved either way: drop allocation the sotuv can no
+            # longer hold, then let avans in if it grew.
+            trim_sale_allocations(sale)
+            reconcile_customer_allocations(sale.customer)
+            if moved:
+                previous = Customer.objects.filter(pk=previous_customer_id).first()
+                if previous:
+                    reconcile_customer_allocations(previous)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Sotuv", sale.pk,
                 f"Sotuv tahrirlandi: {sale.kg} kg · {sale.customer.name}",
@@ -1424,8 +1455,12 @@ def sale_delete(request, pk):
     sale = get_object_or_404(Sale, pk=pk)
     if request.method == "POST":
         label = f"{sale.kg} kg · {sale.customer.name}"
+        customer = sale.customer
         try:
             sale.delete()
+            # Its allocations went with it (CASCADE); that money is avans again, and
+            # the mijoz's other open sotuvlar have first claim on it.
+            reconcile_customer_allocations(customer)
             AuditLog.record(request.user, AuditLog.Action.DELETE, "Sotuv", pk, f"Sotuv o'chirildi: {label}")
             messages.success(request, "Sotuv o'chirildi")
         except ProtectedError:
@@ -1564,8 +1599,10 @@ def return_create(request):
             ret.created_by = request.user
             ret.save()
             # The return shrank the sale's net_total; trim any now-excess allocation
-            # so the freed money becomes a reachable advance again.
+            # so the freed money becomes a reachable advance again, then let the
+            # mijoz's other open sotuvlar claim it.
             trim_sale_allocations(sale)
+            reconcile_customer_allocations(sale.customer)
             AuditLog.record(
                 request.user, AuditLog.Action.RETURN, "Qaytarish", ret.pk,
                 f"Qaytarish: {ret.kg} kg · sotuv #{sale.pk} · {sale.customer.name}",

@@ -1220,14 +1220,19 @@ class PaymentAllocation(models.Model):
         return f"{self.payment_id} → sotuv #{self.sale_id}: {self.amount}$"
 
 
-def allocate_customer_payment(payment, picks=None):
-    """Allocate a payment across the customer's outstanding sales. `picks` is an
-    optional list of (sale_id, amount) chosen in the form; the rest (or all, if no
-    picks) auto-fills oldest-first. Leftover stays unallocated = advance.
+def unspent_payment_amount(payment):
+    """The part of a to'lov that is not sitting on any sotuv yet — the mijoz's avans.
 
     The pool is net_amount, not amount: a perechisleniya foiz never reached us, so it
     cannot pay down anybody's sale."""
-    remaining = payment.net_amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))
+    return payment.net_amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))
+
+
+def allocate_customer_payment(payment, picks=None):
+    """Allocate a payment across the customer's outstanding sales. `picks` is an
+    optional list of (sale_id, amount) chosen in the form; the rest (or all, if no
+    picks) auto-fills oldest-first. Leftover stays unallocated = advance."""
+    remaining = unspent_payment_amount(payment)
     with transaction.atomic():
         if picks:
             for sale_id, amt in picks:
@@ -1251,35 +1256,60 @@ def allocate_customer_payment(payment, picks=None):
     return remaining  # the advance left over
 
 
-def apply_customer_advance(sale):
-    """Pull this customer's unallocated payment money onto a new sale, oldest
-    payment first, until the sale is covered or the advance runs out. If the sale
-    came from a reservation (bron), money earmarked for that reservation
-    (`CustomerPayment.reservation == sale.reservation`) applies FIRST, then the
-    fallback is the customer's general oldest-first advances — same as before."""
-    earmarked_pks = []
+def reconcile_customer_allocations(customer):
+    """Put every unspent so'm of this mijoz's to'lovlar onto their oldest outstanding
+    sotuv, oldest to'lov first.
+
+    Non-destructive and idempotent: allocations that already exist — including ones
+    the operator picked by hand — are never moved or dropped, only money that is
+    sitting unspent gets placed. So it is safe to call after any change to a to'lov,
+    a sotuv or a qaytarish.
+
+    This exists because the two narrower helpers each only ever look at one row.
+    `allocate_customer_payment` re-spreads the to'lov being edited and
+    `apply_customer_advance` fills the sotuv being created; neither notices when
+    editing one to'lov leaves an OLDER sotuv short while another to'lov's remainder
+    sits unlinked. Those two are the SAME money seen from both sides — the mijoz
+    neither owes it nor is owed it — so they cancel in `Customer.balance` and the
+    mijoz drops off Qarzlar while the sotuv still shows a qoldiq they have paid."""
     with transaction.atomic():
-        if sale.reservation_id:
-            earmarked = sale.reservation.earmarked_payments.order_by("date", "id")
-            for payment in earmarked:
-                earmarked_pks.append(payment.pk)
-                if sale.remaining <= 0:
-                    break
-                unallocated = (payment.net_amount
-                              - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0")))
-                take = min(unallocated, sale.remaining)
+        outstanding = [s for s in customer.sales.order_by("date", "id") if s.remaining > 0]
+        if not outstanding:
+            return
+        for payment in customer.customer_payments.order_by("date", "id"):
+            unspent = unspent_payment_amount(payment)
+            if unspent <= 0:
+                continue
+            for sale in outstanding:
+                # `remaining` re-reads the allocations, so each sotuv is measured
+                # against what earlier to'lovlar in this same sweep already put on it.
+                take = min(unspent, sale.remaining)
                 if take > 0:
                     PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
-        # General advances: skip the earmarked payments already handled above, so
-        # "earmark-first" is structural, not dependent on the fresh-query recompute.
-        general = sale.customer.customer_payments.exclude(pk__in=earmarked_pks).order_by("date", "id")
-        for payment in general:
-            if sale.remaining <= 0:
-                break
-            unallocated = payment.net_amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))
-            take = min(unallocated, sale.remaining)
-            if take > 0:
-                PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
+                    unspent -= take
+                if unspent <= 0:
+                    break
+
+
+def apply_customer_advance(sale):
+    """Cover a fresh sale from money the mijoz has already handed over. Money
+    earmarked for this sale's bron (`CustomerPayment.reservation == sale.reservation`)
+    applies FIRST — it was put down for this lot specifically — and the general avans
+    then goes through `reconcile_customer_allocations`.
+
+    Deliberately NOT "fill this sale from the avans": an avans that sits unspent
+    while an older sotuv is unpaid belongs to that older sotuv. Filling the new sale
+    first let money skip a queue it was already in, leaving the older sotuv showing
+    a qoldiq the mijoz had in fact already covered."""
+    with transaction.atomic():
+        if sale.reservation_id:
+            for payment in sale.reservation.earmarked_payments.order_by("date", "id"):
+                if sale.remaining <= 0:
+                    break
+                take = min(unspent_payment_amount(payment), sale.remaining)
+                if take > 0:
+                    PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
+        reconcile_customer_allocations(sale.customer)
 
 
 def trim_sale_allocations(sale):

@@ -3,7 +3,10 @@ Date/ETA cell for one load row. Single source of truth for both the initial
 render and the in-place AJAX swap after a status change (see shipment_set_status).
 An arrived load shows the exact "Yetib keldi" date; moving the status back clears
 `arrived` on the server, so the tahminiy (ETA) view returns here automatically.
+The Jo'natilgan date sits above the badge — the leg the yuk started from is the
+context for whatever "kun qoldi"/"kechikdi" reads below it.
 {% endcomment %}
+{% if s.sent %}<div class="muted load-sent">Jo'natilgan: {{ s.sent }}</div>{% endif %}
 {% if s.arrived %}
   <span class="daybadge arrived">Yetib keldi</span>
   <div class="muted load-sub">{{ s.arrived }}</div>
