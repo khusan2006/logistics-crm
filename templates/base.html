@@ -267,6 +267,13 @@
           if (html === null || html === undefined) { return; }
           body.innerHTML = html;
           bindForm(body.querySelector('form'));
+          // A form that comes back with errors is brand-new DOM, so every field
+          // enhancer has to run over it again — same event openModal fires. Without
+          // it the re-rendered form was raw markup: kg stayed an <input type=number>
+          // that the money formatter's grouped "1 234" then blanked out (so it took
+          // three digits and no more), and the Mahsulotlar dropdown went back to
+          // offering every kelishuv's products instead of the chosen one's.
+          document.dispatchEvent(new CustomEvent('modal:loaded', { detail: body }));
         }).catch(function () {
           if (submit) { submit.disabled = false; }
         });
