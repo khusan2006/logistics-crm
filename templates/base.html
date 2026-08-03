@@ -60,6 +60,10 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>
           <span>Yuklar</span>
         </a>
+        <a class="nav-item {% if 'logist' in url_name %}active{% endif %}" href="{% url 'logist_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
+          <span>Logistlar</span>
+        </a>
       </div>
 
       {% if user.is_admin_role %}
@@ -203,6 +207,38 @@
     var parts = s.split('.');
     parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     return '$' + sign + parts.join('.');
+  };
+
+  // A control group's CHOSEN element. A <select> carries its value on the one
+  // element, so a plain querySelector finds the answer; a RADIO GROUP spreads the
+  // same name — and the same data- hook — across every option, and only the CHECKED
+  // one carries it. Reading the first radio instead is what made the xarajat modal
+  // preview 600 000 so'm as "7 200 000 000 so'm": it multiplied by the kurs because
+  // it believed the currency was still Dollar.
+  window.pickedControl = function (root, selector) {
+    var els = (root || document).querySelectorAll(selector);
+    var fallback = null;
+    for (var i = 0; i < els.length; i++) {
+      if (els[i].type !== 'radio') { return els[i]; }
+      if (els[i].checked) { return els[i]; }
+      if (fallback === null) { fallback = els[i]; }
+    }
+    return fallback;
+  };
+
+  // Visit a selector ONCE PER CONTROL, not once per DOM node. On a radio group the
+  // naive forEach runs the callback once per option, so whichever option happens to
+  // be last silently decides the outcome — which is why the bank foiz field sat
+  // open on a Naqd xarajat: the callback ran last for the Bank radio.
+  window.eachControl = function (root, selector, fn) {
+    var done = [];
+    (root || document).querySelectorAll(selector).forEach(function (el) {
+      var scope = el.closest('[data-line-row]') || el.closest('form') || document;
+      var chosen = window.pickedControl(scope, selector) || el;
+      if (done.indexOf(chosen) !== -1) { return; }
+      done.push(chosen);
+      fn(chosen);
+    });
   };
 
   // Theme toggle (light default, dark saved in localStorage)
@@ -1298,29 +1334,34 @@
       var root = currencyEl.closest('[data-line-row]')
               || currencyEl.closest('form') || document;
       var rateEl = root.querySelector('[data-money-rate]');
-      var amountEl = root.querySelector('[data-money-amount]');
-      if (!rateEl || !amountEl) { return; }
+      // ALL of them, not the first: the xarajat grid has one currency and one kurs
+      // shared across seven amount boxes, and each box needs its own preview.
+      var amountEls = root.querySelectorAll('[data-money-amount]');
+      if (!rateEl || !amountEls.length) { return; }
+      var rate = num(rateEl);
 
-      var preview = amountEl.parentNode.querySelector('[data-money-preview]');
-      if (!preview) {
-        preview = document.createElement('span');
-        preview.className = 'muted';
-        preview.setAttribute('data-money-preview', '');
-        amountEl.insertAdjacentElement('afterend', preview);
-      }
-      var amount = num(amountEl), rate = num(rateEl);
-      if (amount > 0 && rate > 0) {
-        preview.hidden = false;
-        preview.textContent = currencyEl.value === 'uzs'
-          ? '≈ ' + window.fmtUsd(amount / rate)
-          : '≈ ' + som(amount * rate) + " so'm";
-      } else {
-        preview.hidden = true;
-        preview.textContent = '';
-      }
+      amountEls.forEach(function (amountEl) {
+        var preview = amountEl.parentNode.querySelector('[data-money-preview]');
+        if (!preview) {
+          preview = document.createElement('span');
+          preview.className = 'muted';
+          preview.setAttribute('data-money-preview', '');
+          amountEl.insertAdjacentElement('afterend', preview);
+        }
+        var amount = num(amountEl);
+        if (amount > 0 && rate > 0) {
+          preview.hidden = false;
+          preview.textContent = currencyEl.value === 'uzs'
+            ? '≈ ' + window.fmtUsd(amount / rate)
+            : '≈ ' + som(amount * rate) + " so'm";
+        } else {
+          preview.hidden = true;
+          preview.textContent = '';
+        }
+      });
     }
     function enhance(root) {
-      (root || document).querySelectorAll('[data-money-currency]').forEach(function (el) {
+      window.eachControl(root, '[data-money-currency]', function (el) {
         if (el.dataset.currencyToggleReady) { return; }
         el.dataset.currencyToggleReady = '1';
         update(el);
@@ -1332,7 +1373,10 @@
     document.addEventListener('input', function (e) {
       if (e.target.matches && e.target.matches('[data-money-rate], [data-money-amount]')) {
         var root = e.target.closest('[data-line-row]') || e.target.closest('form') || document;
-        var currencyEl = root.querySelector('[data-money-currency]');
+        // The CHECKED option, not the first: typing an amount after picking So'm
+        // used to re-preview against Dollar, so the same figure previewed two
+        // different ways depending on the order the operator worked in.
+        var currencyEl = window.pickedControl(root, '[data-money-currency]');
         if (currencyEl) { update(currencyEl); }
       }
     });
@@ -1357,7 +1401,10 @@
       if (!isTransfer) { feeEl.value = '0'; }
     }
     function enhance(root) {
-      (root || document).querySelectorAll('[name$=method]').forEach(function (el) {
+      // Once per usul control. Run per radio, this called update() three times and
+      // let the Bank option — merely by being last — leave the foiz box open on a
+      // Naqd xarajat, inviting a figure the server then ignores.
+      window.eachControl(root, '[name$=method]', function (el) {
         if (el.dataset.feeToggleReady) { return; }
         el.dataset.feeToggleReady = '1';
         update(el);
@@ -1365,6 +1412,46 @@
     }
     document.addEventListener('change', function (e) {
       if (e.target.matches && e.target.matches('[name$=method]')) { update(e.target); }
+    });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
+  // Per-turkum perechisleniya foizi on the xarajat grid. Each box may override the
+  // shared usul, so the foiz has to follow the box's OWN way of paying: a bojxona
+  // wired by bank next to a gruzchi paid cash is one submission with one foiz that
+  // belongs to exactly one of them.
+  //
+  // A box shows its foiz only when its effective usul is Bank — blank override
+  // means "as set above", so the shared picker decides. Left visible on a naqd box
+  // it would invite a figure CashEntry.fee_amount then drops on the floor.
+  (function () {
+    function sync(form) {
+      var sharedEl = window.pickedControl(form, '[name=method]');
+      var shared = sharedEl ? sharedEl.value : '';
+      form.querySelectorAll('.xcell').forEach(function (cell) {
+        var box = cell.querySelector('[data-cell-fee]');
+        if (!box) { return; }
+        var own = cell.querySelector('select[name^=method_]');
+        var isTransfer = ((own && own.value) || shared) === 'transfer';
+        box.hidden = !isTransfer;
+        // Blank, not '0': blank still means "use the shared foiz", which is the
+        // right resting state for a row that is not wired. An explicit 0 would
+        // override the shared figure if the operator later switched it to Bank.
+        if (!isTransfer) {
+          var input = box.querySelector('input');
+          if (input) { input.value = ''; }
+        }
+      });
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('.xgrid-form').forEach(sync);
+    }
+    document.addEventListener('change', function (e) {
+      if (!e.target.closest) { return; }
+      var form = e.target.closest('.xgrid-form');
+      if (form && e.target.matches('[name=method], select[name^=method_]')) { sync(form); }
     });
     if (document.readyState !== 'loading') { enhance(); }
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
@@ -1401,8 +1488,11 @@
       var root = pctEl.closest('[data-line-row]') || pctEl.closest('form') || document;
       var baseEl = root.querySelector('[data-fee-base]');
       if (!baseEl) { return; }
-      var methodEl = root.querySelector('[name$=method]');
-      var currencyEl = root.querySelector('[data-money-currency]');
+      // Both are the CHOSEN option, not the first in the group — on a radio-based
+      // modal the first is a constant, so the hint used to claim no foiz was charged
+      // and to print the cut in dollars whatever the operator had picked.
+      var methodEl = window.pickedControl(root, '[name$=method]');
+      var currencyEl = window.pickedControl(root, '[data-money-currency]');
       // Under the summa rather than the foiz: the summa is the full-width field, and
       // the figure the hint corrects is the one sitting right above it.
       var hint = baseEl.parentNode.querySelector('.fee-preview');

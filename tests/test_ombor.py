@@ -31,7 +31,8 @@ def test_arrived_shipment_is_lot_with_full_available_kg(db):
     s = _arrived_shipment(kg="400")
     assert s.is_lot is True
     assert s.sold_kg == Decimal("0")
-    assert s.reserved_kg == Decimal("0")
+    # No reserved_kg on a lot any more: a bron is a claim on a MARKA across every
+    # kelishuv, so the block is applied once at brand level by brand_free_kg.
     assert s.returned_kg == Decimal("0")
     assert s.available_kg == s.kg == Decimal("400")
 

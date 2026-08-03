@@ -21,8 +21,8 @@
     <th>Oxirgi kelgan</th>
     <th class="num">Kirim</th>
     <th class="num">Sotilgan</th>
-    <th class="num">Bron</th>
-    <th class="num">Qoldiq</th>
+    <th class="num" title="Mijozlarga va'da qilingan — navbat bo'yicha beriladi">Bronlangan</th>
+    <th class="num" title="Bronlardan keyin qolgani — oddiy sotuvga shuncha bor">Sotish mumkin</th>
     <th class="num">Tan narx</th>
     <th></th>
   </tr>
@@ -37,8 +37,16 @@
     <td>{{ g.arrived_last }}</td>
     <td class="num">{{ g.kirim|floatformat:"-3" }}</td>
     <td class="num">{{ g.sold|floatformat:"-3" }}</td>
-    <td class="num">{{ g.reserved|floatformat:"-3" }}</td>
-    <td class="num"><strong>{{ g.available|floatformat:"-3" }}</strong></td>
+    {% comment %}
+    The two columns are stated separately and both are labelled, because the whole
+    confusion this answers is "the ombor says 24 000 but I can only sell 4 000 —
+    where did the rest go". Bronlangan says where.
+    {% endcomment %}
+    <td class="num">{% if g.reserved %}{{ g.reserved|floatformat:"-3" }}
+      <div class="muted load-sub">{{ g.brons|length }} ta bron</div>
+      {% else %}<span class="muted">—</span>{% endif %}</td>
+    <td class="num"><strong>{{ g.available|floatformat:"-3" }}</strong>
+      {% if g.short %}<div class="late load-sub">{{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
     <td class="num">
       {% if g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}
       {% else %}<span title="Lotlar turli tan narxda keldi">{% rate_range_both g.cost_min g.cost_max g.cost_min_uzs g.cost_max_uzs %}</span>{% endif %}
@@ -60,8 +68,13 @@
         </div>
         <table class="legs-inline-table">
           <tr>
+            {% comment %}
+            No Bron column here. A bron is a claim on the MARKA, not on one truck —
+            it is settled from whichever lot is oldest, so a per-lot bron figure
+            would be an invention. The marka row above carries it.
+            {% endcomment %}
             <th>Lot</th><th>Kelishuv</th><th>Hamkor</th><th>Kelgan sana</th>
-            <th class="num">Kirim</th><th class="num">Sotilgan</th><th class="num">Bron</th>
+            <th class="num">Kirim</th><th class="num">Sotilgan</th>
             <th class="num">Qoldiq</th><th class="num">Tan narx</th><th></th>
           </tr>
           {% for lot in g.lots %}
@@ -72,7 +85,6 @@
             <td>{{ lot.arrived }}</td>
             <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
             <td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
-            <td class="num">{{ lot.reserved_kg|floatformat:"-3" }}</td>
             <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
             <td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>
             <td class="row-actions">
@@ -86,6 +98,55 @@
           </tr>
           {% endfor %}
         </table>
+
+        {% comment %}
+        Bronlar on this marka's lots. These kg are already out of Qoldiq above, so
+        without this block the operator can see stock is held back but not act on
+        it. Converting here reloads Ombor in place (the convert view answers 204),
+        so the freed kg and the new sotuv show up straight away.
+        {% endcomment %}
+        {% if g.brons %}
+        <div class="legs-inline-head" style="margin-top: 14px;">
+          <strong>{{ g.brand }} navbati</strong>
+          <span class="muted">birinchi bron qilgan birinchi oladi — shu kg Sotish mumkin ustunidan chiqarilgan</span>
+        </div>
+        <table class="legs-inline-table">
+          <tr>
+            <th>#</th><th>Mijoz</th><th>Sana</th>
+            <th class="num">Qolgan kg</th><th class="num">Narx</th><th class="num">Jami</th><th></th>
+          </tr>
+          {% for r in g.brons %}
+          <tr>
+            <td><span class="qpos{% if forloop.first %} qpos--first{% endif %}">{{ forloop.counter }}</span></td>
+            <td>{{ r.customer.name }}</td>
+            <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
+            <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
+              {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>
+            <td class="num">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+            <td class="num">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}—{% endif %}</td>
+            <td class="row-actions">
+              {% comment %}
+              Only the head of the queue can be served, and only up to what is on the
+              shelf — the rest wait. The button says the kg so a partial fill is not
+              a surprise after the click.
+              {% endcomment %}
+              {% if forloop.first and g.on_hand > 0 %}
+              <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal class="row-inline-form">
+                {% csrf_token %}
+                {% if not r.price %}<input type="number" step="0.0001" min="0" name="price" placeholder="Narx" required style="width:88px;" aria-label="Sotuv narxi">{% endif %}
+                <button type="submit" class="btn btn-sm">Berish</button>
+              </form>
+              {% else %}
+              <button type="button" class="btn btn-sm" disabled title="Navbati kelmadi">Navbatda</button>
+              {% endif %}
+              <a class="icon-action" href="{% url 'reservation_cancel' r.pk %}" data-modal title="Bronni bekor qilish">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="8" x2="16" y2="16"/></svg>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% endif %}
       </div>
     </td>
   </tr>

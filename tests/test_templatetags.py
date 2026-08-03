@@ -22,3 +22,24 @@ def test_usd_keeps_real_decimals():
 
 def test_usd_blank_safe_none():
     assert usd(None) == "$0"
+
+
+def test_no_multiline_django_comments_in_templates():
+    """`{# … #}` is single-line ONLY. Spanning it across lines is not a comment —
+    Django renders it as literal text, and inside a <table> the browser hoists that
+    text out to the top of the page. It throws no error and fails no assertion that
+    only checks figures, so it ships looking fine and reads broken on screen."""
+    import glob
+    import re
+
+    offenders = []
+    for path in sorted(glob.glob("templates/**/*.html", recursive=True)):
+        text = open(path).read()
+        for match in re.finditer(r"\{#", text):
+            rest = text[match.start():]
+            end = rest.find("#}")
+            if end == -1 or "\n" in rest[:end]:
+                offenders.append(f"{path}:{text[:match.start()].count(chr(10)) + 1}")
+    assert not offenders, (
+        "multi-line or unclosed {# #} — use {% comment %}{% endcomment %}: "
+        + ", ".join(offenders))

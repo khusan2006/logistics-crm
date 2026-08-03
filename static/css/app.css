@@ -424,6 +424,99 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   .balance-cell + .balance-cell { border-left: none; padding-left: 0; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 }
 
+/* ============================================================
+   Kassa — current-state tiles, period flow
+   ============================================================ */
+
+/* Hozirgi holat — a board of facts. Six equal tiles, each one place money or goods
+   is sitting right now. Equal weight is the point: none of these is the headline
+   and none is derived from the others, so making one of them big would be a claim
+   the data does not support. Each tile links to the screen where you act on it. */
+.ktiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.ktile {
+  display: block; padding: 15px 17px; color: inherit; text-decoration: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
+}
+.ktile:hover { border-color: var(--border-strong); background: var(--surface-hover); transform: translateY(-1px); }
+.ktile:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.ktile-label {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-weight: 700; color: var(--text-muted);
+}
+/* A dot rather than a coloured card: the tone marks what KIND of line it is —
+   money we hold, money owed to us, money we owe — without shouting it. */
+.ktile-label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-faint); }
+.ktile--in .ktile-label::before { background: var(--success); }
+.ktile--out .ktile-label::before { background: var(--danger); }
+.ktile-num { margin-top: 9px; font-size: 23px; font-weight: 750; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; }
+.ktile--in .ktile-num { color: var(--success); }
+.ktile--out .ktile-num { color: var(--danger); }
+.ktile-som { margin-top: 2px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ktile-note { margin-top: 10px; font-size: 12.5px; color: var(--text-muted); line-height: 1.45; }
+.ktile-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); font-weight: 650; }
+.ktiles-foot { margin: 0 0 14px; font-size: 12px; line-height: 1.55; color: var(--text-faint); max-width: 96ch; }
+.ktiles-foot b { color: var(--text-muted); font-weight: 650; }
+@media (max-width: 1000px) { .ktiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .ktiles { grid-template-columns: 1fr; } }
+
+/* Method split, inside the period card it belongs to */
+.kmethods {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+  padding-bottom: 12px; margin-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.ksm-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; color: var(--text-faint); }
+.ksm-val { margin-top: 5px; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ksm-flow { margin-top: 4px; display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.kassa-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 14px; }
+/* No `margin-right: auto` to push the dates right: in a WRAPPING flex row an auto
+   margin absorbs every pixel of free space, so the date pair and the button were
+   forced onto lines of their own even though all three fit across easily. */
+.kassa-filter .status-tabs { margin: 0; }
+.kassa-filter label { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
+/* The presets are the common path and the date pair is the escape hatch, so the
+   pair shrinks first — a date input at its intrinsic width pushed the submit
+   button onto a line of its own. */
+.kassa-filter input[type="date"] { width: 122px; min-width: 0; padding: 5px 8px; font-size: 12.5px; }
+.kassa-range { gap: 8px; }
+.kassa-range span { color: var(--text-faint); }
+
+/* Flow and position side by side — they answer "what moved" and "what it means",
+   and reading one without the other is what made the stacked version feel long. */
+.kassa-grid { margin-bottom: 14px; }
+.kcard { margin-bottom: 0; padding: 16px 18px; }
+/* Stacked, not inline: the note is now a full explanatory sentence, and sharing a
+   baseline row with it squeezed the heading until "Sof holat" broke across lines. */
+.kcard-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+.kcard-head h2 { margin: 0; font-size: 16px; }
+.kcard-note { font-size: 12px; color: var(--text-faint); line-height: 1.4; }
+
+/* Waterfall: bars are placed with server-computed percentages, so nothing here
+   computes and the geometry can never disagree with the figures. */
+.waterfall { display: flex; flex-direction: column; }
+.wf-row { display: grid; grid-template-columns: 132px minmax(0, 1fr) 104px; align-items: center; gap: 12px; padding: 4px 0; }
+.wf-label { font-size: 12.5px; color: var(--text-muted); }
+.wf-track { position: relative; height: 16px; background: var(--surface-2); border-radius: 3px; }
+.wf-bar { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; background: var(--text-faint); }
+/* The zero line's offset is a percentage OF THE TRACK, so each track draws its own
+   slice — one absolute rule on the card would be a percentage of the card. */
+.wf-track::before { content: ""; position: absolute; top: -3px; bottom: -3px; left: var(--zero, 0%); width: 1px; background: var(--border-strong); }
+.wf-in .wf-bar { background: var(--success); }
+.wf-out .wf-bar { background: var(--danger); }
+.wf-total .wf-bar { background: var(--accent); }
+.wf-total .wf-label { font-weight: 650; color: var(--text); }
+.wf-amount { font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.wf-in .wf-amount { color: var(--success); }
+.wf-out .wf-amount { color: var(--danger); }
+.wf-total .wf-amount { font-weight: 700; }
+.wf-total + .wf-in, .wf-out + .wf-total { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 7px; }
+@media (max-width: 560px) { .wf-row { grid-template-columns: 108px minmax(0, 1fr) 88px; gap: 8px; } }
+
+/* Position rows: one claim each, the total set apart by a rule rather than a card */
+
+
 /* Ombor — recent-receipts feed: one card-row per production handover */
 .receipt-list { display: flex; flex-direction: column; gap: 10px; }
 .receipt-row {
@@ -758,6 +851,11 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 }
 .btn:hover { background: var(--accent-hover); color: #fff; }
 .btn:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+/* A blocked action has to LOOK blocked. Without this a [disabled] .btn keeps the
+   full accent fill and a pointer cursor, so "Sotuvga aylantirish" on a lot still
+   in transit reads as clickable and only the tooltip says otherwise. */
+.btn:disabled, .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled:hover, .btn[disabled]:hover { background: var(--accent); }
 
 .btn-ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
 .btn-ghost:hover { background: var(--surface-hover); color: var(--text); }
@@ -778,6 +876,11 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 .row-actions { white-space: nowrap; }
 .row-actions > * { vertical-align: middle; }
 .row-actions > * + * { margin-left: 6px; }
+
+/* A POST action that needs its own <form> (bron → sotuv, with an optional narx
+   field). A bare form is block-level and would break the row onto two lines, so
+   it lays out inline alongside the icons like every other action. */
+.row-inline-form { display: inline-flex; align-items: center; gap: 6px; }
 
 .icon-action {
   display: inline-grid;
@@ -883,6 +986,10 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
   box-shadow: var(--shadow-lg);
 }
 .modal--sm { width: min(440px, calc(100vw - var(--sidebar-w) - 32px)); }
+/* The xarajat grid needs the room: three boxes across, each carrying a figure and
+   two dropdowns. Selected by content via :has() so no JS has to know the modal's
+   size — and where :has() is missing the dialog simply stays its usual width. */
+.modal:has(.xgrid-form) { width: min(780px, calc(100vw - var(--sidebar-w) - 32px)); }
 /* On phones the sidebar is an off-canvas overlay (no layout width), so the
    dialog centres in the full viewport again. */
 @media (max-width: 560px) {
@@ -1498,6 +1605,32 @@ ul.errorlist li::before { content: "⚠ "; }
 .overdue-banner .ob-sum { color: var(--danger); font-weight: 600; }
 .overdue-banner .btn { flex: 0 0 auto; }
 
+/* Bron prompt on arrival. Same shape as the overdue banner but in the accent
+   rather than danger: a load landing with brons on it is an opportunity, not a
+   problem, and colouring it red would train the operator to dismiss it. */
+.bron-banner {
+  display: flex; align-items: center; gap: 13px;
+  padding: 13px 16px; margin-bottom: 16px; border-radius: var(--r);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.bron-banner .bb-icon { color: var(--accent); flex: 0 0 auto; display: grid; }
+.bron-banner .bb-icon svg { width: 21px; height: 21px; }
+.bron-banner .bb-text { flex: 1 1 auto; font-size: 14px; }
+.bron-banner .bb-text strong { color: var(--accent); font-weight: 600; }
+.bron-banner .btn { flex: 0 0 auto; }
+.bron-banner .bb-close {
+  flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center;
+  border: none; border-radius: 50%; background: transparent;
+  color: var(--text-muted); font-size: 19px; line-height: 1; cursor: pointer;
+}
+.bron-banner .bb-close:hover { background: var(--surface-hover); color: var(--text); }
+@media (max-width: 620px) {
+  .bron-banner { flex-wrap: wrap; }
+  .bron-banner .bb-text { flex: 1 1 100%; order: 2; }
+  .bron-banner .btn { order: 3; }
+}
+
 /* ============================================================
    Toasts
    ============================================================ */
@@ -2014,3 +2147,207 @@ form.stacked .lineset-field[hidden] { display: none; }
 .status-breakdown-list span { color: var(--text-muted); }
 .status-breakdown-list .load-id { font-variant-numeric: tabular-nums; }
 .status-breakdown-more { justify-content: flex-end; font-size: 12px; }
+
+/* Bron queue position. FIFO is the rule the bron screens exist to enforce, so the
+   place in line is a first-class column rather than something inferred from the
+   sort order — which a reader would lose the moment they sorted by anything else. */
+.qpos {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px;
+  padding: 0 6px; border-radius: var(--r-pill);
+  background: var(--surface-2); color: var(--text-muted);
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.qpos--first { background: var(--success-soft); color: var(--success); }
+
+/* ============================================================
+   Xarajat grid — one small box per turkum
+   ============================================================ */
+
+/* The turkumlar are the form. Seven boxes several to a row beat add-row →
+   pick-from-dropdown → type → repeat, because a load's costs are known as a set. */
+/* The shared row is flex, not an even grid: a date picker, a two-option toggle, a
+   three-option toggle and a number want four different widths, and forcing them
+   into equal columns clipped the widest one. */
+/* flex-start with equal-height controls: bottom-aligning them left every label at
+   a different height, because a 40px input and a 34px toggle bottom-aligned means
+   their captions cannot both sit on one line. */
+.xgrid-form .xgrid-shared { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-start; }
+.xgrid-form .xgrid-shared > * { flex: 0 0 auto; }
+.xgrid-form .xgrid-shared input[type="date"] { width: 148px; }
+.xgrid-form .xgrid-shared input[type="number"],
+.xgrid-form .xgrid-shared input[type="text"] { width: 122px; }
+.xgrid-form .xgrid-extra {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 12px 14px;
+}
+.xgrid-form .xgrid-shared { margin-bottom: 16px; }
+.xgrid-form .xgrid-extra { margin-top: 14px; }
+.xgrid-form .xgrid-shared > label,
+.xgrid-form .xgrid-extra label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-muted); }
+/* The option labels inside a segment are not form captions — exclude them from the
+   stacking rule above, or each one turns into its own column. */
+.xgrid-form .xgrid-shared .seg-opt { display: flex; gap: 0; }
+
+.xgrid-legend {
+  display: flex; align-items: baseline; gap: 9px; margin: 0 0 8px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-weight: 700; color: var(--text-muted);
+}
+.xgrid-legend span { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12px; color: var(--text-faint); }
+
+/* auto-fit against a real minimum, not a viewport media query: the modal is a
+   fixed 780px whatever the window is doing, so a breakpoint on `100vw` dropped the
+   grid to two columns while the dialog was still wide enough for three. */
+.xgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); gap: 10px; }
+/* White with a real border, not a tinted chip: a filled surface at this size read
+   as a disabled field rather than an empty one waiting for a figure. */
+.xcell {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px 9px; border-radius: var(--r-sm);
+  background: var(--input); border: 1px solid var(--border-strong);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.xcell:hover { border-color: var(--text-faint); }
+.xcell:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.xcell.is-bad { border-color: var(--danger); }
+.xcell-label { font-size: 11.5px; font-weight: 650; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Borderless inside its own tinted box — a full input frame inside a card frame is
+   two boxes saying the same thing, and at this size it eats the number's room. */
+.xcell input {
+  width: 100%; min-width: 0; padding: 3px 0; border: none; background: transparent;
+  font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums;
+  color: var(--text); font-family: inherit;
+}
+.xcell input:focus { outline: none; }
+.xcell input::placeholder { color: var(--text-faint); font-weight: 400; }
+.xcell .errorlist { margin: 2px 0 0; font-size: 11px; }
+
+
+/* Per-turkum override, folded away. The shared pickers above cover a whole truck
+   paid one way; this is for the bojxona wired in so'm next to a cash gruzchi. */
+/* Figure on the left, its two overrides stacked down the right. Always visible
+   rather than folded away: an override tucked behind a disclosure can sit there
+   unnoticed and quietly book a cash line as a bank transfer. */
+.xcell { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.xcell-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.xcell-side { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.xcell .errorlist { grid-column: 1 / -1; }
+/* The turkum's own perechisleniya foizi. Full width under the figure and its
+   overrides, and only on show when this box is paid by Bank — so a grid of cash
+   xarajatlar stays a plain grid of figures. */
+.xcell-fee {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 2px; padding-top: 6px; border-top: 1px dashed var(--border);
+}
+.xcell-fee[hidden] { display: none; }
+.xcell-fee-label { font-size: 11px; color: var(--text-muted); }
+.modal form.stacked .xcell-fee input.xfee,
+.xcell-fee input.xfee {
+  width: 86px; max-width: none; flex: 0 0 auto; padding: 3px 6px;
+  font-size: 11px; font-weight: 600; text-align: right; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--input); color: var(--text);
+}
+/* Deliberately overriding the modal's global select styling: these are 86px
+   satellites of the figure beside them, not fields in their own right. */
+.modal form.stacked .xcell-side select.xmini,
+.xcell-side select.xmini {
+  width: 86px; max-width: none; padding: 3px 4px 3px 6px;
+  font-size: 11px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--input); color: var(--text-muted);
+}
+.xcell-side select.xmini:focus { color: var(--text); }
+/* A chosen override is not the default — say so, or it reads as decoration. */
+.xcell-side select.xmini:valid:not(:placeholder-shown) { color: var(--text); }
+.xcell-more { margin-top: 5px; }
+.xcell-more > summary {
+  list-style: none; cursor: pointer; width: fit-content;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--text-faint); padding: 1px 5px; border-radius: var(--r-pill);
+}
+.xcell-more > summary::-webkit-details-marker { display: none; }
+.xcell-more > summary:hover { background: var(--surface-2); color: var(--text-muted); }
+.xcell-more[open] > summary { color: var(--accent); background: var(--accent-soft); }
+.xcell-more > label { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 10.5px; color: var(--text-faint); }
+.xcell-more select { width: 100%; min-width: 0; padding: 3px 4px; font-size: 11.5px; }
+
+/* ── Segmented radio group with icons ───────────────────────────────────────── */
+/* For choices of two or three. A <select> hides the whole choice behind a click to
+   show what this states outright, and the method colours (naqd green, karta blue,
+   bank violet) are the same ones the ledgers use, so the control teaches the
+   vocabulary rather than inventing a second one. */
+/* The height lives on the PILL, not the group. `min-height` on the flex container
+   gave its items no definite cross size to stretch into, so the label stayed at
+   text height and the white pill floated in a 40px well with grey below it.
+   Sizing the body instead makes the group exactly 34 + 2·2 padding + 2·1 border =
+   40px, matching the inputs beside it, with no stretching involved. */
+.seg { display: inline-flex; align-items: stretch; padding: 2px; gap: 2px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--border); }
+/* flex, so the body inside can stretch. As a block, `.seg-body` was only as tall
+   as its own text — the label stretched to the group's min-height but the white
+   pill did not follow it, leaving a band of grey below every option. */
+.seg-opt { display: flex; cursor: pointer; }
+/* Off-screen, not display:none — a hidden input is unfocusable and drops the group
+   out of keyboard reach entirely. */
+.seg-opt input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.seg-body {
+  flex: 1 1 auto; min-height: 34px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 0 11px; border-radius: 5px;
+  font-size: 13px; font-weight: 600; color: var(--text-muted);
+  white-space: nowrap; transition: background 0.12s, color 0.12s;
+}
+.seg-opt:hover .seg-body { background: var(--surface-hover); color: var(--text); }
+.seg-ico { display: grid; place-items: center; width: 16px; height: 16px; flex-shrink: 0; }
+.seg-ico svg { width: 15px; height: 15px; }
+.seg-glyph { font-size: 10.5px; font-weight: 700; letter-spacing: -0.01em; }
+.seg-opt input:checked + .seg-body { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+/* Inset, so the ring hugs the segment instead of drawing a second box around it —
+   a checked AND focused option was reading as two different selection styles. */
+.seg-opt input:focus-visible + .seg-body { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+/* Checked state carries the method's own colour — the same one the ledger badge
+   for that method uses, so the two read as the same fact. */
+.seg-opt input:checked + .seg-cash { color: var(--success); }
+.seg-opt input:checked + .seg-card { color: var(--accent); }
+.seg-opt input:checked + .seg-transfer { color: var(--violet); }
+.seg-opt input:checked + .seg-usd,
+.seg-opt input:checked + .seg-uzs { color: var(--accent); }
+
+.seg--compact { padding: 1px; gap: 1px; }
+.seg--compact .seg-body { min-height: 24px; padding: 0 7px; }
+.seg--compact .seg-ico { width: 14px; height: 14px; }
+.seg--compact .seg-ico svg { width: 13px; height: 13px; }
+
+.xfield { display: flex; flex-direction: column; gap: 6px; }
+.xfield-label { font-size: 12.5px; color: var(--text-muted); line-height: 1.2; }
+.xgrid-form .xgrid-shared > label { line-height: 1.2; }
+.xcell-more .seg { margin-top: 6px; }
+
+/* A boxed run of related fields inside an otherwise flat form. Used where a modal
+   carries two of the same field — the yuk form has a Valyuta and a kurs for the
+   driver's advance and another pair on every Mahsulot row, and unboxed they read
+   as one stray set belonging to nothing. */
+.fieldgroup {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  padding: 12px 14px 4px;
+  margin: 4px 0 14px;
+}
+/* `float` + full width, not just `display: block`: a <legend> is laid out in the
+   fieldset's BORDER box, so by default it straddles the top edge and the border
+   draws straight through the text. Floating it drops it into normal flow, where it
+   sits inside the box like any other heading. */
+.fieldgroup > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.fieldgroup > legend + * { clear: both; }
+.fieldgroup > p:last-child { margin-bottom: 10px; }

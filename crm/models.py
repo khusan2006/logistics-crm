@@ -218,6 +218,76 @@ class Partner(models.Model):
         return self.name
 
 
+class Logist(models.Model):
+    """Logist: the person who arranges transport and pays the drivers for us.
+
+    We send them money in a lump; they hand a driver an advance when a yuk goes out.
+    So they carry a balance — our money sitting in their pocket — and it is allowed
+    to go negative, because a logist will sometimes pay a driver out of their own
+    cash before we have topped them up. A negative balance is our debt to them."""
+
+    name = models.CharField("Ismi", max_length=200)
+    phone = models.CharField("Telefon", max_length=30, blank=True)
+    note = models.TextField("Izoh", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Logist"
+        verbose_name_plural = "Logistlar"
+
+    @property
+    def received_total(self):
+        """What we have sent them. `net_amount` rather than `amount`: a bank foiz
+        never reached the logist, so it never became theirs to spend."""
+        if not hasattr(self, "payments"):
+            return Decimal("0")
+        return sum((p.net_amount for p in self.payments.all()), Decimal("0"))
+
+    @property
+    def received_total_uzs(self):
+        if not hasattr(self, "payments"):
+            return Decimal("0")
+        return sum((p.net_amount_uzs for p in self.payments.all()), Decimal("0"))
+
+    @property
+    def paid_total(self):
+        """What they have handed to drivers on our loads."""
+        if not hasattr(self, "driver_advances"):
+            return Decimal("0")
+        return sum((e.amount for e in self.driver_advances.all()), Decimal("0"))
+
+    @property
+    def paid_total_uzs(self):
+        if not hasattr(self, "driver_advances"):
+            return Decimal("0")
+        return sum((e.amount_uzs for e in self.driver_advances.all()), Decimal("0"))
+
+    @property
+    def latest_rate(self):
+        """The kurs from this logist's most recent top-up.
+
+        A driver advance is handed over in dollars out of money we already sent, so
+        the honest so'm value of it is the rate that money was converted at — not
+        whatever today's rate happens to be. Falls back to the legacy rate for a
+        logist who has not been funded yet, so an advance can still be recorded."""
+        latest = self.payments.order_by("-date", "-created_at").first()
+        return latest.exchange_rate if latest else LEGACY_RATE
+
+    @property
+    def balance(self):
+        """Positive = our money still in their hands. Negative = they fronted it and
+        we owe them."""
+        return self.received_total - self.paid_total
+
+    @property
+    def balance_uzs(self):
+        return self.received_total_uzs - self.paid_total_uzs
+
+    def __str__(self):
+        return self.name
+
+
 class Customer(models.Model):
     """Mijoz (buyer) — purchases granula from us."""
 
@@ -636,6 +706,75 @@ class SupplierPayment(CashEntry):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
 
 
+class LogistPayment(CashEntry):
+    """Money we send a logist so they can pay drivers.
+
+    THIS is the kassa outflow, not the driver advance that follows it. The cash
+    leaves us here; what the logist later hands a driver moves their balance and
+    prices the yuk, but spending it again in the kassa would bill us twice for the
+    same money."""
+
+    logist = models.ForeignKey(Logist, on_delete=models.PROTECT,
+                               related_name="payments", verbose_name="Logist")
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="logist_payments",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Logistga to'lov"
+        verbose_name_plural = "Logistga to'lovlar"
+
+    @property
+    def net_amount(self):
+        """What actually reached the logist, after any bank foiz — that is what
+        becomes theirs to spend, so that is what their balance grows by."""
+        return self.amount - self.fee_amount
+
+    @property
+    def net_amount_uzs(self):
+        return uzs_slice(self, self.net_amount)
+
+    @property
+    def total_out(self):
+        """What the kassa loses: the logist's money plus the bank's cut on top."""
+        return self.amount + self.fee_amount
+
+    @property
+    def total_out_uzs(self):
+        return self.amount_uzs + self.in_som(self.fee_amount)
+
+    def __str__(self):
+        return f"{self.logist_id} · {self.amount}$ ({self.date})"
+
+
+def logist_positions():
+    """(held, held_uzs, owed, owed_uzs) across logistlar, both sides positive.
+
+    Kept apart for the same reason the hamkor pair is: a logist we have overfunded
+    and one who fronted their own cash are two different facts, and netting them
+    into one number hides both."""
+    held = held_uzs = owed = owed_uzs = Decimal("0")
+    logists = Logist.objects.prefetch_related("payments", "driver_advances")
+    for logist in logists:
+        balance, balance_uzs = logist.balance, logist.balance_uzs
+        if balance > 0:
+            held += balance
+            held_uzs += balance_uzs
+        elif balance < 0:
+            owed -= balance
+            owed_uzs -= balance_uzs
+    return held, held_uzs, owed, owed_uzs
+
+
 def commission_total(payments):
     """Summed per row so the total always matches the rows on screen — a single
     SQL expression would round once at the end and could drift by cents."""
@@ -659,6 +798,12 @@ class Shipment(models.Model):
     # mas'ul shaxs is not always someone with an account (the prototype carried
     # them as a plain "Logist: <name>" note).
     responsible = models.CharField("Mas'ul shaxs", max_length=120, blank=True)
+    # Who arranges the transport and pays this load's driver. Separate from
+    # `responsible`, which is our own person: the logist is an outside party who
+    # holds our money. Optional — plenty of loads move without one.
+    logist = models.ForeignKey("Logist", on_delete=models.PROTECT, null=True,
+                               blank=True, related_name="shipments",
+                               verbose_name="Logist")
     # Who is actually driving it — often known before the plate, and the number the
     # logist calls when a load goes quiet.
     driver_name = models.CharField("Haydovchi", max_length=120, blank=True)
@@ -721,11 +866,15 @@ class Shipment(models.Model):
 
     @property
     def expenses_total(self):
-        return self.expenses.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        # Summed in Python, not with aggregate(): every screen that reaches this
+        # prefetches `expenses`, and aggregate() ignores a prefetch cache — it fires
+        # a fresh query per yuk. Landed cost reads it once per lot, so on Ombor and
+        # the kassa that was one query per row for a figure already in memory.
+        return sum((e.amount for e in self.expenses.all()), Decimal("0"))
 
     @property
     def expenses_total_uzs(self):
-        return self.expenses.aggregate(s=Sum("amount_uzs"))["s"] or Decimal("0")
+        return sum((e.amount_uzs for e in self.expenses.all()), Decimal("0"))
 
     @property
     def expense_per_kg(self):
@@ -743,10 +892,6 @@ class Shipment(models.Model):
     @property
     def sold_kg(self):
         return sum((ln.sold_kg for ln in self.lines.all()), Decimal("0"))
-
-    @property
-    def reserved_kg(self):
-        return sum((ln.reserved_kg for ln in self.lines.all()), Decimal("0"))
 
     @property
     def available_kg(self):
@@ -861,25 +1006,35 @@ class ShipmentLine(MoneyEntry):
         return total
 
     @property
-    def reserved_kg(self):
-        return sum((r.kg for r in self.reservations.all() if r.status == "active"),
-                   Decimal("0"))
-
-    @property
     def available_kg(self):
-        return self.kg - self.sold_kg - self.reserved_kg + self.returned_kg
+        """PHYSICAL kg left on this lot: what arrived, minus what has been sold,
+        plus what came back.
+
+        Brons are deliberately absent. A bron is a claim on a MARKA across every
+        kelishuv, not on one truck, so subtracting it here would pin it to whichever
+        lot happened to be looked at. The bron block is applied once, at brand level,
+        by `brand_free_kg` — which is what the sotuv forms check."""
+        return self.kg - self.sold_kg + self.returned_kg
 
     def __str__(self):
         return f"Lot #{self.pk} · {self.brand} · {self.kg} kg"
 
 
 class Reservation(MoneyEntry):
-    """Bron: a customer reserves kg on a lot (arrived or still in-transit). While
-    active it blocks that kg via `Shipment.reserved_kg`. Converting turns it into a
-    Sale (only once the lot has arrived); cancelling frees the kg back up.
+    """Bron: a mijoz reserves kg of a MARKA, not of one lot.
 
-    The agreed narx carries its currency across the conversion, so a bron struck in
-    so'm becomes a so'm sotuv rather than silently turning into dollars."""
+    The claim is on the product across every kelishuv: whichever truck lands first
+    with that marka fills the bron, whoever it came from. That is why there is no
+    lot here — pinning a bron to a lot would mean the mijoz waits for one specific
+    truck while the same granula sits in the ombor from another kelishuv.
+
+    The queue is FIFO by `created_at`: the mijoz who bronned first is served first,
+    and a bron cannot be filled while an older one for the same marka is still open.
+    Filling is partial — a 20 000 kg bron against a 12 000 kg arrival takes the
+    12 000 now and stays open for the rest, because loads arrive in pieces.
+
+    The agreed narx carries its currency into the sotuv, so a bron struck in so'm
+    becomes a so'm sotuv rather than silently turning into dollars."""
 
     money_fields = ("price", "price_uzs")
 
@@ -890,9 +1045,11 @@ class Reservation(MoneyEntry):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="reservations", verbose_name="Mijoz")
-    line = models.ForeignKey("ShipmentLine", on_delete=models.PROTECT,
-                             related_name="reservations", verbose_name="Lot (mahsulot)")
+    brand = models.CharField("Marka", max_length=120, db_index=True)
     kg = models.DecimalField("Bron qilingan kg", max_digits=12, decimal_places=3)
+    fulfilled_kg = models.DecimalField(
+        "Berilgan kg", max_digits=12, decimal_places=3, default=0,
+        help_text="Sotuvga aylantirilgan qismi — qolgani navbatda turadi")
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
                                 null=True, blank=True)
     price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
@@ -910,8 +1067,140 @@ class Reservation(MoneyEntry):
         verbose_name = "Bron"
         verbose_name_plural = "Bronlar"
 
+    @property
+    def remaining_kg(self):
+        """Still owed to this mijoz. A partly filled bron stays in the queue for the
+        rest rather than closing, so this — not `kg` — is what blocks stock and what
+        the next arrival draws against."""
+        return self.kg - self.fulfilled_kg
+
+    @property
+    def is_open(self):
+        return self.status == self.Status.ACTIVE and self.remaining_kg > 0
+
+    @property
+    def total(self):
+        """What the bron is worth at the agreed narx — None while the narx is still
+        open, which is a real state here: a bron may be struck before the price is.
+        None rather than 0 so the screen can say "kelishilmagan" instead of showing
+        a free reservation."""
+        if self.price is None:
+            return None
+        return (self.kg * self.price).quantize(Decimal("0.01"))
+
+    @property
+    def total_uzs(self):
+        if self.price_uzs is None:
+            return None
+        return (self.kg * self.price_uzs).quantize(Decimal("0.01"))
+
     def __str__(self):
-        return f"Bron #{self.pk} · {self.customer} · {self.kg} kg"
+        return f"Bron #{self.pk} · {self.customer} · {self.brand} · {self.kg} kg"
+
+
+# ── Pozitsiya: what the cash figure means ────────────────────────────────────────
+#
+# The kassa on its own answers "how much money moved", which is not the same as
+# "how are we doing". These four put the cash figure in context: money we are
+# holding but have not earned, money owed to us, goods we own, and the two sides
+# of what we owe hamkorlar. Each returns a (dollar, so'm) pair, and each so'm
+# figure is summed from rows booked at their OWN kurs rather than re-rated today —
+# same rule as everything else that shows both currencies.
+
+
+def customer_advance_total():
+    """Money mijozlar have handed over that sits on no sotuv yet.
+
+    It IS in the kassa — the cash arrived — but it is not ours: cancel the bron or
+    the order and it goes back. Showing it beside the till figure is the difference
+    between "we have this" and "we are holding this"."""
+    total = total_uzs = Decimal("0")
+    for payment in CustomerPayment.objects.prefetch_related("allocations"):
+        unspent = unspent_payment_amount(payment)
+        if unspent > 0:
+            total += unspent
+            total_uzs += uzs_slice(payment, unspent)
+    return total, total_uzs
+
+
+def customer_receivable_total():
+    """What mijozlar still owe us — positive balances only, and how many of them.
+
+    A mijoz sitting in avans does not net off another mijoz's qarz: the money is
+    not fungible across customers, and treating it as one figure would understate
+    both what is owed and what is held."""
+    total = total_uzs = Decimal("0")
+    count = 0
+    customers = Customer.objects.prefetch_related(
+        "sales__returns", "sales__allocations", "customer_payments__allocations")
+    for customer in customers:
+        if customer.balance > 0:
+            total += customer.balance
+            total_uzs += customer.balance_uzs
+            count += 1
+    return total, total_uzs, count
+
+
+def partner_positions():
+    """Both directions of the hamkor relationship, kept apart.
+
+    A kelishuv paid beyond the goods sent is an avans WE are owed, not a smaller
+    qarz — netting the two into one number hid $203 030.5 of prepayment behind a
+    $50 480 payable at the end of July. Returns (owed, owed_uzs, prepaid,
+    prepaid_uzs), both sides positive."""
+    owed = owed_uzs = prepaid = prepaid_uzs = Decimal("0")
+    owed_partners, prepaid_contracts = set(), 0
+    contracts = Contract.objects.select_related("partner").prefetch_related(
+        "lines__shipment_lines", "supplier_payments")
+    for contract in contracts:
+        debt, debt_uzs = contract.debt, contract.debt_uzs
+        if debt > 0:
+            owed += debt
+            owed_uzs += debt_uzs
+            owed_partners.add(contract.partner_id)
+        elif debt < 0:
+            prepaid -= debt
+            prepaid_uzs -= debt_uzs
+            prepaid_contracts += 1
+    return {"owed": owed, "owed_uzs": owed_uzs, "partners": len(owed_partners),
+            "prepaid": prepaid, "prepaid_uzs": prepaid_uzs,
+            "contracts": prepaid_contracts}
+
+
+def stock_value():
+    """Granula sitting in the ombor, at its landed cost — goods we paid for and
+    still own. Costed rather than priced: what it will sell for is not knowable
+    yet, what it cost us is."""
+    total = total_uzs = kg = Decimal("0")
+    for lot in arrived_lots().prefetch_related(
+            "sales__returns", "shipment__expenses",
+            "contract_line__contract__supplier_payments",
+            "contract_line__contract__lines"):
+        left = lot.kg - lot.sold_kg + lot.returned_kg
+        if left > 0:
+            kg += left
+            total += (left * lot.landed_cost_per_kg).quantize(Decimal("0.01"))
+            total_uzs += (left * lot.landed_cost_per_kg_uzs).quantize(Decimal("0.01"))
+    return total, total_uzs, kg
+
+
+def transit_value():
+    """Goods already sent by the hamkor but not yet arrived, at the agreed narx.
+
+    At the kelishuv price, not landed cost: the freight and bojxona on a truck
+    still moving have mostly not been paid, so a landed figure here would be a
+    guess dressed as a cost."""
+    total = total_uzs = kg = Decimal("0")
+    loads = set()
+    lines = (ShipmentLine.objects
+             .filter(shipment__arrived__isnull=True)
+             .select_related("shipment", "contract_line"))
+    for line in lines:
+        total += line.goods_value
+        total_uzs += line.goods_value_uzs
+        kg += line.kg
+        loads.add(line.shipment_id)
+    return total, total_uzs, kg, len(loads)
 
 
 def arrived_lots():
@@ -919,6 +1208,65 @@ def arrived_lots():
     return (ShipmentLine.objects
             .filter(shipment__arrived__isnull=False)
             .select_related("contract_line", "shipment", "shipment__contract"))
+
+
+def bron_queue(brand=None):
+    """Open brons, oldest first — the order they must be served in.
+
+    One list, not one per marka, so the caller can see the whole board; pass a
+    marka to narrow it. Ordering is `created_at` then pk: two brons taken in the
+    same second still have a defined winner, and it is the one entered first."""
+    qs = (Reservation.objects
+          .filter(status=Reservation.Status.ACTIVE)
+          .select_related("customer")
+          .order_by("created_at", "pk"))
+    if brand is not None:
+        qs = qs.filter(brand=brand)
+    return [r for r in qs if r.remaining_kg > 0]
+
+
+def brand_reserved_kg(brand):
+    """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
+    a bron half filled from an earlier truck only blocks the half still owed."""
+    return sum((r.remaining_kg for r in bron_queue(brand)), Decimal("0"))
+
+
+def brand_on_hand_kg(brand):
+    """Physical kg of this marka in the ombor — what arrived, minus what has been
+    sold, plus what came back. Says nothing about who it is promised to."""
+    return sum((lot.kg - lot.sold_kg + lot.returned_kg
+                for lot in arrived_lots().filter(contract_line__brand=brand)),
+               Decimal("0"))
+
+
+def brand_free_kg(brand):
+    """What an ordinary sotuv may take: on the shelf, minus what is bronned.
+
+    Never negative — brons can be taken against goods that have not landed yet, so
+    promised can legitimately exceed on-hand, and reporting that as a negative
+    shelf figure would be nonsense rather than information."""
+    return max(brand_on_hand_kg(brand) - brand_reserved_kg(brand), Decimal("0"))
+
+
+def bron_brands():
+    """Markalar a bron may be taken against — every place the granula could come
+    from, in the order a kg travels:
+
+      * still to be sent on a kelishuv   (nothing shipped yet — booking ahead)
+      * sent and on the road             (fully shipped, not yet landed)
+      * sitting in the ombor             (landed, unsold)
+
+    The middle case is easy to miss and is not an edge case: a kelishuv whose trucks
+    have all left has `remaining_kg` of zero and no arrived lot, so leaving it out
+    would make a marka unbookable for exactly the weeks it is in transit."""
+    brands = {line.brand for line in ContractLine.objects
+              .select_related("contract").prefetch_related("shipment_lines")
+              if line.remaining_kg > 0}
+    brands |= {line.contract_line.brand for line in ShipmentLine.objects
+               .filter(shipment__arrived__isnull=True)
+               .select_related("contract_line")}
+    brands |= {lot.brand for lot in arrived_lots()}
+    return sorted(brands)
 
 
 def fifo_lots(brand):
@@ -930,29 +1278,42 @@ def fifo_lots(brand):
 
 
 def brand_stock_costed():
-    """[(brand, available kg, weighted-average tannarx, [kelishuv codes])] across
-    arrived lots, for the sale-by-brand dropdown: availability, the blended landed
-    cost (so the seller sees the cost floor while pricing), and which kelishuv(lar)
-    the stock came from. A brand's lots can carry different landed costs and come
-    from different kelishuvlar, and a FIFO sale may hit any of them first, so the
-    cost is the kg-weighted average and the codes are the full set."""
-    avail, cost, codes = {}, {}, {}
+    """Per marka in the ombor: what is on the shelf, what of it is bronned, what is
+    therefore free to sell, the blended landed cost, and which kelishuvlar it came
+    from.
+
+    On-hand and free are kept as separate figures on purpose. A screen that showed
+    only the free number would leave the operator hunting for the kg that "went
+    missing"; one that showed only on-hand would let them oversell a promise. A
+    brand's lots can carry different landed costs and come from different
+    kelishuvlar, so the cost is kg-weighted and the codes are the full set."""
+    on_hand, cost, codes = {}, {}, {}
     for lot in arrived_lots():
         a = lot.available_kg
         if a > 0:
             b = lot.brand
-            avail[b] = avail.get(b, Decimal("0")) + a
+            on_hand[b] = on_hand.get(b, Decimal("0")) + a
             cost[b] = cost.get(b, Decimal("0")) + a * lot.landed_cost_per_kg
             codes.setdefault(b, set()).add(lot.contract_line.contract.code)
-    return [(b, avail[b], (cost[b] / avail[b]).quantize(Decimal("0.0001")), sorted(codes[b]))
-            for b in sorted(avail)]
+    rows = []
+    for b in sorted(on_hand):
+        reserved = brand_reserved_kg(b)
+        rows.append({
+            "brand": b,
+            "on_hand": on_hand[b],
+            "reserved": min(reserved, on_hand[b]),
+            "free": max(on_hand[b] - reserved, Decimal("0")),
+            "cost": (cost[b] / on_hand[b]).quantize(Decimal("0.0001")),
+            "codes": sorted(codes[b]),
+        })
+    return rows
 
 
 def brand_stock_costed_uzs():
     """The so'm twin of brand_stock_costed's blended tannarx, keyed by brand.
 
-    Kept as a separate lookup rather than a sixth tuple element so the existing
-    callers — the sale-by-brand dropdown among them — keep unpacking four values."""
+    Kept as a separate lookup rather than another key on those rows so a caller that
+    only needs the dollar cost does not pay for the so'm walk as well."""
     totals, avail = {}, {}
     for lot in arrived_lots():
         a = lot.available_kg
@@ -1243,8 +1604,26 @@ def unspent_payment_amount(payment):
     """The part of a to'lov that is not sitting on any sotuv yet — the mijoz's avans.
 
     The pool is net_amount, not amount: a perechisleniya foiz never reached us, so it
-    cannot pay down anybody's sale."""
-    return payment.net_amount - (payment.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0"))
+    cannot pay down anybody's sale.
+
+    Summed in Python rather than with aggregate() so a prefetched `allocations` is
+    actually used — aggregate() always goes back to the database, which turned the
+    kassa's avans figure into one query per to'lov."""
+    allocated = sum((a.amount for a in payment.allocations.all()), Decimal("0"))
+    return payment.net_amount - allocated
+
+
+def uzs_slice(row, part):
+    """The so'm worth of `part` — some fraction of `row`'s amount — at that row's own
+    kurs.
+
+    Taken as a share of the stored so'm value rather than reconverted, so a derived
+    figure can never disagree with its parent about what the kurs was that day. The
+    same rule every stored pair follows."""
+    if not row.amount:
+        return Decimal("0")
+    return (row.amount_uzs * part / row.amount).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def allocate_customer_payment(payment, picks=None):
@@ -1382,6 +1761,17 @@ class ShipmentExpense(CashEntry):
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
                               default=PayMethod.CASH)
     note = models.CharField("Izoh", max_length=255, blank=True)
+    # Set when a logist paid this out of the balance we already funded. The cost
+    # still belongs to the yuk, but the cash left the kassa when we topped the
+    # logist up — charging it again here would bill us twice for one payment.
+    logist = models.ForeignKey("Logist", on_delete=models.PROTECT, null=True,
+                               blank=True, related_name="driver_advances",
+                               verbose_name="Logist to'ladi")
+    # The advance the logist hands the driver as the truck leaves. Flagged rather
+    # than inferred from `logist` alone, because a logist may pay a yuk's bojxona
+    # too — and this is the one row the yuk form owns and rewrites on edit.
+    is_driver_advance = models.BooleanField("Haydovchi avansi", default=False,
+                                            editable=False)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="shipment_expenses",
                                    verbose_name="Kim kiritdi")
@@ -1393,14 +1783,26 @@ class ShipmentExpense(CashEntry):
         verbose_name_plural = "Yuk xarajatlari"
 
     @property
+    def from_kassa(self):
+        """False when a logist funded it from the balance we already sent them."""
+        return self.logist_id is None
+
+    @property
     def total_out(self):
-        """What the kassa loses: the expense plus any bank foiz. The landed cost
-        deliberately keeps using `amount` — a transfer fee is the cost of moving the
-        money, not of the goods, so it must not re-price the granula."""
+        """What the kassa loses: the expense plus any bank foiz — and nothing at all
+        when a logist paid it, because that money already left as a LogistPayment.
+
+        The landed cost deliberately keeps using `amount` either way: a transfer fee
+        is the cost of moving money, not of the goods, and who handed the cash over
+        does not change what the granula cost."""
+        if not self.from_kassa:
+            return Decimal("0")
         return self.amount + self.fee_amount
 
     @property
     def total_out_uzs(self):
+        if not self.from_kassa:
+            return Decimal("0")
         return self.amount_uzs + self.in_som(self.fee_amount)
 
     def __str__(self):

@@ -16,3 +16,9 @@ dev.sqlite3
 dev.sqlite3.bak-*
 *.dump
 *.sql
+
+# Per-process test databases (TEST_DB_SUFFIX) from parallel audit runs.
+test_db*.sqlite3
+
+# Local snapshot of the kassa work-in-progress, kept for reference only.
+.kassa-wip/

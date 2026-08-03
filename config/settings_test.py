@@ -10,11 +10,20 @@ from .settings import *  # noqa: F401,F403
 
 # A self-contained SQLite database, recreated per test run. File-based (not
 # ":memory:") so Django's LiveServerTestCase thread and the test thread share it.
+#
+# TEST_DB_SUFFIX lets several pytest processes run at once without fighting over
+# one file: each exports its own suffix and gets its own database. Unset — which
+# is every normal run — the name is exactly what it has always been.
+import os  # noqa: E402
+
+_db_suffix = os.environ.get("TEST_DB_SUFFIX", "")
+_db_path = BASE_DIR / f"test_db{_db_suffix}.sqlite3"  # noqa: F405
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "test_db.sqlite3",  # noqa: F405
-        "TEST": {"NAME": BASE_DIR / "test_db.sqlite3"},  # noqa: F405
+        "NAME": _db_path,
+        "TEST": {"NAME": _db_path},
     }
 }
 

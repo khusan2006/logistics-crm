@@ -2,44 +2,137 @@
 {% load crm_extras %}
 {% block title %}Bronlar · GranulaLog{% endblock %}
 {% block topbar_title %}Bronlar{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'reservation_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi bron</a>{% endblock %}
 {% block content %}
 
-{% if page.object_list %}
+{% comment %}
+Same one-form toolbar as Kelishuvlar: every filter is a select that auto-submits,
+so they combine instead of fighting. Holat carries faceted counts — each option
+shows how many rows picking it would leave.
+{% endcomment %}
+<form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Mijoz, marka yoki kelishuv bo'yicha qidirish…" autocomplete="off" aria-label="Bron qidirish">
+    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+  <label>Mijoz
+    <select name="customer" data-combobox>
+      <option value="">Hammasi</option>
+      {% for c in customers %}
+      <option value="{{ c.pk }}"{% if customer_id == c.pk|stringformat:"s" %} selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Holat
+    <select name="status">
+      {% for t in status_tabs %}
+      <option value="{{ t.key }}"{% if status == t.key %} selected{% endif %}>{{ t.label }} ({{ t.count }})</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Berish
+    <select name="lot">
+      <option value=""{% if not lot %} selected{% endif %}>Hammasi</option>
+      <option value="ready"{% if lot == "ready" %} selected{% endif %}>Berish mumkin</option>
+      <option value="waiting"{% if lot == "waiting" %} selected{% endif %}>Navbatda kutmoqda</option>
+    </select>
+  </label>
+  <label>Saralash
+    <select name="sort">
+      {% for key, label in sort_options %}
+      <option value="{{ key }}"{% if sort == key %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% comment %}
+  ?yuk= is set by the arrival banner, not by a control here. It rides as a hidden
+  field so changing a select keeps the load pinned; the chip below is how you see
+  it is on and how you drop it.
+  {% endcomment %}
+  {% if page.object_list %}
 <div class="table-wrap">
 <table>
   <tr>
     <th class="sticky-col">Mijoz</th>
-    <th>Lot</th>
+    <th>Sana</th>
+    <th>Marka</th>
+    <th title="Shu marka bo'yicha navbatdagi o'rni — birinchi turgan birinchi oladi">Navbat</th>
     <th>Kg</th>
+    <th title="Hali berilmagan qismi">Qolgan</th>
     <th>Narx</th>
     <th>Holat</th>
     <th></th>
   </tr>
   {% for r in page %}
   <tr>
-    <td class="sticky-col">{{ r.customer.name }}</td>
-    <td>#{{ r.line.shipment_id }} · {{ r.line.brand }}{% if not r.line.arrived %} <span class="muted">(yo'lda)</span>{% endif %}</td>
-    <td>{{ r.kg|floatformat:"-3" }}</td>
-    <td>{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}—{% endif %}</td>
+    <td class="sticky-col">
+      {% if r.is_open %}<a href="{% url 'reservation_edit' r.pk %}" data-modal>{{ r.customer.name }}</a>
+      {% else %}{{ r.customer.name }}{% endif %}
+    </td>
+    <td>{{ r.created_at|date:"d.m.Y" }}</td>
+    <td>{{ r.brand }}</td>
     <td>
-      {% if r.status == "active" %}<span class="daybadge">Faol</span>
-      {% elif r.status == "converted" %}<span class="daybadge ok">Sotuvga aylandi</span>
+      {% if r.queue_pos %}
+        <span class="qpos{% if r.queue_pos == 1 %} qpos--first{% endif %}">{{ r.queue_pos }}</span>
+      {% else %}<span class="muted">—</span>{% endif %}
+    </td>
+    <td>{{ r.kg|floatformat:"-3" }}</td>
+    <td>
+      {% if r.fulfilled_kg %}
+        <strong>{{ r.remaining_kg|floatformat:"-3" }}</strong>
+        <div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>
+      {% else %}{{ r.remaining_kg|floatformat:"-3" }}{% endif %}
+    </td>
+    <td>{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+    <td>
+      {% if r.status == "active" %}
+        {% if r.servable_kg > 0 %}
+          <span class="badge badge-ok">Berish mumkin</span>
+          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor</div>
+        {% elif r.blocked_by %}
+          <span class="badge badge-warning">Navbatda</span>
+          <div class="muted load-sub">oldida {{ r.blocked_by.customer.name }}</div>
+        {% else %}
+          <span class="badge badge-warning">Mol kutilmoqda</span>
+          <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>
+        {% endif %}
+      {% elif r.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
       {% else %}<span class="muted">Bekor qilindi</span>{% endif %}
     </td>
     <td class="row-actions">
-      {% if r.status == "active" %}
-        {% if r.shipment.arrived %}
-        <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal>
+      {% if r.is_open %}
+        {% comment %}
+        Convert is offered only to the head of the marka's queue with stock behind
+        it. Anything else is disabled with the reason on it, so the FIFO rule is
+        visible on screen rather than discovered by getting an error.
+        {% endcomment %}
+        {% if r.servable_kg > 0 %}
+        <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal class="row-inline-form">
           {% csrf_token %}
-          {% if not r.price %}<input type="number" step="0.0001" name="price" placeholder="Narx" required style="width:90px;">{% endif %}
-          <button type="submit" class="btn btn-sm">Sotuvga aylantirish</button>
+          {% if not r.price %}<input type="number" step="0.0001" min="0" name="price" placeholder="Narx" required style="width:88px;" aria-label="Sotuv narxi">{% endif %}
+          <button type="submit" class="btn btn-sm">{{ r.servable_kg|floatformat:"-3" }} kg berish</button>
         </form>
+        {% elif r.blocked_by %}
+        <button type="button" class="btn btn-sm" disabled title="Navbatda oldida {{ r.blocked_by.customer.name }} turibdi">Navbati kelmadi</button>
         {% else %}
-        <button type="button" class="btn btn-sm" disabled title="Lot hali omborga yetib kelmagan">Sotuvga aylantirish</button>
+        <button type="button" class="btn btn-sm" disabled title="{{ r.brand }} omborda yo'q — yuk kutilmoqda">Mol yo'q</button>
         {% endif %}
-        <a class="btn btn-sm btn-ghost" href="{% url 'reservation_cancel' r.pk %}" data-modal>Bekor qilish</a>
+        <a class="icon-action act-edit" href="{% url 'reservation_edit' r.pk %}" data-modal title="Tahrirlash">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </a>
+        <a class="icon-action" href="{% url 'reservation_cancel' r.pk %}" data-modal title="Bekor qilish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="8" x2="16" y2="16"/></svg>
+        </a>
+        <a class="icon-action act-delete" href="{% url 'reservation_delete' r.pk %}" data-modal title="O'chirish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        </a>
+      {% elif r.status == "converted" %}
+        <span class="muted">—</span>
       {% else %}
-        —
+        <a class="icon-action act-delete" href="{% url 'reservation_delete' r.pk %}" data-modal title="O'chirish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        </a>
       {% endif %}
     </td>
   </tr>
@@ -48,6 +141,7 @@
 </div>
 {% include "crm/_pagination.html" with label="bron" %}
 {% else %}
-<p class="muted">Bronlar topilmadi.</p>
+<p class="muted">Bronlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}
+
 {% endblock %}

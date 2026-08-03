@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date as _date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.contrib import messages
@@ -17,20 +17,25 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .exports import xlsx_response
+from .templatetags.crm_extras import usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
-    ExpenseTargetForm, SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
-    ShipmentExpenseFormSet, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
+    ExpenseGridForm, LogistForm, LogistPaymentForm,
+    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
+    ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
+    AuditLog, Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
-    apply_customer_advance, arrived_lots, commission_total, convert_pair, fifo_lots,
-    reconcile_customer_allocations, trim_sale_allocations,
+    apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
+    bron_queue, commission_total, convert_pair, logist_positions,
+    customer_advance_total, customer_receivable_total, fifo_lots, partner_positions,
+    reconcile_customer_allocations, stock_value, transit_value, trim_sale_allocations,
+    unspent_payment_amount, uzs_slice,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
@@ -519,8 +524,8 @@ def supplier_payment_list(request):
     q = request.GET.get("q", "").strip()
     partner_id = request.GET.get("partner", "").strip()
     method = request.GET.get("method", "").strip()
-    date_from = request.GET.get("date_from", "").strip()
-    date_to = request.GET.get("date_to", "").strip()
+    date_from = _date_param(request, "date_from")
+    date_to = _date_param(request, "date_to")
     sort = request.GET.get("sort", "").strip()
     if sort not in {key for key, *_ in SUPPLIER_PAYMENT_SORTS}:
         sort = SUPPLIER_PAYMENT_SORT_DEFAULT
@@ -986,7 +991,7 @@ def ombor(request):
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
     lots = (arrived_lots()
-            .prefetch_related("shipment__expenses", "reservations", "sales__returns")
+            .prefetch_related("shipment__expenses", "sales__returns")
             .order_by("shipment__arrived", "id"))
     if q:
         filters = (Q(contract_line__brand__icontains=q)
@@ -1002,14 +1007,15 @@ def ombor(request):
         g = by_brand.get(brand)
         if g is None:
             g = by_brand[brand] = {"brand": brand, "lots": [], "partners": [],
+                                   "brons": [],
                                    "kirim": Decimal("0"), "sold": Decimal("0"),
                                    "reserved": Decimal("0"), "available": Decimal("0")}
             groups.append(g)
         g["lots"].append(lot)
+
         g["kirim"] += lot.kg
         g["sold"] += lot.sold_kg
-        g["reserved"] += lot.reserved_kg
-        g["available"] += lot.available_kg
+        g["on_hand"] = g.get("on_hand", Decimal("0")) + lot.available_kg
         partner = lot.shipment.contract.partner.name
         if partner not in g["partners"]:
             g["partners"].append(partner)
@@ -1020,6 +1026,13 @@ def ombor(request):
         g["cost_min"], g["cost_min_uzs"] = min(costed)
         g["cost_max"], g["cost_max_uzs"] = max(costed)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
+        # The bron queue for this marka, oldest first — and the arithmetic that says
+        # where the shelf kg went, so nobody has to work out why Sotish mumkin is
+        # smaller than Kirim.
+        g["brons"] = bron_queue(g["brand"])
+        g["reserved"] = sum((r.remaining_kg for r in g["brons"]), Decimal("0"))
+        g["available"] = max(g["on_hand"] - g["reserved"], Decimal("0"))
+        g["short"] = max(g["reserved"] - g["on_hand"], Decimal("0"))
 
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {"page": page, "q": q})
@@ -1043,6 +1056,10 @@ def shipment_create(request):
                     shipment.arrived = timezone.localdate()
                 shipment.save()
                 _save_lines(lines, shipment)
+                # The advance goes out with the truck, so it is recorded by the
+                # dispatch form rather than waiting for somebody to remember it as
+                # an xarajat later.
+                form.sync_driver_advance(shipment, request.user)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Yuk", shipment.pk,
                 f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
@@ -1064,6 +1081,7 @@ def shipment_edit(request, pk):
             with transaction.atomic():
                 form.save()
                 _save_lines(lines, shipment)
+                form.sync_driver_advance(shipment, request.user)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
                 f"Yuk tahrirlandi: {shipment.brand_summary} · {shipment.kg} kg",
@@ -1191,6 +1209,20 @@ def shipment_set_status(request, pk):
     shipment.save(update_fields=["status", "arrived"])
     AuditLog.record(request.user, AuditLog.Action.STATUS, "Yuk", shipment.pk,
                     f"{old_name} → {status.name}")
+
+    # Arrival is the moment a bron on this load becomes sellable, and whoever
+    # marks the truck in is rarely the person who sells. So the count rides back
+    # with the response rather than waiting to be stumbled on — counted across ALL
+    # the yuk's product lines, since a bron hangs off a line, not the load.
+    brons = 0
+    if status.is_arrival:
+        # A bron is a claim on a MARKA, so the loads that matter are the ones
+        # carrying a marka somebody is waiting for — not brons "belonging" to this
+        # truck, which no longer exist.
+        markalar = {line.brand for line in shipment.lines.all()}
+        brons = sum(1 for b in bron_queue() if b.brand in markalar)
+    bron_url = f"{reverse('reservation_list')}?status=active&lot=ready"
+
     if is_ajax(request):
         # The list JS updates the row in place (or drops it, if the load just
         # arrived and moved to Yakunlangan) — no page reload, never stale. The
@@ -1200,8 +1232,13 @@ def shipment_set_status(request, pk):
             "status_id": status.pk,
             "arrived": shipment.arrived is not None,
             "date_html": render_to_string("crm/_load_date_cell.html", {"s": shipment}),
+            "bron_count": brons,
+            "bron_url": bron_url,
+            "shipment_id": shipment.pk,
         })
     messages.success(request, "Holat yangilandi")
+    if brons:
+        messages.info(request, f"Bu yukda {brons} ta faol bron bor — sotuvga aylantirish mumkin")
     return redirect(request.POST.get("next") or "shipment_list")
 
 
@@ -1229,42 +1266,32 @@ def shipment_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def expense_create(request):
-    """Several xarajatlar at once: a yuk usually collects transport, bojxona and
-    a couple of others on the same day, so the modal takes rows."""
-    target = ExpenseTargetForm(request.POST or None,
-                               initial={"shipment": request.GET.get("shipment")})
-    rows = ShipmentExpenseFormSet(request.POST or None,
-                                  queryset=ShipmentExpense.objects.none())
+    """Every turkum as its own box, filled in one pass — a yuk collects bojxona,
+    deklarant and a couple of others on the same day, and the operator knows them as
+    a set rather than as rows to be added one at a time."""
+    form = ExpenseGridForm(request.POST or None,
+                           initial={"shipment": request.GET.get("shipment")})
 
     def respond(invalid=False):
-        return form_response(request, target, "Yangi xarajat", invalid=invalid,
-                             extra_context={"lines": rows, "lines_legend": "Xarajatlar",
-                                            "lines_class": "lineset--money lineset--expense",
-                                            "lines_add_label": "+ Xarajat qo'shish"})
+        return form_response(request, form, "Yangi xarajat", invalid=invalid,
+                             modal_template="crm/_expense_grid_modal.html")
 
     if request.method == "POST":
-        if target.is_valid() and rows.is_valid():
-            shipment = target.cleaned_data["shipment"]
-            saved = []
+        if form.is_valid():
+            rows = form.build(request.user)
             with transaction.atomic():
-                for form in rows.forms:
-                    if not form.cleaned_data or form.cleaned_data.get("DELETE"):
-                        continue
-                    expense = form.save(commit=False)
-                    expense.shipment = shipment
-                    expense.date = target.cleaned_data["date"]
-                    expense.created_by = request.user
+                for expense in rows:
                     expense.save()
-                    saved.append(expense)
-            total = sum((e.amount for e in saved), Decimal("0"))
+            shipment = form.cleaned_data["shipment"]
+            total = sum((e.amount for e in rows), Decimal("0"))
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Yuk xarajati",
-                saved[0].pk if saved else None,
-                f"Yangi xarajat: {len(saved)} ta · {total}$ · yuk #{shipment.pk}",
+                rows[0].pk if rows else None,
+                f"Yangi xarajat: {len(rows)} ta · {total}$ · yuk #{shipment.pk}",
             )
             messages.success(
                 request,
-                f"{len(saved)} ta xarajat qo'shildi" if len(saved) > 1 else "Xarajat qo'shildi")
+                f"{len(rows)} ta xarajat qo'shildi" if len(rows) > 1 else "Xarajat qo'shildi")
             # reload whichever page it was opened from (loads list or the load detail)
             return form_reload(request, reverse("shipment_detail", args=[shipment.pk]))
         return respond(invalid=True)
@@ -1483,11 +1510,96 @@ def sale_detail(request, pk):
     return render(request, "crm/sale_detail.html", {"sale": sale})
 
 
+#: Holat tabs, in the order a bron moves through them. Faol leads because an open
+#: bron is the only kind there is anything left to do about.
+RESERVATION_STATUS_LABELS = [
+    ("active", "Faol"), ("converted", "Sotuvga aylandi"),
+    ("cancelled", "Bekor qilindi"), ("", "Hammasi"),
+]
+
+# Sorted in Python: jami is kg × narx and lot state reads through two relations,
+# neither of which is a column. Each entry is (key, label, sort key, reverse).
+RESERVATION_SORTS = [
+    # Navbat first: FIFO order is the rule the screen exists to enforce, so it is
+    # what you should be looking at unless you deliberately ask for something else.
+    ("queue", "Navbat bo'yicha", lambda r: (r.brand, r.created_at, r.pk), False),
+    ("-created", "Sana — yangi avval", lambda r: (r.created_at, r.pk), True),
+    ("created", "Sana — eski avval", lambda r: (r.created_at, r.pk), False),
+    ("customer", "Mijoz — A-Z", lambda r: (r.customer.name.casefold(), r.pk), False),
+    ("-kg", "Kg — kattadan", lambda r: (r.kg, r.pk), True),
+    ("-total", "Jami — kattadan",
+     lambda r: (r.kg * (r.price or Decimal("0")), r.pk), True),
+]
+RESERVATION_SORT_DEFAULT = "queue"
+
+
 @role_required(User.Role.ADMIN)
 def reservation_list(request):
-    reservations = Reservation.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
-    page = Paginator(reservations, 20).get_page(request.GET.get("page"))
-    return render(request, "crm/reservation_list.html", {"page": page})
+    """Bronlar, kelishuvlar-style: search plus mijoz / holat / lot filters and a
+    sort, with the holat counts faceted so each option shows what picking it
+    yields. Everything past the mijoz filter reads computed properties, so the
+    rows become a list once and are narrowed in Python from there."""
+    q = request.GET.get("q", "").strip()
+    customer_id = request.GET.get("customer", "").strip()
+    # "ready" = at the head of its marka's queue with stock on the shelf; "waiting"
+    # = open but blocked, either by the queue or by an empty ombor.
+    lot = request.GET.get("lot", "").strip()
+    # Faol is the working view — an open bron is the only kind with anything left
+    # to act on, so it is where you land rather than the whole history.
+    status = request.GET.get("status", "active").strip()
+    sort = request.GET.get("sort", "").strip()
+    if sort not in {key for key, *_ in RESERVATION_SORTS}:
+        sort = RESERVATION_SORT_DEFAULT
+
+    reservations = Reservation.objects.select_related("customer")
+    if q:
+        reservations = reservations.filter(
+            Q(customer__name__icontains=q) | Q(brand__icontains=q)
+            | Q(note__icontains=q))
+    if customer_id.isdigit():
+        reservations = reservations.filter(customer_id=int(customer_id))
+
+    rows = list(reservations)
+    # Queue position and what is on the shelf for that marka right now — the two
+    # facts that decide whether a bron can be filled today. Computed once per marka
+    # rather than per row: the queue walk is the same for every bron of a marka.
+    shelf, queues = {}, {}
+    for brand in {r.brand for r in rows}:
+        shelf[brand] = brand_on_hand_kg(brand)
+        queues[brand] = [b.pk for b in bron_queue(brand)]
+    for row in rows:
+        order = queues.get(row.brand, [])
+        row.queue_pos = order.index(row.pk) + 1 if row.pk in order else None
+        row.brand_on_hand = shelf.get(row.brand, Decimal("0"))
+        row.servable_kg = (min(row.remaining_kg, row.brand_on_hand)
+                           if row.queue_pos == 1 else Decimal("0"))
+        row.blocked_by = (
+            Reservation.objects.filter(pk=order[0]).select_related("customer").first()
+            if row.queue_pos and row.queue_pos > 1 else None)
+    if lot == "ready":
+        rows = [r for r in rows if r.servable_kg > 0]
+    elif lot == "waiting":
+        rows = [r for r in rows if r.is_open and r.servable_kg <= 0]
+    # Counted before the holat filter narrows anything, so the numbers describe
+    # the other tabs rather than the one already chosen.
+    status_tabs = [{"key": key, "label": label,
+                    "count": (len(rows) if not key
+                              else sum(1 for r in rows if r.status == key))}
+                   for key, label in RESERVATION_STATUS_LABELS]
+    if status:
+        rows = [r for r in rows if r.status == status]
+
+    _, _, sort_key, sort_reverse = next(e for e in RESERVATION_SORTS if e[0] == sort)
+    rows.sort(key=sort_key, reverse=sort_reverse)
+
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    return render(request, "crm/reservation_list.html", {
+        "page": page, "q": q, "customer_id": customer_id, "status": status,
+        "lot": lot, "status_tabs": status_tabs, "sort": sort,
+        "sort_options": [(key, label) for key, label, *_ in RESERVATION_SORTS],
+        "customers": Customer.objects.all(),
+        "has_filters": bool(customer_id or lot or status != "active"),
+    })
 
 
 @role_required(User.Role.ADMIN)
@@ -1516,6 +1628,56 @@ def reservation_create(request):
 
 
 @role_required(User.Role.ADMIN)
+def reservation_edit(request, pk):
+    """Only an active bron is editable. A converted one has already become a sotuv
+    that snapshotted its kg and narx — editing the bron behind it would leave the
+    two disagreeing with no way to tell which is real."""
+    reservation = get_object_or_404(Reservation, pk=pk)
+    if reservation.status != Reservation.Status.ACTIVE:
+        messages.error(request, "Faqat faol bronni tahrirlash mumkin")
+        return form_reload(request, reverse("reservation_list"))
+    form = ReservationForm(request.POST or None, instance=reservation)
+    title = "Bronni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Bron", reservation.pk,
+                f"Bron tahrirlandi: {reservation.kg} kg · {reservation.customer.name}",
+            )
+            messages.success(request, "Bron yangilandi")
+            return form_reload(request, reverse("reservation_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def reservation_delete(request, pk):
+    """Hard-delete a mistyped bron. A converted one is refused: its sotuv points
+    back here (SET_NULL), so deleting it would quietly cut the sotuv loose from the
+    bron it came from instead of failing."""
+    reservation = get_object_or_404(Reservation, pk=pk)
+    label = f"{reservation.kg} kg · {reservation.customer.name}"
+    if reservation.status == Reservation.Status.CONVERTED:
+        messages.error(request, "Sotuvga aylangan bronni o'chirib bo'lmaydi")
+        return form_reload(request, reverse("reservation_list"))
+    if request.method == "POST":
+        reservation.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Bron", pk,
+                        f"Bron o'chirildi: {label}")
+        messages.success(request, "Bron o'chirildi")
+        return form_reload(request, reverse("reservation_list"))
+    return render_confirm(
+        request,
+        "Bronni o'chirish",
+        f"“{label}” broni butunlay o'chiriladi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="reservation_list",
+    )
+
+
+@role_required(User.Role.ADMIN)
 def reservation_cancel(request, pk):
     reservation = get_object_or_404(Reservation, pk=pk)
     if request.method == "POST":
@@ -1540,10 +1702,34 @@ def reservation_cancel(request, pk):
 @require_POST
 @role_required(User.Role.ADMIN)
 def reservation_convert(request, pk):
+    """Fill a bron from whatever of its marka is on the shelf, oldest lot first.
+
+    Two rules the mijoz is entitled to. FIFO: an older open bron for the same marka
+    must be served first, so nobody is jumped in the queue. Partial: if only some of
+    the kg has landed, that part becomes a sotuv now and the bron stays open for the
+    rest — loads arrive in pieces and making the mijoz wait for a full truck would
+    hold their granula hostage to a later one."""
     reservation = get_object_or_404(Reservation, pk=pk)
-    if reservation.line.arrived is None:
-        messages.error(request, "Lot hali omborga yetib kelmagan")
+    if not reservation.is_open:
+        messages.error(request, "Bu bron ochiq emas")
         return form_reload(request, reverse("reservation_list"))
+
+    queue = bron_queue(reservation.brand)
+    if queue and queue[0].pk != reservation.pk:
+        first = queue[0]
+        messages.error(
+            request,
+            f"Navbat buzilmaydi: {first.brand} bo'yicha birinchi navbatda "
+            f"{first.customer.name} turibdi ({_kg(first.remaining_kg)} kg). "
+            "Avval o'shani bering yoki bronini bekor qiling.")
+        return form_reload(request, reverse("reservation_list"))
+
+    on_shelf = brand_on_hand_kg(reservation.brand)
+    take_total = min(reservation.remaining_kg, on_shelf)
+    if take_total <= 0:
+        messages.error(request, f"{reservation.brand} omborda yo'q — yuk kutilmoqda")
+        return form_reload(request, reverse("reservation_list"))
+
     # The bron's own money shape carries over whole — currency, kurs and both
     # values. A bron struck in so'm must not become a dollar sotuv re-rated at
     # today's kurs, which would quietly change the price the mijoz agreed to.
@@ -1566,26 +1752,46 @@ def reservation_convert(request, pk):
         # not — a bron carrying a narx but no so'm twin still has to become a
         # complete sotuv, so derive the missing side at the bron's own kurs.
         _, price_uzs = convert_pair(price, Currency.USD, reservation.exchange_rate, "0.0001")
-    # Defense-in-depth: reserved kg was validated at reservation time and convert is
-    # net-neutral, but refuse if the lot has since become over-committed (e.g. its kg
-    # was edited down) so a convert can never oversell.
-    if reservation.line.available_kg < 0:
-        messages.error(request, "Lot kg yetarli emas")
-        return form_reload(request, reverse("reservation_list"))
-    sale = Sale.objects.create(
-        customer=reservation.customer, line=reservation.line, kg=reservation.kg,
-        price=price, price_uzs=price_uzs, currency=reservation.currency,
-        exchange_rate=reservation.exchange_rate,
-        date=timezone.localdate(), reservation=reservation, created_by=request.user,
-    )
-    reservation.status = Reservation.Status.CONVERTED
-    reservation.save(update_fields=["status"])
+
+    remaining = take_total
+    slices = []
+    with transaction.atomic():
+        # One Sale per lot slice, exactly as a by-brand sotuv does: each slice keeps
+        # its own lot's landed cost, which differs per truck.
+        for lot in fifo_lots(reservation.brand):
+            if remaining <= 0:
+                break
+            take = min(lot.available_kg, remaining)
+            if take <= 0:
+                continue
+            slices.append(Sale.objects.create(
+                customer=reservation.customer, line=lot, kg=take,
+                price=price, price_uzs=price_uzs, currency=reservation.currency,
+                exchange_rate=reservation.exchange_rate, date=timezone.localdate(),
+                reservation=reservation, created_by=request.user,
+            ))
+            remaining -= take
+        reservation.fulfilled_kg += take_total - remaining
+        if reservation.remaining_kg <= 0:
+            reservation.status = Reservation.Status.CONVERTED
+        reservation.save(update_fields=["fulfilled_kg", "status"])
+
+    left = reservation.remaining_kg
     AuditLog.record(
         request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
-        f"Bron sotuvga aylandi: {reservation.kg} kg · {reservation.customer.name}",
+        f"Brondan sotuv: {_kg(take_total - remaining)} kg {reservation.brand} · "
+        f"{reservation.customer.name}"
+        + (f" · {_kg(left)} kg navbatda qoldi" if left > 0 else " · bron yopildi"),
     )
-    apply_customer_advance(sale)
-    messages.success(request, "Bron sotuvga aylantirildi")
+    for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
+        apply_customer_advance(sale)
+    if left > 0:
+        messages.success(
+            request,
+            f"{_kg(take_total - remaining)} kg sotuvga aylandi — "
+            f"{_kg(left)} kg navbatda qoldi")
+    else:
+        messages.success(request, "Bron to'liq sotuvga aylantirildi")
     return form_reload(request, reverse("reservation_list"))
 
 
@@ -1666,15 +1872,69 @@ def debt_customer(request, pk):
     return render(request, "crm/debt_customer.html", {"customer": customer, "sales": sales})
 
 
-def _uzs_slice(row, part):
-    """The so'm worth of `part` — a commission or a foiz carved out of `row`'s
-    amount — at that row's own kurs. Taken as a fraction of the stored so'm value
-    rather than reconverted, so a derived line can never disagree with its parent
-    over what the kurs was that day."""
-    if not row.amount:
-        return Decimal("0")
-    return (row.amount_uzs * part / row.amount).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP)
+#: How the outflow rows collapse into waterfall steps. Bojxona and transport carry
+#: the load on their own (88% of yuk spend in July), so they get a bar each and the
+#: rest share one — six bars a reader can hold in their head beats twelve they cannot.
+WATERFALL_EXPENSE_GROUPS = [
+    ("customs", "Bojxona"),
+    ("transport", "Transport"),
+]
+WATERFALL_EXPENSE_OTHER = "Boshqa xarajatlar"
+
+
+def _kg(value):
+    """1000.000 → "1 000", 1234.500 → "1 234.5" — kg read the way the money does,
+    space-grouped and without the column's padded decimals."""
+    text = f"{Decimal(value or 0):,.3f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text.replace(",", " ")
+
+
+def _waterfall(opening, opening_uzs, steps):
+    """Lay out a waterfall: turn (label, delta) steps into bars positioned against a
+    shared scale, so the template does no arithmetic.
+
+    Each step's bar spans from the running total before it to the running total
+    after, which is what makes a waterfall readable — the bar IS the movement, and
+    where it sits shows the level it moved from. The opening and closing bars are
+    different animals: they measure from zero, because they are levels, not moves.
+
+    The scale spans every level the balance passes through, so a run that dips
+    negative still fits and the zero line lands where it belongs."""
+    running = opening
+    running_uzs = opening_uzs
+    levels = [opening]
+    rows = []
+    for label, delta, delta_uzs in steps:
+        before = running
+        running += delta
+        running_uzs += delta_uzs
+        levels.append(running)
+        rows.append({"label": label, "amount": delta, "amount_uzs": delta_uzs,
+                     "kind": "in" if delta >= 0 else "out",
+                     "span": (min(before, running), max(before, running)),
+                     "running": running, "running_uzs": running_uzs})
+
+    low, high = min(levels + [Decimal("0")]), max(levels + [Decimal("0")])
+    span = high - low
+    def place(lo, hi):
+        """(left %, width %) — a zero-width bar still gets a hairline to sit on."""
+        if span <= 0:
+            return 0.0, 100.0
+        return (float((lo - low) / span * 100),
+                max(float((hi - lo) / span * 100), 0.35))
+
+    bars = [{"label": "Boshlang'ich qoldiq", "amount": opening, "amount_uzs": opening_uzs,
+             "kind": "total", "running": opening, "running_uzs": opening_uzs,
+             "span": (min(Decimal("0"), opening), max(Decimal("0"), opening))}]
+    bars += rows
+    bars.append({"label": "Qoldiq", "amount": running, "amount_uzs": running_uzs,
+                 "kind": "total", "running": running, "running_uzs": running_uzs,
+                 "span": (min(Decimal("0"), running), max(Decimal("0"), running))})
+    for bar in bars:
+        bar["left"], bar["width"] = place(*bar["span"])
+    return bars, place(Decimal("0"), Decimal("0"))[0]
 
 
 @role_required(User.Role.ADMIN)
@@ -1684,8 +1944,8 @@ def kassa(request):
     Excel-like ledgers side by side — Kirim (customer payments) and Chiqim
     (supplier payments + shipment expenses). Purely derived; ?from&to narrows
     the period section, the hero is all-time."""
-    date_from = (request.GET.get("from") or "").strip()
-    date_to = (request.GET.get("to") or "").strip()
+    date_from = _date_param(request, "from")
+    date_to = _date_param(request, "to")
 
     def _range(qs):
         if date_from:
@@ -1713,16 +1973,80 @@ def kassa(request):
     # Joriy holat (all-time, filter-independent): money physically in the till.
     # The so'm figure is the sum of each row's OWN so'm value, so it is what was
     # actually banked over time — not the dollar total re-rated at today's kurs.
+    # ShipmentExpense.total_out is already zero for a logist-funded row, so the
+    # whole queryset can be summed: the money left when we topped the logist up,
+    # and LogistPayment below is where that shows.
     cash_total = (_in(CustomerPayment.objects.all())
                   - _out(SupplierPayment.objects.all())
-                  - _out(ShipmentExpense.objects.all()))
+                  - _out(ShipmentExpense.objects.all())
+                  - _out(LogistPayment.objects.all()))
     cash_total_uzs = (_in_uzs(CustomerPayment.objects.all())
                       - _out_uzs(SupplierPayment.objects.all())
-                      - _out_uzs(ShipmentExpense.objects.all()))
+                      - _out_uzs(ShipmentExpense.objects.all())
+                      - _out_uzs(LogistPayment.objects.all()))
+
+    # Not all of the till is ours. Money a mijoz has handed over that sits on no
+    # sotuv is held, not earned — cancel the order and it goes back out.
+    advance, advance_uzs = customer_advance_total()
+    own_cash, own_cash_uzs = cash_total - advance, cash_total_uzs - advance_uzs
+
+    # Pozitsiya: what the cash figure MEANS. Cash alone reads as a disaster while
+    # the money is sitting in trucks and mijoz qarzi; these are the lines that say
+    # where it went. Current-state, so the date filter does not touch them.
+    receivable, receivable_uzs, debtors = customer_receivable_total()
+    hamkor = partner_positions()
+    logist_held, logist_held_uzs, logist_owed, logist_owed_uzs = logist_positions()
+    stock, stock_uzs, stock_kg = stock_value()
+    transit, transit_uzs, transit_kg, transit_loads = transit_value()
+    # A board of current facts, not a balance sheet. Each tile is one place money
+    # or goods is sitting RIGHT NOW, says so in plain words, and carries the second
+    # fact that makes it actionable — how many kg, how many mijoz, how many yuk.
+    # Nothing is summed across tiles: adding cash to granula to somebody else's debt
+    # produces a number that describes no actual thing.
+    tiles = [
+        {"label": "Kassada", "amount": cash_total, "amount_uzs": cash_total_uzs,
+         "note": "hozir qo'lda va hisobda turgan pul", "tone": "cash",
+         "meta": f"shundan mijoz avansi {usd(advance)}" if advance else "",
+         "url": reverse("customer_payment_list")},
+        {"label": "Mijozlar qarzi", "amount": receivable, "amount_uzs": receivable_uzs,
+         "note": "mol berilgan, puli hali olinmagan", "tone": "in",
+         "meta": f"{debtors} ta mijozda" if debtors else "",
+         "url": reverse("debt_list")},
+        {"label": "Omborda", "amount": stock, "amount_uzs": stock_uzs,
+         "note": "kelgan, hali sotilmagan mol — tannarxda", "tone": "in",
+         "meta": f"{_kg(stock_kg)} kg", "url": reverse("ombor")},
+        {"label": "Yo'lda", "amount": transit, "amount_uzs": transit_uzs,
+         "note": "jo'natilgan, hali yetib kelmagan mol", "tone": "in",
+         "meta": f"{_kg(transit_kg)} kg · {transit_loads} ta yuk",
+         "url": reverse("shipment_list")},
+        {"label": "Hamkorlarda avansimiz", "amount": hamkor["prepaid"],
+         "amount_uzs": hamkor["prepaid_uzs"], "tone": "in",
+         "note": "yuk kelishidan oldin to'lab qo'yganimiz",
+         "meta": f"{hamkor['contracts']} ta kelishuvda" if hamkor["contracts"] else "",
+         "url": reverse("contract_list")},
+        {"label": "Logistlarda", "amount": logist_held, "amount_uzs": logist_held_uzs,
+         "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
+         "tone": "in", "meta": "", "url": reverse("logist_list")},
+        {"label": "Hamkorlarga qarzimiz", "amount": hamkor["owed"],
+         "amount_uzs": hamkor["owed_uzs"], "tone": "out",
+         "note": "kelgan yuk uchun hali to'lamaganimiz",
+         "meta": f"{hamkor['partners']} ta hamkorga" if hamkor["partners"] else "",
+         "url": reverse("supplier_payment_list")},
+    ]
+    # A logist who fronted their own cash is a debt we owe, and a debt nobody can
+    # see is one nobody pays. Appended only when it exists: unlike every other tile
+    # this one is usually zero, and a permanently empty tile is noise, not a fact.
+    if logist_owed:
+        tiles.append({
+            "label": "Logistlarga qarzimiz", "amount": -logist_owed,
+            "amount_uzs": -logist_owed_uzs, "tone": "out", "meta": "",
+            "note": "o'z pulidan haydovchiga bergani",
+            "url": reverse("logist_list") + "?state=owed"})
 
     cust_pays = _range(CustomerPayment.objects.select_related("customer"))
     sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
-    expenses = _range(ShipmentExpense.objects.select_related("shipment__contract"))
+    expenses = _range(ShipmentExpense.objects.select_related("shipment__contract", "logist"))
+    logist_pays = _range(LogistPayment.objects.select_related("logist"))
 
     balances = {}
     net_in = net_out = Decimal("0")
@@ -1730,10 +2054,12 @@ def kassa(request):
     for value, label in PayMethod.choices:
         m_in = _in(cust_pays.filter(method=value))
         m_out = (_out(sup_pays.filter(method=value))
-                 + _out(expenses.filter(method=value)))
+                 + _out(expenses.filter(method=value))
+                 + _out(logist_pays.filter(method=value)))
         m_in_uzs = _in_uzs(cust_pays.filter(method=value))
         m_out_uzs = (_out_uzs(sup_pays.filter(method=value))
-                     + _out_uzs(expenses.filter(method=value)))
+                     + _out_uzs(expenses.filter(method=value))
+                     + _out_uzs(logist_pays.filter(method=value)))
         balances[value] = {"label": label, "in": m_in, "out": m_out,
                            "balance": m_in - m_out, "in_uzs": m_in_uzs,
                            "out_uzs": m_out_uzs, "balance_uzs": m_in_uzs - m_out_uzs}
@@ -1767,7 +2093,7 @@ def kassa(request):
             # The cut is a slice of the payment, so it inherits that row's kurs
             # rather than being re-rated at today's.
             "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": _uzs_slice(p, p.commission_amount),
+            "amount_uzs": uzs_slice(p, p.commission_amount),
             "amount": p.commission_amount,
         })
     for p in sup_pays:
@@ -1780,7 +2106,30 @@ def kassa(request):
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
         })
+    for p in logist_pays:
+        outflow_rows.append({
+            "kind": "logist", "pk": p.pk, "date": p.date, "obj": p,
+            "title": f"Logist {p.logist.name}ga" + (f" · {p.note}" if p.note else ""),
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.amount_uzs, "amount": p.amount,
+        })
+    for p in logist_pays:
+        if not p.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_logist", "pk": p.pk, "date": p.date, "obj": p,
+            "title": f"Perechisleniya foizi ({p.fee_percent}%) · logist {p.logist.name}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
+        })
+    # Logist-funded expenses are deliberately absent from this ledger: the cash they
+    # cost left as the LogistPayment above, and listing them here would show the
+    # same money going out twice.
     for e in expenses:
+        if not e.from_kassa:
+            continue
         outflow_rows.append({
             "kind": "expense", "pk": e.pk, "date": e.date, "obj": e,
             "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
@@ -1789,7 +2138,7 @@ def kassa(request):
             "amount_uzs": e.amount_uzs, "amount": e.amount,
         })
     for e in expenses:
-        if not e.fee_amount:
+        if not e.fee_amount or not e.from_kassa:
             continue
         outflow_rows.append({
             "kind": "fee_expense", "pk": e.pk, "date": e.date, "obj": e,
@@ -1812,11 +2161,66 @@ def kassa(request):
     for c in Contract.objects.select_related("partner").prefetch_related("shipments"):
         d = c.debt
         if d > 0:
-            usd, uzs = payables.get(c.partner, (Decimal("0"), Decimal("0")))
-            payables[c.partner] = (usd + d, uzs + c.debt_uzs)
+            # Not named `usd`: assigning that name anywhere in this function makes
+            # it local for the WHOLE scope, so the `usd` formatter imported at module
+            # level becomes unreachable everywhere above this line too.
+            dollars, sums = payables.get(c.partner, (Decimal("0"), Decimal("0")))
+            payables[c.partner] = (dollars + d, sums + c.debt_uzs)
     partner_debts = sorted(payables.items(), key=lambda kv: kv[1][0], reverse=True)
     payable_total = sum((d for _, (d, _u) in partner_debts), Decimal("0"))
     payable_total_uzs = sum((u for _, (_d, u) in partner_debts), Decimal("0"))
+
+    # Oqim: the same money as the ledgers below, told as a sequence. The opening
+    # balance is whatever the till had moved to before the period started — with no
+    # filter that is zero, which is honest: the kassa has no kapital rows yet, so
+    # the run genuinely starts from nothing. Adding them later adds a bar, nothing
+    # else changes.
+    if date_from:
+        prior = (CustomerPayment.objects.filter(date__lt=date_from),
+                 SupplierPayment.objects.filter(date__lt=date_from),
+                 ShipmentExpense.objects.filter(date__lt=date_from),
+                 LogistPayment.objects.filter(date__lt=date_from))
+        opening = _in(prior[0]) - sum((_out(q) for q in prior[1:]), Decimal("0"))
+        opening_uzs = _in_uzs(prior[0]) - sum((_out_uzs(q) for q in prior[1:]),
+                                              Decimal("0"))
+    else:
+        opening = opening_uzs = Decimal("0")
+
+    sup_amount = sum((p.amount for p in sup_pays), Decimal("0"))
+    sup_amount_uzs = sum((p.amount_uzs for p in sup_pays), Decimal("0"))
+    commission = commission_total(sup_pays)
+    commission_uzs = sum((p.commission_amount_uzs for p in sup_pays), Decimal("0"))
+    # Outgoing foiz only. A mijoz's perechisleniya foiz never reached the kassa —
+    # `net_in` is already net of it — so billing it again here would take the same
+    # money out twice and the waterfall would stop landing on the ledger total.
+    outgoing = list(sup_pays) + list(expenses) + list(logist_pays)
+    fees = sum((r.fee_amount for r in outgoing), Decimal("0"))
+    fees_uzs = sum((r.fee_amount_uzs for r in outgoing), Decimal("0"))
+
+    logist_amount = sum((p.amount for p in logist_pays), Decimal("0"))
+    logist_amount_uzs = sum((p.amount_uzs for p in logist_pays), Decimal("0"))
+    steps = [("Mijozlardan", net_in, net_in_uzs),
+             ("Hamkorlarga", -sup_amount, -sup_amount_uzs),
+             ("Vositachi ustamasi", -commission, -commission_uzs),
+             ("Logistlarga", -logist_amount, -logist_amount_uzs)]
+    grouped = Decimal("0")
+    grouped_uzs = Decimal("0")
+    kassa_expenses = [e for e in expenses if e.from_kassa]
+    for key, label in WATERFALL_EXPENSE_GROUPS:
+        rows = [e for e in kassa_expenses if e.category == key]
+        steps.append((label, -sum((e.amount for e in rows), Decimal("0")),
+                      -sum((e.amount_uzs for e in rows), Decimal("0"))))
+    known = {key for key, _ in WATERFALL_EXPENSE_GROUPS}
+    for expense in kassa_expenses:
+        if expense.category not in known:
+            grouped += expense.amount
+            grouped_uzs += expense.amount_uzs
+    steps.append((WATERFALL_EXPENSE_OTHER, -grouped, -grouped_uzs))
+    steps.append(("Bank foizi", -fees, -fees_uzs))
+    # A step worth nothing is a bar with no bar — drop it rather than draw a label
+    # against empty space. Bank foizi is usually the one: it is barely used.
+    steps = [s for s in steps if s[1]]
+    waterfall, zero_line = _waterfall(opening, opening_uzs, steps)
 
     # Quick period presets for the filter bar.
     today = timezone.localdate()
@@ -1829,6 +2233,10 @@ def kassa(request):
 
     return render(request, "crm/kassa.html", {
         "cash_total": cash_total, "cash_total_uzs": cash_total_uzs,
+        "advance": advance, "advance_uzs": advance_uzs,
+        "own_cash": own_cash, "own_cash_uzs": own_cash_uzs,
+        "tiles": tiles,
+        "waterfall": waterfall, "zero_line": zero_line,
         "balances": balances, "net_in": net_in, "net_out": net_out,
         "net_total": net_in - net_out,
         "net_in_uzs": net_in_uzs, "net_out_uzs": net_out_uzs,
@@ -1840,11 +2248,27 @@ def kassa(request):
     })
 
 
+def _date_param(request, key):
+    """A ?from / ?to querystring value, or "" when it is not a real YYYY-MM-DD date.
+
+    These land straight in a `date__gte=` filter, and Django raises ValidationError
+    on anything it cannot parse — which escapes the view as a 500. A querystring is
+    typed by hand, kept in bookmarks and copied between screens, so a stale or
+    mistyped one must narrow nothing rather than take the page down."""
+    raw = (request.GET.get(key) or "").strip()
+    if not raw:
+        return ""
+    try:
+        return _date.fromisoformat(raw).isoformat()
+    except ValueError:
+        return ""
+
+
 def _report_filters(request):
     """Parse the shared reports/exports querystring filters (?from&to&partner&brand&status)."""
     return {
-        "date_from": (request.GET.get("from") or "").strip(),
-        "date_to": (request.GET.get("to") or "").strip(),
+        "date_from": _date_param(request, "from"),
+        "date_to": _date_param(request, "to"),
         "partner_id": (request.GET.get("partner") or "").strip(),
         "brand": (request.GET.get("brand") or "").strip(),
         "status_id": (request.GET.get("status") or "").strip(),
@@ -2074,3 +2498,164 @@ def export_debts(request):
         for c in Customer.objects.all() if c.balance > 0
     )
     return xlsx_response("qarzdorlar.xlsx", headers, rows)
+
+
+# ── Logistlar ────────────────────────────────────────────────────────────────────
+#
+# A logist holds our money: we send them a lump, they hand each driver an advance
+# when a yuk goes out. So the list is a balance sheet, not a directory — the name
+# on its own tells you nothing you need.
+
+
+@role_required(User.Role.ADMIN)
+def logist_list(request):
+    q = request.GET.get("q", "").strip()
+    state = request.GET.get("state", "").strip()
+    logists = Logist.objects.prefetch_related(
+        "payments", "driver_advances__shipment", "shipments")
+    if q:
+        logists = logists.filter(Q(name__icontains=q) | Q(phone__icontains=q))
+
+    rows = list(logists)
+    if state == "holding":
+        rows = [x for x in rows if x.balance > 0]
+    elif state == "owed":
+        rows = [x for x in rows if x.balance < 0]
+    elif state == "settled":
+        rows = [x for x in rows if x.balance == 0]
+
+    held, held_uzs, owed, owed_uzs = logist_positions()
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    return render(request, "crm/logist_list.html", {
+        "page": page, "q": q, "state": state,
+        "held": held, "held_uzs": held_uzs, "owed": owed, "owed_uzs": owed_uzs,
+        "has_filters": bool(state),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def logist_detail(request, pk):
+    """One logist's account: every top-up in, every driver advance out, newest
+    first, with the running balance the list page shows."""
+    logist = get_object_or_404(
+        Logist.objects.prefetch_related("payments", "driver_advances__shipment"), pk=pk)
+    rows = []
+    for payment in logist.payments.all():
+        rows.append({"kind": "in", "date": payment.date, "obj": payment,
+                     "title": payment.note or "Bizdan olindi",
+                     "amount": payment.net_amount, "amount_uzs": payment.net_amount_uzs,
+                     "currency": payment.currency, "method": payment.get_method_display(),
+                     "method_code": payment.method})
+    for advance in logist.driver_advances.all():
+        rows.append({"kind": "out", "date": advance.date, "obj": advance,
+                     "title": f"Yuk #{advance.shipment_id} · {advance.get_category_display()}"
+                              + (f" · {advance.note}" if advance.note else ""),
+                     "amount": advance.amount, "amount_uzs": advance.amount_uzs,
+                     "currency": advance.currency, "method": advance.get_method_display(),
+                     "method_code": advance.method})
+    rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
+    page = Paginator(rows, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/logist_detail.html", {"logist": logist, "page": page})
+
+
+@role_required(User.Role.ADMIN)
+def logist_create(request):
+    form = LogistForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            logist = form.save()
+            AuditLog.record(request.user, AuditLog.Action.CREATE, "Logist", logist.pk,
+                            f"Yangi logist: {logist.name}")
+            messages.success(request, "Logist qo'shildi")
+            return form_success(request, reverse("logist_list"))
+        return form_response(request, form, "Yangi logist", invalid=True)
+    return form_response(request, form, "Yangi logist")
+
+
+@role_required(User.Role.ADMIN)
+def logist_edit(request, pk):
+    logist = get_object_or_404(Logist, pk=pk)
+    form = LogistForm(request.POST or None, instance=logist)
+    title = "Logistni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(request.user, AuditLog.Action.UPDATE, "Logist", logist.pk,
+                            f"Logist tahrirlandi: {logist.name}")
+            messages.success(request, "Logist yangilandi")
+            return form_reload(request, reverse("logist_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def logist_delete(request, pk):
+    logist = get_object_or_404(Logist, pk=pk)
+    if request.method == "POST":
+        try:
+            logist.delete()
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Logist", pk,
+                            f"Logist o'chirildi: {logist.name}")
+            messages.success(request, "Logist o'chirildi")
+        except ProtectedError:
+            # PROTECT on both sides: a logist with money or loads behind them is a
+            # piece of the ledger, not a contact card to tidy away.
+            messages.error(request, "Logistga to'lov yoki yuk biriktirilgan")
+        return form_reload(request, reverse("logist_list"))
+    return render_confirm(
+        request, "Logistni o'chirish", f"“{logist.name}” o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="logist_list")
+
+
+@role_required(User.Role.ADMIN)
+def logist_payment_create(request):
+    initial = {}
+    logist_id = request.GET.get("logist")
+    if logist_id and logist_id.isdigit():
+        initial["logist"] = int(logist_id)
+    form = LogistPaymentForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            payment = form.save(commit=False)
+            payment.created_by = request.user
+            payment.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.PAYMENT, "Logistga to'lov", payment.pk,
+                f"Logistga to'lov: {payment.amount}$ · {payment.logist.name}")
+            messages.success(request, "Logistga to'lov qo'shildi")
+            return form_success(request, reverse("logist_list"))
+        return form_response(request, form, "Logistga to'lov", invalid=True)
+    return form_response(request, form, "Logistga to'lov")
+
+
+@role_required(User.Role.ADMIN)
+def logist_payment_edit(request, pk):
+    payment = get_object_or_404(LogistPayment, pk=pk)
+    form = LogistPaymentForm(request.POST or None, instance=payment)
+    title = "To'lovni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Logistga to'lov", payment.pk,
+                f"Logistga to'lov tahrirlandi: {payment.amount}$ · {payment.logist.name}")
+            messages.success(request, "To'lov yangilandi")
+            return form_reload(request, reverse("logist_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def logist_payment_delete(request, pk):
+    payment = get_object_or_404(LogistPayment, pk=pk)
+    if request.method == "POST":
+        label = f"{payment.amount}$ · {payment.logist.name}"
+        payment.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Logistga to'lov", pk,
+                        f"Logistga to'lov o'chirildi: {label}")
+        messages.success(request, "To'lov o'chirildi")
+        return form_reload(request, reverse("logist_list"))
+    return render_confirm(
+        request, "To'lovni o'chirish",
+        f"“{payment.amount}$ · {payment.logist.name}” to'lovi o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="logist_list")

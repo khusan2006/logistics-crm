@@ -5,7 +5,7 @@
 <div class="card" style="max-width: 560px;">
   <form method="post" class="stacked">
     {% csrf_token %}
-    {{ form.as_p }}
+    {% include "crm/_form_fields.html" %}
     {% if lines %}{% include "crm/_line_fields.html" %}{% endif %}
     {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
     <button type="submit" class="btn">Saqlash</button>

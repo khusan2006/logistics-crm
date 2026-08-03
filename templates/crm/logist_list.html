@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Logistlar · GranulaLog{% endblock %}
+{% block topbar_title %}Logistlar{% endblock %}
+{% block fab %}
+<a class="fab" href="{% url 'logist_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Pul yuborish</a>
+<a class="fab fab--muted" href="{% url 'logist_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi logist</a>
+{% endblock %}
+{% block content %}
+
+{% comment %}
+Two current-state figures, the same shape the kassa uses. A logist holds our money
+between the day we send it and the day a driver takes it, so "how much is out there"
+is the question this page opens with — not how many logistlar there are.
+{% endcomment %}
+<div class="ktiles">
+  <a class="ktile ktile--in" href="?state=holding">
+    <div class="ktile-label">Logistlarda turgan pulimiz</div>
+    <div class="ktile-num">{{ held|usd }}</div>
+    <div class="ktile-som">{{ held_uzs|som }}</div>
+    <div class="ktile-note">yuborilgan, hali haydovchilarga berilmagan</div>
+  </a>
+  <a class="ktile ktile--out" href="?state=owed">
+    <div class="ktile-label">Logistlarga qarzimiz</div>
+    <div class="ktile-num">{{ owed|usd }}</div>
+    <div class="ktile-som">{{ owed_uzs|som }}</div>
+    <div class="ktile-note">o'z pulidan haydovchiga bergani</div>
+  </a>
+</div>
+
+<form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Ism yoki telefon bo'yicha qidirish…" autocomplete="off" aria-label="Logist qidirish">
+    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+  <label>Holat
+    <select name="state">
+      <option value=""{% if not state %} selected{% endif %}>Hammasi</option>
+      <option value="holding"{% if state == "holding" %} selected{% endif %}>Pulimiz turibdi</option>
+      <option value="owed"{% if state == "owed" %} selected{% endif %}>Bizning qarzimiz</option>
+      <option value="settled"{% if state == "settled" %} selected{% endif %}>Hisob teng</option>
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
+  {% if has_filters or q %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
+</form>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Logist</th>
+    <th>Telefon</th>
+    <th class="num" title="Biz yuborgan pul — bank foizi ayirilgan holda">Yuborilgan</th>
+    <th class="num" title="Haydovchilarga bergani — yuklarning tannarxiga kirgan">Haydovchilarga</th>
+    <th class="num">Qoldiq</th>
+    <th class="num">Yuklar</th>
+    <th></th>
+  </tr>
+  {% for l in page %}
+  <tr>
+    <td class="sticky-col"><a href="{% url 'logist_detail' l.pk %}">{{ l.name }}</a></td>
+    <td class="muted">{{ l.phone|default:"—" }}</td>
+    <td class="num">{% money_both l.received_total l.received_total_uzs %}</td>
+    <td class="num">{% money_both l.paid_total l.paid_total_uzs %}</td>
+    {% comment %}
+    Positive = our money still in their pocket; negative = they fronted it and we
+    owe them. Both are normal, so both get a colour rather than one being an error.
+    {% endcomment %}
+    <td class="num">
+      {% if l.balance > 0 %}<span class="badge badge-ok">{% money_both l.balance l.balance_uzs %}</span>
+      {% elif l.balance < 0 %}<span class="badge badge-warning">{% money_both l.balance l.balance_uzs %}</span>
+      {% else %}<span class="muted">0</span>{% endif %}
+    </td>
+    <td class="num muted">{{ l.shipments.count }}</td>
+    <td class="row-actions">
+      <a class="btn btn-ghost btn-sm" href="{% url 'logist_payment_create' %}?logist={{ l.pk }}" data-modal>Pul yuborish</a>
+      <a class="icon-action act-edit" href="{% url 'logist_edit' l.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'logist_delete' l.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% include "crm/_pagination.html" with label="logist" %}
+{% else %}
+<p class="muted">Logistlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtr bo'yicha{% endif %}.</p>
+{% endif %}
+
+{% endblock %}

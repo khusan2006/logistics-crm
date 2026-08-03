@@ -8,70 +8,95 @@
 {% endblock %}
 {% block content %}
 
-{# Joriy holat — kassadagi pul vs hamkorlarga qarz #}
-<p class="section-eyebrow">Joriy holat</p>
-<section class="balance-hero" aria-label="Kassa holati">
-  <div class="balance-hero-grid">
-    <div class="balance-cell">
-      <div class="balance-cap"><span class="balance-ic balance-ic--cash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="12" cy="14" r="1.5"/></svg></span>Kassadagi pul</div>
-      <div class="balance-num">{% money_both cash_total cash_total_uzs %}</div>
-      <div class="balance-note">kirim − chiqim, boshidan</div>
-    </div>
-    <div class="balance-cell">
-      <div class="balance-cap"><span class="balance-ic balance-ic--debt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20"/><path d="M4 20V8l8-5 8 5v12"/></svg></span>Hamkorlarga qarzimiz</div>
-      <div class="balance-num">{% money_both payable_total payable_total_uzs %}</div>
-      <div class="balance-note">yuborilgan yuklar bo'yicha to'lanmagani</div>
-    </div>
-  </div>
-</section>
-
-<form method="get" class="searchbar" style="margin-bottom: 6px;">
-  <label>Boshlanish <input type="date" name="from" value="{{ date_from }}"></label>
-  <label>Tugash <input type="date" name="to" value="{{ date_to }}"></label>
-  <button type="submit" class="btn">Filtrlash</button>
-</form>
-<div class="status-tabs" style="margin-bottom: 16px;">
-  {% for label, f, t in presets %}
-  <a class="status-tab{% if date_from == f and date_to == t %} is-active{% endif %}"
-     href="?{% if f %}from={{ f }}&to={{ t }}{% endif %}">{{ label }}</a>
+{% comment %}
+Hozirgi holat as a board of facts, not a balance sheet. Six tiles, each one place
+money or goods is sitting right now, each with the second fact that makes it
+actionable — kg, mijoz count, yuk count — and each linking to the screen where you
+act on it. Nothing is summed across them on purpose: adding cash to granula to
+somebody else's unpaid invoice gives a number that describes no actual thing.
+{% endcomment %}
+<div class="ktiles">
+  {% for t in tiles %}
+  <a class="ktile ktile--{{ t.tone }}" href="{{ t.url }}">
+    <div class="ktile-label">{{ t.label }}</div>
+    <div class="ktile-num">{{ t.amount|usd }}</div>
+    <div class="ktile-som">{{ t.amount_uzs|som }}</div>
+    <div class="ktile-note">{{ t.note }}</div>
+    {% if t.meta %}<div class="ktile-meta">{{ t.meta }}</div>{% endif %}
+  </a>
   {% endfor %}
 </div>
+<p class="ktiles-foot">
+  Hammasi <b>bugungi holat</b> — pastdagi sana filtri bu raqamlarga ta'sir qilmaydi.
+  Kassadagi raqam tizim boshlangandan beri bo'lgan kirim va chiqim ayirmasi; biznesni
+  moliyalashtirgan kapital hali kirim sifatida kiritilmagan.
+</p>
 
-{# Shu davr — tanlangan sana bo'yicha usul kesimida #}
-<p class="section-eyebrow">Shu davr · tanlangan sana bo'yicha</p>
-<div class="kpi-grid">
-  <div class="kpi {% if balances.cash.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
-    <div class="kpi-head"><span class="kpi-label">Naqd</span></div>
-    <div class="kpi-value">{% money_both balances.cash.balance balances.cash.balance_uzs %}</div>
-    <div class="kpi-meta muted">
-      <span class="avans">+{% money_both balances.cash.in balances.cash.in_uzs %}</span>
-      <span class="late">−{% money_both balances.cash.out balances.cash.out_uzs %}</span>
-    </div>
+<form method="get" class="kassa-filter">
+  <div class="status-tabs">
+    {% for label, f, t in presets %}
+    <a class="status-tab{% if date_from == f and date_to == t %} is-active{% endif %}"
+       href="?{% if f %}from={{ f }}&to={{ t }}{% endif %}">{{ label }}</a>
+    {% endfor %}
   </div>
-  <div class="kpi {% if balances.card.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
-    <div class="kpi-head"><span class="kpi-label">Karta</span></div>
-    <div class="kpi-value">{% money_both balances.card.balance balances.card.balance_uzs %}</div>
-    <div class="kpi-meta muted">
-      <span class="avans">+{% money_both balances.card.in balances.card.in_uzs %}</span>
-      <span class="late">−{% money_both balances.card.out balances.card.out_uzs %}</span>
+  {% comment %}
+  One "Davr" control, not two labelled inputs: the pair plus the presets plus the
+  button overran the row and dropped the button onto a line of its own.
+  {% endcomment %}
+  <label class="kassa-range">Davr
+    <input type="date" name="from" value="{{ date_from }}" aria-label="Boshlanish sanasi">
+    <span aria-hidden="true">–</span>
+    <input type="date" name="to" value="{{ date_to }}" aria-label="Tugash sanasi">
+  </label>
+  <button type="submit" class="btn btn-sm">Filtrlash</button>
+</form>
+
+<div class="kassa-grid">
+  {% comment %}
+  Oqim — the period's money as a sequence. Each bar spans from the balance before
+  the step to the balance after, so the bar IS the movement and where it sits is
+  the level it moved from. The closing bar has to land on Kassadagi pul above.
+
+  `u` on every floatformat is load-bearing: the active locale writes a decimal with
+  a comma, and `left: 70,72%` is not a length — the bars silently collapse to zero
+  width while every figure beside them stays correct.
+  {% endcomment %}
+  <section class="card kcard" style="--zero: {{ zero_line|floatformat:"2u" }}%;">
+    <div class="kcard-head">
+      <h2>Oqim</h2>
+      <span class="kcard-note">tanlangan davrda pul qayerdan kelib qayerga ketdi</span>
     </div>
-  </div>
-  <div class="kpi {% if balances.transfer.balance < 0 %}kpi--red{% else %}kpi--green{% endif %}">
-    <div class="kpi-head"><span class="kpi-label">Bank</span></div>
-    <div class="kpi-value">{% money_both balances.transfer.balance balances.transfer.balance_uzs %}</div>
-    <div class="kpi-meta muted">
-      <span class="avans">+{% money_both balances.transfer.in balances.transfer.in_uzs %}</span>
-      <span class="late">−{% money_both balances.transfer.out balances.transfer.out_uzs %}</span>
+    {% comment %}
+    The method split lives HERE, not in the band above: it is filtered by the date
+    range like everything else in this card, while both figures in the band are
+    current-state. Sitting in the band it looked like the same kind of number and
+    silently changed when the filter moved.
+    {% endcomment %}
+    <div class="kmethods">
+      {% for key, b in balances.items %}
+      <div class="ksm">
+        <div class="ksm-label">{{ b.label }}</div>
+        <div class="ksm-val">{{ b.balance|usd }}</div>
+        <div class="ksm-flow">
+          <span class="avans">kirim {{ b.in|usd }}</span>
+          <span class="late">chiqim {{ b.out|usd }}</span>
+        </div>
+      </div>
+      {% endfor %}
     </div>
-  </div>
-  <div class="kpi {% if net_total < 0 %}kpi--red{% else %}kpi--blue{% endif %}">
-    <div class="kpi-head"><span class="kpi-label">Jami</span></div>
-    <div class="kpi-value">{% money_both net_total net_total_uzs %}</div>
-    <div class="kpi-meta muted">
-      <span class="avans">+{% money_both net_in net_in_uzs %}</span>
-      <span class="late">−{% money_both net_out net_out_uzs %}</span>
+    <div class="waterfall">
+      {% for b in waterfall %}
+      <div class="wf-row wf-{{ b.kind }}" {% if b.kind != "total" %}title="Qoldiq: {{ b.running|usd }}"{% endif %}>
+        <div class="wf-label">{{ b.label }}</div>
+        <div class="wf-track">
+          <div class="wf-bar" style="left: {{ b.left|floatformat:"2u" }}%; width: {{ b.width|floatformat:"2u" }}%;"></div>
+        </div>
+        <div class="wf-amount">{{ b.amount|usd }}</div>
+      </div>
+      {% endfor %}
     </div>
-  </div>
+  </section>
+
 </div>
 
 <div class="grid-2 kassa-ledger">
@@ -171,24 +196,9 @@
   </div>
 </div>
 
-{% if partner_debts %}
-<div class="card" style="margin-top: 16px;">
-  <h3 style="margin: 0 0 10px;">Hamkorlarga qarzimiz</h3>
-  <div class="table-wrap">
-  <table>
-    <tr><th class="sticky-col">Hamkor</th><th>Qarz</th><th></th></tr>
-    {# each row is (partner, (dollar debt, so'm debt)) — summed per kelishuv #}
-    {% for partner, debt in partner_debts %}
-    <tr>
-      <td class="sticky-col">{{ partner.name }}</td>
-      <td class="late">{% money_both debt.0 debt.1 %}</td>
-      <td class="row-actions">
-        <a class="btn btn-ghost btn-sm" href="{% url 'supplier_payment_create' %}" data-modal>To'lash</a>
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
-  </div>
-</div>
-{% endif %}
+{% comment %}
+The per-hamkor breakdown used to be a third table down here, repeating a figure
+Pozitsiya already states. It now lives inside that card, next to the total it
+belongs to.
+{% endcomment %}
 {% endblock %}

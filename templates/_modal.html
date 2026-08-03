@@ -4,7 +4,7 @@
 </div>
 <form method="post" action="{{ request.path }}" class="stacked">
   {% csrf_token %}
-  {{ form.as_p }}
+  {% include "crm/_form_fields.html" %}
   {% if lines %}{% include "crm/_line_fields.html" %}{% endif %}
   {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
   <div class="modal-actions">

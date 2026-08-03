@@ -1,0 +1,46 @@
+{% comment %}
+Renders a form's visible fields, boxing any the form declares as a group.
+
+A form opts in with:
+
+    field_groups = [("Legend", ["field_a", "field_b"])]
+
+Fields keep their declared order; when the first field of a group comes up the
+whole group is drawn inside one <fieldset>, and the rest are skipped in place.
+Forms that declare nothing render exactly as they always did.
+
+This exists because a modal can carry two of the same field. The yuk form has a
+Valyuta and a kurs for the driver's advance AND one on every Mahsulot row — as a
+flat list those read as one stray pair of pickers belonging to nothing.
+{% endcomment %}
+{% comment %}
+The fallback is load-bearing: a form without the mixin has no `rendered_fields`,
+and a missing attribute in a Django template resolves to empty — so without this
+every ungrouped form in the app rendered zero fields and saved nothing.
+{% endcomment %}
+{% if not form.rendered_fields %}{{ form.as_p }}{% else %}
+{% for item in form.rendered_fields %}
+  {% if item.group %}
+  <fieldset class="fieldgroup">
+    <legend>{{ item.legend }}</legend>
+    {% for field in item.fields %}
+    <p>
+      <label for="{{ field.id_for_label }}">{{ field.label }}:</label>
+      {{ field }}
+      {% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}
+      {% if field.errors %}<ul class="errorlist">{% for e in field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+    </p>
+    {% endfor %}
+  </fieldset>
+  {% else %}
+  <p>
+    <label for="{{ item.field.id_for_label }}">{{ item.field.label }}:</label>
+    {{ item.field }}
+    {% if item.field.help_text %}<span class="helptext">{{ item.field.help_text }}</span>{% endif %}
+    {% if item.field.errors %}<ul class="errorlist">{% for e in item.field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+  </p>
+  {% endif %}
+{% endfor %}
+{% for field in form.hidden_fields %}{{ field }}{% endfor %}
+{% if form.non_field_errors %}<ul class="errorlist">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+{% endif %}

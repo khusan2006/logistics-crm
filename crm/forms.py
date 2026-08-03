@@ -6,9 +6,11 @@ from django.urls import reverse_lazy
 from django.utils import timezone
 
 from .models import (
-    Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation, Return,
-    Sale, Shipment, ShipmentExpense, ShipmentLeg, ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_stock_costed, convert_pair,
+    LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment, Logist,
+    LogistPayment, Partner,
+    PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
+    ShipmentLine, ShipmentStatus, SupplierPayment,
+    arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .templatetags.crm_extras import rate, som, usd
@@ -29,6 +31,36 @@ def _group_thousands(field):
     (data-money). The JS strips the spaces back to a plain number right before the
     form is submitted, so the server still receives 1000000."""
     field.widget.attrs["data-money"] = ""
+
+
+class GroupedFieldsMixin:
+    """Lets a form box a run of related fields under one legend.
+
+    Declare `field_groups = [("Legend", ["a", "b"])]`; `_form_fields.html` walks
+    `rendered_fields()` and draws those inside a <fieldset>. A form that declares
+    nothing renders exactly as before, so this is opt-in per form rather than a
+    change to how every form looks."""
+
+    #: [(legend, [field names])] — grouped where they first appear, in field order.
+    field_groups = []
+
+    def rendered_fields(self):
+        groups = {names[0]: (legend, names) for legend, names in self.field_groups}
+        grouped = {name for _, names in self.field_groups for name in names}
+        items = []
+        for field in self.visible_fields():
+            if field.name in groups:
+                legend, names = groups[field.name]
+                items.append({
+                    "group": True, "legend": legend,
+                    # `self[name]` not `field`: the group lists names, and pulling
+                    # each bound field by name keeps them in the legend's order
+                    # rather than the form's, and survives a missing one.
+                    "fields": [self[n] for n in names if n in self.fields],
+                })
+            elif field.name not in grouped:
+                items.append({"group": False, "field": field})
+        return items
 
 
 class FeePercentFormMixin:
@@ -109,6 +141,30 @@ class MoneyEntryFormMixin:
         # (24 000 kg on a truck), so it gets the same as-you-type grouping.
         if "kg" in self.fields:
             _group_thousands(self.fields["kg"])
+        self._seed_typed_side()
+
+    def _seed_typed_side(self):
+        """Open an existing so'm row showing the so'm figure, not the dollar one.
+
+        The typed field IS the USD column (`amount` / `price`); the so'm twin is not
+        a form field at all (see _post_clean). So a ModelForm binding an existing row
+        puts the DOLLAR value into the one visible money box — a box labelled so'm on
+        a so'm row, and re-read as so'm when the form comes back.
+
+        That is how a 12 000 000 so'm to'lov returned as 1 000 so'm after an Save
+        with nothing touched: 1 000 went out as the box's value and came back in as
+        the typed so'm amount, then divided by the kurs into $0.08.
+
+        Only the UNBOUND case matters — a bound form renders what was posted — and
+        only a row that already exists: a blank form has nothing to restore."""
+        instance = getattr(self, "instance", None)
+        if instance is None or not getattr(instance, "pk", None):
+            return
+        if getattr(instance, "currency", None) != Currency.UZS:
+            return
+        typed = getattr(instance, self.uzs_field, None)
+        if typed is not None:
+            self.initial[self.typed_field] = typed
 
     def clean(self):
         cleaned = super().clean()
@@ -369,11 +425,11 @@ class ContractLineChoiceSelect(forms.Select):
         return option
 
 
-class ShipmentForm(forms.ModelForm):
+class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent", "eta", "responsible",
+        fields = ["contract", "status", "sent", "eta", "logist", "responsible",
                   "driver_name", "driver_phone", "transport", "container", "note"]
         widgets = {
             "contract": forms.Select(attrs={"data-contract-source": ""}),
@@ -392,8 +448,67 @@ class ShipmentForm(forms.ModelForm):
         }
         labels = {"sent": "Jo'natiladigan sana"}
 
+    # Declaration order puts extra fields after the model's, which stranded the
+    # advance at the bottom of the form — three fields about the logist, six fields
+    # away from the logist picker. The generic template renders `form` in order, so
+    # the order is set here rather than by hand-writing a template.
+    field_order = ["contract", "status", "sent", "eta",
+                   "logist", "driver_advance",
+                   "responsible", "driver_name", "driver_phone",
+                   "transport", "container", "note"]
+
+    # Boxed together under one legend. This modal ALSO carries a Valyuta and a kurs
+    # on every Mahsulot row, so two unboxed currency labels would leave the operator
+    # guessing which amount each belongs to. The box says: these four are one thing.
+    field_groups = [("Logist va haydovchi avansi", ["logist", "driver_advance"])]
+
+    # The advance is handed over as the truck leaves, so it belongs to the dispatch
+    # form rather than to a later xarajat entry. Three fields because it is money:
+    # a figure alone has no so'm twin and could never join a so'm total.
+    driver_advance = forms.DecimalField(
+        label="Haydovchiga avans ($)", max_digits=14, decimal_places=2,
+        required=False, min_value=Decimal("0"),
+        widget=forms.NumberInput(attrs={"placeholder": "0", "step": "0.01"}),
+        help_text="Logist yo'lga chiqishda haydovchiga bergan pul — uning balansidan "
+                  "yechiladi, kassadan qayta chiqmaydi. Faqat dollarda; so'm qiymati "
+                  "shu logistga oxirgi to'lov kursida hisoblanadi.")
     def clean_driver_phone(self):
         return validate_intl_phone(self.cleaned_data.get("driver_phone"))
+
+    def sync_driver_advance(self, shipment, user):
+        """Create, update or remove the yuk's driver advance to match the form.
+
+        One row, found by its flag rather than by category or logist: a logist may
+        also have paid this load's bojxona, and rewriting that by accident would
+        move money between two lines that have nothing to do with each other."""
+        existing = shipment.expenses.filter(is_driver_advance=True).first()
+        amount = self.cleaned_data.get("driver_advance")
+        logist = self.cleaned_data.get("logist")
+        if not amount or not logist:
+            # Cleared, or the logist was removed — the advance goes with it, and
+            # the yuk's tannarx drops back by that much.
+            if existing:
+                existing.delete()
+            return None
+        # Dollars, at the kurs that logist's own funding was converted at: the
+        # advance is paid out of money we already sent them, so re-rating it at
+        # today's kurs would give it a so'm value that money never had.
+        rate = logist.latest_rate
+        usd_value, uzs_value = convert_pair(amount, Currency.USD, rate)
+        fields = {
+            "amount": usd_value, "amount_uzs": uzs_value,
+            "currency": Currency.USD, "exchange_rate": rate,
+            "logist": logist, "category": ShipmentExpense.Category.TRANSPORT,
+            "date": shipment.sent or timezone.localdate(),
+        }
+        if existing:
+            for key, value in fields.items():
+                setattr(existing, key, value)
+            existing.save()
+            return existing
+        return ShipmentExpense.objects.create(
+            shipment=shipment, is_driver_advance=True, method=PayMethod.CASH,
+            note="Haydovchiga avans", created_by=user, **fields)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -408,6 +523,14 @@ class ShipmentForm(forms.ModelForm):
         self.fields["contract"].queryset = _keep_if(
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
+        self.fields["logist"].empty_label = "Logistsiz"
+        _group_thousands(self.fields["driver_advance"])
+        # Editing a yuk shows the advance already recorded — otherwise saving an
+        # untouched form would wipe it.
+        if self.instance.pk and not self.is_bound:
+            advance = self.instance.expenses.filter(is_driver_advance=True).first()
+            if advance:
+                self.initial.setdefault("driver_advance", advance.amount)
 
     def clean_transport(self):
         """Free text. There used to be a plate-shaped regex here, which rejected
@@ -426,6 +549,12 @@ class ShipmentForm(forms.ModelForm):
         sent, eta = cleaned.get("sent"), cleaned.get("eta")
         if sent and eta and eta < sent:
             self.add_error("eta", "Kelish sanasi jo'natish sanasidan oldin bo'la olmaydi")
+        # An advance with nobody behind it has no balance to come out of, and would
+        # silently become an ordinary kassa expense — the exact double-count this
+        # whole feature exists to prevent. No kurs check: it is not asked for, it
+        # comes off the logist's own funding.
+        if cleaned.get("driver_advance") and not cleaned.get("logist"):
+            self.add_error("logist", "Avansni kim berdi? Logistni tanlang")
         return cleaned
 
 
@@ -628,12 +757,18 @@ class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
         # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
         # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
         # readable ("24000", not Decimal.normalize()'s "2.4E+4").
+        # FREE kg, not on-hand: bronned granula is promised to a queue and must not
+        # be sellable over the counter. The option says both figures so the operator
+        # can see where the difference went rather than wondering.
         costed = brand_stock_costed()
-        self.stock = {b: avail for b, avail, _, _ in costed}
+        self.stock = {row["brand"]: row["free"] for row in costed}
         self.fields["brand"].choices = [
-            (b, f"{b} · {', '.join(kods)} · {_clean_number(avail)} kg · "
-                f"{_clean_number(cost.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for b, avail, cost, kods in costed
+            (row["brand"],
+             f"{row['brand']} · {', '.join(row['codes'])} · "
+             f"{_clean_number(row['free'])} kg bo'sh"
+             + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
+             + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
+            for row in costed if row["free"] > 0
         ]
 
     def clean(self):
@@ -644,7 +779,9 @@ class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
         if brand and kg is not None and kg > 0:
             available = self.stock.get(brand, Decimal("0"))
             if kg > available:
-                self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+                self.add_error(
+                    "kg", f"Sotish mumkin bo'lgan qoldiqdan oshmasligi kerak "
+                          f"({_clean_number(available)} kg — qolgani bronlangan)")
         return cleaned
 
 
@@ -678,9 +815,19 @@ class SaleLotForm(PriceEntryFormMixin, forms.ModelForm):
         lot, kg = cleaned.get("lot"), cleaned.get("kg")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if lot and kg is not None and kg > 0 and kg > lot.available_kg:
-            self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
-                                 f"({lot.available_kg.normalize()} kg)")
+        if lot and kg is not None and kg > 0:
+            # Two ceilings, both real: this lot's own physical kg, and what is left
+            # of the marka once the bron queue has its share. Selling one lot dry is
+            # still overselling if the granula was promised to somebody.
+            if kg > lot.available_kg:
+                self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
+                                     f"({_clean_number(lot.available_kg)} kg)")
+            else:
+                free = brand_free_kg(lot.brand)
+                if kg > free:
+                    self.add_error(
+                        "kg", f"Bu markadan {_clean_number(free)} kg sotish mumkin — "
+                              "qolgani bronlangan")
         return cleaned
 
 
@@ -719,31 +866,54 @@ class SaleForm(PriceEntryFormMixin, forms.ModelForm):
 
 
 class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
-    """A reservation can target an arrived OR in-transit lot — sold_kg is 0 on an
-    in-transit lot, so reservable there is simply kg minus other active reservations."""
+    """A bron is taken against a MARKA, not a lot: whichever kelishuv's truck lands
+    first with that granula fills it. So the choice list is every marka still coming
+    on a kelishuv plus everything already in the ombor — deliberately including
+    markalar with zero stock today, since booking ahead is the point.
+
+    There is no kg ceiling here for the same reason. Reserving 40 000 kg against a
+    kelishuv that has not shipped yet is normal business, and capping the bron at
+    today's shelf would forbid exactly the case this screen exists for."""
 
     #: the narx is optional on a bron — the price can be agreed later
     allow_blank = True
 
+    brand = forms.ChoiceField(label="Marka")
+
     class Meta:
         model = Reservation
-        fields = ["customer", "line", "kg", "currency", "price", "exchange_rate", "note"]
+        fields = ["customer", "brand", "kg", "currency", "price", "exchange_rate", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 2})}
 
-    def clean(self):
-        cleaned = super().clean()
-        line, kg = cleaned.get("line"), cleaned.get("kg")
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        stock = {row["brand"]: row for row in brand_stock_costed()}
+        choices = []
+        for brand in bron_brands():
+            row = stock.get(brand)
+            if row and row["free"] > 0:
+                hint = f"omborda {_clean_number(row['free'])} kg bo'sh"
+            elif row:
+                hint = f"omborda {_clean_number(row['on_hand'])} kg, hammasi bronlangan"
+            else:
+                hint = "hozircha omborda yo'q — kelganda navbat bo'yicha beriladi"
+            choices.append((brand, f"{brand} · {hint}"))
+        self.fields["brand"].choices = choices
+        # An existing bron keeps its marka even if that marka has since dropped off
+        # the list, so editing one never silently rewrites what was reserved.
+        if self.instance.pk and self.instance.brand not in dict(choices):
+            self.fields["brand"].choices = [
+                (self.instance.brand, self.instance.brand)] + choices
+
+    def clean_kg(self):
+        kg = self.cleaned_data.get("kg")
         if kg is not None and kg <= 0:
-            self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if line and kg is not None and kg > 0:
-            other_reserved = sum(
-                (r.kg for r in line.reservations.filter(status="active").exclude(pk=self.instance.pk)),
-                Decimal("0"),
-            )
-            reservable = line.kg - line.sold_kg - other_reserved
-            if kg > reservable:
-                self.add_error("kg", f"Bron miqdori qolgan kg dan oshmasligi kerak ({reservable} kg)")
-        return cleaned
+            raise forms.ValidationError("Kg musbat bo'lishi kerak")
+        if kg is not None and self.instance.pk and kg < self.instance.fulfilled_kg:
+            raise forms.ValidationError(
+                f"Allaqachon {_clean_number(self.instance.fulfilled_kg)} kg berilgan — "
+                "bundan kam qilib bo'lmaydi")
+        return kg
 
 
 class ReturnForm(PriceEntryFormMixin, forms.ModelForm):
@@ -869,61 +1039,230 @@ CustomerPaymentFormSet = forms.modelformset_factory(
     extra=1, can_delete=True)
 
 
-class ExpenseTargetForm(forms.Form):
-    """The header of a multi-row xarajat modal: which yuk, and the date they all
-    share. Xarajatlar are entered per trip, so repeating the date on every row
-    only invited them to disagree.
+class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
+    """Every xarajat turkum as its own small box, filled in one pass.
 
-    The yuk rides here because the rows say nothing about which load they belong
-    to and the modal posts to a path with no query string."""
+    The old shape asked the operator to add a row, pick a turkum from a dropdown,
+    type a figure, add another row, pick again — for costs they already know as a
+    set ("bojxona 3200, deklarant 175, gruzchi 65"). Here the turkumlar are the
+    form: seven labelled boxes, type into the ones that apply, leave the rest blank.
+
+    Valyuta, kurs and to'lov usuli are asked once and shared. That is not a
+    simplification of the data — across every yuk in the books, the method has never
+    differed between one truck's xarajatlar. A line that genuinely needs its own
+    method is still one more submission away."""
+
+    #: (model category value, label) — the grid's order, which is the order the
+    #: money is actually spent on a load rather than alphabetical.
+    CATEGORIES = ShipmentExpense.Category.choices
 
     shipment = forms.ModelChoiceField(queryset=Shipment.objects.all(),
                                       widget=forms.HiddenInput)
     date = forms.DateField(label="Sana", widget=date_widget(),
                            initial=timezone.localdate)
+    # Radios, not selects: two and three options respectively, so a dropdown hides
+    # the whole choice behind a click to show what a segmented control states
+    # outright — and the method colours already mean something everywhere else.
+    currency = forms.ChoiceField(label="Valyuta", choices=Currency.choices,
+                                 initial=Currency.USD, widget=forms.RadioSelect)
+    method = forms.ChoiceField(label="To'lov usuli", choices=PayMethod.choices,
+                               initial=PayMethod.CASH, widget=forms.RadioSelect)
+    exchange_rate = forms.DecimalField(
+        label="Dollar kursi (1$ = so'm)", max_digits=12, decimal_places=2,
+        initial=LEGACY_RATE)
+    fee_percent = forms.DecimalField(
+        label="Perechisleniya foizi (%)", max_digits=5, decimal_places=2,
+        required=False, initial=0,
+        help_text="Bank orqali to'langan xarajatlarga qo'llanadi — turkum o'zinikini "
+                  "kiritsa, o'shanisi ustun")
+    note = forms.CharField(label="Izoh", max_length=255, required=False,
+                           widget=forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}))
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for value, label in self.CATEGORIES:
+            field = forms.DecimalField(
+                label=label, max_digits=14, decimal_places=2, required=False,
+                min_value=Decimal("0"),
+                widget=forms.NumberInput(attrs={"placeholder": "0", "step": "0.01"}))
+            self.fields[self.field_name(value)] = field
+            _group_thousands(field)
+            # Same hook the single-amount forms use, on every box: the Valyuta
+            # picker above is shared, so switching it previews all seven at once.
+            field.widget.attrs["data-money-amount"] = ""
+            # Per-turkum overrides, blank = "use the shared one above". Folded away
+            # in a <details> so the common case — one truck, one way of paying —
+            # stays a plain grid of figures, while a bojxona paid by bank in so'm
+            # alongside a cash gruzchi is still one submission.
+            # Short option text: these sit in ~86px dropdowns beside the figure, and
+            # the blank one doubles as the placeholder — an untouched box reads
+            # "Valyuta" / "Usul", which is exactly what "not overridden" means.
+            self.fields[self.currency_name(value)] = forms.ChoiceField(
+                label="Valyuta", required=False, initial="",
+                choices=[("", "Valyuta"), (Currency.USD, "$"), (Currency.UZS, "so'm")],
+                widget=forms.Select(attrs={"class": "xmini"}))
+            self.fields[self.method_name(value)] = forms.ChoiceField(
+                label="To'lov usuli", required=False, initial="",
+                choices=[("", "Usul"), (PayMethod.CASH, "Naqd"),
+                         (PayMethod.CARD, "Karta"), (PayMethod.TRANSFER, "Bank")],
+                widget=forms.Select(attrs={"class": "xmini"}))
+            # The foiz belongs to the row that was actually wired, not to the trip.
+            # One truck routinely pays a bojxona by bank and a gruzchi in cash, and
+            # the banks the business uses do not all charge the same — so a single
+            # shared figure either bills the cash rows (which CashEntry.fee_amount
+            # then silently drops) or understates the wired one. Blank = "as set
+            # below", the same rule the valyuta and usul overrides follow.
+            self.fields[self.fee_name(value)] = forms.DecimalField(
+                label="Perechisleniya foizi (%)", max_digits=5, decimal_places=2,
+                required=False, min_value=Decimal("0"), max_value=Decimal("100"),
+                widget=forms.NumberInput(attrs={
+                    "class": "xmini xfee", "placeholder": "foiz",
+                    "step": "0.01", "min": "0", "max": "100"}))
 
-class ShipmentExpenseRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
-    """One xarajat row. Ordered so Turkum / Valyuta / To'lov usuli land on a line
-    of their own — see .lineset--expense in the stylesheet."""
+    @staticmethod
+    def field_name(category):
+        return f"amount_{category}"
 
-    field_order = ["amount", "category", "currency", "method", "exchange_rate",
-                   "fee_percent", "note"]
+    @staticmethod
+    def currency_name(category):
+        return f"currency_{category}"
 
-    class Meta:
-        model = ShipmentExpense
-        # No date: it is shared, so the modal asks once in ExpenseTargetForm.
-        fields = ["category", "currency", "amount", "exchange_rate", "method",
-                  "fee_percent", "note"]
-        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+    @staticmethod
+    def method_name(category):
+        return f"method_{category}"
 
+    @staticmethod
+    def fee_name(category):
+        return f"fee_{category}"
 
-class BaseExpenseFormSet(forms.BaseModelFormSet):
+    def amount_fields(self):
+        """(amount, currency, method, foiz override, category) per turkum, for a
+        template that lays the grid out itself rather than trusting field order."""
+        return [(self[self.field_name(v)], self[self.currency_name(v)],
+                 self[self.method_name(v)], self[self.fee_name(v)], v)
+                for v, _ in self.CATEGORIES]
+
+    def row_fee(self, category):
+        """The foiz this turkum is charged: its own if one was typed, else the
+        shared one. `0` typed into a box is an explicit "no foiz on this row" and
+        must win over the shared figure, so a blank is told apart from a zero
+        rather than both being falsy."""
+        own = self.cleaned_data.get(self.fee_name(category))
+        if own is not None:
+            return own
+        return self.cleaned_data.get("fee_percent") or Decimal("0")
+
     def clean(self):
-        super().clean()
-        if any(self.errors):
-            return
-        kept = [f for f in self.forms
-                if f.cleaned_data and not f.cleaned_data.get("DELETE")]
-        if not kept:
+        cleaned = super().clean()
+        entered = [(value, cleaned.get(self.field_name(value)))
+                   for value, _ in self.CATEGORIES]
+        self.entries = [(value, amount) for value, amount in entered
+                        if amount is not None and amount > 0]
+        if not self.entries:
+            # Without this the modal saves nothing and closes as if it worked.
             raise forms.ValidationError("Kamida bitta xarajat kiritilishi kerak")
+        for value, amount in entered:
+            if amount is not None and amount <= 0:
+                self.add_error(self.field_name(value), "Musbat son kiriting")
+        return cleaned
 
+    def build(self, user):
+        """The ShipmentExpense rows this grid stands for — one per filled box.
 
-ShipmentExpenseFormSet = forms.modelformset_factory(
-    ShipmentExpense, form=ShipmentExpenseRowForm, formset=BaseExpenseFormSet,
-    extra=1, can_delete=True)
+        Date, kurs and the fee are genuinely shared: they describe the trip, not the
+        line. Currency and method are per line, defaulting to the shared pickers —
+        a bojxona wired in so'm next to a gruzchi paid cash is one submission, and
+        each row converts at its own currency."""
+        rate = self.cleaned_data["exchange_rate"]
+        shared = {
+            "shipment": self.cleaned_data["shipment"],
+            "date": self.cleaned_data["date"],
+            "exchange_rate": rate,
+            "note": self.cleaned_data.get("note", ""),
+            "created_by": user,
+        }
+        rows = []
+        for category, typed in self.entries:
+            currency = (self.cleaned_data.get(self.currency_name(category))
+                        or self.cleaned_data["currency"])
+            method = (self.cleaned_data.get(self.method_name(category))
+                      or self.cleaned_data["method"])
+            usd_value, uzs_value = convert_pair(typed, currency, rate)
+            rows.append(ShipmentExpense(category=category, amount=usd_value,
+                                        amount_uzs=uzs_value, currency=currency,
+                                        method=method,
+                                        fee_percent=self.row_fee(category), **shared))
+        return rows
 
 
 class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = ShipmentExpense
-        fields = ["shipment", "date", "category", "currency", "amount",
+        fields = ["shipment", "date", "category", "logist", "currency", "amount",
                   "exchange_rate", "method", "fee_percent", "note"]
         widgets = {"date": date_widget(),
                    "shipment": forms.HiddenInput()}
+        help_texts = {"logist": "Bo'sh qoldirilsa — kassadan to'langan"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["logist"].empty_label = "Kassadan to'landi"
+        # Default to the yuk's own logist: if a load is being run by somebody, an
+        # expense on it was almost certainly paid out of that person's balance, and
+        # picking the wrong one silently moves money between two people's accounts.
+        shipment = self.initial.get("shipment") or getattr(self.instance, "shipment_id", None)
+        if shipment and not self.instance.pk:
+            match = Shipment.objects.filter(pk=getattr(shipment, "pk", shipment)).first()
+            if match and match.logist_id:
+                self.initial.setdefault("logist", match.logist_id)
 
     def save(self, commit=True):
         obj = super().save(commit=False)
         if commit:
             obj.save()
         return obj
+
+
+class LogistForm(forms.ModelForm):
+    class Meta:
+        model = Logist
+        fields = ["name", "phone", "note"]
+        widgets = {
+            "phone": phone_intl_widget(),
+            "note": forms.Textarea(attrs={"rows": 2}),
+            "name": forms.TextInput(attrs={"autocomplete": "off",
+                                           "placeholder": "Masalan: Sardor aka"}),
+        }
+
+    def clean_phone(self):
+        return validate_intl_phone(self.cleaned_data.get("phone"))
+
+
+class LogistPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """Money we send a logist. No ceiling: unlike a hamkor to'lov there is nothing
+    to overpay — the balance is a running float they draw drivers' advances from,
+    and topping it up before the loads go out is the normal way round."""
+
+    class Meta:
+        model = LogistPayment
+        fields = ["logist", "date", "currency", "amount", "exchange_rate",
+                  "method", "fee_percent", "note"]
+        widgets = {"date": date_widget()}
+        labels = {"amount": "Yuboriladigan summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["logist"].label_from_instance = logist_option_label
+
+
+def logist_option_label(logist):
+    """Logist <option>: the name and what they are holding, since the balance is
+    the fact you need when deciding how much to send."""
+    balance = logist.balance
+    if balance > 0:
+        state = f"{_clean_number(balance)} $ qoldiq"
+    elif balance < 0:
+        state = f"{_clean_number(-balance)} $ bizning qarzimiz"
+    else:
+        state = "qoldiq yo'q"
+    return f"{logist.name} · {state}"

@@ -7,6 +7,13 @@
 {% endif %}
 {% block content %}
 
+{% comment %}
+Filled in by the status JS when a load is marked arrived and it turns out to have
+active brons on it. Empty on load — the prompt only makes sense in the moment,
+and a toast would be gone in 4.5 seconds with the link still unclicked.
+{% endcomment %}
+<div id="bron-alert" aria-live="polite"></div>
+
 <form method="get" class="searchbar" role="search" data-live-search>
   {% comment %}
   `all` rides along as a hidden field so searching keeps you in whichever set you
@@ -406,6 +413,42 @@
     });
   });
 
+  // A load that just landed with brons on it: say so where the operator is
+  // standing. The row itself is usually gone by now (arrived loads leave the
+  // active set), so the banner carries the yuk number and links to that load's
+  // brons rather than relying on the row still being there to point at.
+  function showBronAlert(data) {
+    var host = document.getElementById('bron-alert');
+    if (!host) { return; }
+    var bar = document.createElement('div');
+    bar.className = 'bron-banner';
+    bar.innerHTML =
+      '<span class="bb-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+      + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      + '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 10h18"/>'
+      + '<path d="M8 2v4"/><path d="M16 2v4"/></svg></span>'
+      + '<span class="bb-text">Yuk <strong>#' + data.shipment_id + '</strong> omborga keldi — '
+      + 'unda <strong>' + data.bron_count + ' ta</strong> faol bron bor.</span>';
+    var go = document.createElement('a');
+    go.className = 'btn btn-sm';
+    go.href = data.bron_url;
+    go.textContent = 'Bronlarni ko’rish';
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'bb-close';
+    close.setAttribute('aria-label', 'Yopish');
+    close.innerHTML = '&times;';
+    close.addEventListener('click', function () { bar.remove(); });
+    bar.appendChild(go);
+    bar.appendChild(close);
+    // Newest on top, and one banner per load — marking two loads in a row should
+    // not stack a duplicate for the same yuk.
+    var existing = host.querySelector('[data-yuk="' + data.shipment_id + '"]');
+    if (existing) { existing.remove(); }
+    bar.setAttribute('data-yuk', data.shipment_id);
+    host.insertBefore(bar, host.firstChild);
+  }
+
   // Status dropdown: save via fetch and update the row IN PLACE — no page
   // reload, so what you see is always the saved state. If the load reached
   // the arrival status it moves to Yakunlangan and its row is removed.
@@ -437,6 +480,7 @@
           sel.classList.add('is-saved');           // brief green flash = saqlandi
           setTimeout(function () { sel.classList.remove('is-saved'); }, 900);
         }
+        if (data.bron_count) { showBronAlert(data); }
         updateCounts(); applyActive();
       }).catch(function () {
         sel.value = sel.dataset.prev;  // save failed — put the old status back

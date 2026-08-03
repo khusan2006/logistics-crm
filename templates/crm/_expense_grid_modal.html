@@ -1,0 +1,72 @@
+{% comment %}
+Xarajat modal: the turkumlar ARE the form. Seven small labelled boxes laid out
+several to a row, so a load's costs are entered in one pass instead of add-row →
+pick-turkum → type → repeat. Blank boxes are simply not saved.
+
+Valyuta, kurs and to'lov usuli are asked once above the grid because they are
+shared in practice — no yuk in the books has ever mixed payment methods across its
+own xarajatlar.
+{% endcomment %}
+<div class="modal-head">
+  <h2>{{ title }}</h2>
+  <button type="button" class="modal-x" data-modal-close aria-label="Yopish">&times;</button>
+</div>
+<form method="post" action="{{ request.path }}" class="stacked xgrid-form">
+  {% csrf_token %}
+  {{ form.shipment }}
+  {% if form.non_field_errors %}<ul class="errorlist">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+
+  <div class="xgrid-shared">
+    <label>{{ form.date.label }}{{ form.date }}{{ form.date.errors }}</label>
+    <div class="xfield"><span class="xfield-label">{{ form.currency.label }}</span>
+      {% include "crm/_seg_field.html" with field=form.currency %}{{ form.currency.errors }}</div>
+    <div class="xfield"><span class="xfield-label">{{ form.method.label }}</span>
+      {% include "crm/_seg_field.html" with field=form.method %}{{ form.method.errors }}</div>
+
+    <label>{{ form.exchange_rate.label }}{{ form.exchange_rate }}{{ form.exchange_rate.errors }}</label>
+  </div>
+
+  <p class="xgrid-legend">Xarajatlar <span>faqat kerakli turkumlarni to'ldiring</span></p>
+  {% comment %}
+  Each box carries its own valyuta and usul as two small dropdowns down the right
+  side. Blank means "as set above" — visible at a glance rather than folded behind
+  a disclosure, so an override can never be sitting there unnoticed.
+  {% endcomment %}
+  <div class="xgrid">
+    {% comment %}
+    The foiz sits INSIDE the box, not once above the grid: a turkum carries its own
+    usul, so a bojxona wired by bank next to a gruzchi paid in cash needs its own
+    cut. It is revealed only when that box's effective usul is Bank — on naqd or
+    karta the server drops it (CashEntry.fee_amount), so offering one there would
+    promise a deduction that never happens.
+    {% endcomment %}
+    {% for amount, currency, method, fee, category in form.amount_fields %}
+    <div class="xcell{% if amount.errors or fee.errors %} is-bad{% endif %}" data-cat="{{ category }}">
+      <label class="xcell-main">
+        <span class="xcell-label">{{ amount.label }}</span>
+        {{ amount }}
+      </label>
+      <div class="xcell-side">
+        {{ currency }}
+        {{ method }}
+      </div>
+      <label class="xcell-fee" data-cell-fee hidden>
+        <span class="xcell-fee-label">Perechisleniya foizi (%)</span>
+        {{ fee }}
+      </label>
+      {{ amount.errors }}{{ fee.errors }}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="xgrid-extra">
+    <label>{{ form.fee_percent.label }}{{ form.fee_percent }}
+      <small class="field-hint">{{ form.fee_percent.help_text }}</small>{{ form.fee_percent.errors }}</label>
+    <label>{{ form.note.label }}{{ form.note }}{{ form.note.errors }}</label>
+  </div>
+
+  <div class="modal-actions">
+    <button type="submit" class="btn">Saqlash</button>
+    <button type="button" class="btn btn-ghost" data-modal-close>Bekor qilish</button>
+  </div>
+</form>

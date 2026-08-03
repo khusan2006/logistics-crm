@@ -238,12 +238,14 @@ class Command(BaseCommand):
             )
 
     def _seed_reservation(self, contracts, customers, admin):
-        in_transit = Shipment.objects.filter(
-            contract=contracts["c2"], container="DEMO-TRANSIT-01").first()
-        if in_transit is None:
+        """A bron is a claim on a MARKA across every kelishuv, so it needs a brand
+        rather than a lot — the demo one books granula that is still in transit,
+        which is the case the queue exists for."""
+        line = contracts["c2"].lines.first()
+        if line is None:
             return
         Reservation.objects.get_or_create(
-            customer=customers["gulnora"], line=in_transit.lines.first(),
+            customer=customers["gulnora"], brand=line.brand,
             defaults={
                 "kg": Decimal("2000"), "price": Decimal("1.40"),
                 "status": Reservation.Status.ACTIVE,

@@ -131,7 +131,7 @@ def test_kassa_kirim_chiqim_ledgers_and_cash_hero(admin_client, db):
     kinds = [(r["kind"], r["amount"]) for r in resp.context["outflow_page"]]
     assert kinds == [("expense", Decimal("100.00")), ("supplier", Decimal("200.00"))]
     html = resp.content.decode()
-    assert "Kirim" in html and "Chiqim" in html and "Kassadagi pul" in html
+    assert "Kirim" in html and "Chiqim" in html and "Kassada" in html
 
 
 def test_kassa_income_ledger_paginates_at_20(admin_client, db):
@@ -188,3 +188,254 @@ def test_kassa_two_ledgers_page_independently(admin_client, db):
     ctx = admin_client.get("/kassa/?ipage=2&opage=2").context
     assert ctx["income_page"].number == 2
     assert ctx["outflow_page"].number == 2
+
+
+class TestCashOwnership:
+    """The till holds money that is not ours: a to'lov sitting on no sotuv is the
+    mijoz's avans, and cancelling their order sends it back out."""
+
+    def test_unallocated_payment_is_reported_as_held_not_earned(self, admin_client, db):
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        ctx = admin_client.get("/kassa/").context
+        assert ctx["cash_total"] == Decimal("500.00")
+        assert ctx["advance"] == Decimal("500.00")
+        assert ctx["own_cash"] == Decimal("0.00")
+
+    def test_money_that_paid_a_sotuv_is_ours(self, admin_client, db):
+        from crm.models import Sale, allocate_customer_payment
+        contract = _contract()
+        shipment = _arrived_shipment(contract)
+        customer = _customer()
+        Sale.objects.create(customer=customer, line=shipment.lines.first(),
+                            kg=Decimal("300"), price=Decimal("1.00"),
+                            price_uzs=Decimal("12000"), date="2026-07-17")
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-18", amount=Decimal("500.00"),
+            method="cash")
+        # allocation is its own step — creating a to'lov does not spend it
+        allocate_customer_payment(payment)
+        ctx = admin_client.get("/kassa/").context
+        # 300 of the 500 landed on the sotuv; 200 is still the mijoz's
+        assert ctx["advance"] == Decimal("200.00")
+        assert ctx["own_cash"] == ctx["cash_total"] - Decimal("200.00")
+
+    def test_the_bank_foiz_never_becomes_an_advance(self, admin_client, db):
+        """A perechisleniya foiz never reached us, so it cannot be money we hold."""
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("1000.00"), method="transfer",
+                                       fee_percent=Decimal("2"))
+        ctx = admin_client.get("/kassa/").context
+        assert ctx["advance"] == Decimal("980.00")
+        assert ctx["cash_total"] == Decimal("980.00")
+
+
+class TestCurrentStateTiles:
+    """Hozirgi holat is a board of facts — one tile per place money or goods sits.
+    Nothing is summed across them: cash plus granula plus somebody else's unpaid
+    invoice is a number that describes no actual thing."""
+
+    def _tiles(self, admin_client):
+        return {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+
+    def test_every_tile_states_a_current_fact_and_links_somewhere(self, admin_client, db):
+        contract = _contract()
+        shipment = _arrived_shipment(contract)
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("200.00"), method="cash")
+        tiles = self._tiles(admin_client)
+        assert list(tiles) == ["Kassada", "Mijozlar qarzi", "Omborda", "Yo'lda",
+                               "Hamkorlarda avansimiz", "Logistlarda",
+                               "Hamkorlarga qarzimiz"]
+        for tile in tiles.values():
+            assert tile["note"], tile["label"]
+            assert tile["url"].startswith("/"), tile["label"]
+        assert tiles["Kassada"]["amount"] == resp_cash(admin_client)
+
+    def test_no_derived_total_is_published(self, admin_client, db):
+        """Sof holat is gone: it summed things that are not the same kind of thing."""
+        ctx = admin_client.get("/kassa/").context
+        assert "net_position" not in ctx
+        assert "Sof holat" not in admin_client.get("/kassa/").content.decode()
+
+    def test_stock_and_transit_tiles_carry_their_kg(self, admin_client, db):
+        contract = _contract()
+        _arrived_shipment(contract)                       # 500 kg arrived
+        moving = Shipment.objects.create(
+            contract=contract, status=ShipmentStatus.objects.exclude(is_arrival=True).first(),
+            sent="2026-07-20", eta="2026-08-01")
+        ShipmentLine.objects.create(shipment=moving, contract_line=contract.lines.first(),
+                                    kg=Decimal("300"))
+        tiles = self._tiles(admin_client)
+        assert "500 kg" in tiles["Omborda"]["meta"]
+        assert "300 kg" in tiles["Yo'lda"]["meta"]
+        assert "1 ta yuk" in tiles["Yo'lda"]["meta"]
+
+    def test_debtor_count_rides_with_the_receivable(self, admin_client, db):
+        from crm.models import Sale
+        contract = _contract()
+        shipment = _arrived_shipment(contract)
+        for name in ("Bir", "Ikki"):
+            Sale.objects.create(customer=_customer(name), line=shipment.lines.first(),
+                                kg=Decimal("100"), price=Decimal("1.00"),
+                                price_uzs=Decimal("12000"), date="2026-07-17")
+        tiles = self._tiles(admin_client)
+        assert tiles["Mijozlar qarzi"]["amount"] == Decimal("200.00")
+        assert tiles["Mijozlar qarzi"]["meta"] == "2 ta mijozda"
+
+    def test_customer_advance_is_named_on_the_kassa_tile(self, admin_client, db):
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        assert "avansi" in self._tiles(admin_client)["Kassada"]["meta"]
+
+    def test_prepaid_kelishuv_is_its_own_tile_not_a_smaller_qarz(self, admin_client, db):
+        """The July bug: 5 kelishuv prepaid by $203 030.5 sat behind a $50 480
+        payable because only positive debts were counted."""
+        contract = _contract()              # 1000 kg @ $1, nothing shipped yet
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("600.00"), method="cash")
+        tiles = self._tiles(admin_client)
+        assert tiles["Hamkorlarda avansimiz"]["amount"] == Decimal("600.00")
+        assert tiles["Hamkorlarda avansimiz"]["meta"] == "1 ta kelishuvda"
+        assert tiles["Hamkorlarga qarzimiz"]["amount"] == Decimal("0")
+
+    def test_both_hamkor_directions_can_be_non_zero_at_once(self, admin_client, db):
+        owing = _contract("Qarzdor")
+        _arrived_shipment(owing)                       # 500 kg shipped, nothing paid
+        prepaid = _contract("Avansli")
+        SupplierPayment.objects.create(contract=prepaid, date="2026-07-11",
+                                       amount=Decimal("300.00"), method="cash")
+        tiles = self._tiles(admin_client)
+        assert tiles["Hamkorlarga qarzimiz"]["amount"] == Decimal("500.00")
+        assert tiles["Hamkorlarda avansimiz"]["amount"] == Decimal("300.00")
+
+
+def resp_cash(admin_client):
+    return admin_client.get("/kassa/").context["cash_total"]
+
+
+class TestWaterfall:
+    def _rows(self, ctx):
+        return {b["label"]: b["amount"] for b in ctx["waterfall"]}
+
+    def test_it_closes_on_the_cash_total(self, admin_client, db):
+        contract = _contract()
+        shipment = _arrived_shipment(contract)
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("200.00"), method="cash",
+                                       commission_percent=Decimal("2"))
+        ShipmentExpense.objects.create(shipment=shipment, date="2026-07-12",
+                                       category="customs", amount=Decimal("100.00"),
+                                       method="cash")
+        ctx = admin_client.get("/kassa/").context
+        closing = ctx["waterfall"][-1]
+        assert closing["label"] == "Qoldiq"
+        assert closing["running"] == ctx["cash_total"]
+        assert closing["running_uzs"] == ctx["cash_total_uzs"]
+        # and the steps between are the ledger, decomposed
+        rows = self._rows(ctx)
+        assert rows["Mijozlardan"] == Decimal("500.00")
+        assert rows["Hamkorlarga"] == Decimal("-200.00")
+        assert rows["Vositachi ustamasi"] == Decimal("-4.00")
+        assert rows["Bojxona"] == Decimal("-100.00")
+
+    def test_steps_sum_to_the_ledger_totals(self, admin_client, db):
+        contract = _contract()
+        shipment = _arrived_shipment(contract)
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("900.00"), method="cash")
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("200.00"), method="transfer",
+                                       fee_percent=Decimal("1"))
+        ShipmentExpense.objects.create(shipment=shipment, date="2026-07-12",
+                                       category="transport", amount=Decimal("50.00"),
+                                       method="cash")
+        ctx = admin_client.get("/kassa/").context
+        steps = [b for b in ctx["waterfall"] if b["kind"] != "total"]
+        assert sum(b["amount"] for b in steps if b["kind"] == "in") == ctx["net_in"]
+        assert -sum(b["amount"] for b in steps if b["kind"] == "out") == ctx["net_out"]
+
+    def test_a_customer_foiz_is_not_billed_again_as_an_outflow(self, admin_client, db):
+        """net_in is already net of it — a Bank foizi step here would spend it twice."""
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("1000.00"), method="transfer",
+                                       fee_percent=Decimal("2"))
+        ctx = admin_client.get("/kassa/").context
+        assert self._rows(ctx)["Mijozlardan"] == Decimal("980.00")
+        assert "Bank foizi" not in self._rows(ctx)
+        assert ctx["waterfall"][-1]["running"] == Decimal("980.00")
+
+    def test_an_outgoing_foiz_gets_its_own_step(self, admin_client, db):
+        contract = _contract()
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("1000.00"), method="transfer",
+                                       fee_percent=Decimal("2"))
+        ctx = admin_client.get("/kassa/").context
+        assert self._rows(ctx)["Bank foizi"] == Decimal("-20.00")
+        assert ctx["waterfall"][-1]["running"] == Decimal("-1020.00")
+
+    def test_opening_balance_carries_the_period_boundary(self, admin_client, db):
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-06-01",
+                                       amount=Decimal("400.00"), method="cash")
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("100.00"), method="cash")
+        ctx = admin_client.get("/kassa/", {"from": "2026-07-01", "to": "2026-07-31"}).context
+        opening = ctx["waterfall"][0]
+        assert opening["label"] == "Boshlang'ich qoldiq"
+        assert opening["amount"] == Decimal("400.00")
+        assert ctx["waterfall"][-1]["running"] == Decimal("500.00") == ctx["cash_total"]
+
+    def test_unfiltered_opens_at_zero(self, admin_client, db):
+        _customer()
+        ctx = admin_client.get("/kassa/").context
+        assert ctx["waterfall"][0]["amount"] == Decimal("0")
+
+    def test_bars_stay_inside_the_track(self, admin_client, db):
+        contract = _contract()
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("900.00"), method="cash")
+        ctx = admin_client.get("/kassa/").context
+        for bar in ctx["waterfall"]:
+            assert bar["left"] >= -0.001, bar["label"]
+            assert bar["left"] + bar["width"] <= 100.001, bar["label"]
+        assert 0 <= ctx["zero_line"] <= 100
+
+    def test_empty_period_does_not_divide_by_zero(self, admin_client, db):
+        ctx = admin_client.get("/kassa/", {"from": "2030-01-01", "to": "2030-01-31"}).context
+        assert ctx["waterfall"][-1]["running"] == Decimal("0")
+        for bar in ctx["waterfall"]:
+            assert 0 <= bar["left"] <= 100
+
+    def test_bar_geometry_is_written_as_valid_css(self, admin_client, db):
+        """Regression: the active locale renders a decimal with a comma, so
+        `floatformat:2` emitted `left: 70,72%` — not a length. Every bar collapsed
+        to zero width while the figures beside them stayed right, so the page looked
+        fine in every assertion and wrong on screen."""
+        import re
+
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("500.50"), method="cash")
+        html = admin_client.get("/kassa/").content.decode()
+        styles = re.findall(r'class="wf-bar" style="([^"]+)"', html)
+        assert styles, "no waterfall bars rendered"
+        for style in styles:
+            assert "," not in style, style
+            assert re.fullmatch(r"left: \d+(\.\d+)?%; width: \d+(\.\d+)?%;", style), style
+        zero = re.search(r'--zero: ([^;]+);', html).group(1)
+        assert "," not in zero, zero
