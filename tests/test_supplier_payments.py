@@ -3,7 +3,8 @@ from decimal import Decimal
 from conftest import make_contract, make_shipment
 from crm.templatetags.crm_extras import NBSP
 from crm.models import (
-    Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
+    Contract, ContractLine, Currency, Partner, Shipment, ShipmentLine, ShipmentStatus,
+    SupplierPayment,
 )
 
 
@@ -206,6 +207,65 @@ def test_the_cap_counts_what_was_already_paid(admin_client, db):
     _post_payment(admin_client, contract, "1500")
     assert _post_payment(admin_client, contract, "600").status_code == 200
     assert _post_payment(admin_client, contract, "500").status_code == 302
+
+
+# --- a kelishuv is owed, capped and closed in the currency it was struck in ---
+
+def _som_contract(kg="1000", price_uzs="12650", rate="12650"):
+    """A kelishuv agreed in so'm: 1 000 kg at 12 650 so'm/kg = 12 650 000 so'm."""
+    price = (Decimal(price_uzs) / Decimal(rate)).quantize(Decimal("0.0001"))
+    contract = make_contract(kg=kg, price=price, price_uzs=price_uzs,
+                             currency=Currency.UZS)
+    contract.lines.update(exchange_rate=Decimal(rate))
+    return Contract.objects.get(pk=contract.pk)
+
+
+def test_a_som_kelishuv_is_owed_in_som(db):
+    contract = _som_contract()
+    assert contract.currency == Currency.UZS
+    assert contract.lines.get().currency == Currency.UZS
+    assert contract.total_value_own == Decimal("12650000.00")
+    assert contract.payable_left_own == Decimal("12650000.00")
+
+
+def test_a_som_kelishuv_paid_off_in_som_is_settled_whatever_the_kurs_did(admin_client, db):
+    """Paid to the tiyin, in the currency it was agreed in, a week later at another
+    kurs. The dollar twin of the two figures cannot line up — they were derived at
+    rates a week apart — and that is exactly why it is not what settles anything."""
+    contract = _som_contract()
+    make_shipment(contract=contract, kg="1000")
+    resp = _post_payment(admin_client, contract, "12650000",
+                         currency="uzs", exchange_rate="12800")
+    assert resp.status_code == 302
+
+    contract = Contract.objects.get(pk=contract.pk)
+    assert contract.payable_left_own == Decimal("0.00")
+    assert contract.payable_left != Decimal("0.00")     # the derived side, unused
+    assert contract.is_settled
+
+
+def test_a_settled_som_kelishuv_takes_no_further_payment(admin_client, db):
+    """The cap is the so'm figure too. Measured on the dollar side it would still
+    read a remainder and go on asking for money that is not owed."""
+    contract = _som_contract()
+    make_shipment(contract=contract, kg="1000")
+    _post_payment(admin_client, contract, "12650000", currency="uzs",
+                  exchange_rate="12800")
+
+    resp = _post_payment(admin_client, contract, "1000", currency="uzs",
+                         exchange_rate="12800")
+    assert resp.status_code == 200
+    assert Contract.objects.get(pk=contract.pk).paid_total_uzs == Decimal("12650000.00")
+
+
+def test_a_som_kelishuv_drops_off_the_working_list_once_settled(admin_client, db):
+    contract = _som_contract()
+    make_shipment(contract=contract, kg="1000")
+    _post_payment(admin_client, contract, "12650000", currency="uzs",
+                  exchange_rate="12800")
+
+    listed = admin_client.get("/contracts/", {"state": "open"}).context["page"]
+    assert [c.pk for c in listed.object_list] == []
 
 
 def test_paying_ahead_leaves_less_to_pay(db):

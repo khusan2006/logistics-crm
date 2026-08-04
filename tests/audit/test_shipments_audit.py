@@ -9,10 +9,13 @@ The four probe families the product owner's symptoms map onto:
   (c) stickiness     — a row entered in so'm must stay so'm through save + reopen
   (d) aggregates     — a total must equal the sum of its parts, mixed kursi included
 """
+from contextlib import contextmanager
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from crm.models import (
+    LEGACY_RATE,
     Contract, ContractLine, Currency, Customer, Logist, LogistPayment, Partner, Sale,
     Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg, ShipmentLine, ShipmentStatus,
     convert_pair,
@@ -39,21 +42,36 @@ def _contract_line(contract, brand="LLDPE", kg="10000", typed="1.00",
 
 
 def _contract(**kw):
-    contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
+    """A kelishuv and its single product, both struck in the same currency — the
+    product cannot pick its own any more."""
+    contract = Contract.objects.create(
+        partner=_partner(), created="2026-07-01",
+        currency=kw.get("currency", Currency.USD))
     _contract_line(contract, **kw)
     return contract
 
 
 def _rows(*rows, initial=0):
-    """Mahsulotlar formset payload. Unlike conftest.line_data this leaves currency
-    and kurs to the caller only when they say so, and carries `id` for edits."""
+    """Mahsulotlar formset payload; carries `id` for edits. Nothing is defaulted in —
+    a yuk row has no valyuta or kurs box of its own, both come off the kelishuv."""
     data = {"lines-TOTAL_FORMS": str(len(rows)), "lines-INITIAL_FORMS": str(initial),
             "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000"}
     for i, row in enumerate(rows):
-        row = {"currency": "usd", "exchange_rate": "12000", **row}
         for key, value in row.items():
             data[f"lines-{i}-{key}"] = "" if value is None else str(value)
     return data
+
+
+@contextmanager
+def _inherited_kurs(kurs):
+    """Pin what a fresh row inherits as its kurs — the probes used to type it into a
+    box that no longer exists, so they say it here instead. Blank, zero or negative
+    means "whatever the app would have found", which is LEGACY_RATE in an empty book."""
+    if kurs is None or Decimal(str(kurs or 0)) <= 0:
+        yield
+        return
+    with patch("crm.forms.latest_exchange_rate", return_value=Decimal(str(kurs))):
+        yield
 
 
 def _header(contract, **extra):
@@ -66,7 +84,16 @@ def _header(contract, **extra):
 
 
 def _create(client, contract, *rows, **extra):
-    return client.post("/shipments/new/", {**_header(contract, **extra), **_rows(*rows)})
+    """A row's `currency` is dropped (it is the kelishuv's) and its `exchange_rate`
+    becomes the rate the row inherits, so the probes read as they always did."""
+    rows = [dict(row) for row in rows]
+    kurs = None
+    for row in rows:
+        row.pop("currency", None)
+        kurs = row.pop("exchange_rate", kurs)
+    with _inherited_kurs(kurs):
+        return client.post("/shipments/new/",
+                           {**_header(contract, **extra), **_rows(*rows)})
 
 
 def _one_line_yuk(client, contract, **row):
@@ -121,7 +148,7 @@ def _money_snapshot(shipment):
 def test_a_som_line_stores_the_typed_som_bit_exact(admin_client):
     """14 040 so'm/kg typed at 12 000 → the so'm side is the agreed figure, the
     dollar side is derived once at four decimals."""
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     line = yuk.lines.get()
@@ -148,7 +175,7 @@ def test_a_dollar_line_stores_the_typed_dollar_bit_exact(admin_client):
 def test_a_som_narx_that_does_not_divide_keeps_four_decimals(admin_client):
     """A per-kg narx carries four decimals, not two — 12 345 so'm at 10 850 is
     1.1378 $/kg, and rounding that to 1.14 would move a 24-tonne lot by $53."""
-    contract = _contract(kg="30000")
+    contract = _contract(kg="30000", currency=Currency.UZS, typed="12345", rate="10850")
     yuk = _one_line_yuk(admin_client, contract, kg="24000",
                         currency="uzs", price="12345", exchange_rate="10850")
     line = yuk.lines.get()
@@ -162,16 +189,20 @@ def test_a_som_narx_that_does_not_divide_keeps_four_decimals(admin_client):
 #     boundaries: blank kurs, zero kurs, zero/negative narx, extremes
 # =====================================================================
 
-@pytest.mark.parametrize("rate", ["", "0", "-100"])
-def test_a_priced_line_without_a_usable_kurs_is_refused(admin_client, rate):
+def test_a_priced_line_always_has_a_usable_kurs_to_inherit(admin_client):
     """A narx with no kurs has only one of its two values and could never join a
-    so'm total — convert_pair raises, so the form must refuse before that."""
-    contract = _contract()
+    so'm total. The operator is no longer asked for one, so the guarantee moved: the
+    row inherits the last rate entered, and an empty book still yields LEGACY_RATE —
+    there is no path left that reaches convert_pair without one."""
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     resp = _create(admin_client, contract,
                    {"contract_line": contract.lines.first().pk, "kg": "1000",
-                    "currency": "uzs", "price": "14040", "exchange_rate": rate})
-    assert resp.status_code == 200
-    assert not Shipment.objects.exists()
+                    "price": "14040"})
+    assert resp.status_code == 302
+    line = Shipment.objects.latest("pk").lines.get()
+    assert line.exchange_rate == LEGACY_RATE
+    assert line.price_uzs == Decimal("14040.00")
+    assert line.price == Decimal("1.1700")           # 14040 / 12000
 
 
 @pytest.mark.parametrize("price", ["0", "-1.5"])
@@ -194,7 +225,7 @@ def test_an_extreme_kurs_still_round_trips_the_typed_side(admin_client):
     assert line.price == Decimal("1.1700")
     assert line.price_uzs == Decimal("1169999.99")
 
-    tiny = _contract(kg="20000")
+    tiny = _contract(kg="20000", currency=Currency.UZS, typed="5", rate="0.01")
     yuk2 = _one_line_yuk(admin_client, tiny, kg="1000",
                          currency="uzs", price="5", exchange_rate="0.01")
     line2 = yuk2.lines.get()
@@ -207,7 +238,7 @@ def test_an_extreme_kurs_still_round_trips_the_typed_side(admin_client):
 # =====================================================================
 
 def test_a_som_line_saves_as_som_and_reopens_bound_to_som(admin_client):
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     line = yuk.lines.get()
@@ -218,15 +249,18 @@ def test_a_som_line_saves_as_som_and_reopens_bound_to_som(admin_client):
 
     resp = admin_client.get(f"/shipments/{yuk.pk}/edit/")
     sub = resp.context["lines"].forms[0]
-    assert sub["currency"].value() == "uzs"
-    assert Decimal(str(sub["exchange_rate"].value())) == Decimal("12000.00")
+    # No pickers on the row any more — it reads so'm because its kelishuv does, and
+    # the kurs it was booked at stays on the row without being typed.
+    assert "currency" not in sub.fields and "exchange_rate" not in sub.fields
+    assert Decimal(str(sub["price"].value())) == Decimal("14040.00")
+    assert line.exchange_rate == Decimal("12000.00")
 
 
 # Regression guard. This was an xfail documenting the so'm-edit defect; it passes
 # since MoneyEntryFormMixin._seed_typed_side (crm/forms.py) opens a so'm row showing
 # its so'm figure. Kept as a test so the defect cannot come back.
 def test_the_edit_form_shows_the_som_figure_in_the_narx_box(admin_client):
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     resp = admin_client.get(f"/shipments/{yuk.pk}/edit/")
@@ -234,22 +268,23 @@ def test_the_edit_form_shows_the_som_figure_in_the_narx_box(admin_client):
     assert Decimal(str(sub["price"].value())) == Decimal("14040.00")
 
 
-def test_switching_a_line_from_dollars_to_som_sticks(admin_client):
-    """Changing the Valyuta on an existing lot and typing the so'm figure must
-    land as a so'm row — this is the "it stays set to a different currency"
-    complaint, checked at the only layer that can settle it: the database."""
+def test_a_lot_cannot_be_switched_to_the_other_currency_on_its_own(admin_client):
+    """The old complaint was that a row would not stay on the currency it was set to.
+    It cannot be set at all now: a lot is priced in its kelishuv's currency, so a
+    posted valyuta is ignored rather than half-applied to one row of a truck whose
+    qarz is measured on the other side."""
     contract = _contract()
     yuk = _one_line_yuk(admin_client, contract,
                         currency="usd", price="1.17", exchange_rate="12000")
     payload = _echo_edit_payload(admin_client, yuk, **{
-        "lines-0-currency": "uzs", "lines-0-price": "15600",
+        "lines-0-currency": "uzs", "lines-0-price": "1.30",
         "lines-0-exchange_rate": "13000"})
     assert admin_client.post(f"/shipments/{yuk.pk}/edit/", payload).status_code == 302
     line = yuk.lines.get()
     line.refresh_from_db()
-    assert line.currency == "uzs"
-    assert line.price_uzs == Decimal("15600.00")
-    assert line.price == Decimal("1.2000")
+    assert line.currency == Currency.USD == contract.currency
+    assert line.price == Decimal("1.3000")           # the narx did land
+    assert line.exchange_rate == Decimal("12000.00")  # at the kurs it was booked with
 
 
 # =====================================================================
@@ -272,7 +307,7 @@ def test_resaving_an_untouched_som_lot_moves_nothing(admin_client):
     rendered, so Django's `has_changed()` skips the row and never writes it. The
     row's money survives because nothing touched it — see the kg test below for
     what happens the moment anything on the row does change."""
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     before = _money_snapshot(yuk)
@@ -285,7 +320,7 @@ def test_resaving_an_untouched_som_lot_moves_nothing(admin_client):
 def test_editing_only_the_transport_leaves_a_som_lots_money_alone(admin_client):
     """A header-only edit is safe — the Mahsulot row is unchanged, so it is not
     rewritten."""
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     before = _money_snapshot(yuk)
@@ -313,7 +348,7 @@ def test_correcting_the_kg_of_a_dollar_lot_leaves_its_narx_alone(admin_client):
 # MoneyEntryFormMixin._seed_typed_side (crm/forms.py) opens a so'm row showing its
 # so'm figure. Kept as a test so the defect cannot come back.
 def test_correcting_the_kg_of_a_som_lot_leaves_its_narx_alone(admin_client):
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     payload = _echo_edit_payload(admin_client, yuk, **{"lines-0-kg": "1100"})
@@ -363,29 +398,28 @@ def test_a_driver_advance_is_not_re_rated_when_the_yuk_is_resaved(admin_client, 
 # (d) AGGREGATE CONSISTENCY — mixed currencies, mixed kursi
 # =====================================================================
 
-def test_a_yuk_total_equals_its_lines_with_mixed_currencies_and_kursi(admin_client):
-    """One truck, a dollar-priced brand at 12 000 and a so'm-priced brand at
-    13 000. Each side of the yuk total is the plain sum of that side's rows —
-    never a re-conversion of the other."""
-    contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
-    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.00")
+def test_a_yuk_total_equals_its_lines_across_two_brands(admin_client):
+    """One truck, two so'm-priced brands. Each side of the yuk total is the plain sum
+    of that side's rows — never a re-conversion of the other."""
+    contract = Contract.objects.create(partner=_partner(), created="2026-07-01",
+                                       currency=Currency.UZS)
+    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="13000",
+                       currency=Currency.UZS, rate="13000")
     b = _contract_line(contract, brand="HDPE", kg="10000", typed="16901",
                        currency=Currency.UZS, rate="13000")
     resp = _create(
         admin_client, contract,
-        {"contract_line": a.pk, "kg": "1000", "currency": "usd",
-         "price": "1.25", "exchange_rate": "12000"},
-        {"contract_line": b.pk, "kg": "2000", "currency": "uzs",
-         "price": "16901", "exchange_rate": "13000"})
+        {"contract_line": a.pk, "kg": "1000", "price": "16250",
+         "exchange_rate": "13000"},
+        {"contract_line": b.pk, "kg": "2000", "price": "16901"})
     assert resp.status_code == 302
     yuk = Shipment.objects.latest("pk")
 
     rows = list(yuk.lines.all())
-    assert yuk.goods_value == sum(r.goods_value for r in rows) == Decimal("3850.20")
+    assert {r.currency for r in rows} == {Currency.UZS}
     assert (yuk.goods_value_uzs == sum(r.goods_value_uzs for r in rows)
-            == Decimal("48802000.00"))
-    # the two sides legitimately disagree: each row was rated at its own kurs
-    assert yuk.goods_value_uzs != yuk.goods_value * Decimal("12000")
+            == Decimal("50052000.00"))         # 16 250 000 + 33 802 000
+    assert yuk.goods_value == sum(r.goods_value for r in rows)
     assert yuk.kg == Decimal("3000.000")
 
 
@@ -394,21 +428,23 @@ def test_the_kelishuv_shipped_value_equals_the_sum_of_its_yuk_lines(admin_client
     reconcile to the same rows the Yuklar page shows."""
     contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
     a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.00")
-    b = _contract_line(contract, brand="HDPE", kg="10000", typed="13000",
-                       currency=Currency.UZS, rate="13000")
+    b = _contract_line(contract, brand="HDPE", kg="10000", typed="1.00")
     _create(admin_client, contract,
-            {"contract_line": a.pk, "kg": "1000", "currency": "usd",
-             "price": "1.25", "exchange_rate": "12000"})
+            {"contract_line": a.pk, "kg": "1000", "price": "1.25",
+             "exchange_rate": "12000"})
     _create(admin_client, contract,
-            {"contract_line": b.pk, "kg": "2000", "currency": "uzs",
-             "price": "14300", "exchange_rate": "13000"})
+            {"contract_line": b.pk, "kg": "2000", "price": "1.10",
+             "exchange_rate": "13000"})
     contract.refresh_from_db()
 
     lines = [ln for yuk in contract.shipments.all() for ln in yuk.lines.all()]
     assert contract.shipped_value == sum(ln.goods_value for ln in lines)
     assert contract.shipped_value_uzs == sum(ln.goods_value_uzs for ln in lines)
     assert contract.shipped_value == Decimal("1250.00") + Decimal("2200.00")
+    # each truck carries the kurs of the day it was booked, so the so'm side is not
+    # the dollar side times any single rate
     assert contract.shipped_value_uzs == Decimal("15000000.00") + Decimal("28600000.00")
+    assert contract.shipped_value_own == contract.shipped_value
 
 
 def test_landed_cost_is_the_narx_plus_the_freight_share_plus_the_vositachi_cut(admin_client):
@@ -670,7 +706,7 @@ def test_deleting_a_lot_a_sotuv_depends_on_fails_gracefully(admin_client, admin_
 def test_legs_do_not_disturb_the_loads_money(admin_client):
     """Legs carry no money; adding, reordering and deleting them must leave every
     figure on the load exactly where it was."""
-    contract = _contract()
+    contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     yuk = _one_line_yuk(admin_client, contract,
                         currency="uzs", price="14040", exchange_rate="12000")
     before = _money_snapshot(yuk)

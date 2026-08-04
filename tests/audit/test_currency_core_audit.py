@@ -384,9 +384,9 @@ def rendered_formset_payload(formset):
 
 
 def _som_priced_contract():
-    contract = make_contract(kg="1000", price="0.8140")
+    contract = make_contract(kg="1000", price="0.8140", currency=UZS)
     line = contract.lines.get()
-    line.currency, line.price_uzs = UZS, Decimal("9768")
+    line.price_uzs = Decimal("9768")
     line.exchange_rate = Decimal("12000")
     line.save()
     line.refresh_from_db()
@@ -395,7 +395,8 @@ def _som_priced_contract():
 
 def _post_contract_edit(client, contract, **line_overrides):
     resp = client.get(f"/contracts/{contract.pk}/edit/")
-    payload = {"partner": contract.partner_id, "created": "2026-07-01", "note": "",
+    payload = {"partner": contract.partner_id, "currency": contract.currency,
+               "created": "2026-07-01", "note": "",
                "planned_trucks": resp.context["lines_after"]["planned_trucks"].value() or 1}
     formset = resp.context["lines"]
     payload.update(rendered_formset_payload(formset))

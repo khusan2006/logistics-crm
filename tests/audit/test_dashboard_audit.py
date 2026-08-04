@@ -264,26 +264,26 @@ def test_resaving_a_som_kelishuv_unchanged_moves_nothing(admin_client):
     """(b) Same probe on the other input into 'Hamkor qarzi'."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "",
-        "planned_trucks": "",
+        "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+        "note": "", "planned_trucks": "",
         "lines-TOTAL_FORMS": "1", "lines-INITIAL_FORMS": "0",
         "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000",
-        "lines-0-brand": "LLDPE", "lines-0-kg": "1000",
-        "lines-0-currency": "uzs", "lines-0-price": "15000",
-        "lines-0-exchange_rate": "12500",
+        "lines-0-brand": "LLDPE", "lines-0-kg": "1000", "lines-0-price": "15000",
     })
     assert resp.status_code == 302
     line = ContractLine.objects.get()
-    assert (line.price, line.price_uzs) == (Decimal("1.2000"), Decimal("15000.00"))
+    # no kurs box on a kelishuv any more: the row inherits the last rate entered,
+    # which in an empty book is LEGACY_RATE — 15 000 / 12 000
+    assert (line.price, line.price_uzs) == (Decimal("1.2500"), Decimal("15000.00"))
     before = _figures(admin_client)
-    assert before["debt_total"] == Decimal("1200.00")
+    assert before["debt_total"] == Decimal("1250.00")
     assert before["debt_total_uzs"] == Decimal("15000000.00")
 
     _resave(admin_client, f"/contracts/{line.contract_id}/edit/",
             extra_forms=("lines_after",), formsets=("lines",))
 
     line.refresh_from_db()
-    assert (line.price, line.price_uzs) == (Decimal("1.2000"), Decimal("15000.00"))
+    assert (line.price, line.price_uzs) == (Decimal("1.2500"), Decimal("15000.00"))
     assert _figures(admin_client) == before
 
 

@@ -222,7 +222,7 @@ def test_audit_note_names_the_code(admin_client, db):
     umumiy), shuning uchun kod o'qiladigan izohga yoziladi."""
     sobir = _partner("Sobir")
     admin_client.post("/contracts/new/", {
-        "partner": sobir.pk, "created": "2026-07-04", "note": "",
+        "partner": sobir.pk, "currency": "usd", "created": "2026-07-04", "note": "",
         **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert "sobir-1" in AuditLog.objects.get(target_type="Kelishuv").summary

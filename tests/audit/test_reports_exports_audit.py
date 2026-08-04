@@ -28,6 +28,7 @@ Run:
 from decimal import Decimal
 from html.parser import HTMLParser
 from io import BytesIO
+from unittest.mock import patch
 
 import openpyxl
 import pytest
@@ -211,9 +212,9 @@ def test_a_som_kelishuv_narx_reaches_the_xlsx_as_som(admin_client, db):
     so'm column and the derived 0.814 in the dollar one — never the other way."""
     partner = _partner()
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "", "planned_trucks": "1",
-        **line_data({"brand": "LLDPE", "kg": "1000", "currency": "uzs",
-                     "price": "9768", "exchange_rate": "12000"}),
+        "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+        "note": "", "planned_trucks": "1",
+        **line_data({"brand": "LLDPE", "kg": "1000", "price": "9768"}),
     })
     assert resp.status_code == 302
 
@@ -919,11 +920,14 @@ def test_a_tiny_kurs_keeps_the_typed_som_figure_exact(admin_client, db):
     """kurs = 1 so'm/$ is nonsense but enterable. The typed so'm side must still be
     the one that reaches the file, undivided."""
     partner = _partner()
-    assert admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "", "planned_trucks": "1",
-        **line_data({"brand": "LLDPE", "kg": "1000", "currency": "uzs",
-                     "price": "9768", "exchange_rate": "1"}),
-    }).status_code == 302
+    # the kurs is inherited now, not typed — patched to the nonsense figure the
+    # probe is about
+    with patch("crm.forms.latest_exchange_rate", return_value=Decimal("1")):
+        assert admin_client.post("/contracts/new/", {
+            "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+            "note": "", "planned_trucks": "1",
+            **line_data({"brand": "LLDPE", "kg": "1000", "price": "9768"}),
+        }).status_code == 302
 
     row = _rows(admin_client.get(CONTRACTS))[0]
     assert _dec(row["Narx (so'm)"]) == Decimal("9768")

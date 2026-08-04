@@ -350,6 +350,12 @@ class Contract(models.Model):
 
     partner = models.ForeignKey(Partner, on_delete=models.PROTECT,
                                 related_name="contracts", verbose_name="Hamkor")
+    # A kelishuv is struck in ONE currency and settled in that same one: the qarz,
+    # the to'lov ceiling and the Yopilgan test all read this side and never the
+    # converted twin. The kurs still rides on every row, but only so the goods can
+    # be priced into a landed cost — it never moves what is owed.
+    currency = models.CharField("Valyuta", max_length=3, choices=Currency.choices,
+                                default=Currency.USD)
     # The code the client reads — sobir-3 — split so "next number for sobir" is a
     # Max() instead of parsing integers back out of strings (sobir-10 < sobir-9).
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
@@ -376,6 +382,21 @@ class Contract(models.Model):
     @property
     def code(self):
         return f"{self.code_slug}-{self.code_number}"
+
+    @property
+    def is_som(self):
+        """True when the kelishuv was struck in so'm. Same name the money rows carry,
+        so a screen can ask the question of either without knowing which it holds."""
+        return self.currency == Currency.UZS
+
+    def _own(self, usd_value, uzs_value):
+        """Whichever half of a stored pair is the kelishuv's OWN money.
+
+        Every qarz figure goes through here. Reading the other half would be a
+        converted number the two sides never agreed on: a so'm kelishuv paid in full
+        still shows a dollar remainder whenever the kurs has moved since, because its
+        dollar twin was derived at a different one."""
+        return uzs_value if self.is_som else usd_value
 
     def _next_code_number(self, slug):
         """One past the highest number this hamkor — or anyone sharing their slug —
@@ -508,8 +529,12 @@ class Contract(models.Model):
 
     @property
     def debt(self):
-        """What we owe the partner NOW: shipped value minus payments. Payments are
-        capped at this in the form, so it never goes negative (no prepayments)."""
+        """What we owe the partner NOW: shipped value minus payments.
+
+        Goes NEGATIVE on purpose. Paying before a truck is sent is normal, so the
+        form's ceiling is the whole kelishuv (`payable_left`) rather than this —
+        anything paid ahead of the goods reads here as an avans we are owed, which
+        is what `partner_positions()` splits back out."""
         return self.shipped_value - self.paid_total
 
     @property
@@ -532,15 +557,46 @@ class Contract(models.Model):
         figure on screen and the Qolgan/Yakunlangan filter can never disagree."""
         return self.expected_value - self.paid_total
 
+    # The same five figures in the kelishuv's OWN currency. These are the ones every
+    # qarz screen, the to'lov ceiling and the Yopilgan test read; the dollar/so'm
+    # pairs above stay because a landed cost still has to mix the two.
+    @property
+    def total_value_own(self):
+        return self._own(self.total_value, self.total_value_uzs)
+
+    @property
+    def expected_value_own(self):
+        return self._own(self.expected_value, self.expected_value_uzs)
+
+    @property
+    def paid_total_own(self):
+        return self._own(self.paid_total, self.paid_total_uzs)
+
+    @property
+    def shipped_value_own(self):
+        return self._own(self.shipped_value, self.shipped_value_uzs)
+
+    @property
+    def payable_left_own(self):
+        return self.expected_value_own - self.paid_total_own
+
+    @property
+    def debt_own(self):
+        return self.shipped_value_own - self.paid_total_own
+
     @property
     def is_settled(self):
         """Yopilgan: every kg has gone out AND nothing is left to pay. Anything
         else is still open business — goods owed to us, money owed to them, or
         both — which is what the default Kelishuvlar view shows.
 
+        Measured in the kelishuv's own currency: a so'm kelishuv settled in full
+        would otherwise keep a dollar remainder for as long as the kurs has moved
+        since it was struck, and could never leave the Tugallanmagan list.
+
         Uses payable_left rather than debt so it is the same number the Qolgan
         to'lov column shows; with every kg shipped the two are equal anyway."""
-        return self.remaining_kg <= 0 and self.payable_left <= 0
+        return self.remaining_kg <= 0 and self.payable_left_own <= 0
 
     def __str__(self):
         # the hamkor is already in the code
@@ -553,8 +609,11 @@ class ContractLine(MoneyEntry):
     kelishuv, so a kelishuv can be half-delivered on one brand and untouched on
     another.
 
-    The narx is agreed in whichever currency the two sides actually spoke in;
-    `currency` records which, and both values are kept at that day's kurs."""
+    The narx is agreed in whichever currency the kelishuv was struck in — the line
+    inherits it rather than choosing its own, so "what is still owed on this
+    kelishuv" can be one figure in one currency. Both values are still kept at that
+    day's kurs, because a landed cost has to mix currencies even when a qarz may
+    not."""
 
     money_fields = ("price", "price_uzs")
 
@@ -571,6 +630,20 @@ class ContractLine(MoneyEntry):
         ordering = ["position", "id"]
         verbose_name = "Kelishuv mahsuloti"
         verbose_name_plural = "Kelishuv mahsulotlari"
+
+    def save(self, *args, **kwargs):
+        """Backstop: a product line is always in its kelishuv's currency.
+
+        The form already sets it. Code that builds rows directly does not — the
+        prototype importer, the seeders, a shell one-liner — and a line struck in
+        the other currency would price its trucks into a `shipped_value_own` the
+        kelishuv's qarz is not measured in."""
+        if self.contract_id:
+            self.currency = self.contract.currency
+            if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+                kwargs["update_fields"] = list(dict.fromkeys(
+                    list(kwargs["update_fields"]) + ["currency"]))
+        return super().save(*args, **kwargs)
 
     @property
     def total_value(self):
@@ -930,6 +1003,17 @@ class ShipmentLine(MoneyEntry):
         ordering = ["position", "id"]
         verbose_name = "Yuk mahsuloti"
         verbose_name_plural = "Yuk mahsulotlari"
+
+    def save(self, *args, **kwargs):
+        """Backstop, same rule as the kelishuv line: a truck's narx is quoted in the
+        kelishuv's currency. A truck priced in the other one would land in
+        `shipped_value_own` as a figure the qarz was never measured in."""
+        if self.contract_line_id:
+            self.currency = self.contract_line.contract.currency
+            if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+                kwargs["update_fields"] = list(dict.fromkeys(
+                    list(kwargs["update_fields"]) + ["currency"]))
+        return super().save(*args, **kwargs)
 
     @property
     def brand(self):
@@ -1807,6 +1891,27 @@ class ShipmentExpense(CashEntry):
 
     def __str__(self):
         return f"{self.get_category_display()}: {self.amount}$ (yuk #{self.shipment_id})"
+
+
+def latest_exchange_rate():
+    """The most recently entered kurs — for the rows that no longer ask for one.
+
+    A kelishuv struck in one currency and settled in it needs no kurs to know what is
+    owed, so the form stopped asking for one. The goods on it still have to be priced
+    into a landed cost, and that DOES mix a so'm transport bill with a dollar mol —
+    so rather than invent a rate per row, the last real one somebody typed is
+    inherited.
+
+    Only rows where the operator genuinely chose a kurs are consulted: a to'lov, a
+    xarajat, a sotuv. An empty database falls back to LEGACY_RATE, the same figure
+    the columns themselves default to."""
+    newest_at = newest_rate = None
+    for model in (CustomerPayment, SupplierPayment, ShipmentExpense, Sale):
+        row = (model.objects.order_by("-created_at")
+               .values("created_at", "exchange_rate").first())
+        if row and (newest_at is None or row["created_at"] > newest_at):
+            newest_at, newest_rate = row["created_at"], row["exchange_rate"]
+    return newest_rate or LEGACY_RATE
 
 
 class ShipmentDelay(models.Model):

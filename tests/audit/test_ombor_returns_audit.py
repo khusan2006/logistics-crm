@@ -35,15 +35,20 @@ def _customer(name="Alisher Mebel"):
 
 def _lot(brand="LLDPE", kg="1000", partner="Pars",
          contract_typed="1.00", contract_currency=USD, contract_rate="12000",
-         lot_typed=None, lot_currency=USD, lot_rate="12000",
+         lot_typed=None, lot_currency=None, lot_rate="12000",
          expense=None, arrived="2026-07-16", contract_kg="100000"):
     """One arrived lot (a ShipmentLine) — the unit the ombor deals in.
 
     `lot_typed=None` leaves the truck line unpriced so it inherits the kelishuv
     narx, which is the common shape in the real data.
+
+    A lot is priced in its kelishuv's currency, so `lot_currency` follows
+    `contract_currency` — asking for the other one is not a shape the app can hold.
     """
+    lot_currency = contract_currency
     p = Partner.objects.create(name=partner, phone="1", city="T")
-    c = Contract.objects.create(partner=p, created="2026-07-01")
+    c = Contract.objects.create(partner=p, created="2026-07-01",
+                                currency=contract_currency)
     c_usd, c_uzs = convert_pair(Decimal(contract_typed), contract_currency,
                                 Decimal(contract_rate), "0.0001")
     line = ContractLine.objects.create(
@@ -377,14 +382,16 @@ def test_resaving_an_untouched_som_priced_yuk_keeps_its_som_narx(admin_client):
     so'm narx the operator actually agreed, so the round trip is correct rather
     than merely skipped.
     """
-    lot = _lot(kg="1000", lot_typed="20000", lot_currency=UZS, lot_rate="12345")
+    lot = _lot(kg="1000", lot_typed="20000", contract_currency=UZS, lot_rate="12345")
     assert lot.price_uzs == Decimal("20000.00")
 
     for _ in range(2):
         page = admin_client.get(f"/shipments/{lot.shipment_id}/edit/")
-        # the box now shows the so'm side, matching the So'm picker beside it
-        assert page.context["lines"].forms[0]["price"].value() == Decimal("20000.00")
-        assert page.context["lines"].forms[0]["currency"].value() == UZS
+        # the box now shows the so'm side — there is no picker beside it any more,
+        # the row reads so'm because the kelishuv it hangs off was struck in so'm
+        row = page.context["lines"].forms[0]
+        assert row["price"].value() == Decimal("20000.00")
+        assert "currency" not in row.fields
         body = _rendered_post(page.context["form"])
         body.update(_rendered_formset_post(page.context["lines"]))
         resp = admin_client.post(f"/shipments/{lot.shipment_id}/edit/", body)
@@ -400,7 +407,7 @@ def test_resaving_an_untouched_som_priced_yuk_keeps_its_som_narx(admin_client):
 # since MoneyEntryFormMixin._seed_typed_side (crm/forms.py) opens a so'm row showing
 # its so'm figure. Kept as a test so the defect cannot come back.
 def test_correcting_the_kg_of_a_som_priced_lot_must_not_move_its_narx(admin_client):
-    lot = _lot(kg="1000", lot_typed="20000", lot_currency=UZS, lot_rate="12345")
+    lot = _lot(kg="1000", lot_typed="20000", contract_currency=UZS, lot_rate="12345")
 
     page = admin_client.get(f"/shipments/{lot.shipment_id}/edit/")
     body = _rendered_post(page.context["form"])
@@ -635,9 +642,9 @@ def test_stock_value_equals_the_ombor_shelf_at_landed_cost(admin_client):
                    strict=False)
 def test_som_tannarx_range_is_a_real_range_when_kursi_differ(admin_client):
     # cheaper in dollars, dearer in so'm (booked when the kurs was high)
-    _lot(brand="2102", kg="1000", lot_typed="18000", lot_currency=UZS,
+    _lot(brand="2102", kg="1000", lot_typed="18000", contract_currency=UZS,
          lot_rate="15000", arrived="2026-07-19")           # $1.20/kg · 18 000 so'm
-    _lot(brand="2102", kg="1000", lot_typed="13000", lot_currency=UZS,
+    _lot(brand="2102", kg="1000", lot_typed="13000", contract_currency=UZS,
          lot_rate="10000", partner="Ikki", arrived="2026-07-23")  # $1.30 · 13 000
 
     g = _group(admin_client, "2102")
@@ -704,7 +711,7 @@ def test_mixed_currency_lots_of_one_marka_still_sum_in_both_currencies(admin_cli
     never a re-rating of the other side."""
     a = _lot(brand="2102", kg="1000", lot_typed="1.20", lot_currency=USD,
              lot_rate="12000", arrived="2026-07-19")
-    b = _lot(brand="2102", kg="2000", lot_typed="18000", lot_currency=UZS,
+    b = _lot(brand="2102", kg="2000", lot_typed="18000", contract_currency=UZS,
              lot_rate="15000", partner="Ikki", arrived="2026-07-23")
 
     total, total_uzs, kg = stock_value()

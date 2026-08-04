@@ -124,11 +124,13 @@ def test_every_fifo_slice_inherits_the_agreed_currency(admin_client, db):
 # --- the kelishuv narx -----------------------------------------------------
 
 def test_a_contract_price_can_be_agreed_in_som(admin_client, db):
+    """The currency is the kelishuv's, not the row's, and no kurs is typed: the row
+    inherits the last one entered (LEGACY_RATE in an empty book)."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "", "planned_trucks": "1",
-        **line_data({"brand": "LLDPE", "kg": "1000", "currency": "uzs",
-                     "price": "9768", "exchange_rate": "12000"}),
+        "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+        "note": "", "planned_trucks": "1",
+        **line_data({"brand": "LLDPE", "kg": "1000", "price": "9768"}),
     })
     assert resp.status_code == 302
     line = ContractLine.objects.get()

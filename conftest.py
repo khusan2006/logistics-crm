@@ -15,15 +15,23 @@ PASSWORD = "test-pass-123"
 # about one product, so these build that shape in one call and hand back the
 # piece the test actually asserts on.
 
-def make_contract(partner=None, brand="LLDPE", kg="1000", price="1.00", **kw):
-    """A kelishuv with a single product. Returns the Contract."""
+def make_contract(partner=None, brand="LLDPE", kg="1000", price="1.00",
+                  price_uzs=None, **kw):
+    """A kelishuv with a single product. Returns the Contract.
+
+    `currency` (and any other header field) goes through **kw; the product row
+    inherits it, so a so'm kelishuv is built by passing currency="uzs" here rather
+    than on the row. `price_uzs` spells out the so'm side when a test cares about the
+    exact figure that was typed — left out, the row's own kurs fills it in."""
     if partner is None:
         partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     fields = {"created": "2026-07-01"}
     fields.update(kw)
     contract = Contract.objects.create(partner=partner, **fields)
-    ContractLine.objects.create(contract=contract, brand=brand,
-                                kg=Decimal(str(kg)), price=Decimal(str(price)))
+    line = {"kg": Decimal(str(kg)), "price": Decimal(str(price))}
+    if price_uzs is not None:
+        line["price_uzs"] = Decimal(str(price_uzs))
+    ContractLine.objects.create(contract=contract, brand=brand, **line)
     return contract
 
 
@@ -97,9 +105,9 @@ def line_data(*rows, initial=0, prefix="lines"):
     """POST payload for a Mahsulotlar formset: management fields plus one dict per
     product row, e.g. line_data({"brand": "LLDPE", "kg": "100", "price": "1"}).
 
-    Every priced row carries a currency and a kurs since dual currency landed; both
-    default to dollar at 12,000 so a test only spells them out when the currency is
-    what it is testing."""
+    No currency or kurs here: a product row is priced in the currency of the kelishuv
+    it hangs off, and inherits that kelishuv's rate. A so'm narx is therefore posted
+    as `currency: "uzs"` on the HEADER, next to the partner."""
     data = {
         f"{prefix}-TOTAL_FORMS": str(len(rows)),
         f"{prefix}-INITIAL_FORMS": str(initial),
@@ -107,7 +115,6 @@ def line_data(*rows, initial=0, prefix="lines"):
         f"{prefix}-MAX_NUM_FORMS": "1000",
     }
     for i, row in enumerate(rows):
-        row = {"currency": "usd", "exchange_rate": "12000", **row}
         for key, value in row.items():
             data[f"{prefix}-{i}-{key}"] = "" if value is None else str(value)
     return data

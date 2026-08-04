@@ -20,6 +20,7 @@ from .exports import xlsx_response
 from .templatetags.crm_extras import usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm,
+    contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     ExpenseGridForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
@@ -435,7 +436,11 @@ def _save_lines(formset, parent):
 @role_required(User.Role.ADMIN)
 def contract_create(request):
     form = ContractForm(request.POST or None)
-    lines = ContractLineFormSet(request.POST or None)
+    # The rows are priced in the header's currency, and they are built before the
+    # header has been validated — so it is read off the raw POST (contract_currency).
+    lines = ContractLineFormSet(
+        request.POST or None,
+        form_kwargs={"currency": contract_currency(request.POST or None)})
     plan = TruckPlanForm(request.POST or None)
     if request.method == "POST":
         if form.is_valid() and lines.is_valid() and plan.is_valid():
@@ -466,7 +471,9 @@ def _contract_form_response(request, form, lines, plan, title, invalid=False):
 def contract_edit(request, pk):
     contract = get_object_or_404(Contract, pk=pk)
     form = ContractForm(request.POST or None, instance=contract)
-    lines = ContractLineFormSet(request.POST or None, instance=contract)
+    lines = ContractLineFormSet(
+        request.POST or None, instance=contract,
+        form_kwargs={"currency": contract_currency(request.POST or None, contract)})
     plan = TruckPlanForm(request.POST or None, instance=contract)
     title = "Kelishuvni tahrirlash"
     if request.method == "POST":

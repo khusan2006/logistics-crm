@@ -6,7 +6,8 @@ from django.utils import timezone
 from conftest import line_data, make_contract, make_shipment
 from crm.templatetags.crm_extras import NBSP
 from crm.models import (
-    Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
+    Contract, ContractLine, Currency, Partner, Shipment, ShipmentLine, ShipmentStatus,
+    SupplierPayment,
 )
 
 
@@ -45,7 +46,7 @@ def test_total_value(db):
 def test_create_via_view(admin_client, admin_user):
     p = Partner.objects.create(name="Arya", phone="1", city="Shiroz")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "created": "2026-07-04", "note": "",
+        "partner": p.pk, "currency": "usd", "created": "2026-07-04", "note": "",
         **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert resp.status_code == 302
@@ -66,7 +67,7 @@ def test_create_contract_modal_post_valid_returns_204_with_redirect(admin_client
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "created": "2026-07-05", "note": "",
+            "partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
             **line_data({"brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
@@ -231,23 +232,23 @@ def test_kelishuv_option_shows_the_price(db):
 
 
 def test_kelishuv_option_shows_a_som_narx_in_som(db):
-    """A kelishuv struck in so'm is offered in so'm. Both ends of a mixed range
-    carry their own unit — a shared trailing "$/kg" would misprice the so'm line."""
+    """A kelishuv struck in so'm is offered in so'm — including both ends of a price
+    range, since a shared trailing "$/kg" would misprice every row under it."""
     from crm.forms import contract_option_label
 
-    som_only = _contract(kg="1000", price="1.00")
-    som_only.lines.update(currency="uzs", price_uzs=Decimal("12500"),
-                          exchange_rate=Decimal("12500"))
+    som_only = _contract(kg="1000", price="1.00", currency="uzs",
+                         price_uzs=Decimal("12500"))
+    som_only.lines.update(exchange_rate=Decimal("12500"))
     assert f"12{NBSP}500 so'm/kg" in contract_option_label(som_only)
     assert "$/kg" not in contract_option_label(som_only)
 
-    mixed = _contract(kg="1000", price="1.00")
-    ContractLine.objects.create(contract=mixed, brand="ftor oq", kg=Decimal("500"),
+    ContractLine.objects.create(contract=som_only, brand="ftor oq", kg=Decimal("500"),
                                 price=Decimal("2.50"), price_uzs=Decimal("31250"),
-                                currency="uzs", exchange_rate=Decimal("12500"))
-    label = contract_option_label(mixed)
-    assert "1 $/kg" in label
+                                exchange_rate=Decimal("12500"))
+    label = contract_option_label(som_only)
+    assert f"12{NBSP}500 so'm/kg" in label
     assert f"31{NBSP}250 so'm/kg" in label
+    assert "$/kg" not in label
 
 
 def test_kelishuv_has_no_deadline(db):
@@ -261,7 +262,7 @@ def test_kelishuv_has_no_deadline(db):
 def test_planned_trucks_is_optional_and_saved(admin_client, db):
     """Kelishuvga nechta mashina biriktirilishi — ixtiyoriy."""
     p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
-    payload = {"partner": p.pk, "created": "2026-07-05", "note": "",
+    payload = {"partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
                **line_data({"brand": "2102", "kg": "20000", "price": "1.10"})}
     assert admin_client.post("/contracts/new/", payload).status_code == 302
     assert Contract.objects.get().planned_trucks is None
@@ -360,3 +361,54 @@ def test_an_unknown_sort_falls_back_to_the_default(admin_client, db):
     old = _contract(created="2026-01-05")
     new = _contract(created="2026-09-09")
     assert _sorted_codes(admin_client, "junk") == [new.code, old.code]
+
+
+# --- one kelishuv, one currency -------------------------------------------
+
+def test_a_kelishuv_is_struck_in_one_currency_and_its_rows_follow(admin_client, db):
+    """The valyuta is the agreement's, not the product row's — that is what lets
+    "qolgan to'lov" be a single figure in a single currency."""
+    p = Partner.objects.create(name="Sobir", phone="1", city="Tehron")
+    resp = admin_client.post("/contracts/new/", {
+        "partner": p.pk, "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "2102 repak", "kg": "1000", "price": "12650"},
+                    {"brand": "ftor oq", "kg": "500", "price": "13000"}),
+    })
+    assert resp.status_code == 302
+    c = Contract.objects.get()
+    assert c.currency == Currency.UZS
+    assert {ln.currency for ln in c.lines.all()} == {Currency.UZS}
+    assert c.is_som and c.total_value_own == c.total_value_uzs
+
+
+def test_a_product_row_asks_for_neither_a_valyuta_nor_a_kurs(admin_client, db):
+    """Both are the kelishuv's. The kurs is still stored — a landed cost has to mix
+    currencies — it is just inherited instead of typed."""
+    c = _contract(currency=Currency.UZS)
+    resp = admin_client.get(f"/contracts/{c.pk}/edit/")
+    row = resp.context["lines"].forms[0]
+    assert "currency" not in row.fields
+    assert "exchange_rate" not in row.fields
+    assert "currency" in resp.context["form"].fields
+    assert c.lines.get().exchange_rate > 0
+
+
+def test_the_currency_is_frozen_once_money_or_goods_are_attached(admin_client, db):
+    """Re-striking a live kelishuv in the other currency would re-read every figure
+    already booked against it — a 10 000$ to'lov becoming 10 000 so'm."""
+    c = _contract()
+    assert not admin_client.get(
+        f"/contracts/{c.pk}/edit/").context["form"].fields["currency"].disabled
+
+    SupplierPayment.objects.create(contract=c, date="2026-07-23",
+                                   amount=Decimal("100"), method="cash")
+    form = admin_client.get(f"/contracts/{c.pk}/edit/").context["form"]
+    assert form.fields["currency"].disabled
+    # and a posted currency is ignored rather than half-applied
+    admin_client.post(f"/contracts/{c.pk}/edit/", {
+        "partner": c.partner_id, "currency": "uzs", "created": "2026-07-01",
+        "note": "", "planned_trucks": "",
+        **line_data({"id": c.lines.get().pk, "brand": "LLDPE 209AA",
+                     "kg": "50000", "price": "0.96"}, initial=1)})
+    c.refresh_from_db()
+    assert c.currency == Currency.USD

@@ -11,6 +11,7 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
+    latest_exchange_rate,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .templatetags.crm_extras import rate, som, usd
@@ -24,6 +25,12 @@ def date_widget(**attrs):
     as blank — so an edit form looked empty and saving it wiped the date.
     """
     return forms.DateInput(attrs={"type": "date", **attrs}, format="%Y-%m-%d")
+
+
+def currency_suffix(currency):
+    """The unit a money box should be labelled with, once the currency is no longer
+    the operator's to pick — the kelishuv already settled it."""
+    return "so'm" if currency == Currency.UZS else "USD"
 
 
 def _group_thousands(field):
@@ -200,10 +207,19 @@ class MoneyEntryFormMixin:
         This has to happen here rather than in save(): the so'm side is not a form
         field (it is computed, never typed), so ModelForm would not write it — and
         the Mahsulotlar formsets never call our save() at all, they go through
-        formset.save(). _post_clean is the one hook every save path passes through."""
+        formset.save(). _post_clean is the one hook every save path passes through.
+
+        The currency and the kurs ride along whenever the form inherited them instead
+        of asking (a kelishuv row, a yuk row). construct_instance() only copies fields
+        the form declares, so without this the row would convert at the inherited kurs
+        but STORE the column default — and re-opening it would re-derive its narx at a
+        rate it was never priced with."""
         super()._post_clean()
         if self.uzs_field in self.cleaned_data:
             setattr(self.instance, self.uzs_field, self.cleaned_data[self.uzs_field])
+        for inherited in ("currency", "exchange_rate"):
+            if inherited not in self.fields and inherited in self.cleaned_data:
+                setattr(self.instance, inherited, self.cleaned_data[inherited])
 
     def money_kwargs(self):
         """The converted money as kwargs, for the views that build their model
@@ -250,16 +266,16 @@ class CustomerForm(forms.ModelForm):
 
 
 class ContractForm(forms.ModelForm):
-    """The kelishuv header. The dollar kursi used to live here as a display-only
-    helper that showed a so'm preview and stored nothing; each Mahsulot row now
-    carries its own real kurs, so the fake one has been dropped rather than left
-    beside a field that looks identical but actually saves."""
+    """The kelishuv header, including the one currency the whole agreement is struck
+    and settled in. No kurs is asked for: an agreement in one currency is owed and
+    paid in that same currency, and the rate the goods are later costed at is
+    inherited rather than typed (see `latest_exchange_rate`)."""
 
-    field_order = ["partner", "created", "note"]
+    field_order = ["partner", "currency", "created", "note"]
 
     class Meta:
         model = Contract
-        fields = ["partner", "created", "note"]
+        fields = ["partner", "currency", "created", "note"]
         widgets = {
             "created": date_widget(),
             "note": forms.Textarea(attrs={"rows": 3}),
@@ -269,6 +285,39 @@ class ContractForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if not self.instance.pk:  # new contract → default the date to today
             self.fields["created"].initial = timezone.localdate
+        # Re-striking a live kelishuv in the other currency would re-read every
+        # figure already booked against it — a $10 000 to'lov becoming 10 000 so'm —
+        # so the choice is frozen the moment real money or goods are attached to it.
+        # Django ignores a disabled field's submitted value and keeps the stored one.
+        if contract_locked(self.instance):
+            self.fields["currency"].disabled = True
+            self.fields["currency"].help_text = (
+                "To'lov yoki yuk biriktirilgan kelishuvning valyutasi o'zgartirilmaydi")
+
+
+def contract_locked(contract):
+    """A kelishuv with real money or goods already on it can no longer be re-struck
+    in the other currency — every figure booked against it would be re-read."""
+    return bool(contract and contract.pk and (
+        contract.supplier_payments.exists() or contract.shipments.exists()))
+
+
+def contract_currency(data, instance=None):
+    """Which currency the Mahsulot rows are being typed in, read BEFORE the header
+    form has been validated.
+
+    The formset is built in the same breath as the form, and a row cannot be
+    converted without knowing which currency its narx was typed in — so the value is
+    taken off the raw POST. A locked kelishuv keeps its stored currency whatever the
+    POST says, matching the disabled picker on the form."""
+    if contract_locked(instance):
+        return instance.currency
+    submitted = (data or {}).get("currency")
+    if submitted in Currency.values:
+        return submitted
+    if instance is not None and instance.pk:
+        return instance.currency
+    return Currency.USD
 
 
 def _keep_if(queryset, predicate, keep_pk=None):
@@ -340,19 +389,29 @@ class TruckPlanForm(forms.ModelForm):
 
 
 class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
-    """One "Mahsulot" row on the kelishuv form. The narx is entered in whichever
-    currency the kelishuv was struck in."""
+    """One "Mahsulot" row on the kelishuv form.
+
+    Neither a valyuta nor a kurs is asked for here any more. The narx is in the
+    kelishuv's currency by definition, and a row settled in the currency it was
+    agreed in needs no rate to say what is owed — so the row inherits both from the
+    header instead of offering a picker that could disagree with it."""
 
     class Meta:
         model = ContractLine
-        fields = ["brand", "kg", "currency", "price", "exchange_rate"]
+        fields = ["brand", "kg", "price"]
         widgets = {
             "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
             "kg": forms.NumberInput(attrs={"placeholder": "0"}),
             "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "0.0000"}),
-            "exchange_rate": forms.NumberInput(attrs={"step": "1",
-                                                      "placeholder": "Masalan: 12650"}),
         }
+
+    def __init__(self, *args, currency=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The header's currency, handed down by the formset. The mixin has just
+        # stripped the unit off the narx label because it assumes the operator picks
+        # one; here it is known, so it goes back on.
+        self.line_currency = currency or Currency.USD
+        self.fields["price"].label = f"1 kg narxi ({currency_suffix(self.line_currency)})"
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
@@ -367,6 +426,13 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         return price
 
     def clean(self):
+        # Seeded before the mixin converts: it reads both out of cleaned_data, and
+        # neither is a field on this form any more. An existing row keeps the kurs it
+        # was booked at — recomputing it at today's rate would move a so'm figure that
+        # was already agreed (see `latest_exchange_rate`).
+        self.cleaned_data["currency"] = self.line_currency
+        self.cleaned_data["exchange_rate"] = (
+            self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
         cleaned = super().clean()
         kg = cleaned.get("kg")
         # Shrinking a product below what already went out would make qolgan negative.
@@ -565,16 +631,19 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
 
 
 class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
-    """One product on the truck."""
+    """One product on the truck.
+
+    Like the kelishuv row, it neither asks for a valyuta nor a kurs: a truck is
+    priced in the currency of the kelishuv it is drawn from, and that is the currency
+    its goods land in `shipped_value_own`."""
 
     #: blank narx means "use the kelishuv's" — see ShipmentLine.unit_price
     allow_blank = True
 
     class Meta:
         model = ShipmentLine
-        fields = ["contract_line", "kg", "currency", "price", "exchange_rate"]
-        widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""}),
-                   "exchange_rate": forms.NumberInput(attrs={"step": "1"})}
+        fields = ["contract_line", "kg", "price"]
+        widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""})}
         labels = {"kg": "Yuboriladigan kg", "price": "1 kg narxi"}
 
     def __init__(self, *args, **kwargs):
@@ -588,10 +657,12 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
             base, lambda ln: ln.remaining_kg > 0, self.instance.contract_line_id)
         # Everything needed to pick the right row without leaving the dropdown:
         # which kelishuv, which marka, how much is still owed, at what price.
+        # Priced in its own kelishuv's currency — a so'm line printed with a dollar
+        # sign in front of it is the exact lie this phase is removing.
         self.fields["contract_line"].label_from_instance = (
             lambda ln: f"{ln.contract.code} · {ln.brand} · "
                        f"{_clean_number(ln.remaining_kg)} kg qolgan · "
-                       f"{_clean_number(ln.price)} $/kg")
+                       f"{rate(ln.price, ln.price_uzs, ln.currency)}")
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
@@ -604,6 +675,17 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         if price is not None and price <= 0:
             raise forms.ValidationError("Narx musbat bo'lishi kerak")
         return price
+
+    def clean(self):
+        # Seeded before the mixin converts, same as the kelishuv row — except the
+        # currency comes from whichever product this row picked, since the truck's
+        # kelishuv is only settled once `contract_line` has been cleaned.
+        line = self.cleaned_data.get("contract_line")
+        self.cleaned_data["currency"] = (
+            line.contract.currency if line else Currency.USD)
+        self.cleaned_data["exchange_rate"] = (
+            self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
+        return super().clean()
 
 
 class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
@@ -709,7 +791,7 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         base = (Contract.objects.select_related("partner")
                 .prefetch_related("lines__shipment_lines", "supplier_payments"))
         self.fields["contract"].queryset = _keep_if(
-            base, lambda c: c.payable_left > 0, self.instance.contract_id)
+            base, lambda c: c.payable_left_own > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
 
     def clean_commission_percent(self):
@@ -728,14 +810,22 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
         # kelishuv's value, not the goods shipped so far. The cap is on what the
         # hamkor RECEIVES — the middleman's cut rides on top and is not part of it.
+        #
+        # Measured in the KELISHUV's currency, not the dollar column: a so'm kelishuv
+        # paid off in so'm still leaves a dollar remainder whenever the kurs has moved
+        # since it was struck, and the form would go on demanding money that is not
+        # owed. The to'lov's own converted value is what settles it.
         if contract and amount is not None and not self.errors:
-            left = contract.payable_left
+            paid = cleaned.get("amount_uzs") if contract.is_som else amount
+            left = contract.payable_left_own
             if self.instance.pk and self.instance.contract_id == contract.pk:
-                left += self.instance.amount
-            if amount > left:
+                left += (self.instance.amount_uzs if contract.is_som
+                         else self.instance.amount)
+            if paid is not None and paid > left:
+                shown = som(left) if contract.is_som else usd(left)
                 self.add_error(
                     "amount",
-                    f"Kelishuv qiymatidan oshib ketdi (to'lash mumkin: {left} $)")
+                    f"Kelishuv qiymatidan oshib ketdi (to'lash mumkin: {shown})")
         return cleaned
 
 

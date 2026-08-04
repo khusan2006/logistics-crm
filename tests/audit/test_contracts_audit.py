@@ -14,7 +14,9 @@ symptoms the product owner reported:
 
 Tests marked xfail carry a "BUG:" reason and document a defect that is still live.
 """
+from contextlib import contextmanager
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django import forms as djforms
@@ -33,13 +35,36 @@ def _partner(name="Pars"):
 
 
 def _create(client, *rows, partner=None, created="2026-07-01", note="", **extra):
-    """Open a kelishuv through the real view and hand back the saved Contract."""
+    """Open a kelishuv through the real view and hand back the saved Contract.
+
+    A row's `currency` is lifted onto the header — the whole kelishuv is struck in one
+    currency now, so the product rows no longer carry a picker of their own. A row's
+    `exchange_rate` is lifted too, but it is not a form field at all any more: the row
+    inherits the last kurs anybody entered, so the probe stands in for that lookup
+    rather than posting a box the operator no longer sees."""
     partner = partner or _partner()
-    payload = {"partner": partner.pk, "created": created, "note": note,
-               "planned_trucks": "", **line_data(*rows), **extra}
-    resp = client.post("/contracts/new/", payload)
+    rows = [dict(row) for row in rows]
+    currency, kurs = Currency.USD, None
+    for row in rows:
+        currency = row.pop("currency", currency)
+        kurs = row.pop("exchange_rate", kurs)
+    payload = {"partner": partner.pk, "currency": currency, "created": created,
+               "note": note, "planned_trucks": "", **line_data(*rows), **extra}
+    with _inherited_kurs(kurs):
+        resp = client.post("/contracts/new/", payload)
     assert resp.status_code == 302, resp.context["lines"].errors if resp.context else resp
     return Contract.objects.order_by("-pk").first()
+
+
+@contextmanager
+def _inherited_kurs(kurs):
+    """Pin what a fresh row inherits as its kurs. Blank or zero means "whatever the
+    app would have found", which is LEGACY_RATE in an empty database."""
+    if kurs in (None, "", "0"):
+        yield
+        return
+    with patch("crm.forms.latest_exchange_rate", return_value=Decimal(str(kurs))):
+        yield
 
 
 def _bound_values(form, data):
@@ -167,13 +192,18 @@ def test_the_saved_row_keeps_the_som_currency_it_was_entered_in(admin_client, db
 
 
 def test_the_edit_form_reopens_with_som_selected(admin_client, db):
+    """The picker sits on the header now — one currency for the whole kelishuv — and
+    the rows carry neither it nor a kurs box, so there is nothing left that could
+    re-open disagreeing with the agreement it belongs to."""
     contract = _create(admin_client, {"brand": "LLDPE", "kg": "1000",
                                       "currency": "uzs", "price": "12650",
                                       "exchange_rate": "12650"})
     resp = admin_client.get(f"/contracts/{contract.pk}/edit/")
-    form = resp.context["lines"].forms[0]
-    assert form["currency"].value() == "uzs"
-    assert form["exchange_rate"].value() == Decimal("12650.00")
+    assert resp.context["form"]["currency"].value() == "uzs"
+    row = resp.context["lines"].forms[0]
+    assert "currency" not in row.fields and "exchange_rate" not in row.fields
+    # the kurs it was booked at is still on the row, it is just no longer typed
+    assert contract.lines.get().exchange_rate == Decimal("12650.00")
 
 
 # Regression guard. This was an xfail documenting the so'm-edit defect; it passes
@@ -280,27 +310,39 @@ def test_editing_the_kg_of_a_som_line_leaves_its_narx_alone(admin_client, db):
     assert Contract.objects.get(pk=contract.pk).total_value_uzs == Decimal("15180000.00")
 
 
-# --- (d) aggregates over mixed currencies and mixed kurs values ------------
+# --- (d) aggregates over a kelishuv's products -----------------------------
 
-def test_jami_is_the_sum_of_lines_that_mix_currency_and_kurs(admin_client, db):
+def test_every_product_row_is_struck_in_the_kelishuvs_own_currency(admin_client, db):
+    """Products no longer carry a currency of their own. A kelishuv is one agreement
+    in one currency, which is what lets "qolgan to'lov" be a single figure in a single
+    currency instead of a per-row pile that has to be converted to be added up."""
     contract = _create(
         admin_client,
-        {"brand": "LLDPE", "kg": "1000", "currency": "usd", "price": "1.20",
-         "exchange_rate": "12000"},
-        {"brand": "HDPE", "kg": "500", "currency": "uzs", "price": "13000",
+        {"brand": "LLDPE", "kg": "1000", "price": "13000", "currency": "uzs",
          "exchange_rate": "13000"},
+        {"brand": "HDPE", "kg": "500", "price": "26000"},
     )
-    usd_line = contract.lines.get(brand="LLDPE")
-    som_line = contract.lines.get(brand="HDPE")
+    assert contract.currency == Currency.UZS
+    assert {line.currency for line in contract.lines.all()} == {Currency.UZS}
 
-    assert usd_line.total_value == Decimal("1200.00")
-    assert usd_line.total_value_uzs == Decimal("14400000.00")
-    assert som_line.total_value == Decimal("500.00")          # 500 × (13000/13000)
-    assert som_line.total_value_uzs == Decimal("6500000.00")
 
-    assert contract.total_value == usd_line.total_value + som_line.total_value
-    assert contract.total_value_uzs == (usd_line.total_value_uzs
-                                        + som_line.total_value_uzs)
+def test_jami_is_the_sum_of_the_product_rows(admin_client, db):
+    contract = _create(
+        admin_client,
+        {"brand": "LLDPE", "kg": "1000", "price": "1.20", "exchange_rate": "12000"},
+        {"brand": "HDPE", "kg": "500", "price": "2.00"},
+    )
+    first = contract.lines.get(brand="LLDPE")
+    second = contract.lines.get(brand="HDPE")
+
+    assert first.total_value == Decimal("1200.00")
+    assert first.total_value_uzs == Decimal("14400000.00")
+    assert second.total_value == Decimal("1000.00")
+    assert second.total_value_uzs == Decimal("12000000.00")
+
+    assert contract.total_value == first.total_value + second.total_value
+    assert contract.total_value_uzs == first.total_value_uzs + second.total_value_uzs
+    assert contract.total_value_own == contract.total_value      # a dollar kelishuv
     assert contract.kg == Decimal("1500.000")
 
 
@@ -403,11 +445,10 @@ def test_payable_left_nets_payments_that_arrived_in_different_currencies(admin_c
     assert contract.payable_left_uzs == Decimal("4600000.00")
 
 
-@pytest.mark.xfail(reason="BUG: a so'm kelishuv settled in full in so'm still shows a "
-                          "dollar Qolgan to'lov and never leaves Tugallanmagan — "
-                          "is_settled/payable_left read only the USD side, which was "
-                          "derived at a different day's kurs than the payment",
-                   strict=False)
+# Regression guard. This was an xfail documenting the defect that a so'm kelishuv
+# settled in full in so'm still showed a dollar Qolgan to'lov and never left
+# Tugallanmagan. It passes since the qarz figures are measured in the kelishuv's own
+# currency (Contract._own); kept as a test so the defect cannot come back.
 def test_a_som_kelishuv_paid_in_full_in_som_counts_as_settled(admin_client, db):
     contract = _create(admin_client, {"brand": "LLDPE", "kg": "1000",
                                       "currency": "uzs", "price": "12650",
@@ -422,14 +463,14 @@ def test_a_som_kelishuv_paid_in_full_in_som_counts_as_settled(admin_client, db):
     contract = Contract.objects.get(pk=contract.pk)
 
     assert line.contract.total_value_uzs == Decimal("12650000.00")
-    assert contract.payable_left_uzs == Decimal("0.00")   # nothing owed in so'm
-    assert contract.payable_left <= 0                     # but the USD side says 11.72
+    assert contract.payable_left_own == Decimal("0.00")   # nothing owed in so'm
     assert contract.is_settled
 
 
-def test_a_som_kelishuv_settled_in_som_still_shows_a_dollar_payable(admin_client, db):
-    """The measured half of the test above: the two halves of Qolgan to'lov
-    disagree by the kurs move between the kelishuv and the to'lov."""
+def test_the_dollar_twin_of_a_settled_som_kelishuv_is_not_what_settles_it(admin_client, db):
+    """The same kelishuv seen from the other column. The dollar twin still reads
+    11.72 — the goods and the money were converted at kurs values a week apart — and
+    that is precisely why it is not the figure anything is measured against."""
     contract = _create(admin_client, {"brand": "LLDPE", "kg": "1000",
                                       "currency": "uzs", "price": "12650",
                                       "exchange_rate": "12650"})
@@ -440,12 +481,12 @@ def test_a_som_kelishuv_settled_in_som_still_shows_a_dollar_payable(admin_client
                                    exchange_rate=Decimal("12800"))
     contract = Contract.objects.get(pk=contract.pk)
 
-    assert contract.payable_left_uzs == Decimal("0.00")
-    assert contract.payable_left == Decimal("11.72")
-    assert contract.is_settled is False
-    # and so it stays on the working list for ever
+    assert contract.payable_left == Decimal("11.72")      # the derived side, unused
+    assert contract.payable_left_own == Decimal("0.00")   # the agreed side, settled
+    assert contract.is_settled
+    # and so it drops off the working list instead of sitting there for ever
     resp = admin_client.get("/contracts/", {"state": "open"})
-    assert [c.pk for c in resp.context["page"].object_list] == [contract.pk]
+    assert [c.pk for c in resp.context["page"].object_list] == []
 
 
 def test_the_to_lov_chips_can_leave_a_kelishuv_in_no_bucket(admin_client, db):
