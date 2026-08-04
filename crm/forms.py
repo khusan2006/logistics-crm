@@ -575,10 +575,17 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             if existing:
                 existing.delete()
             return None
-        # Dollars, at the kurs that logist's own funding was converted at: the
-        # advance is paid out of money we already sent them, so re-rating it at
-        # today's kurs would give it a so'm value that money never had.
-        rate = logist.latest_rate
+        # Dollars, at the kurs that logist's own funding was converted at: the advance
+        # is paid out of money we already sent them, so rating it at today's kurs
+        # would give it a so'm value that money never had.
+        #
+        # And once booked, that kurs is the advance's own. Topping the logist up again
+        # moves `latest_rate`, and this method runs on EVERY yuk save — so re-reading
+        # it here restated the so'm value of cash handed to a driver weeks earlier,
+        # triggered by an edit that had nothing to do with it. Moving the advance to a
+        # different logist is a different event, and does take that logist's rate.
+        kept = existing if existing and existing.logist_id == logist.pk else None
+        rate = kept.exchange_rate if kept else logist.latest_rate
         usd_value, uzs_value = convert_pair(amount, Currency.USD, rate)
         fields = {
             "amount": usd_value, "amount_uzs": uzs_value,
@@ -1548,7 +1555,16 @@ class LogistForm(forms.ModelForm):
 class LogistPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     """Money we send a logist. No ceiling: unlike a hamkor to'lov there is nothing
     to overpay — the balance is a running float they draw drivers' advances from,
-    and topping it up before the loads go out is the normal way round."""
+    and topping it up before the loads go out is the normal way round.
+
+    That float is kept in dollars: every driver advance is booked in dollars
+    (ShipmentForm.sync_driver_advance), so the balance is a dollar figure. A dollar
+    top-up therefore crosses nothing and asks for no kurs, exactly as a kelishuv paid
+    in its own currency does; a so'm top-up does convert into that float, so there the
+    rate is what decides how much the logist ends up holding."""
+
+    #: The currency the logist's balance is kept in — see the class docstring.
+    float_currency = Currency.USD
 
     class Meta:
         model = LogistPayment
@@ -1560,6 +1576,21 @@ class LogistPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelFor
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["logist"].label_from_instance = logist_option_label
+        self.fields["exchange_rate"].help_text = (
+            "Faqat so'mda yuborilayotganda kerak")
+        # A constant rather than a picker: unlike a kelishuv there is nothing to
+        # choose here, but the same JS decides whether the kurs box is shown.
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def clean(self):
+        # Same rule as a hamkor to'lov, and only a MISSING rate is filled in — one the
+        # operator did supply stands. An edit keeps the rate the top-up was booked at,
+        # so a figure already on the books never moves on its own.
+        typed_rate = self.cleaned_data.get("exchange_rate") or Decimal("0")
+        if typed_rate <= 0 and self.cleaned_data.get("currency") == self.float_currency:
+            self.cleaned_data["exchange_rate"] = (
+                self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
+        return super().clean()
 
 
 def logist_option_label(logist):

@@ -208,11 +208,10 @@ def test_resaving_the_yuk_neither_duplicates_nor_double_counts_the_advance(
     assert logist.balance == Decimal("9500.00")
 
 
-@pytest.mark.xfail(reason="BUG: sync_driver_advance re-derives the advance's so'm "
-                          "value from logist.latest_rate on EVERY yuk save, so a "
-                          "later top-up at a new kurs silently re-prices an advance "
-                          "that was handed over months ago",
-                   strict=False)
+# Regression guard. This was an xfail documenting the defect that sync_driver_advance
+# re-derived an advance's so'm value from logist.latest_rate on EVERY yuk save, so a
+# later top-up at a new kurs silently re-priced cash handed over months earlier. An
+# advance booked keeps its own kurs now; only a move to another logist re-rates it.
 def test_a_later_top_up_does_not_re_price_an_advance_already_handed_over(
         admin_client, db):
     """forms.py:470 states the rule it then breaks on edit: "re-rating it at today's
@@ -232,6 +231,44 @@ def test_a_later_top_up_does_not_re_price_an_advance_already_handed_over(
     advance.refresh_from_db()
     assert advance.exchange_rate == Decimal("12000.00")
     assert advance.amount_uzs == Decimal("6000000.00")
+
+
+def test_correcting_the_advance_figure_keeps_the_kurs_it_was_handed_over_at(
+        admin_client, db):
+    """Restating how much the driver got is a correction to the SAME handover, so it
+    is re-figured at that handover's kurs — not at whatever the logist has since been
+    topped up at."""
+    logist = _logist()
+    _send(admin_client, logist, amount="10000", exchange_rate="12000")
+    shipment, contract = _dispatch(admin_client, logist, advance="500")
+    _send(admin_client, logist, amount="5000", exchange_rate="13000",
+          date="2026-07-20")
+
+    _resave(admin_client, shipment, contract, logist, advance="600")
+
+    advance = ShipmentExpense.objects.get(is_driver_advance=True)
+    assert advance.amount == Decimal("600.00")
+    assert advance.exchange_rate == Decimal("12000.00")
+    assert advance.amount_uzs == Decimal("7200000.00")     # 600 × 12 000, not 13 000
+
+
+def test_moving_the_advance_to_another_logist_takes_that_logists_kurs(
+        admin_client, db):
+    """The one case that DOES re-rate: the money now comes out of somebody else's
+    float, so it is worth what their funding was converted at."""
+    first, second = _logist(), _logist("Bekzod aka")
+    _send(admin_client, first, amount="10000", exchange_rate="12000")
+    _send(admin_client, second, amount="10000", exchange_rate="13000")
+    shipment, contract = _dispatch(admin_client, first, advance="500")
+
+    _resave(admin_client, shipment, contract, second, advance="500")
+
+    advance = ShipmentExpense.objects.get(is_driver_advance=True)
+    assert advance.logist_id == second.pk
+    assert advance.exchange_rate == Decimal("13000.00")
+    assert advance.amount_uzs == Decimal("6500000.00")
+    assert first.balance == Decimal("10000.00")            # handed back
+    assert second.balance == Decimal("9500.00")
 
 
 def test_an_advance_for_an_unfunded_logist_uses_the_legacy_rate(admin_client, db):
@@ -427,14 +464,29 @@ def test_a_top_up_of_nothing_or_less_is_refused(admin_client, db, amount):
 
 
 @pytest.mark.parametrize("rate", ["", "0"])
-def test_a_top_up_with_no_usable_kurs_is_refused(admin_client, db, rate):
-    """convert_pair raises on rate <= 0: such a row has only one of its two values
-    and could never join a so'm total."""
+def test_a_som_top_up_with_no_usable_kurs_is_refused(admin_client, db, rate):
+    """A logist's float is kept in dollars, so so'm sent to them converts into it —
+    and without a rate there is no saying how much they ended up holding."""
+    logist = _logist()
+    resp = admin_client.post("/logist-payments/new/",
+                             _pay_body(logist, currency="uzs", amount="12000000",
+                                       exchange_rate=rate))
+    assert resp.status_code == 200
+    assert not LogistPayment.objects.exists()
+
+
+@pytest.mark.parametrize("rate", ["", "0"])
+def test_a_dollar_top_up_asks_for_no_kurs_at_all(admin_client, db, rate):
+    """Dollars into a dollar float cross nothing: the summa IS what the logist ends
+    up holding. The row still takes a rate for the kassa's so'm column."""
     logist = _logist()
     resp = admin_client.post("/logist-payments/new/",
                              _pay_body(logist, exchange_rate=rate))
-    assert resp.status_code == 200
-    assert not LogistPayment.objects.exists()
+    assert resp.status_code == 302
+    payment = LogistPayment.objects.get()
+    assert payment.amount == Decimal("1000.00")
+    assert payment.exchange_rate > 0
+    assert logist.balance == Decimal("1000.00")
 
 
 def test_a_cleared_foiz_box_does_not_break_the_save(admin_client, db):

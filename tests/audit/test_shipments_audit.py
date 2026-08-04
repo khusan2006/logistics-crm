@@ -360,12 +360,9 @@ def test_correcting_the_kg_of_a_som_lot_leaves_its_narx_alone(admin_client):
     assert line.price == Decimal("1.1700")
 
 
-@pytest.mark.xfail(reason="BUG: ShipmentForm.sync_driver_advance re-rates an "
-                          "EXISTING advance at logist.latest_rate on every save, so "
-                          "topping the logist up at a new kurs silently moves the "
-                          "so'm value of an advance handed over weeks earlier "
-                          "(crm/forms.py:466-482).",
-                   strict=False)
+# Regression guard. Was an xfail documenting the same defect the logist audit pins:
+# an advance already handed over kept being re-rated at whatever the logist's newest
+# funding kurs happened to be, on a save that had nothing to do with it.
 def test_a_driver_advance_is_not_re_rated_when_the_yuk_is_resaved(admin_client, admin_user):
     logist = Logist.objects.create(name="Sardor", phone="1")
     LogistPayment.objects.create(logist=logist, date="2026-07-01", amount=Decimal("1000"),

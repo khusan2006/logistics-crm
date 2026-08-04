@@ -1442,17 +1442,28 @@
   // Each kelishuv <option> carries its own currency (ContractChoiceSelect), so the
   // comparison needs no round trip; the server re-derives it either way.
   (function () {
-    function update(form) {
+    var MARKED = '[data-contract-currency], [data-settled-against]';
+    // What this money is settled against. A hamkor to'lov settles a kelishuv, so it
+    // follows whichever one is picked; a logist top-up settles a float that is kept
+    // in one fixed currency, so it is a constant on the picker itself.
+    function settledAgainst(form) {
       var contractEl = form.querySelector('[data-contract-currency]');
+      if (contractEl) {
+        var option = contractEl.options[contractEl.selectedIndex];
+        return option ? option.getAttribute('data-currency') : '';
+      }
+      var fixedEl = form.querySelector('[data-settled-against]');
+      return fixedEl ? fixedEl.getAttribute('data-settled-against') : '';
+    }
+    function update(form) {
       var rateEl = form.querySelector('[data-money-rate]');
       var currencyEl = window.pickedControl(form, '[data-money-currency]');
-      if (!contractEl || !rateEl || !currencyEl) { return; }
-      var option = contractEl.options[contractEl.selectedIndex];
-      var contractCurrency = option ? option.getAttribute('data-currency') : '';
+      if (!rateEl || !currencyEl) { return; }
+      var against = settledAgainst(form);
       var box = rateEl.closest('p') || rateEl.closest('.lineset-field') || rateEl;
-      // No kelishuv picked yet: nothing to compare against, so stay out of the way
-      // rather than demand a kurs for a boundary that may not exist.
-      var crosses = !!contractCurrency && contractCurrency !== currencyEl.value;
+      // Nothing picked to compare against yet: stay out of the way rather than
+      // demand a kurs for a boundary that may not exist.
+      var crosses = !!against && against !== currencyEl.value;
       box.hidden = !crosses;
       // Cleared as well as hidden: an invisible rate would still drive the "≈ …"
       // preview beside the summa, quoting a counter-currency figure off a number
@@ -1461,13 +1472,13 @@
     }
     function enhance(root) {
       (root || document).querySelectorAll('form').forEach(function (form) {
-        if (form.querySelector('[data-contract-currency]')) { update(form); }
+        if (form.querySelector(MARKED)) { update(form); }
       });
     }
     document.addEventListener('change', function (e) {
       if (!e.target.closest) { return; }
       var form = e.target.closest('form');
-      if (!form || !form.querySelector('[data-contract-currency]')) { return; }
+      if (!form || !form.querySelector(MARKED)) { return; }
       if (e.target.matches('[data-contract-currency], [data-money-currency]')) {
         update(form);
       }

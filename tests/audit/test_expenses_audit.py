@@ -205,11 +205,9 @@ def test_editing_an_expense_never_makes_a_second_row(admin_client, shipment):
     assert ShipmentExpense.objects.count() == 2
 
 
-@pytest.mark.xfail(reason="BUG: ShipmentForm.sync_driver_advance re-derives the "
-                          "advance's so'm value from logist.latest_rate on EVERY "
-                          "yuk save, so a later top-up at a new kurs silently "
-                          "re-rates an advance that was already handed over",
-                   strict=False)
+# Regression guard. Third view of the same fixed defect (see the logist and yuk
+# audits): an advance already handed over kept being re-derived from the logist's
+# newest funding kurs on every yuk save. It keeps its own kurs now.
 def test_resaving_a_yuk_does_not_re_rate_an_already_recorded_driver_advance(
         admin_client, db):
     """crm/forms.py:493 states the rule outright — "re-rating it at today's kurs
