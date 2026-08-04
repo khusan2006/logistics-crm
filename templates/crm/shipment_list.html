@@ -294,7 +294,11 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
 </table>
 </div>
 <p class="muted loads-empty-filtered" hidden>Bu holatda yuk yo'q.</p>
-{% include "crm/_pagination.html" with label="yuk" %}
+{% comment %}
+Hammasi pages by kelishuv, so the count beside the pager counts kelishuvlar — a
+page here is "these N kelishuv and all of their yuklar".
+{% endcomment %}
+{% include "crm/_pagination.html" with label="kelishuv" %}
 {% else %}
 <p class="muted">{% if show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}

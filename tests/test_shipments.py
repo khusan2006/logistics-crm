@@ -284,6 +284,7 @@ def test_arrived_loads_are_hidden_until_hammasi(admin_client, db):
 
 
 def test_hammasi_paginates_and_searches_across_every_load(admin_client, db):
+    """Hammasi pages by KELISHUV: a page is N of them and all of their yuklar."""
     c = _contract(kg="200000")
     for i in range(3):
         make_shipment(contract=c, kg="100", arrived=date.today(), transport=f"01 77{i} AAA",
@@ -292,10 +293,34 @@ def test_hammasi_paginates_and_searches_across_every_load(admin_client, db):
                            transport="01 999 ZZZ", status=ShipmentStatus.arrival())
 
     page = admin_client.get("/shipments/", {"all": "1"}).context["page"]
-    assert page is not None and page.paginator.count == 4
+    assert page is not None and page.paginator.count == 1          # one kelishuv…
+    assert len(page.object_list[0]["shipments"]) == 4              # …carrying all 4
 
     hit = admin_client.get("/shipments/", {"all": "1", "q": "999"})
     assert [s.pk for s in hit.context["shipments"]] == [wanted.pk]
+
+
+def test_hammasi_never_splits_a_kelishuv_across_pages(admin_client, db):
+    """Paging the flat list cut a kelishuv wherever its 20th load fell, so the rest
+    of its yuklar sat under a second copy of the same header a page later — and
+    since the list runs newest-first, that cut ran along the status line: the moving
+    loads on one page, the arrived ones on the next."""
+    for i in range(12):
+        contract = _contract(kg="200000")
+        make_shipment(contract=contract, kg="100", transport=f"01 {i:03d} AAA")
+        make_shipment(contract=contract, kg="100", arrived=date.today(),
+                      transport=f"01 {i:03d} BBB", status=ShipmentStatus.arrival())
+
+    seen = set()
+    for number in (1, 2):
+        groups = admin_client.get(
+            "/shipments/", {"all": "1", "page": number}).context["groups"]
+        for g in groups:
+            assert g["contract"].pk not in seen        # never a second header
+            seen.add(g["contract"].pk)
+            # both of the kelishuv's yuklar, whatever holat they are in
+            assert len(g["shipments"]) == 2
+    assert len(seen) == 12
 
 
 def test_the_old_done_url_now_lands_on_hammasi(admin_client, db):

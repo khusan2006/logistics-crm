@@ -939,16 +939,12 @@ def shipment_list(request):
         if s.is_overdue:
             overdue_count += 1
 
-    # Hammasi can grow without bound, so page it and group only what this page
-    # shows; the active view stays whole, as the pipeline is meant to be scanned.
-    page = Paginator(shipments, 20).get_page(request.GET.get("page")) if show_all else None
-    rows = list(page.object_list) if page is not None else shipments
-
-    # Group the rows under their kelishuv (newest contract first, newest load first
-    # inside — same recency feel as the flat list had).
+    # Group under the kelishuv (newest contract first, newest load first inside —
+    # same recency feel as the flat list had). Built from every row, before any
+    # paging: a kelishuv is the unit this page is read in.
     groups = []
     by_contract = {}
-    for s in sorted(rows, key=lambda s: -s.contract_id):
+    for s in sorted(shipments, key=lambda s: -s.contract_id):
         g = by_contract.get(s.contract_id)
         if g is None:
             g = by_contract[s.contract_id] = {"contract": s.contract, "shipments": []}
@@ -956,6 +952,19 @@ def shipment_list(request):
         g["shipments"].append(s)
     for g in groups:
         g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
+
+    # Hammasi can grow without bound, so page it — by KELISHUV, not by yuk. Paging
+    # the flat list cut a kelishuv wherever its 20th load happened to fall, leaving
+    # the rest of that kelishuv's yuklar under a second copy of the same header a
+    # page later. And because the list runs newest-first, that cut landed almost
+    # exactly along the status line: the moving loads on one page, the arrived ones
+    # on the next, which is what made a kelishuv look split by holat.
+    #
+    # The active view stays whole, as the pipeline is meant to be scanned.
+    page = Paginator(groups, 10).get_page(request.GET.get("page")) if show_all else None
+    if page is not None:
+        groups = list(page.object_list)
+    rows = [s for g in groups for s in g["shipments"]]
 
     statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
     # The arrival status only earns a tab in Hammasi — in the active view nothing
