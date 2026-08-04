@@ -15,7 +15,7 @@ import pytest
 
 from crm.models import (
     Contract, ContractLine, Currency, Customer, Partner, Reservation, Return, Sale,
-    Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, brand_free_kg,
+    Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
     brand_on_hand_kg, convert_pair, stock_value,
 )
 
@@ -150,7 +150,6 @@ def test_lot_remaining_is_arrived_minus_sold(admin_client):
     assert g["kirim"] == Decimal("1000.000")
     assert g["sold"] == Decimal("400.000")
     assert g["on_hand"] == Decimal("600.000")
-    assert g["available"] == Decimal("600.000")
 
 
 def test_restocked_return_puts_the_kg_back_on_the_lot(admin_client):
@@ -161,10 +160,9 @@ def test_restocked_return_puts_the_kg_back_on_the_lot(admin_client):
     lot.refresh_from_db()
     assert lot.returned_kg == Decimal("100.000")
     assert lot.available_kg == Decimal("700.000")
-    # and the marka-level figures the sotuv forms police follow it
+    # and the marka-level figure the sotuv forms police follows it
     assert brand_on_hand_kg("LLDPE") == Decimal("700.000")
-    assert brand_free_kg("LLDPE") == Decimal("700.000")
-    assert _group(admin_client, "LLDPE")["available"] == Decimal("700.000")
+    assert _group(admin_client, "LLDPE")["on_hand"] == Decimal("700.000")
 
 
 def test_non_restocked_return_leaves_the_shelf_alone(admin_client):
@@ -182,28 +180,28 @@ def test_non_restocked_return_leaves_the_shelf_alone(admin_client):
 
 
 def test_stock_never_goes_negative_and_the_shortfall_is_named(admin_client):
-    """Bronning more than has landed is legitimate; a negative shelf is not."""
+    """Bronning more than has landed is legitimate; a negative shelf is not. The
+    bron takes nothing off the shelf, so the gap is reported as `short` instead."""
     _lot(kg="1000")
     _reserve(admin_client, "LLDPE", _customer(), kg="2500")
 
     g = _group(admin_client, "LLDPE")
-    assert g["on_hand"] == Decimal("1000.000")
+    assert g["on_hand"] == Decimal("1000.000")         # every kg still sellable
     assert g["reserved"] == Decimal("2500.000")
-    assert g["available"] == Decimal("0")                # clamped, not −1500
-    assert g["short"] == Decimal("1500.000")
-    assert brand_free_kg("LLDPE") == Decimal("0")
+    assert g["short"] == Decimal("1500.000")           # clamped, not −1500
+    assert brand_on_hand_kg("LLDPE") == Decimal("1000.000")
 
 
 def test_deleting_a_sotuv_releases_its_stock(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400")
-    assert _group(admin_client, "LLDPE")["available"] == Decimal("600.000")
+    assert _group(admin_client, "LLDPE")["on_hand"] == Decimal("600.000")
 
     assert admin_client.post(f"/sales/{sale.pk}/delete/").status_code == 302
     lot.refresh_from_db()
     assert lot.available_kg == Decimal("1000.000")
     g = _group(admin_client, "LLDPE")
-    assert g["sold"] == Decimal("0") and g["available"] == Decimal("1000.000")
+    assert g["sold"] == Decimal("0") and g["on_hand"] == Decimal("1000.000")
 
 
 def test_deleting_a_sotuv_that_has_a_return_restores_the_whole_lot(admin_client):
@@ -220,15 +218,17 @@ def test_deleting_a_sotuv_that_has_a_return_restores_the_whole_lot(admin_client)
     assert lot.available_kg == Decimal("1000.000")       # not 1100
 
 
-def test_deleting_a_bron_frees_the_reserved_kg(admin_client):
+def test_deleting_a_bron_drops_the_promise(admin_client):
     lot = _lot(kg="1000")
     bron = _reserve(admin_client, "LLDPE", _customer(), kg="400")
-    assert _group(admin_client, "LLDPE")["available"] == Decimal("600.000")
+    g = _group(admin_client, "LLDPE")
+    assert g["reserved"] == Decimal("400.000")
+    assert g["on_hand"] == Decimal("1000.000")           # promised, not held
 
     assert admin_client.post(f"/reservations/{bron.pk}/delete/", {}).status_code == 302
     g = _group(admin_client, "LLDPE")
     assert g["reserved"] == Decimal("0")
-    assert g["available"] == Decimal("1000.000")
+    assert g["on_hand"] == Decimal("1000.000")
     lot.refresh_from_db()
     assert lot.available_kg == Decimal("1000.000")       # a bron never touched it
 
@@ -245,7 +245,7 @@ def test_ombor_columns_reconcile_after_a_restocked_return(admin_client):
 
     g = _group(admin_client, "LLDPE")
     # Nothing is bronned, so the columns on screen must add up on their own.
-    assert g["kirim"] - g["sold"] == g["available"]
+    assert g["kirim"] - g["sold"] == g["on_hand"]
 
 
 # =============================================================================
@@ -342,7 +342,7 @@ def test_som_sale_returned_in_full_zeroes_both_sides(admin_client):
 
 def _ombor_snapshot(client, brand):
     g = _group(client, brand)
-    return {k: g[k] for k in ("kirim", "sold", "on_hand", "reserved", "available",
+    return {k: g[k] for k in ("kirim", "sold", "on_hand", "reserved", "short",
                               "cost_min", "cost_max", "cost_min_uzs", "cost_max_uzs")}
 
 

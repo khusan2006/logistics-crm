@@ -1010,10 +1010,9 @@ class ShipmentLine(MoneyEntry):
         """PHYSICAL kg left on this lot: what arrived, minus what has been sold,
         plus what came back.
 
-        Brons are deliberately absent. A bron is a claim on a MARKA across every
-        kelishuv, not on one truck, so subtracting it here would pin it to whichever
-        lot happened to be looked at. The bron block is applied once, at brand level,
-        by `brand_free_kg` — which is what the sotuv forms check."""
+        Brons are deliberately absent, and not only because a bron is a claim on a
+        MARKA rather than on one truck: a bron holds nothing back at all. It is a
+        note of who asked first, not a lock on stock — see `bron_queue`."""
         return self.kg - self.sold_kg + self.returned_kg
 
     def __str__(self):
@@ -1028,10 +1027,14 @@ class Reservation(MoneyEntry):
     lot here — pinning a bron to a lot would mean the mijoz waits for one specific
     truck while the same granula sits in the ombor from another kelishuv.
 
-    The queue is FIFO by `created_at`: the mijoz who bronned first is served first,
-    and a bron cannot be filled while an older one for the same marka is still open.
-    Filling is partial — a 20 000 kg bron against a 12 000 kg arrival takes the
-    12 000 now and stays open for the rest, because loads arrive in pieces.
+    A bron reserves nothing physically. It does not hold kg back from an ordinary
+    sotuv and it does not block another bron: the granula goes to whoever the
+    operator hands it to. The `created_at` order is shown as a queue position so it
+    is visible who asked first, but it is a note, not a rule — the operator decides.
+
+    Handing over is partial in both directions: a 20 000 kg bron against a 12 000 kg
+    arrival takes the 12 000 now, and the operator may also give less than that on
+    purpose. Either way the bron stays open for the rest.
 
     The agreed narx carries its currency into the sotuv, so a bron struck in so'm
     becomes a so'm sotuv rather than silently turning into dollars."""
@@ -1070,8 +1073,8 @@ class Reservation(MoneyEntry):
     @property
     def remaining_kg(self):
         """Still owed to this mijoz. A partly filled bron stays in the queue for the
-        rest rather than closing, so this — not `kg` — is what blocks stock and what
-        the next arrival draws against."""
+        rest rather than closing, so this — not `kg` — is what the next hand-over
+        draws against and what the ombor reports as promised."""
         return self.kg - self.fulfilled_kg
 
     @property
@@ -1211,11 +1214,16 @@ def arrived_lots():
 
 
 def bron_queue(brand=None):
-    """Open brons, oldest first — the order they must be served in.
+    """Open brons, oldest first — who asked for this marka, in the order they asked.
+
+    The order is shown, not enforced. Nothing here stops the second bron being
+    filled before the first, or an ordinary sotuv taking the same kg: it exists so
+    the operator can SEE who booked first and decide, which is how the hand-over is
+    actually agreed on the phone.
 
     One list, not one per marka, so the caller can see the whole board; pass a
     marka to narrow it. Ordering is `created_at` then pk: two brons taken in the
-    same second still have a defined winner, and it is the one entered first."""
+    same second still have a defined order, and it is the one entered first."""
     qs = (Reservation.objects
           .filter(status=Reservation.Status.ACTIVE)
           .select_related("customer")
@@ -1226,26 +1234,21 @@ def bron_queue(brand=None):
 
 
 def brand_reserved_kg(brand):
-    """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
-    a bron half filled from an earlier truck only blocks the half still owed."""
+    """Kg of this marka promised to somebody — a figure to show, not a block.
+
+    Counted on `remaining_kg`, so a bron half handed over only reports the half
+    still owed. It may legitimately exceed what is on the shelf: brons are taken
+    against granula that has not landed yet."""
     return sum((r.remaining_kg for r in bron_queue(brand)), Decimal("0"))
 
 
 def brand_on_hand_kg(brand):
     """Physical kg of this marka in the ombor — what arrived, minus what has been
-    sold, plus what came back. Says nothing about who it is promised to."""
+    sold, plus what came back. This is the only ceiling a sotuv has: bronned kg are
+    still sellable to whoever walks in."""
     return sum((lot.kg - lot.sold_kg + lot.returned_kg
                 for lot in arrived_lots().filter(contract_line__brand=brand)),
                Decimal("0"))
-
-
-def brand_free_kg(brand):
-    """What an ordinary sotuv may take: on the shelf, minus what is bronned.
-
-    Never negative — brons can be taken against goods that have not landed yet, so
-    promised can legitimately exceed on-hand, and reporting that as a negative
-    shelf figure would be nonsense rather than information."""
-    return max(brand_on_hand_kg(brand) - brand_reserved_kg(brand), Decimal("0"))
 
 
 def bron_brands():
@@ -1278,15 +1281,14 @@ def fifo_lots(brand):
 
 
 def brand_stock_costed():
-    """Per marka in the ombor: what is on the shelf, what of it is bronned, what is
-    therefore free to sell, the blended landed cost, and which kelishuvlar it came
-    from.
+    """Per marka in the ombor: what is on the shelf, how much of it somebody has
+    bronned, the blended landed cost, and which kelishuvlar it came from.
 
-    On-hand and free are kept as separate figures on purpose. A screen that showed
-    only the free number would leave the operator hunting for the kg that "went
-    missing"; one that showed only on-hand would let them oversell a promise. A
-    brand's lots can carry different landed costs and come from different
-    kelishuvlar, so the cost is kg-weighted and the codes are the full set."""
+    Bronned is carried beside on-hand rather than subtracted from it: all of the
+    shelf is sellable, and the promised figure is there so the operator selling it
+    knows somebody else asked for it first. A brand's lots can carry different
+    landed costs and come from different kelishuvlar, so the cost is kg-weighted
+    and the codes are the full set."""
     on_hand, cost, codes = {}, {}, {}
     for lot in arrived_lots():
         a = lot.available_kg
@@ -1297,12 +1299,10 @@ def brand_stock_costed():
             codes.setdefault(b, set()).add(lot.contract_line.contract.code)
     rows = []
     for b in sorted(on_hand):
-        reserved = brand_reserved_kg(b)
         rows.append({
             "brand": b,
             "on_hand": on_hand[b],
-            "reserved": min(reserved, on_hand[b]),
-            "free": max(on_hand[b] - reserved, Decimal("0")),
+            "reserved": brand_reserved_kg(b),
             "cost": (cost[b] / on_hand[b]).quantize(Decimal("0.0001")),
             "codes": sorted(codes[b]),
         })

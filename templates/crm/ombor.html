@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load crm_extras %}
+{% load crm_extras l10n %}
 {% block title %}Ombor · GranulaLog{% endblock %}
 {% block topbar_title %}Ombor{% endblock %}
 {% block content %}
@@ -21,8 +21,8 @@
     <th>Oxirgi kelgan</th>
     <th class="num">Kirim</th>
     <th class="num">Sotilgan</th>
-    <th class="num" title="Mijozlarga va'da qilingan — navbat bo'yicha beriladi">Bronlangan</th>
-    <th class="num" title="Bronlardan keyin qolgani — oddiy sotuvga shuncha bor">Sotish mumkin</th>
+    <th class="num" title="Mijozlarga va'da qilingan — sotuvni to'smaydi, kim so'raganini ko'rsatadi">Bronlangan</th>
+    <th class="num" title="Omborda turgan kg — bron bo'lsa ham shuncha sotish mumkin">Sotish mumkin</th>
     <th class="num">Tan narx</th>
     <th></th>
   </tr>
@@ -38,21 +38,21 @@
     <td class="num">{{ g.kirim|floatformat:"-3" }}</td>
     <td class="num">{{ g.sold|floatformat:"-3" }}</td>
     {% comment %}
-    The two columns are stated separately and both are labelled, because the whole
-    confusion this answers is "the ombor says 24 000 but I can only sell 4 000 —
-    where did the rest go". Bronlangan says where.
+    Bronlangan sits BESIDE Sotish mumkin, not inside it. The whole shelf is sellable
+    — a bron is a promise, not a lock — so the column answers "somebody has asked
+    for this" rather than subtracting itself from the sellable figure.
     {% endcomment %}
     <td class="num">{% if g.reserved %}{{ g.reserved|floatformat:"-3" }}
       <div class="muted load-sub">{{ g.brons|length }} ta bron</div>
       {% else %}<span class="muted">—</span>{% endif %}</td>
-    <td class="num"><strong>{{ g.available|floatformat:"-3" }}</strong>
-      {% if g.short %}<div class="late load-sub">{{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
+    <td class="num"><strong>{{ g.on_hand|floatformat:"-3" }}</strong>
+      {% if g.short %}<div class="late load-sub">bronlarga {{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
     <td class="num">
       {% if g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}
       {% else %}<span title="Lotlar turli tan narxda keldi">{% rate_range_both g.cost_min g.cost_max g.cost_min_uzs g.cost_max_uzs %}</span>{% endif %}
     </td>
     <td class="row-actions">
-      {% if g.available > 0 %}
+      {% if g.on_hand > 0 %}
       <a class="btn btn-sm" href="{% url 'sale_create' %}?brand={{ g.brand|urlencode }}" data-modal title="Eng eski lotdan boshlab sotiladi (FIFO)">Sotish</a>
       {% else %}
       <button type="button" class="btn btn-sm" disabled>Sotish</button>
@@ -100,15 +100,15 @@
         </table>
 
         {% comment %}
-        Bronlar on this marka's lots. These kg are already out of Qoldiq above, so
-        without this block the operator can see stock is held back but not act on
-        it. Converting here reloads Ombor in place (the convert view answers 204),
-        so the freed kg and the new sotuv show up straight away.
+        Who has asked for this marka. These kg are NOT held back from Qoldiq above —
+        the list is here so the operator can see the promises and act on them from
+        the same place they sell. Handing over reloads Ombor in place (the convert
+        view answers 204), so the new sotuv shows up straight away.
         {% endcomment %}
         {% if g.brons %}
         <div class="legs-inline-head" style="margin-top: 14px;">
-          <strong>{{ g.brand }} navbati</strong>
-          <span class="muted">birinchi bron qilgan birinchi oladi — shu kg Sotish mumkin ustunidan chiqarilgan</span>
+          <strong>{{ g.brand }} bronlari</strong>
+          <span class="muted">kim oldin so'ragani ko'rinib tursin uchun — tartib majburiy emas, xohlagan bronni berish mumkin</span>
         </div>
         <table class="legs-inline-table">
           <tr>
@@ -126,18 +126,19 @@
             <td class="num">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}—{% endif %}</td>
             <td class="row-actions">
               {% comment %}
-              Only the head of the queue can be served, and only up to what is on the
-              shelf — the rest wait. The button says the kg so a partial fill is not
-              a surprise after the click.
+              Any bron here can be served, in any order. The kg box is pre-filled
+              with the most this one can take and stays editable, so giving part of
+              a bron is one edit rather than a workaround.
               {% endcomment %}
-              {% if forloop.first and g.on_hand > 0 %}
+              {% if r.servable_kg > 0 %}
               <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal class="row-inline-form">
                 {% csrf_token %}
+                <input type="text" data-money name="kg" value="{{ r.servable_kg|unlocalize }}" required style="width:88px;" title="Ko'pi bilan {{ r.servable_kg|floatformat:"-3" }} kg" aria-label="Beriladigan kg">
                 {% if not r.price %}<input type="number" step="0.0001" min="0" name="price" placeholder="Narx" required style="width:88px;" aria-label="Sotuv narxi">{% endif %}
                 <button type="submit" class="btn btn-sm">Berish</button>
               </form>
               {% else %}
-              <button type="button" class="btn btn-sm" disabled title="Navbati kelmadi">Navbatda</button>
+              <button type="button" class="btn btn-sm" disabled title="{{ g.brand }} omborda yo'q">Mol yo'q</button>
               {% endif %}
               <a class="icon-action" href="{% url 'reservation_cancel' r.pk %}" data-modal title="Bronni bekor qilish">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="8" x2="16" y2="16"/></svg>

@@ -17,7 +17,8 @@ import pytest
 
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
-    Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus, brand_free_kg,
+    Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus, brand_on_hand_kg,
+    brand_reserved_kg,
 )
 
 
@@ -69,8 +70,10 @@ def _edit(client, reservation, **overrides):
                        _edit_payload(reservation, **overrides))
 
 
-def _convert(client, reservation, price=None):
+def _convert(client, reservation, price=None, kg=None):
     body = {} if price is None else {"price": price}
+    if kg is not None:
+        body["kg"] = kg
     return client.post(f"/reservations/{reservation.pk}/convert/", body)
 
 
@@ -600,13 +603,14 @@ def test_a_mijoz_balance_sums_brons_of_mixed_currency_and_mixed_kurs(
     assert customer.balance_uzs == Decimal("96000000.00") + Decimal("104000000.00")
 
 
-def test_the_list_page_reserved_kg_matches_what_the_ombor_blocks(admin_client, db):
+def test_the_list_page_reserved_kg_matches_what_the_ombor_reports(admin_client, db):
     _arrived_lot(kg="10000")
     _reserve(admin_client, "LLDPE", _customer("Bir"), kg="3000", price="2.00")
     _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="2000", price="2.00")
     head = Reservation.objects.order_by("created_at", "pk").first()
     _convert(admin_client, head)                            # 3 000 kg handed over
-    assert brand_free_kg("LLDPE") == Decimal("5000.000")    # 10000 − 3000 sold − 2000 still bronned
+    assert brand_on_hand_kg("LLDPE") == Decimal("7000.000")  # 10000 − 3000 sold
+    assert brand_reserved_kg("LLDPE") == Decimal("2000.000")  # still promised
     rows = {r.customer.name: r
             for r in admin_client.get("/reservations/").context["page"]}
     assert rows["Ikki"].queue_pos == 1
@@ -655,16 +659,17 @@ def test_a_converted_bron_cannot_be_cancelled_into_deletability(admin_client, db
     assert CustomerPayment.objects.get().reservation_id is not None
 
 
-def test_cancelling_an_active_bron_frees_the_kg_and_moves_no_money(
+def test_cancelling_an_active_bron_drops_the_promise_and_moves_no_money(
         admin_client, db):
     _arrived_lot(kg="10000")
     _reserve(admin_client, "LLDPE", _customer(), kg="5000",
              price="18000", currency="uzs", exchange_rate="12650")
     bron = Reservation.objects.get()
     before = _money(bron)
-    assert brand_free_kg("LLDPE") == Decimal("5000.000")
+    assert brand_reserved_kg("LLDPE") == Decimal("5000.000")
     admin_client.post(f"/reservations/{bron.pk}/cancel/", {})
     bron.refresh_from_db()
     assert bron.status == "cancelled"
-    assert brand_free_kg("LLDPE") == Decimal("10000.000")
+    assert brand_reserved_kg("LLDPE") == Decimal("0")
+    assert brand_on_hand_kg("LLDPE") == Decimal("10000.000")
     assert _money(bron) == before

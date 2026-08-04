@@ -10,7 +10,7 @@ from .models import (
     LogistPayment, Partner,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
+    arrived_lots, brand_stock_costed, bron_brands, convert_pair,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .templatetags.crm_extras import rate, som, usd
@@ -763,18 +763,18 @@ class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
         # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
         # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
         # readable ("24000", not Decimal.normalize()'s "2.4E+4").
-        # FREE kg, not on-hand: bronned granula is promised to a queue and must not
-        # be sellable over the counter. The option says both figures so the operator
-        # can see where the difference went rather than wondering.
+        # The ceiling is what is physically on the shelf. Bronned kg are still
+        # sellable — the option only SAYS how much is promised, so the operator
+        # knows they are selling out from under somebody rather than being stopped.
         costed = brand_stock_costed()
-        self.stock = {row["brand"]: row["free"] for row in costed}
+        self.stock = {row["brand"]: row["on_hand"] for row in costed}
         self.fields["brand"].choices = [
             (row["brand"],
              f"{row['brand']} · {', '.join(row['codes'])} · "
-             f"{_clean_number(row['free'])} kg bo'sh"
+             f"{_clean_number(row['on_hand'])} kg omborda"
              + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
              + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for row in costed if row["free"] > 0
+            for row in costed if row["on_hand"] > 0
         ]
 
     def clean(self):
@@ -786,8 +786,8 @@ class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
             available = self.stock.get(brand, Decimal("0"))
             if kg > available:
                 self.add_error(
-                    "kg", f"Sotish mumkin bo'lgan qoldiqdan oshmasligi kerak "
-                          f"({_clean_number(available)} kg — qolgani bronlangan)")
+                    "kg", f"Ombor qoldig'idan oshmasligi kerak "
+                          f"({_clean_number(available)} kg)")
         return cleaned
 
 
@@ -821,19 +821,12 @@ class SaleLotForm(PriceEntryFormMixin, forms.ModelForm):
         lot, kg = cleaned.get("lot"), cleaned.get("kg")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if lot and kg is not None and kg > 0:
-            # Two ceilings, both real: this lot's own physical kg, and what is left
-            # of the marka once the bron queue has its share. Selling one lot dry is
-            # still overselling if the granula was promised to somebody.
-            if kg > lot.available_kg:
-                self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
-                                     f"({_clean_number(lot.available_kg)} kg)")
-            else:
-                free = brand_free_kg(lot.brand)
-                if kg > free:
-                    self.add_error(
-                        "kg", f"Bu markadan {_clean_number(free)} kg sotish mumkin — "
-                              "qolgani bronlangan")
+        if lot and kg is not None and kg > 0 and kg > lot.available_kg:
+            # The lot's own physical kg is the only ceiling. A bron on this marka
+            # does not shrink it: the granula may be promised to somebody, but the
+            # operator is allowed to sell it to whoever is standing in front of them.
+            self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
+                                 f"({_clean_number(lot.available_kg)} kg)")
         return cleaned
 
 
@@ -877,9 +870,10 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     on a kelishuv plus everything already in the ombor — deliberately including
     markalar with zero stock today, since booking ahead is the point.
 
-    There is no kg ceiling here for the same reason. Reserving 40 000 kg against a
-    kelishuv that has not shipped yet is normal business, and capping the bron at
-    today's shelf would forbid exactly the case this screen exists for."""
+    There is no kg ceiling here, and none against what is already bronned either.
+    Reserving 40 000 kg against a kelishuv that has not shipped yet is normal
+    business, and since a bron holds nothing back, two mijoz booking the same kg is
+    a fact the operator settles at hand-over rather than an error to refuse now."""
 
     #: the narx is optional on a bron — the price can be agreed later
     allow_blank = True
@@ -897,12 +891,12 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
         choices = []
         for brand in bron_brands():
             row = stock.get(brand)
-            if row and row["free"] > 0:
-                hint = f"omborda {_clean_number(row['free'])} kg bo'sh"
-            elif row:
-                hint = f"omborda {_clean_number(row['on_hand'])} kg, hammasi bronlangan"
+            if row:
+                hint = f"omborda {_clean_number(row['on_hand'])} kg"
+                if row["reserved"]:
+                    hint += f", {_clean_number(row['reserved'])} kg bronlangan"
             else:
-                hint = "hozircha omborda yo'q — kelganda navbat bo'yicha beriladi"
+                hint = "hozircha omborda yo'q — kelganda beriladi"
             choices.append((brand, f"{brand} · {hint}"))
         self.fields["brand"].choices = choices
         # An existing bron keeps its marka even if that marka has since dropped off
