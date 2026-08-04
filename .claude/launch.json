@@ -3,13 +3,13 @@
   "configurations": [
     {
       "name": "granulalog",
-      "runtimeExecutable": ".venv/bin/python",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["manage.py", "runserver", "127.0.0.1:8009", "--settings=config.settings_dev"],
       "port": 8009
     },
     {
       "name": "granulalog-prodcopy",
-      "runtimeExecutable": ".venv/bin/python",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["manage.py", "runserver", "127.0.0.1:8010", "--settings=config.settings_prodcopy"],
       "port": 8010
     }
