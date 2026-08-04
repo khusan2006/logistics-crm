@@ -43,9 +43,13 @@ def _post(shipment, **fields):
 
 
 def _rows(shipment, admin_user, **fields):
+    """The rows one submission of the grid puts on a yuk that has none yet, keyed by
+    turkum. save() rather than the old build(): the grid now rewrites and removes
+    rows as well as adding them, so what it creates is only knowable from the save."""
     form = ExpenseGridForm(_post(shipment, **fields))
     assert form.is_valid(), form.errors
-    return {row.category: row for row in form.build(admin_user)}
+    created, _updated, _deleted = form.save(admin_user)
+    return {row.category: row for row in created}
 
 
 # --- the point of the change ------------------------------------------------

@@ -1349,9 +1349,16 @@
           amountEl.insertAdjacentElement('afterend', preview);
         }
         var amount = num(amountEl);
+        // A box may override the shared Valyuta (the xarajat grid). The preview has
+        // to follow the same rule the server does — blank means "as set above" — or
+        // a bojxona entered in so'm previews as though the figure were dollars, and
+        // 37 678 674 so'm reads back as "≈ 452 144 088 000 so'm".
+        var cell = amountEl.closest('.xcell');
+        var own = cell && cell.querySelector('select[name^=currency_]');
+        var currency = (own && own.value) || currencyEl.value;
         if (amount > 0 && rate > 0) {
           preview.hidden = false;
-          preview.textContent = currencyEl.value === 'uzs'
+          preview.textContent = currency === 'uzs'
             ? '≈ ' + window.fmtUsd(amount / rate)
             : '≈ ' + som(amount * rate) + " so'm";
         } else {
@@ -1368,7 +1375,16 @@
       });
     }
     document.addEventListener('change', function (e) {
-      if (e.target.matches && e.target.matches('[data-money-currency]')) { update(e.target); }
+      if (!e.target.matches) { return; }
+      if (e.target.matches('[data-money-currency]')) { update(e.target); return; }
+      // A per-turkum valyuta override moves only its own box's preview, but it is
+      // redrawn from the shared picker like every other one — one code path for
+      // "which valyuta is this box counted in", server and screen alike.
+      if (e.target.matches('select[name^=currency_]')) {
+        var shared = window.pickedControl(
+          e.target.closest('form') || document, '[data-money-currency]');
+        if (shared) { update(shared); }
+      }
     });
     document.addEventListener('input', function (e) {
       if (e.target.matches && e.target.matches('[data-money-rate], [data-money-amount]')) {

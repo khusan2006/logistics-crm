@@ -1268,30 +1268,51 @@ def shipment_delete(request, pk):
 def expense_create(request):
     """Every turkum as its own box, filled in one pass — a yuk collects bojxona,
     deklarant and a couple of others on the same day, and the operator knows them as
-    a set rather than as rows to be added one at a time."""
-    form = ExpenseGridForm(request.POST or None,
+    a set rather than as rows to be added one at a time.
+
+    Opened on a yuk that already has xarajatlar, the boxes come up filled with them,
+    so the modal is that yuk's xarajatlar rather than a queue of new ones — hence
+    Saqlash may add, rewrite AND remove rows in one go."""
+    # The yuk drives the boxes' contents, so it has to be known before the form is
+    # built — on a failed submit too, or the modal would come back stripped of the
+    # notes saying which figures are already in the books.
+    asked = (request.POST.get("shipment") if request.method == "POST"
+             else request.GET.get("shipment")) or ""
+    shipment = Shipment.objects.filter(pk=asked).first() if asked.isdigit() else None
+    form = ExpenseGridForm(request.POST or None, shipment=shipment,
                            initial={"shipment": request.GET.get("shipment")})
+    title = "Yuk xarajatlari" if form.recorded else "Yangi xarajat"
 
     def respond(invalid=False):
-        return form_response(request, form, "Yangi xarajat", invalid=invalid,
+        return form_response(request, form, title, invalid=invalid,
                              modal_template="crm/_expense_grid_modal.html")
 
     if request.method == "POST":
         if form.is_valid():
-            rows = form.build(request.user)
             with transaction.atomic():
-                for expense in rows:
-                    expense.save()
+                created, updated, deleted = form.save(request.user)
             shipment = form.cleaned_data["shipment"]
-            total = sum((e.amount for e in rows), Decimal("0"))
-            AuditLog.record(
-                request.user, AuditLog.Action.CREATE, "Yuk xarajati",
-                rows[0].pk if rows else None,
-                f"Yangi xarajat: {len(rows)} ta · {total}$ · yuk #{shipment.pk}",
-            )
-            messages.success(
-                request,
-                f"{len(rows)} ta xarajat qo'shildi" if len(rows) > 1 else "Xarajat qo'shildi")
+            done = []
+            if created:
+                total = sum((e.amount for e in created), Decimal("0"))
+                AuditLog.record(
+                    request.user, AuditLog.Action.CREATE, "Yuk xarajati", created[0].pk,
+                    f"Yangi xarajat: {len(created)} ta · {total}$ · yuk #{shipment.pk}")
+                done.append(f"{len(created)} ta xarajat qo'shildi")
+            if updated:
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Yuk xarajati", updated[0].pk,
+                    f"Xarajat tahrirlandi: {len(updated)} ta · yuk #{shipment.pk}")
+                done.append(f"{len(updated)} ta yangilandi")
+            if deleted:
+                AuditLog.record(
+                    request.user, AuditLog.Action.DELETE, "Yuk xarajati", None,
+                    f"Xarajat o'chirildi: {len(deleted)} ta · yuk #{shipment.pk}")
+                done.append(f"{len(deleted)} ta o'chirildi")
+            if done:
+                messages.success(request, " · ".join(done))
+            else:
+                messages.info(request, "O'zgarish yo'q")
             # reload whichever page it was opened from (loads list or the load detail)
             return form_reload(request, reverse("shipment_detail", args=[shipment.pk]))
         return respond(invalid=True)

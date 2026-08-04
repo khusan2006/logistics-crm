@@ -2232,6 +2232,14 @@ form.stacked .lineset-field[hidden] { display: none; }
 .xcell-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .xcell-side { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .xcell .errorlist { grid-column: 1 / -1; }
+/* A box standing in for a xarajat the yuk already has looks like any other: it IS
+   an input with a figure in it, and shading it read like a read-only panel. What
+   marks it out is the figure itself and the note under it saying when it was
+   entered — see .xcell-note. */
+.xcell-note {
+  grid-column: 1 / -1; margin-top: 1px;
+  font-size: 10.5px; line-height: 1.3; color: var(--text-faint);
+}
 /* The turkum's own perechisleniya foizi. Full width under the figure and its
    overrides, and only on show when this box is paid by Bank — so a grid of cash
    xarajatlar stays a plain grid of figures. */

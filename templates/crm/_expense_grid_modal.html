@@ -17,7 +17,14 @@ own xarajatlar.
   {% if form.non_field_errors %}<ul class="errorlist">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
 
   <div class="xgrid-shared">
-    <label>{{ form.date.label }}{{ form.date }}{{ form.date.errors }}</label>
+    {% comment %}
+    Sana dates the rows being added. The ones already recorded keep theirs — each
+    shows it under its own box — so correcting a figure never drags a xarajat
+    entered last week onto today.
+    {% endcomment %}
+    <label>{{ form.date.label }}{{ form.date }}
+      {% if form.recorded %}<small class="field-hint">yangi qatorlar uchun</small>{% endif %}
+      {{ form.date.errors }}</label>
     <div class="xfield"><span class="xfield-label">{{ form.currency.label }}</span>
       {% include "crm/_seg_field.html" with field=form.currency %}{{ form.currency.errors }}</div>
     <div class="xfield"><span class="xfield-label">{{ form.method.label }}</span>
@@ -26,7 +33,14 @@ own xarajatlar.
     <label>{{ form.exchange_rate.label }}{{ form.exchange_rate }}{{ form.exchange_rate.errors }}</label>
   </div>
 
-  <p class="xgrid-legend">Xarajatlar <span>faqat kerakli turkumlarni to'ldiring</span></p>
+  {% comment %}
+  The legend says which of the two the grid is right now. On a yuk that already has
+  xarajatlar the boxes are not blanks to fill but the rows themselves, and clearing
+  one deletes it — that has to be stated before Saqlash, not discovered after.
+  {% endcomment %}
+  <p class="xgrid-legend">Xarajatlar
+    {% if form.recorded %}<span>yozilganlari ko'rinib turibdi — o'zgartiring yoki bo'shatib o'chiring</span>
+    {% else %}<span>faqat kerakli turkumlarni to'ldiring</span>{% endif %}</p>
   {% comment %}
   Each box carries its own valyuta and usul as two small dropdowns down the right
   side. Blank means "as set above" — visible at a glance rather than folded behind
@@ -40,21 +54,34 @@ own xarajatlar.
     karta the server drops it (CashEntry.fee_amount), so offering one there would
     promise a deduction that never happens.
     {% endcomment %}
-    {% for amount, currency, method, fee, category in form.amount_fields %}
-    <div class="xcell{% if amount.errors or fee.errors %} is-bad{% endif %}" data-cat="{{ category }}">
+    {% for cell in form.amount_fields %}
+    <div class="xcell{% if cell.amount.errors or cell.fee.errors %} is-bad{% endif %}" data-cat="{{ cell.category }}">
+      {{ cell.row }}
       <label class="xcell-main">
-        <span class="xcell-label">{{ amount.label }}</span>
-        {{ amount }}
+        <span class="xcell-label">{{ cell.amount.label }}</span>
+        {{ cell.amount }}
       </label>
       <div class="xcell-side">
-        {{ currency }}
-        {{ method }}
+        {{ cell.currency }}
+        {{ cell.method }}
       </div>
+      {% comment %}
+      A prefilled box shows the sana its row was recorded with: the Sana above dates
+      the rows being ADDED and leaves the existing ones where they are, so without
+      this the figure would look as if it belonged to today.
+      {% endcomment %}
+      {% if cell.recorded %}<small class="xcell-note">{{ cell.recorded.date|date:"j-E" }} · yozilgan</small>{% endif %}
+      {% comment %}
+      Rows this box cannot stand in for — a turkum entered twice, or the haydovchi
+      avansi the yuk form owns. Named rather than hidden: the jadval below shows a
+      figure for this turkum that the box does not carry.
+      {% endcomment %}
+      {% if cell.others %}<small class="xcell-note">yana {{ cell.others|length }} ta yozuv — jadvaldan tahrirlanadi</small>{% endif %}
       <label class="xcell-fee" data-cell-fee hidden>
         <span class="xcell-fee-label">Perechisleniya foizi (%)</span>
-        {{ fee }}
+        {{ cell.fee }}
       </label>
-      {{ amount.errors }}{{ fee.errors }}
+      {{ cell.amount.errors }}{{ cell.fee.errors }}
     </div>
     {% endfor %}
   </div>

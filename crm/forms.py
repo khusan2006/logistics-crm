@@ -33,6 +33,12 @@ def _group_thousands(field):
     field.widget.attrs["data-money"] = ""
 
 
+def _agreed(values):
+    """The one value they all share, or None when they differ (or there are none)."""
+    distinct = set(values)
+    return distinct.pop() if len(distinct) == 1 else None
+
+
 class GroupedFieldsMixin:
     """Lets a form box a run of related fields under one legend.
 
@@ -1050,7 +1056,13 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
     Valyuta, kurs and to'lov usuli are asked once and shared. That is not a
     simplification of the data — across every yuk in the books, the method has never
     differed between one truck's xarajatlar. A line that genuinely needs its own
-    method is still one more submission away."""
+    method is still one more submission away.
+
+    Opened on a yuk that already has xarajatlar, the boxes show them. The modal is
+    the yuk's xarajatlar rather than an entry queue: coming back to add a bojxona to
+    a load that already carries a gruzchi and a deklarant used to mean seven empty
+    boxes, with no way to tell from here what was already in the books and nothing
+    stopping the gruzchi being typed a second time."""
 
     #: (model category value, label) — the grid's order, which is the order the
     #: money is actually spent on a load rather than alphabetical.
@@ -1078,8 +1090,13 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
     note = forms.CharField(label="Izoh", max_length=255, required=False,
                            widget=forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}))
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, shipment=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # What the yuk already has. `recorded` are the rows the boxes stand in for;
+        # `others` are the rows they cannot, kept only to be named under the box so
+        # a figure in the jadval the grid does not carry is never a mystery.
+        self.shipment = shipment
+        self.recorded, self.others = self.load_rows(shipment)
         for value, label in self.CATEGORIES:
             field = forms.DecimalField(
                 label=label, max_digits=14, decimal_places=2, required=False,
@@ -1118,6 +1135,96 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                 widget=forms.NumberInput(attrs={
                     "class": "xmini xfee", "placeholder": "foiz",
                     "step": "0.01", "min": "0", "max": "100"}))
+            # Which row this box was showing when the modal was drawn. Saqlash
+            # rewrites and removes only these — the grid speaks for what the
+            # operator had in front of them, not for whatever the yuk holds by the
+            # time it is submitted. Without it a modal opened before a colleague
+            # added a xarajat would delete that xarajat on save, because its box was
+            # blank here for the innocent reason that it did not exist yet.
+            self.fields[self.row_name(value)] = forms.IntegerField(
+                required=False, widget=forms.HiddenInput)
+        # Only the unbound case: a bound form renders what was posted, and re-filling
+        # it from the database would undo the operator's own edit on a failed submit.
+        if not self.is_bound:
+            self.prefill()
+
+    @staticmethod
+    def load_rows(shipment):
+        """({turkum: the row its box stands in for}, {turkum: [the rest]}).
+
+        A turkum recorded exactly once maps onto its box: the box opens showing that
+        figure and saving rewrites that row. A turkum recorded twice — two yo'l
+        xarajati on two different days — has no single figure to show, and prefilling
+        one of the two would rewrite that one while silently leaving the other, so
+        the box stays empty and additive and those rows are edited from the jadval.
+
+        The haydovchi avansi is never one of them whatever else the turkum holds: the
+        yuk form owns that row and rewrites it on every save (sync_driver_advance),
+        so a figure typed over it here would be undone the next time the yuk is
+        edited."""
+        if shipment is None or not getattr(shipment, "pk", None):
+            return {}, {}
+        found = {}
+        for row in shipment.expenses.all():
+            found.setdefault(row.category, []).append(row)
+        recorded, others = {}, {}
+        for category, rows in found.items():
+            managed = [row for row in rows if not row.is_driver_advance]
+            if len(managed) == 1:
+                recorded[category] = managed[0]
+            rest = [row for row in rows if row is not recorded.get(category)]
+            if rest:
+                others[category] = rest
+        return recorded, others
+
+    @staticmethod
+    def typed_amount(row):
+        """The figure as it was typed: a so'm row shows its so'm side rather than the
+        dollar twin, the same rule MoneyEntryFormMixin._seed_typed_side follows on the
+        single-row forms — a 12 000 000 so'm bojxona reopening as 1 000 would be read
+        back as 1 000 so'm and saved as $0.08."""
+        return row.amount_uzs if row.currency == Currency.UZS else row.amount
+
+    def prefill(self):
+        """Show the yuk's xarajatlar in their boxes.
+
+        The shared pickers show what the rows agree on — one truck's costs nearly
+        always went out the same way — and only a turkum that differs carries its own
+        override, so the grid reads the way it was filled in rather than turning every
+        box into an exception.
+
+        Sana is deliberately not among them: it stays on today, because it dates the
+        rows being ADDED. An existing row keeps the sana it was recorded with (see
+        save()), shown under its box, rather than being dragged to today by an edit
+        to the figure beside it."""
+        rows = list(self.recorded.values())
+        if not rows:
+            return
+        shared = {
+            "currency": _agreed(row.currency for row in rows),
+            "method": _agreed(row.method for row in rows),
+            "exchange_rate": _agreed(row.exchange_rate for row in rows),
+            "fee_percent": _agreed(row.fee_percent for row in rows),
+        }
+        # Valyuta, usul and foiz have a per-box override to fall back on when the
+        # rows disagree; the kurs has none, and leaving it on the legacy default
+        # would price a new box at a rate this yuk never used. The newest row's is
+        # the nearest thing the yuk has to today's.
+        if shared["exchange_rate"] is None:
+            shared["exchange_rate"] = max(
+                rows, key=lambda row: (row.date, row.pk)).exchange_rate
+        for name, value in shared.items():
+            if value is not None:
+                self.initial[name] = value
+        for category, row in self.recorded.items():
+            self.initial[self.row_name(category)] = row.pk
+            self.initial[self.field_name(category)] = self.typed_amount(row)
+            if row.currency != shared["currency"]:
+                self.initial[self.currency_name(category)] = row.currency
+            if row.method != shared["method"]:
+                self.initial[self.method_name(category)] = row.method
+            if row.fee_percent != shared["fee_percent"]:
+                self.initial[self.fee_name(category)] = row.fee_percent
 
     @staticmethod
     def field_name(category):
@@ -1135,12 +1242,23 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
     def fee_name(category):
         return f"fee_{category}"
 
+    @staticmethod
+    def row_name(category):
+        return f"row_{category}"
+
     def amount_fields(self):
-        """(amount, currency, method, foiz override, category) per turkum, for a
-        template that lays the grid out itself rather than trusting field order."""
-        return [(self[self.field_name(v)], self[self.currency_name(v)],
-                 self[self.method_name(v)], self[self.fee_name(v)], v)
-                for v, _ in self.CATEGORIES]
+        """One box per turkum, for a template that lays the grid out itself rather
+        than trusting field order. `recorded` is the row this box stands in for (so
+        the box can say when it was entered) and `others` the rows it does not."""
+        return [{"category": value,
+                 "amount": self[self.field_name(value)],
+                 "currency": self[self.currency_name(value)],
+                 "method": self[self.method_name(value)],
+                 "fee": self[self.fee_name(value)],
+                 "row": self[self.row_name(value)],
+                 "recorded": self.recorded.get(value),
+                 "others": self.others.get(value, [])}
+                for value, _ in self.CATEGORIES]
 
     def row_fee(self, category):
         """The foiz this turkum is charged: its own if one was typed, else the
@@ -1158,41 +1276,97 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                    for value, _ in self.CATEGORIES]
         self.entries = [(value, amount) for value, amount in entered
                         if amount is not None and amount > 0]
-        if not self.entries:
-            # Without this the modal saves nothing and closes as if it worked.
+        # Nothing typed and no box that opened showing a row: the modal would
+        # otherwise save nothing and close as if it had worked. On a grid that DID
+        # open filled, an empty one is not an empty submission — it is every xarajat
+        # cleared, which save() carries out.
+        showed = any(cleaned.get(self.row_name(value)) for value, _ in self.CATEGORIES)
+        if not self.entries and not showed:
             raise forms.ValidationError("Kamida bitta xarajat kiritilishi kerak")
         for value, amount in entered:
             if amount is not None and amount <= 0:
                 self.add_error(self.field_name(value), "Musbat son kiriting")
         return cleaned
 
-    def build(self, user):
-        """The ShipmentExpense rows this grid stands for — one per filled box.
+    def row_money(self, category, typed, rate):
+        """What a filled box means in money, converted at its own valyuta.
 
-        Date, kurs and the fee are genuinely shared: they describe the trip, not the
-        line. Currency and method are per line, defaulting to the shared pickers —
-        a bojxona wired in so'm next to a gruzchi paid cash is one submission, and
-        each row converts at its own currency."""
+        Currency and method are per line, defaulting to the shared pickers — a
+        bojxona wired in so'm next to a gruzchi paid cash is one submission."""
+        currency = (self.cleaned_data.get(self.currency_name(category))
+                    or self.cleaned_data["currency"])
+        method = (self.cleaned_data.get(self.method_name(category))
+                  or self.cleaned_data["method"])
+        usd_value, uzs_value = convert_pair(typed, currency, rate)
+        return {"amount": usd_value, "amount_uzs": uzs_value, "currency": currency,
+                "method": method, "exchange_rate": rate,
+                "fee_percent": self.row_fee(category)}
+
+    def save(self, user):
+        """Make the yuk's xarajatlar match the grid — (created, updated, deleted).
+
+        A box that opened showing a row rewrites THAT row rather than adding a second
+        one: the whole point of opening filled in is that coming back to add a bojxona
+        cannot duplicate the gruzchi sitting in front of the operator. Cleared, that
+        row goes — the grid is the yuk's xarajatlar, so a box left empty and a turkum
+        with no xarajat have to mean the same thing.
+
+        "That row" is the one the box carried when the modal was drawn (row_<turkum>),
+        never simply whatever the yuk has under that turkum now. A xarajat added while
+        this modal sat open is left alone rather than deleted for being absent from a
+        grid that never showed it.
+
+        A rewrite touches only the money: summa, valyuta, usul, foiz and the kurs
+        behind them. The row keeps its own sana — a xarajat entered last week does
+        not move to today because the figure beside it was corrected — along with its
+        izoh (the shared one names what is being ADDED) and its `logist`, which this
+        form never asks for: rewriting that would move money between the kassa and
+        somebody's balance behind the operator's back.
+
+        A box that comes back exactly as it was drawn is not written at all. That
+        matters most for the kurs: it is one field above seven boxes, so a yuk whose
+        rows were entered at different kursi would otherwise have every one of them
+        re-rated by a submit that touched nothing."""
+        shipment = self.cleaned_data["shipment"]
+        # Its own yuk, and never the haydovchi avansi: a hand-built payload naming
+        # somebody else's row must not reach it through here.
+        rewritable = {row.pk: row
+                      for row in shipment.expenses.exclude(is_driver_advance=True)}
         rate = self.cleaned_data["exchange_rate"]
-        shared = {
-            "shipment": self.cleaned_data["shipment"],
-            "date": self.cleaned_data["date"],
-            "exchange_rate": rate,
-            "note": self.cleaned_data.get("note", ""),
-            "created_by": user,
-        }
-        rows = []
-        for category, typed in self.entries:
-            currency = (self.cleaned_data.get(self.currency_name(category))
-                        or self.cleaned_data["currency"])
-            method = (self.cleaned_data.get(self.method_name(category))
-                      or self.cleaned_data["method"])
-            usd_value, uzs_value = convert_pair(typed, currency, rate)
-            rows.append(ShipmentExpense(category=category, amount=usd_value,
-                                        amount_uzs=uzs_value, currency=currency,
-                                        method=method,
-                                        fee_percent=self.row_fee(category), **shared))
-        return rows
+        note = self.cleaned_data.get("note", "")
+        typed_by_category = dict(self.entries)
+        created, updated, deleted = [], [], []
+        for category, _label in self.CATEGORIES:
+            typed = typed_by_category.get(category)
+            row = rewritable.get(self.cleaned_data.get(self.row_name(category)))
+            if row is not None and row.category != category:
+                # The box moved turkum under it — treat it as an unfamiliar row and
+                # leave it alone rather than rewriting a bojxona as a gruzchi.
+                row = None
+            if typed is None:
+                if row is not None:
+                    row.delete()
+                    deleted.append(row)
+                continue
+            money = self.row_money(category, typed, rate)
+            if row is None:
+                created.append(ShipmentExpense.objects.create(
+                    shipment=shipment, category=category, created_by=user,
+                    date=self.cleaned_data["date"], note=note, **money))
+                continue
+            # As drawn: the same figure in the same valyuta, paid the same way, at
+            # the same foiz. Compared against what the BOX showed rather than field
+            # by field against the row, so the shared kurs — which no box can show
+            # per row — cannot make an untouched submission look like an edit.
+            if (typed == self.typed_amount(row) and money["currency"] == row.currency
+                    and money["method"] == row.method
+                    and money["fee_percent"] == row.fee_percent):
+                continue
+            for name, value in money.items():
+                setattr(row, name, value)
+            row.save(update_fields=list(money))
+            updated.append(row)
+        return created, updated, deleted
 
 
 class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
