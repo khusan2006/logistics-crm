@@ -1434,6 +1434,49 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
+  // A kelishuv is owed and settled in the one currency it was struck in, so paying
+  // it in that same currency needs no kurs — the figure is the qarz. The box appears
+  // only when the to'lov crosses a currency boundary, which is the one case where
+  // the rate decides how much of the qarz the money actually clears.
+  //
+  // Each kelishuv <option> carries its own currency (ContractChoiceSelect), so the
+  // comparison needs no round trip; the server re-derives it either way.
+  (function () {
+    function update(form) {
+      var contractEl = form.querySelector('[data-contract-currency]');
+      var rateEl = form.querySelector('[data-money-rate]');
+      var currencyEl = window.pickedControl(form, '[data-money-currency]');
+      if (!contractEl || !rateEl || !currencyEl) { return; }
+      var option = contractEl.options[contractEl.selectedIndex];
+      var contractCurrency = option ? option.getAttribute('data-currency') : '';
+      var box = rateEl.closest('p') || rateEl.closest('.lineset-field') || rateEl;
+      // No kelishuv picked yet: nothing to compare against, so stay out of the way
+      // rather than demand a kurs for a boundary that may not exist.
+      var crosses = !!contractCurrency && contractCurrency !== currencyEl.value;
+      box.hidden = !crosses;
+      // Cleared as well as hidden: an invisible rate would still drive the "≈ …"
+      // preview beside the summa, quoting a counter-currency figure off a number
+      // the operator cannot see. The server fills the row's own rate back in.
+      if (!crosses) { rateEl.value = ''; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('form').forEach(function (form) {
+        if (form.querySelector('[data-contract-currency]')) { update(form); }
+      });
+    }
+    document.addEventListener('change', function (e) {
+      if (!e.target.closest) { return; }
+      var form = e.target.closest('form');
+      if (!form || !form.querySelector('[data-contract-currency]')) { return; }
+      if (e.target.matches('[data-contract-currency], [data-money-currency]')) {
+        update(form);
+      }
+    });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
   // Per-turkum perechisleniya foizi on the xarajat grid. Each box may override the
   // shared usul, so the foiz has to follow the box's OWN way of paying: a bojxona
   // wired by bank next to a gruzchi paid cash is one submission with one foiz that

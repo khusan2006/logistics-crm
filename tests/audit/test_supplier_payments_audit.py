@@ -129,14 +129,25 @@ def test_the_derived_dollar_side_rounds_half_up(admin_client, db):
     assert p.amount_uzs == Decimal("6388.25")
 
 
-def test_a_kurs_of_zero_is_refused_in_both_directions(admin_client, db):
-    """Kurssiz pul qatorining ikkinchi tomoni yo'q — saqlanmaydi."""
+def test_a_kurs_is_demanded_only_when_the_tolov_crosses_a_currency(admin_client, db):
+    """A dollar kelishuv paid in dollars settles at face value — there is nothing to
+    convert, so no kurs is asked for and the row inherits one for the kassa's sake.
+    Paid in so'm the rate IS what decides how much of the qarz clears, so a missing
+    one is refused rather than guessed at."""
     contract = _contract()
-    for currency in ("usd", "uzs"):
-        resp = _create(admin_client, contract, currency=currency,
-                       amount="100", exchange_rate="0")
-        assert resp.status_code == 200
+    assert contract.currency == Currency.USD
+
+    crossing = _create(admin_client, contract, currency="uzs",
+                       amount="1265000", exchange_rate="0")
+    assert crossing.status_code == 200
     assert not SupplierPayment.objects.exists()
+
+    same = _create(admin_client, contract, currency="usd",
+                   amount="100", exchange_rate="")
+    assert same.status_code == 302
+    payment = SupplierPayment.objects.get()
+    assert payment.amount == Decimal("100.00")
+    assert payment.exchange_rate > 0
 
 
 def test_zero_and_negative_summa_are_refused(admin_client, db):

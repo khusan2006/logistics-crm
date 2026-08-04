@@ -100,14 +100,31 @@ def test_usd_entry_also_stores_a_som_value(admin_client, db):
     assert p.amount_uzs == Decimal("1265000")
 
 
-def test_a_money_entry_without_a_kurs_is_rejected(admin_client, db):
+def test_a_cross_currency_entry_without_a_kurs_is_rejected(admin_client, db):
+    """Paying a dollar kelishuv in so'm: without a kurs there is no way to say how
+    much of the qarz the money cleared, so the row is refused rather than guessed."""
+    c = _contract(db)
+    resp = admin_client.post("/supplier-payments/new/", {
+        "contract": c.pk, "date": "2026-07-02", "currency": "uzs", "amount": "1265000",
+        "exchange_rate": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 200          # redisplayed, not saved
+    assert SupplierPayment.objects.count() == 0
+
+
+def test_paying_a_kelishuv_in_its_own_currency_asks_for_no_kurs(admin_client, db):
+    """Same currency in and out — the summa IS what the qarz falls by. The row still
+    ends up with a kurs so the kassa's other column has something to add up."""
     c = _contract(db)
     resp = admin_client.post("/supplier-payments/new/", {
         "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
         "exchange_rate": "", "method": "cash", "note": "",
     })
-    assert resp.status_code == 200          # redisplayed, not saved
-    assert SupplierPayment.objects.count() == 0
+    assert resp.status_code == 302
+    payment = SupplierPayment.objects.get()
+    assert payment.amount == Decimal("100.00")
+    assert payment.exchange_rate > 0
+    assert Contract.objects.get(pk=c.pk).paid_total_own == Decimal("100.00")
 
 
 def test_edit_excludes_own_amount_from_debt_check(admin_client, db):
@@ -266,6 +283,70 @@ def test_a_som_kelishuv_drops_off_the_working_list_once_settled(admin_client, db
 
     listed = admin_client.get("/contracts/", {"state": "open"}).context["page"]
     assert [c.pk for c in listed.object_list] == []
+
+
+# --- crossing a currency: the kurs is asked for, then frozen ----------------
+
+def test_a_som_kelishuv_paid_in_dollars_falls_by_the_converted_figure(admin_client, db):
+    """12 650 000 so'm owed, 500$ handed over at 13 000 → 6 500 000 so'm of it is
+    cleared. What settles the qarz is the money AS CONVERTED, not the dollars."""
+    contract = _som_contract()
+    make_shipment(contract=contract, kg="1000")
+    resp = _post_payment(admin_client, contract, "500", currency="usd",
+                         exchange_rate="13000")
+    assert resp.status_code == 302
+
+    contract = Contract.objects.get(pk=contract.pk)
+    assert contract.paid_total_own == Decimal("6500000.00")
+    assert contract.payable_left_own == Decimal("6150000.00")
+
+
+def test_a_dollar_kelishuv_paid_in_som_falls_by_the_converted_figure(admin_client, db):
+    """The mirror case: 2 000$ owed, 6 500 000 so'm handed over at 13 000 clears
+    500$ of it."""
+    contract = _fresh_contract()                      # jami 2,000$
+    make_shipment(contract=contract, kg="1000")
+    resp = _post_payment(admin_client, contract, "6500000", currency="uzs",
+                         exchange_rate="13000")
+    assert resp.status_code == 302
+
+    contract = Contract.objects.get(pk=contract.pk)
+    assert contract.paid_total_own == Decimal("500.00")
+    assert contract.payable_left_own == Decimal("1500.00")
+
+
+def test_a_booked_tolov_does_not_move_when_the_kurs_does(admin_client, db):
+    """The kurs a to'lov was made at is part of the to'lov. A later one at another
+    rate settles its own money and leaves the earlier figure exactly where it was —
+    otherwise a kelishuv squared last week re-opens itself this week."""
+    contract = _som_contract()
+    make_shipment(contract=contract, kg="1000")
+    _post_payment(admin_client, contract, "500", currency="usd", exchange_rate="13000")
+    first = SupplierPayment.objects.get()
+
+    _post_payment(admin_client, contract, "500", currency="usd", exchange_rate="12000")
+    first.refresh_from_db()
+    assert first.amount_uzs == Decimal("6500000.00")   # untouched by the new rate
+    assert Contract.objects.get(pk=contract.pk).paid_total_own == Decimal("12500000.00")
+
+
+def test_correcting_a_tolovs_kurs_by_hand_re_rates_that_tolov(admin_client, db):
+    """Frozen is not immutable: the operator can reopen a to'lov and put it on
+    another kurs, and the qarz follows. It just never happens on its own."""
+    contract = _som_contract()
+    make_shipment(contract=contract, kg="1000")
+    _post_payment(admin_client, contract, "500", currency="usd", exchange_rate="13000")
+    payment = SupplierPayment.objects.get()
+
+    resp = admin_client.post(f"/supplier-payments/{payment.pk}/edit/", {
+        "contract": contract.pk, "date": "2026-07-23", "currency": "usd",
+        "amount": "500", "exchange_rate": "12000", "commission_percent": "",
+        "method": "cash", "fee_percent": "0", "note": ""})
+    assert resp.status_code == 302
+
+    payment.refresh_from_db()
+    assert payment.amount_uzs == Decimal("6000000.00")
+    assert Contract.objects.get(pk=contract.pk).payable_left_own == Decimal("6650000.00")
 
 
 def test_paying_ahead_leaves_less_to_pay(db):

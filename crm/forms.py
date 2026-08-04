@@ -469,6 +469,19 @@ ContractLineFormSet = forms.inlineformset_factory(
     extra=1, min_num=0, can_delete=True)
 
 
+class ContractChoiceSelect(forms.Select):
+    """A kelishuv <select> whose options carry the currency each one was struck in,
+    so the form's JS knows whether the to'lov about to be entered crosses a currency
+    boundary — and therefore whether a kurs has to be asked for at all."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        instance = getattr(value, "instance", None)
+        if instance is not None:
+            option["attrs"]["data-currency"] = instance.currency
+        return option
+
+
 class ShipmentStatusForm(forms.ModelForm):
     class Meta:
         model = ShipmentStatus
@@ -768,12 +781,25 @@ class ShipmentLegForm(forms.ModelForm):
 
 
 class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """A to'lov against one kelishuv.
+
+    The kurs is asked for only when the money crosses a currency boundary — paying a
+    so'm kelishuv in so'm settles it at face value, and there is nothing to convert.
+    It IS asked when the two differ, because then the rate is what decides how much
+    of the qarz the money actually clears.
+
+    A rate entered that way is then frozen: the to'lov keeps the kurs it was made at
+    however the market moves afterwards, so a kelishuv that was square last week
+    cannot re-open itself this week. Correcting it is a deliberate edit of the
+    to'lov, not something that happens on its own."""
+
     class Meta:
         model = SupplierPayment
         fields = ["contract", "date", "currency", "amount", "exchange_rate",
                   "commission_percent", "method", "fee_percent", "note"]
         widgets = {
             "date": date_widget(),
+            "contract": ContractChoiceSelect(attrs={"data-contract-currency": ""}),
             "commission_percent": forms.NumberInput(attrs={
                 "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
                 "placeholder": "0"}),
@@ -784,6 +810,8 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         super().__init__(*args, **kwargs)
         # The kassa total is driven by this, so the operator should see it named.
         self.fields["amount"].widget.attrs["data-commission-base"] = ""
+        self.fields["exchange_rate"].help_text = (
+            "Faqat kelishuv valyutasidan boshqa valyutada to'lanayotganda kerak")
         # Same rich option as the yuk form: which kelishuv, whose, what marka,
         # what is still owed in goods and at what price. A fully-paid kelishuv has
         # nothing left to pay, so it drops off — but stays when editing its own
@@ -805,6 +833,21 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         return percent
 
     def clean(self):
+        # Seeded before the mixin converts. Paying a kelishuv in its own currency
+        # settles it at face value, so no kurs is ASKED for — the row still gets one
+        # (its own on an edit, the last one entered otherwise) because both money
+        # columns have to hold something for the kassa to add up.
+        #
+        # Only a missing rate is filled in. One the operator did supply stands, even
+        # here: the box is hidden rather than forbidden, and choosing the rate a
+        # to'lov is booked at is theirs to make. When the currencies differ nothing is
+        # seeded at all, and the mixin's "Dollar kursini kiriting" is what enforces it.
+        contract = self.cleaned_data.get("contract")
+        typed_rate = self.cleaned_data.get("exchange_rate") or Decimal("0")
+        if (contract is not None and typed_rate <= 0
+                and self.cleaned_data.get("currency") == contract.currency):
+            self.cleaned_data["exchange_rate"] = (
+                self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
         cleaned = super().clean()
         contract, amount = cleaned.get("contract"), cleaned.get("amount")
         # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
