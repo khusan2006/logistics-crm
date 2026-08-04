@@ -63,8 +63,11 @@ def test_the_page_totals_what_the_filters_left(admin_client, db):
     _pay(c, "100", 5, percent="10")      # kassadan 110
     _pay(c, "200", 6)                    # kassadan 200
     resp, _ = _listed(admin_client)
-    assert resp.context["total_paid"] == Decimal("300")
-    assert resp.context["total_out"] == Decimal("310.00")
+    # both to'lovlar were made in dollars, so there is one bucket
+    totals = resp.context["totals"]
+    assert [t["currency"] for t in totals] == ["usd"]
+    assert totals[0]["paid"] == Decimal("300")
+    assert totals[0]["out"] == Decimal("310.00")
 
 
 def test_a_payment_without_a_vositachi_shows_a_dash(admin_client, db):

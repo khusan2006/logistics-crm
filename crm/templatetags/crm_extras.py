@@ -117,6 +117,17 @@ def money_other(usd_value, som_value=None, currency=None):
 
 
 @register.simple_tag
+def money_in(value, currency):
+    """A figure that exists in ONE currency and has no twin.
+
+    Unlike `money`, nothing is stored on the other side to fall back to: this is a
+    per-currency qarz total, and the dollar pile and the so'm pile are two different
+    debts rather than two views of one. Adding them would need a kurs neither side
+    agreed on, so they are printed apart."""
+    return som(value) if _is_som(currency) else usd(value)
+
+
+@register.simple_tag
 def rate(usd_value, som_value=None, currency=None):
     """A row's per-kg narx in the currency that row was booked in.
 

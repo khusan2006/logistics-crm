@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crm_extras %}
 {% block title %}Hamkorlar · GranulaLog{% endblock %}
 {% block topbar_title %}Hamkorlar{% endblock %}
 {% block fab %}<a class="fab" href="{% url 'partner_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi hamkor</a>{% endblock %}
@@ -15,11 +16,22 @@
 {% if page.object_list %}
 <div class="table-wrap">
 <table>
-  <tr><th class="sticky-col">Nomi</th><th>Telefon</th><th>Shahar</th><th>Izoh</th><th></th></tr>
+  <tr><th class="sticky-col">Nomi</th><th>Qolgan to'lov</th><th>Telefon</th><th>Shahar</th><th>Izoh</th><th></th></tr>
   {% for partner in page %}
   <tr>
     <td class="sticky-col">
       <a href="{% url 'partner_edit' partner.pk %}">{{ partner.name }}</a>
+    </td>
+    {% comment %}
+    One line per currency the hamkor was actually dealt with in — never one converted
+    total, because a dollar qarz and a so'm qarz are two different debts.
+    {% endcomment %}
+    <td>
+      {% for currency, amount in partner.payable %}
+      <div class="cell-line"><span class="badge badge-warning">{% money_in amount currency %}</span></div>
+      {% empty %}
+      <span class="badge badge-ok">Qarzsiz</span>
+      {% endfor %}
     </td>
     <td>{{ partner.phone|default:"—" }}</td>
     <td>{{ partner.city|default:"—" }}</td>

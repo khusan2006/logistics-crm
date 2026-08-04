@@ -45,9 +45,17 @@ The totals below count everything the filters left, not just this page.
 </form>
 
 {% if page.object_list %}
+{% comment %}
+One line per currency the to'lovlar were actually made in. Not added together: the
+twin of a so'm to'lov is a conversion, so a single figure would be part agreed and
+part derived.
+{% endcomment %}
 <p class="muted" style="margin-bottom: 12px;">
-  {{ page.paginator.count }} ta to'lov · hamkorga <strong>{% money_both total_paid total_paid_uzs %}</strong>
-  · kassadan <strong>{% money_both total_out total_out_uzs %}</strong>
+  {{ page.paginator.count }} ta to'lov{% for t in totals %}<br>
+  {% if totals|length > 1 %}{{ t.count }} tasi · {% endif %}hamkorga
+  <strong>{% money_in t.paid t.currency %}</strong>
+  · kassadan <strong>{% money_in t.out t.currency %}</strong>
+  {% endfor %}
 </p>
 <div class="table-wrap">
 <table>
@@ -67,10 +75,13 @@ The totals below count everything the filters left, not just this page.
     <td class="sticky-col">{{ p.date }}</td>
     <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand_summary }}</a></td>
     <td>{{ p.contract.partner.name }}</td>
-    <td>
-      {% money p.amount p.amount_uzs p.currency %}
-      <br><small class="muted">{% money_other p.amount p.amount_uzs p.currency %}</small>
-    </td>
+    {% comment %}
+    The converted twin used to sit under this figure. It is a derived number — and
+    since a same-currency to'lov no longer carries a kurs the operator chose, it would
+    be derived from an inherited one, which is not a figure to quote at a hamkor. The
+    to'lov reads in the currency it was made in, full stop.
+    {% endcomment %}
+    <td>{% money p.amount p.amount_uzs p.currency %}</td>
     <td>
       {% if p.commission_percent %}
       {% money p.commission_amount p.commission_amount_uzs p.currency %}<br><small class="muted">{{ p.commission_percent|floatformat:"-2" }}%</small>

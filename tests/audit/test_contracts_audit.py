@@ -346,23 +346,31 @@ def test_jami_is_the_sum_of_the_product_rows(admin_client, db):
     assert contract.kg == Decimal("1500.000")
 
 
-def test_the_list_page_prints_the_same_jami_the_model_computes(admin_client, db):
-    # `money_both` goes through format_html, so the apostrophe in "so'm" reaches the
-    # page escaped — the expectation has to be escaped too, not the tag un-escaped.
+def test_the_list_page_prints_jami_in_the_kelishuvs_own_currency(admin_client, db):
+    """One figure, the agreed one. The twin used to be printed under it; on a so'm
+    kelishuv that twin is a dollar number derived at the kurs of the day it was
+    struck, which is not a figure anybody agreed to or can settle."""
+    # The apostrophe in "so'm" reaches the page escaped, so the expectation has to be
+    # escaped too rather than the tag un-escaped.
     from django.utils.html import escape
 
     from crm.templatetags.crm_extras import som, usd
 
-    contract = _create(
+    som_contract = _create(
         admin_client,
-        {"brand": "LLDPE", "kg": "1000", "currency": "usd", "price": "1.20",
-         "exchange_rate": "12000"},
         {"brand": "HDPE", "kg": "500", "currency": "uzs", "price": "13000",
          "exchange_rate": "13000"},
     )
     html = admin_client.get("/contracts/", {"state": ""}).content.decode()
-    assert escape(usd(contract.total_value)) in html
-    assert escape(som(contract.total_value_uzs)) in html
+    assert escape(som(som_contract.total_value_uzs)) in html
+    assert escape(usd(som_contract.total_value)) not in html
+
+    dollar_contract = _create(
+        admin_client, {"brand": "LLDPE", "kg": "1000", "price": "1.20"},
+        partner=_partner("Arya"))
+    html = admin_client.get("/contracts/", {"state": ""}).content.decode()
+    assert escape(usd(dollar_contract.total_value)) in html
+    assert escape(som(dollar_contract.total_value_uzs)) not in html
 
 
 @pytest.mark.xfail(reason="BUG: the Kelishuvlar Narx column renders a per-kg narx with "
@@ -489,28 +497,29 @@ def test_the_dollar_twin_of_a_settled_som_kelishuv_is_not_what_settles_it(admin_
     assert [c.pk for c in resp.context["page"].object_list] == []
 
 
-def test_the_to_lov_chips_can_leave_a_kelishuv_in_no_bucket(admin_client, db):
-    """`paid` is measured against expected_value while `partial`/`unpaid` are
-    measured against total_value. A truck sent above the agreed narx pulls the two
-    apart, and a kelishuv paid exactly its agreed total matches none of the three
-    chips — the faceted counts no longer add up to Hammasi."""
+# Regression guard. This was the "no bucket" defect: `paid` was measured against
+# expected_value while `partial`/`unpaid` went off total_value, so a truck sent above
+# the agreed narx pulled the two apart and a kelishuv paid exactly its agreed total
+# matched none of the three chips. All three read payable_left_own now.
+@pytest.mark.parametrize("truck_price, expect", [
+    ("1.10", "partial"),   # dearer than agreed: 1 000 paid of 1 100 owed
+    ("0.90", "paid"),      # cheaper than agreed: 900 owed, 1 000 paid
+    ("1.00", "paid"),      # exactly as agreed
+])
+def test_the_to_lov_chips_partition_the_list(admin_client, db, truck_price, expect):
     contract = _create(admin_client, {"brand": "LLDPE", "kg": "1000",
                                       "currency": "usd", "price": "1.00",
                                       "exchange_rate": "12000"})
-    shipment = make_shipment(contract=contract, kg="1000", price="1.10")
-    ShipmentLine.objects.filter(shipment=shipment).update(
-        price=Decimal("1.10"), price_uzs=Decimal("13200.00"))
+    make_shipment(contract=contract, kg="1000", price=truck_price)
     SupplierPayment.objects.create(contract=contract, amount=Decimal("1000.00"),
                                    amount_uzs=Decimal("12000000.00"),
                                    currency=Currency.USD, exchange_rate=Decimal("12000"))
-    contract = Contract.objects.get(pk=contract.pk)
-    assert contract.total_value == Decimal("1000.00")
-    assert contract.expected_value == Decimal("1100.00")
 
     resp = admin_client.get("/contracts/", {"state": ""})
     counts = {t["key"]: t["count"] for t in resp.context["pay_tabs"]}
-    assert counts[""] == 1
-    assert counts["paid"] + counts["partial"] + counts["unpaid"] == 0
+    # exactly one chip claims it, and the three add up to Hammasi
+    assert counts[expect] == 1
+    assert counts["paid"] + counts["partial"] + counts["unpaid"] == counts[""] == 1
 
 
 # --- boundaries ------------------------------------------------------------

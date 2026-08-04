@@ -64,3 +64,46 @@ def test_partner_phone_rejects_other_countries(db):
     from crm.forms import PartnerForm
     f = PartnerForm({"name": "X", "phone": "+82343905395034355", "city": "", "note": ""})
     assert not f.is_valid() and "phone" in f.errors
+
+
+# --- qolgan to'lov, per currency -------------------------------------------
+
+def test_a_partner_row_keeps_its_two_currencies_apart(admin_client, db):
+    """One hamkor, a dollar kelishuv and a so'm kelishuv. The row carries both
+    figures side by side: they are two different debts, and adding them would need a
+    kurs neither side agreed on."""
+    from decimal import Decimal
+
+    from conftest import make_contract
+    from crm.models import Currency
+    from crm.templatetags.crm_extras import som, usd
+
+    partner = Partner.objects.create(name="Sobir", phone="1", city="Tehron")
+    make_contract(partner=partner, kg="1000", price="2.00")          # 2 000 $
+    make_contract(partner=partner, kg="1000", price="1.00",
+                  price_uzs="12650", currency=Currency.UZS)          # 12 650 000 so'm
+
+    row = admin_client.get("/partners/").context["page"].object_list[0]
+    assert row.payable == [(Currency.USD, Decimal("2000.00")),
+                           (Currency.UZS, Decimal("12650000.00"))]
+
+    html = admin_client.get("/partners/").content.decode()
+    from django.utils.html import escape
+    assert escape(usd(Decimal("2000.00"))) in html
+    assert escape(som(Decimal("12650000.00"))) in html
+
+
+def test_a_partner_with_nothing_outstanding_reads_as_qarzsiz(admin_client, db):
+    from decimal import Decimal
+
+    from conftest import make_contract
+    from crm.models import SupplierPayment
+
+    partner = Partner.objects.create(name="Arya", phone="1", city="Shiroz")
+    contract = make_contract(partner=partner, kg="1000", price="2.00")
+    SupplierPayment.objects.create(contract=contract, date="2026-07-23",
+                                   amount=Decimal("2000"), method="cash")
+
+    resp = admin_client.get("/partners/")
+    assert resp.context["page"].object_list[0].payable == []
+    assert "Qarzsiz" in resp.content.decode()

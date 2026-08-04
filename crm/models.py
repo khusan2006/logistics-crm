@@ -1225,6 +1225,25 @@ def customer_receivable_total():
     return total, total_uzs, count
 
 
+def payable_by_currency(contracts):
+    """[(currency, qolgan to'lov)] over a set of kelishuvlar, each in its OWN currency.
+
+    Never summed across currencies. A hamkor owed dollars on one kelishuv and so'm on
+    another is owed two different debts; adding them needs a kurs neither side agreed
+    on, and the total would move on its own as the market did. So the row carries both
+    figures side by side and the reader is told which is which.
+
+    Ordered dollars-first so a hamkor's row reads the same way every time rather than
+    following whichever kelishuv happened to be created first."""
+    totals = {}
+    for contract in contracts:
+        left = contract.payable_left_own
+        if left > 0:
+            totals[contract.currency] = totals.get(contract.currency, Decimal("0")) + left
+    return [(currency, totals[currency])
+            for currency in (Currency.USD, Currency.UZS) if currency in totals]
+
+
 def partner_positions():
     """Both directions of the hamkor relationship, kept apart.
 

@@ -462,14 +462,19 @@ def test_the_list_totals_equal_the_rows_across_mixed_currencies_and_kurslar(admi
     rows = list(SupplierPayment.objects.all())
     assert len(rows) == 3
 
-    ctx = admin_client.get("/supplier-payments/").context
-    assert ctx["total_paid"] == sum((r.amount for r in rows), Decimal("0"))
-    assert ctx["total_paid_uzs"] == sum((r.amount_uzs for r in rows), Decimal("0"))
-    assert ctx["total_out"] == sum((r.total_out for r in rows), Decimal("0"))
-    assert ctx["total_out_uzs"] == sum((r.total_out_uzs for r in rows), Decimal("0"))
+    # Bucketed by the currency each to'lov was MADE in — never one figure, which
+    # would be part agreed and part conversion. Each bucket is the plain sum of its
+    # own rows on their own side.
+    totals = {t["currency"]: t for t in admin_client.get("/supplier-payments/").context["totals"]}
+    dollar = [r for r in rows if not r.is_som]
+    som_rows = [r for r in rows if r.is_som]
+    assert totals["usd"]["paid"] == sum((r.amount for r in dollar), Decimal("0"))
+    assert totals["usd"]["out"] == sum((r.total_out for r in dollar), Decimal("0"))
+    assert totals["uzs"]["paid"] == sum((r.amount_uzs for r in som_rows), Decimal("0"))
+    assert totals["uzs"]["out"] == sum((r.total_out_uzs for r in som_rows), Decimal("0"))
+    assert totals["usd"]["count"] == 1 and totals["uzs"]["count"] == 2
     # and the kelishuv's own view of what it has paid is the same set of rows
-    assert contract.paid_total == ctx["total_paid"]
-    assert contract.paid_total_uzs == ctx["total_paid_uzs"]
+    assert contract.paid_total == sum((r.amount for r in rows), Decimal("0"))
 
 
 def test_commission_total_matches_the_rows_it_summed(admin_client, db):
@@ -516,9 +521,7 @@ def test_deleting_the_only_tolov_empties_every_total(admin_client, db):
     assert contract.paid_total == Decimal("0")
     assert contract.paid_total_uzs == Decimal("0")
     assert contract.commission_accrued == Decimal("0")
-    ctx = admin_client.get("/supplier-payments/").context
-    assert ctx["total_paid"] == ctx["total_paid_uzs"] == Decimal("0")
-    assert ctx["total_out"] == ctx["total_out_uzs"] == Decimal("0")
+    assert admin_client.get("/supplier-payments/").context["totals"] == []
     assert admin_client.get("/kassa/").context["net_out_uzs"] == Decimal("0")
 
 

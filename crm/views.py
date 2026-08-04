@@ -33,7 +33,7 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
-    bron_queue, commission_total, convert_pair, logist_positions,
+    bron_queue, commission_total, convert_pair, logist_positions, payable_by_currency,
     customer_advance_total, customer_receivable_total, fifo_lots, partner_positions,
     reconcile_customer_allocations, stock_value, transit_value, trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
@@ -169,10 +169,15 @@ def audit_list(request):
 @role_required(User.Role.ADMIN)
 def partner_list(request):
     q = request.GET.get("q", "").strip()
-    partners = Partner.objects.all()
+    # The kelishuvlar come along so each hamkor's qolgan to'lov can be totalled per
+    # currency off the prefetch, instead of two queries per row as the page walks it.
+    partners = Partner.objects.prefetch_related(
+        "contracts__lines__shipment_lines", "contracts__supplier_payments")
     if q:
         partners = partners.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(city__icontains=q))
     page = Paginator(partners, 20).get_page(request.GET.get("page"))
+    for partner in page.object_list:
+        partner.payable = payable_by_currency(partner.contracts.all())
     return render(request, "crm/partner_list.html", {"page": page, "q": q})
 
 
@@ -320,10 +325,15 @@ def customer_delete(request, pk):
 # it only appears under "Hammasi" (calling it unpaid would invent a debt).
 # Keyed to the kelishuv's own value: paying before a yuk is sent is normal, so
 # chips that keyed off shipped value left every prepaid kelishuv matching none.
+# All three read the SAME figure, in the kelishuv's own currency, so they partition
+# the list instead of overlapping it. Mixing measures — `paid` off payable_left while
+# `partial`/`unpaid` went off total_value — put a kelishuv whose truck went cheaper
+# than agreed into both To'langan and Qisman, and one whose truck went dearer into
+# neither, so the chip counts disagreed with the rows behind them.
 CONTRACT_PAY_FILTERS = {
-    "paid": lambda c: c.total_value > 0 and c.payable_left <= 0,
-    "partial": lambda c: 0 < c.paid_total < c.total_value,
-    "unpaid": lambda c: c.total_value > 0 and c.paid_total == 0,
+    "paid": lambda c: c.payable_left_own <= 0,
+    "partial": lambda c: c.payable_left_own > 0 and c.paid_total_own > 0,
+    "unpaid": lambda c: c.payable_left_own > 0 and c.paid_total_own == 0,
 }
 CONTRACT_PAY_LABELS = [("", "Hammasi"), ("paid", "To'langan"),
                        ("partial", "Qisman to'langan"), ("unpaid", "To'lanmagan")]
@@ -560,11 +570,22 @@ def supplier_payment_list(request):
 
     # Totals for what the filters left, not just this page — the reason to filter
     # is usually to add something up.
+    #
+    # Bucketed by the currency each to'lov was actually made in, one line per bucket.
+    # The two are not added: a so'm to'lov's dollar twin is derived at that day's
+    # kurs, so a single figure would be part real and part conversion, and would drift
+    # against the rows it claims to total.
     rows = list(payments)
-    total_paid = sum((p.amount for p in rows), Decimal("0"))
-    total_out = sum((p.total_out for p in rows), Decimal("0"))
-    total_paid_uzs = sum((p.amount_uzs for p in rows), Decimal("0"))
-    total_out_uzs = sum((p.total_out_uzs for p in rows), Decimal("0"))
+    totals = []
+    for currency, _label in Currency.choices:
+        made = [p for p in rows if p.currency == currency]
+        if made:
+            totals.append({
+                "currency": currency,
+                "paid": sum((_own_amount(p) for p in made), Decimal("0")),
+                "out": sum((_own_total_out(p) for p in made), Decimal("0")),
+                "count": len(made),
+            })
 
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/supplier_payment_list.html", {
@@ -572,10 +593,19 @@ def supplier_payment_list(request):
         "date_from": date_from, "date_to": date_to, "sort": sort,
         "sort_options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS],
         "methods": PayMethod.choices, "partners": Partner.objects.all(),
-        "total_paid": total_paid, "total_out": total_out,
-        "total_paid_uzs": total_paid_uzs, "total_out_uzs": total_out_uzs,
+        "totals": totals,
         "has_filters": bool(q or partner_id or method or date_from or date_to),
     })
+
+
+def _own_amount(payment):
+    """What the hamkor received, in the currency the to'lov was actually made in."""
+    return payment.amount_uzs if payment.is_som else payment.amount
+
+
+def _own_total_out(payment):
+    """The same for what left the kassa — the summa plus the cuts riding on top."""
+    return payment.total_out_uzs if payment.is_som else payment.total_out
 
 
 def _payment_code_filter(q):
