@@ -1065,7 +1065,13 @@ class ShipmentLine(MoneyEntry):
         """True cost of one kg of this product in this load: its unit price, the
         truck's freight share, and the kelishuv's vositachi cut per kg. Fully live —
         add a freight expense or pay the hamkor and every load re-prices at once,
-        including stock already sold (profit is computed off this, not a snapshot)."""
+        including stock already sold (profit is computed off this, not a snapshot).
+
+        The one place currencies are DELIBERATELY blended. A qarz is measured only in
+        the currency it was agreed in (see `Contract._own`), but a kg has one cost and
+        the money behind it arrives in both at once — mol in dollars, transport in
+        so'm. Each part is folded in at its own entry-day kurs, never today's, so the
+        figure still cannot drift. Pinned by tests/test_cost_blends_currencies.py."""
         return (self.unit_price + self.shipment.expense_per_kg
                 + self.contract_line.contract.commission_per_kg).quantize(Decimal("0.0001"))
 
