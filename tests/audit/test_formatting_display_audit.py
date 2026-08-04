@@ -351,10 +351,10 @@ def test_what_a_negative_sum_actually_prints_today():
     assert rate(Decimal("-1.5"), None, "usd") == "-1.5 $/kg"
 
 
-def test_the_mijozlar_list_renders_an_avans_as_a_negative_dollar_figure(admin_client, db):
-    """Proof it reaches a screen. A mijoz who paid before buying has balance < 0, and
-    customer_list.html:29 already labels that cell "avans" — so the figure beside the word
-    reads "avans $-500", a minus the label has already accounted for."""
+def test_the_mijozlar_list_prints_an_avans_without_a_minus(admin_client, db):
+    """A mijoz who paid before buying is holding an avans, and the cell says so in
+    words. The figure beside it is the size of that avans, so it carries no sign —
+    "avans $-500" made the reader work out that two negatives were one fact."""
     customer = Customer.objects.create(name="Dilnoza", phone="998901234567")
     CustomerPayment.objects.create(
         customer=customer, date="2026-07-20", amount=Decimal("500"),
@@ -363,8 +363,8 @@ def test_the_mijozlar_list_renders_an_avans_as_a_negative_dollar_figure(admin_cl
 
     html = admin_client.get("/customers/").content.decode()
     assert "avans" in html
-    assert f"$-500" in html                 # today's output
-    assert f"-$500" not in html             # what the convention would print
+    assert "$500" in html
+    assert "$-500" not in html and "-$500" not in html
 
 
 # ── crm/formatting.py: phones ───────────────────────────────────────────────────────

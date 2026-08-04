@@ -6,9 +6,10 @@
 {% block content %}
 
 <p>
-  {% if customer.balance > 0 %}<span class="late">qarz {% money_both customer.balance customer.balance_uzs %}</span>
-  {% elif customer.balance < 0 %}<span class="avans">avans {% money_both customer.balance customer.balance_uzs %}</span>
-  {% else %}Balans: 0{% endif %}
+  {% for currency, amount in positions %}
+  {% if amount > 0 %}<span class="late">qarz {% money_in amount currency %}</span>
+  {% else %}<span class="avans">avans {% money_in amount|neg currency %}</span>{% endif %}
+  {% empty %}Balans: 0{% endfor %}
 </p>
 
 {% if sales %}

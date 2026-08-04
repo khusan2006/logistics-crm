@@ -11,7 +11,7 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
-    latest_exchange_rate,
+    customer_balance_by_currency, latest_exchange_rate,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .templatetags.crm_extras import rate, som, usd
@@ -359,16 +359,18 @@ def customer_option_label(customer):
     """Mijoz <option>: the name and their ostatka — the very figure the to'lov is
     being taken against, so it does not have to be looked up on the Qarzlar screen
     first. An overpaid mijoz reads as avans rather than a negative qarz, which is
-    the difference between "collect this" and "we owe them this"."""
-    balance, balance_uzs = customer.balance, customer.balance_uzs
-    # Both currencies, because an ostatka spans sotuvlar of both and cannot pick a
-    # side. An <option> is plain text with no room for a stacked twin, so the so'm
-    # figure rides alongside on the same line.
-    if balance > 0:
-        return f"{customer.name} · qarz {usd(balance)} · {som(balance_uzs)}"
-    if balance < 0:
-        return f"{customer.name} · avans {usd(-balance)} · {som(-balance_uzs)}"
-    return f"{customer.name} · qarzsiz"
+    the difference between "collect this" and "we owe them this".
+
+    One entry per currency they were dealt with in, each labelled on its own: a mijoz
+    can be owed money in dollars while owing it in so'm, and a single netted figure
+    would be struck at a kurs neither sotuv was agreed at."""
+    parts = []
+    for currency, amount in customer_balance_by_currency(customer):
+        figure = som(abs(amount)) if currency == Currency.UZS else usd(abs(amount))
+        parts.append(f"{'qarz' if amount > 0 else 'avans'} {figure}")
+    if not parts:
+        return f"{customer.name} · qarzsiz"
+    return " · ".join([customer.name, *parts])
 
 
 class TruckPlanForm(forms.ModelForm):

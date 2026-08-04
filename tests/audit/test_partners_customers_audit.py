@@ -365,24 +365,15 @@ def test_advance_shows_as_a_negative_balance_on_both_sides():
     assert customer.balance_uzs == Decimal("-1800000.00")
 
 
-def test_a_mijoz_square_in_dollars_is_shown_as_square(admin_client):
-    """CLAIM WITHDRAWN (was xfail "the Balans cell picks qarz/avans off the DOLLAR
-    side only, so a mijoz whose dollar balance nets to 0 renders '—' and their real
-    so'm position disappears").
+def test_a_dollar_sotuv_paid_in_dollars_is_square(admin_client):
+    """A $1 000 sotuv paid with $1 000 is settled, whatever the kurs did between the
+    two. Its so'm twin does NOT come out at zero — the sale was rated at 12 000 and
+    the to'lov at 13 000 — and that is fine, because a dollar sotuv is not settled in
+    so'm. The twin is kept for the blended figures (kassa, tannarx) that need it.
 
-    What the original claim got wrong: settlement in this system IS dollar-denominated.
-    PaymentAllocation.amount (crm/models.py:1573) is a USD column, and Sale.paid_uzs
-    (:1408) values what was paid at the SALE's own kurs via MoneyEntry.in_som (:105)
-    — whose
-    docstring names "a remaining balance" as exactly the kind of figure that must be
-    rated at the row's own entry-time kurs. So a sotuv paid in full has
-    remaining_uzs == 0 to the tiyin no matter what the kurs did in between, and
-    Customer.balance's own docstring (:334) defines qarz/avans off that dollar figure.
-    The '—' is right; labelling this mijoz "avans 1 000 000 so'm" would invent a debt
-    nobody owes.
-
-    The FX residue the claim spotted is real, but it lives in Customer.balance_uzs
-    (:339) — see test_customer_balance_uzs_disagrees_with_the_per_sale_qoldiq below.
+    This test used to argue the opposite: that settlement was dollar-denominated for
+    every sotuv, so a so'm one had to be measured in dollars too. That is the rule
+    this phase replaced.
     """
     customer = Customer.objects.create(name="Nol Dollar", phone="", address="")
     lot = _lot()
@@ -391,10 +382,13 @@ def test_a_mijoz_square_in_dollars_is_shown_as_square(admin_client):
     allocate_customer_payment(payment)
 
     assert customer.balance == Decimal("0")
-    # the sotuv itself is square on BOTH sides — nothing is owed in either currency
     sale.refresh_from_db()
-    assert sale.remaining == Decimal("0")
-    assert sale.remaining_uzs == Decimal("0")
+    # square in the currency it was agreed in, which is the one that settles it
+    assert sale.currency == Currency.USD
+    assert sale.remaining_own == Decimal("0")
+    assert sale.is_paid
+    # the twin does not land on zero, and is not asked to
+    assert sale.remaining_uzs != Decimal("0")
 
     row = _row_html(admin_client, "/customers/", "Nol Dollar")
     assert "qarz" not in row and "avans" not in row, row
@@ -654,18 +648,19 @@ def test_list_search_still_matches_name_and_address(admin_client):
         assert "Telefonli" in html, query
 
 
-def test_customer_list_prints_both_currencies_of_a_real_qarz(admin_client):
-    """(d) The list cell is a total, so it must show both sides — each row having
-    been converted at its own entry-day kurs."""
+def test_customer_list_keeps_a_two_currency_qarz_apart(admin_client):
+    """(d) A mijoz who bought once in dollars and once in so'm owes two debts, not one
+    converted total. The row carries both, each the figure that sotuv was agreed at —
+    $1 000 and 13 000 000 so'm, never their blend."""
     customer = Customer.objects.create(name="Ikki Valyuta", phone="", address="")
     lot = _lot()
     _usd_sale(customer, lot, "1000", "1.00", rate="12000")
     _som_sale(customer, lot, "1000", "13000", rate="13000")
-    assert customer.balance == Decimal("2000.00")
-    assert customer.balance_uzs == Decimal("25000000.00")
 
     row = _row_html(admin_client, "/customers/", "Ikki Valyuta")
     assert "qarz" in row
     # NBSP thousands separator, per the house convention in crm_extras
-    assert f"2{NBSP}000" in row                        # $2 000
-    assert f"25{NBSP}000{NBSP}000" in row              # 25 000 000 so'm
+    assert f"$1{NBSP}000" in row                       # the dollar sotuv, alone
+    assert f"13{NBSP}000{NBSP}000 so&#x27;m" in row    # the so'm sotuv, alone
+    assert f"$2{NBSP}000" not in row                   # the blend nobody agreed to
+    assert f"25{NBSP}000{NBSP}000" not in row

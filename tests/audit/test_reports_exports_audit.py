@@ -303,9 +303,10 @@ def test_a_dollar_row_and_a_som_row_keep_their_own_side_in_one_file(admin_client
 # ── (c) currency stickiness ──────────────────────────────────────────────────
 
 def test_a_som_sotuv_stays_som_in_the_export_after_a_dollar_tolov(admin_client, db):
-    """A dollar to'lov landing against a so'm sotuv must not convert the sotuv.
-    The row's Valyuta stays So'm, its narx columns do not move, and Qoldiq (so'm)
-    is the so'm total less the to'lov rated at THIS sotuv's kurs."""
+    """A dollar to'lov landing against a so'm sotuv must not convert the sotuv. The
+    row's Valyuta stays So'm and its narx columns do not move; Qoldiq (so'm) is the
+    so'm total less what those dollars were worth AT THE TO'LOV's kurs — the rate the
+    money actually changed hands at, which is the one recorded on the to'lov."""
     lot = _lot(_contract(kg="100000", price="1.00"), kg="50000")
     customer = _customer()
     sale = _sale(customer, lot, kg="1000", price="1.1700", currency="uzs",
@@ -327,8 +328,8 @@ def test_a_som_sotuv_stays_som_in_the_export_after_a_dollar_tolov(admin_client, 
     assert _dec(after["Jami (so'm)"]) == Decimal("14040000")
     sale.refresh_from_db()
     assert _close(after["Qoldiq (so'm)"], sale.remaining_uzs)
-    # rated at the SOTUV's 12 000, not the to'lov's 13 500
-    assert _close(after["Qoldiq (so'm)"], Decimal("14040000") - Decimal("6000000"))
+    # rated at the TO'LOV's 13 500: 500$ cleared 6 750 000 so'm of the qarz
+    assert _close(after["Qoldiq (so'm)"], Decimal("14040000") - Decimal("6750000"))
 
 
 # ── numbers must stay numbers ────────────────────────────────────────────────

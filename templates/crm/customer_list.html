@@ -25,9 +25,17 @@
     <td>{{ c.phone|default:"—" }}</td>
     <td>{{ c.address|default:"—" }}</td>
     <td>
-      {% if c.balance > 0 %}<span class="late">qarz {% money_both c.balance c.balance_uzs %}</span>
-      {% elif c.balance < 0 %}<span class="avans">avans {% money_both c.balance c.balance_uzs %}</span>
-      {% else %}—{% endif %}
+      {% comment %}
+      One line per currency this mijoz was actually dealt with in. A dollar avans does
+      not cancel a so'm qarz, so the two are shown apart rather than netted into a
+      figure struck at a kurs neither side agreed on.
+      {% endcomment %}
+      {% for currency, amount in c.positions %}
+      <div class="cell-line">
+        {% if amount > 0 %}<span class="late">qarz {% money_in amount currency %}</span>
+        {% else %}<span class="avans">avans {% money_in amount|neg currency %}</span>{% endif %}
+      </div>
+      {% empty %}—{% endfor %}
     </td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'customer_payment_create' %}?customer={{ c.pk }}" data-modal title="To'lov">

@@ -58,7 +58,7 @@
     </div>
     <div class="stat">
       <div class="muted">Qoldiq/qarz</div>
-      <div{% if sale.remaining > 0 %} class="late"{% endif %}>{% money sale.remaining sale.remaining_uzs sale.currency %}</div>
+      <div{% if sale.remaining_own > 0 %} class="late"{% endif %}>{% money sale.remaining sale.remaining_uzs sale.currency %}</div>
     </div>
   </div>
   {% if sale.note %}<p class="muted" style="margin-top: 14px;">{{ sale.note }}</p>{% endif %}
@@ -121,7 +121,7 @@
   <p class="muted">Hali to'lov qilinmagan.</p>
   {% endif %}
   <p style="margin-top: 12px;">
-    Qoldiq: <strong{% if sale.remaining > 0 %} class="late"{% endif %}>{% money sale.remaining sale.remaining_uzs sale.currency %}</strong>
+    Qoldiq: <strong{% if sale.remaining_own > 0 %} class="late"{% endif %}>{% money sale.remaining sale.remaining_uzs sale.currency %}</strong>
   </p>
 </div>
 

@@ -19,7 +19,11 @@
     <td class="sticky-col">
       <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a>
     </td>
-    <td class="late">{% money_both row.customer.balance row.customer.balance_uzs %}</td>
+    <td class="late">
+      {% for currency, amount in row.positions %}
+      <div class="cell-line">{% money_in amount currency %}</div>
+      {% endfor %}
+    </td>
     {% comment %}
     The muddat the rows are sorted by, spelled out — a mijoz sitting at the top with
     a smaller qarz than the one below looks like a bug unless the reason is on screen.

@@ -34,7 +34,7 @@ from .models import (
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
     bron_queue, commission_total, convert_pair, logist_positions, payable_by_currency,
-    customer_advance_total, customer_receivable_total, fifo_lots, partner_positions,
+    customer_advance_total, customer_balance_by_currency, customer_receivable_total, fifo_lots, partner_positions,
     reconcile_customer_allocations, stock_value, transit_value, trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
 )
@@ -238,12 +238,17 @@ def partner_delete(request, pk):
 @role_required(User.Role.ADMIN)
 def customer_list(request):
     q = request.GET.get("q", "").strip()
-    customers = Customer.objects.all()
+    # The sotuvlar and to'lovlar come along so each mijoz's ostatka can be totalled
+    # per currency off the prefetch instead of two queries per row.
+    customers = Customer.objects.prefetch_related(
+        "sales__allocations", "customer_payments__allocations")
     if q:
         customers = customers.filter(
             Q(name__icontains=q) | Q(phone__icontains=q) | Q(address__icontains=q)
         )
     page = Paginator(customers, 20).get_page(request.GET.get("page"))
+    for customer in page.object_list:
+        customer.positions = customer_balance_by_currency(customer)
     return render(request, "crm/customer_list.html", {"page": page, "q": q})
 
 
@@ -750,7 +755,10 @@ def customer_payment_create(request):
         # On a re-render the mijoz is whatever the header holds, not the query
         # string: the modal posts to a bare path, so ?customer= is gone by then.
         customer = _bound_customer(target, request)
-        alloc_sales = [s for s in customer.sales.all() if s.remaining > 0] if customer else None
+        # Measured in each sotuv's own currency: a so'm sotuv settled in so'm is done,
+        # whatever its dollar twin still reads.
+        alloc_sales = [s for s in customer.sales.all()
+                       if s.remaining_own > 0] if customer else None
         return form_response(request, target, "Yangi to'lov", invalid=invalid,
                              extra_context={"lines": rows, "lines_legend": "To'lovlar",
                                             "lines_class": "lineset--money lineset--payment",
@@ -1911,12 +1919,22 @@ def return_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def debt_list(request):
-    debtors = [c for c in Customer.objects.all() if c.balance > 0]
+    # A mijoz is a debtor if ANY currency they deal in is owed — a dollar avans does
+    # not cancel a so'm qarz, so netting the two would hide a debt that is real.
     rows = []
-    for c in debtors:
+    for c in Customer.objects.prefetch_related("sales__allocations",
+                                               "customer_payments__allocations"):
+        positions = customer_balance_by_currency(c)
+        owed = [(currency, amount) for currency, amount in positions if amount > 0]
+        if not owed:
+            continue
         due = [s.debt_deadline for s in c.sales.all() if s.is_due]
         rows.append({
             "customer": c,
+            "positions": owed,
+            # Only for ordering the page: the biggest debt first needs one number,
+            # and no figure on screen is built from it.
+            "size": max(amount for _currency, amount in owed),
             "overdue_count": sum(1 for s in c.sales.all() if s.is_overdue),
             "due_count": len(due),
             "earliest_due": min(due) if due else None,
@@ -1926,8 +1944,8 @@ def debt_list(request):
     # buried a mijoz due today under bigger debts that are not owed yet.
     chase = [r for r in rows if r["earliest_due"]]
     later = [r for r in rows if not r["earliest_due"]]
-    chase.sort(key=lambda r: (r["earliest_due"], -r["customer"].balance))
-    later.sort(key=lambda r: -r["customer"].balance)
+    chase.sort(key=lambda r: (r["earliest_due"], -r["size"]))
+    later.sort(key=lambda r: -r["size"])
     page = Paginator(chase + later, 20).get_page(request.GET.get("page"))
     return render(request, "crm/debt_list.html", {"page": page})
 
@@ -1935,8 +1953,11 @@ def debt_list(request):
 @role_required(User.Role.ADMIN)
 def debt_customer(request, pk):
     customer = get_object_or_404(Customer, pk=pk)
-    sales = [s for s in customer.sales.select_related("line__contract_line").all() if s.remaining > 0]
-    return render(request, "crm/debt_customer.html", {"customer": customer, "sales": sales})
+    sales = [s for s in customer.sales.select_related("line__contract_line")
+             .prefetch_related("allocations").all() if s.remaining_own > 0]
+    return render(request, "crm/debt_customer.html", {
+        "customer": customer, "sales": sales,
+        "positions": customer_balance_by_currency(customer)})
 
 
 #: How the outflow rows collapse into waterfall steps. Bojxona and transport carry

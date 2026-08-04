@@ -56,6 +56,18 @@ def convert_pair(typed, currency, rate, usd_places="0.01"):
             (typed * rate).quantize(uzs_q, rounding=ROUND_HALF_UP))
 
 
+def own_side(row, usd_value, uzs_value):
+    """Whichever half of a stored pair is `row`'s OWN money — the side it was agreed
+    in, or arrived in.
+
+    Every qarz figure in the app goes through here. Reading the other half is a
+    conversion neither party signed up to, derived at a kurs that has since moved: a
+    so'm sotuv paid off in so'm still shows a dollar remainder, and a kelishuv settled
+    in full never leaves the unfinished list. Costs are the one deliberate exception —
+    see ShipmentLine.landed_cost_per_kg."""
+    return uzs_value if row.is_som else usd_value
+
+
 class MoneyEntry(models.Model):
     """Abstract: the two facts every money row needs on top of its value — which
     currency the operator typed in, and the kurs at that moment.
@@ -390,13 +402,9 @@ class Contract(models.Model):
         return self.currency == Currency.UZS
 
     def _own(self, usd_value, uzs_value):
-        """Whichever half of a stored pair is the kelishuv's OWN money.
-
-        Every qarz figure goes through here. Reading the other half would be a
-        converted number the two sides never agreed on: a so'm kelishuv paid in full
-        still shows a dollar remainder whenever the kurs has moved since, because its
-        dollar twin was derived at a different one."""
-        return uzs_value if self.is_som else usd_value
+        """Whichever half of a stored pair is the kelishuv's OWN money — see
+        `own_side`, which the sotuv and mijoz sides read through too."""
+        return own_side(self, usd_value, uzs_value)
 
     def _next_code_number(self, slug):
         """One past the highest number this hamkor — or anyone sharing their slug —
@@ -1198,6 +1206,27 @@ class Reservation(MoneyEntry):
 # same rule as everything else that shows both currencies.
 
 
+def customer_balance_by_currency(customer):
+    """[(currency, balance)] for one mijoz — positive is qarz, negative is avans.
+
+    Split the way `payable_by_currency` splits a hamkor, and for the same reason: a
+    sotuv agreed in so'm is owed in so'm, a to'lov that arrived in dollars sits as a
+    dollar avans until it is put on a sotuv, and netting the two needs a kurs neither
+    was struck at. A mijoz who deals in both reads as two figures side by side.
+
+    Only non-zero sides are returned, so the common single-currency mijoz still reads
+    as one figure."""
+    balances = {}
+    for sale in customer.sales.all():
+        balances[sale.currency] = balances.get(sale.currency, Decimal("0")) + sale.remaining_own
+    for payment in customer.customer_payments.all():
+        unspent = unspent_payment_amount(payment)
+        if unspent:
+            balances[payment.currency] = balances.get(payment.currency, Decimal("0")) - unspent
+    return [(currency, balances[currency]) for currency in (Currency.USD, Currency.UZS)
+            if balances.get(currency)]
+
+
 def customer_advance_total():
     """Money mijozlar have handed over that sits on no sotuv yet.
 
@@ -1206,10 +1235,13 @@ def customer_advance_total():
     between "we have this" and "we are holding this"."""
     total = total_uzs = Decimal("0")
     for payment in CustomerPayment.objects.prefetch_related("allocations"):
-        unspent = unspent_payment_amount(payment)
-        if unspent > 0:
-            total += unspent
-            total_uzs += uzs_slice(payment, unspent)
+        # Whether there IS an avans is asked in the currency the money arrived in —
+        # that is the pot being drawn down. What it is worth is then read off both
+        # columns, because the till holds cash in both at once.
+        if unspent_payment_amount(payment) > 0:
+            usd, uzs = unspent_payment_pair(payment)
+            total += usd
+            total_uzs += uzs
     return total, total_uzs
 
 
@@ -1515,7 +1547,13 @@ class Sale(MoneyEntry):
 
     @property
     def paid_uzs(self):
-        return self.in_som(self.paid)
+        """Summed off the allocations' own so'm column, not converted from the dollar
+        one. A so'm sotuv settled by a so'm to'lov has to land on exactly zero, and a
+        figure re-derived at this sotuv's kurs lands a tiyin off it — which is what
+        kept a settled so'm sotuv sitting on Qarzlar."""
+        if not hasattr(self, "allocations"):
+            return Decimal("0")
+        return sum((a.amount_uzs for a in self.allocations.all()), Decimal("0"))
 
     @property
     def remaining_uzs(self):
@@ -1535,9 +1573,27 @@ class Sale(MoneyEntry):
     def remaining(self):
         return self.net_total - self.paid
 
+    # --- the sotuv in the currency it was agreed in ---------------------------
+    # These are what a qarz is measured by. The dollar pair above stays for the
+    # blended figures — tannarx, foyda, the kassa — that have to mix the two.
+    @property
+    def net_total_own(self):
+        return own_side(self, self.net_total, self.net_total_uzs)
+
+    @property
+    def paid_own(self):
+        return own_side(self, self.paid, self.paid_uzs)
+
+    @property
+    def remaining_own(self):
+        return own_side(self, self.remaining, self.remaining_uzs)
+
     @property
     def is_paid(self):
-        return self.remaining <= 0
+        """Measured in the sotuv's own currency: a so'm sotuv settled in so'm still
+        shows a dollar remainder whenever the kurs moved between the sale and the
+        to'lov, and would sit on Qarzlar for ever."""
+        return self.remaining_own <= 0
 
     def save(self, *args, **kwargs):
         """A sotuv with no muddat is due the day it was sold.
@@ -1666,6 +1722,12 @@ class CustomerPayment(CashEntry):
         return (self.amount_uzs * self.net_amount / self.amount).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    @property
+    def net_amount_own(self):
+        """What reached us, in the currency it actually arrived in — the figure this
+        to'lov has to be spent down to zero in."""
+        return own_side(self, self.net_amount, self.net_amount_uzs)
+
     def __str__(self):
         return f"{self.customer_id} · {self.amount}$ ({self.date})"
 
@@ -1680,24 +1742,25 @@ class PaymentAllocation(models.Model):
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE,
                              related_name="allocations", verbose_name="Sotuv")
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    # Stored rather than sliced off the parent, because this figure has two readers
+    # that must BOTH be exact: it is how much of the sotuv's qarz was cleared (read in
+    # the sotuv's currency) and how much of the to'lov was spent (read in the to'lov's
+    # currency). A so'm sotuv settled by a so'm to'lov has to land on zero exactly, and
+    # a figure re-derived through the dollar column lands a tiyin off.
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    @property
-    def amount_uzs(self):
-        """Derived, not stored: an allocation is a slice of one payment, so it is
-        worth the same fraction of that payment's so'm value. Storing it would let
-        the slice and its parent drift apart."""
-        payment = self.payment
-        if not payment.amount:
-            return Decimal("0")
-        return (payment.amount_uzs * self.amount / payment.amount).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP)
+    def in_currency(self, currency):
+        """This slice as read by one side of it. The sotuv asks in the currency it was
+        agreed in, the to'lov in the one it arrived in — and when those differ the two
+        answers are both true, at the kurs the money actually moved at."""
+        return self.amount_uzs if currency == Currency.UZS else self.amount
 
     @property
     def currency(self):
-        """Read in the to'lov's currency, for the same reason `amount_uzs` is a
-        slice of the to'lov's so'm value: an allocation is not money of its own,
-        it is a part of one payment that arrived in one currency."""
+        """The to'lov's currency: an allocation is not money of its own, it is a part
+        of one payment that arrived in one currency."""
         return self.payment.currency
 
     class Meta:
@@ -1712,14 +1775,89 @@ class PaymentAllocation(models.Model):
 def unspent_payment_amount(payment):
     """The part of a to'lov that is not sitting on any sotuv yet — the mijoz's avans.
 
+    Read in the currency the money ARRIVED in, which is the currency it is an avans
+    in: 6 500 000 so'm handed over is 6 500 000 so'm of credit until it is put on a
+    sotuv, whatever the kurs does next. The same slice read from the sotuv's side
+    answers a different question, in that sotuv's currency — see
+    PaymentAllocation.in_currency.
+
     The pool is net_amount, not amount: a perechisleniya foiz never reached us, so it
     cannot pay down anybody's sale.
 
     Summed in Python rather than with aggregate() so a prefetched `allocations` is
     actually used — aggregate() always goes back to the database, which turned the
     kassa's avans figure into one query per to'lov."""
-    allocated = sum((a.amount for a in payment.allocations.all()), Decimal("0"))
-    return payment.net_amount - allocated
+    return own_side(payment, *unspent_payment_pair(payment))
+
+
+def unspent_payment_pair(payment):
+    """(usd, uzs) of a to'lov that is not sitting on any sotuv yet.
+
+    Both columns taken straight off the parent minus its slices, so each side is
+    exact. The kassa needs the pair — it holds cash in both currencies at once and
+    says so — while a qarz needs only the side the money arrived in."""
+    allocated = allocated_uzs = Decimal("0")
+    for alloc in payment.allocations.all():
+        allocated += alloc.amount
+        allocated_uzs += alloc.amount_uzs
+    return payment.net_amount - allocated, payment.net_amount_uzs - allocated_uzs
+
+
+def allocation_pair(payment, spent_own):
+    """Both columns of a slice worth `spent_own` of `payment`, in the payment's own
+    currency.
+
+    Taken as a FRACTION of the parent rather than converted at its kurs: the slices of
+    one to'lov then add up to exactly that to'lov on both sides, so a to'lov spent in
+    full leaves nothing behind and a sotuv covered in full lands on zero. Converting
+    each slice separately leaves a tiyin adrift on one side or the other."""
+    total_own = payment.net_amount_own
+    if not total_own:
+        return Decimal("0"), Decimal("0")
+    share = Decimal(spent_own) / total_own
+    return ((payment.net_amount * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            (payment.net_amount_uzs * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _place(payment, sale, take_own):
+    """Put `take_own` of a to'lov — measured in the SOTUV's currency — onto that sotuv.
+
+    The figure the operator and the sotuv care about is how much qarz was cleared, so
+    that is what is asked for; the slice is then sized in the to'lov's own currency so
+    it can be taken as a fraction of it."""
+    if take_own <= 0:
+        return Decimal("0")
+    spent_own = _in_payment_currency(payment, sale, take_own)
+    amount, amount_uzs = allocation_pair(payment, spent_own)
+    PaymentAllocation.objects.create(payment=payment, sale=sale,
+                                     amount=amount, amount_uzs=amount_uzs)
+    return spent_own
+
+
+def _in_payment_currency(payment, sale, amount_own):
+    """A figure in the sotuv's currency, restated in the to'lov's.
+
+    At the TO'LOV's kurs, not the sotuv's: this is that money changing hands, and the
+    rate it changed hands at is the one recorded on the to'lov."""
+    if sale.currency == payment.currency:
+        return Decimal(amount_own)
+    if payment.is_som:                       # dollar sotuv, so'm to'lov
+        return (Decimal(amount_own) * payment.exchange_rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return (Decimal(amount_own) / payment.exchange_rate).quantize(   # so'm sotuv, dollar to'lov
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _in_sale_currency(payment, sale, amount_own):
+    """The mirror of `_in_payment_currency`: what a to'lov's remaining pool is worth
+    against one sotuv's qarz."""
+    if sale.currency == payment.currency:
+        return Decimal(amount_own)
+    if payment.is_som:                       # so'm in hand, dollar qarz to clear
+        return (Decimal(amount_own) / payment.exchange_rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return (Decimal(amount_own) * payment.exchange_rate).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def uzs_slice(row, part):
@@ -1739,6 +1877,8 @@ def allocate_customer_payment(payment, picks=None):
     """Allocate a payment across the customer's outstanding sales. `picks` is an
     optional list of (sale_id, amount) chosen in the form; the rest (or all, if no
     picks) auto-fills oldest-first. Leftover stays unallocated = advance."""
+    # Carried in the TO'LOV's currency — it is that pot being spent down. Each sotuv
+    # is measured in its own, and `_place` bridges the two at the to'lov's kurs.
     remaining = unspent_payment_amount(payment)
     with transaction.atomic():
         if picks:
@@ -1748,18 +1888,17 @@ def allocate_customer_payment(payment, picks=None):
                 sale = Sale.objects.filter(pk=sale_id, customer=payment.customer).first()
                 if sale is None:
                     continue
-                amt = min(Decimal(amt), sale.remaining, remaining)
-                if amt > 0:
-                    PaymentAllocation.objects.create(payment=payment, sale=sale, amount=amt)
-                    remaining -= amt
+                # A pick is typed against the sotuv, so it arrives in the sotuv's
+                # currency; the pool is what this to'lov can still reach it with.
+                take = min(Decimal(amt), sale.remaining_own,
+                           _in_sale_currency(payment, sale, remaining))
+                remaining -= _place(payment, sale, take)
         # FIFO the leftover across still-outstanding sales
         for sale in payment.customer.sales.order_by("date", "id"):
             if remaining <= 0:
                 break
-            take = min(sale.remaining, remaining)
-            if take > 0:
-                PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
-                remaining -= take
+            take = min(sale.remaining_own, _in_sale_currency(payment, sale, remaining))
+            remaining -= _place(payment, sale, take)
     return remaining  # the advance left over
 
 
@@ -1780,7 +1919,8 @@ def reconcile_customer_allocations(customer):
     neither owes it nor is owed it — so they cancel in `Customer.balance` and the
     mijoz drops off Qarzlar while the sotuv still shows a qoldiq they have paid."""
     with transaction.atomic():
-        outstanding = [s for s in customer.sales.order_by("date", "id") if s.remaining > 0]
+        outstanding = [s for s in customer.sales.order_by("date", "id")
+                       if s.remaining_own > 0]
         if not outstanding:
             return
         for payment in customer.customer_payments.order_by("date", "id"):
@@ -1788,12 +1928,10 @@ def reconcile_customer_allocations(customer):
             if unspent <= 0:
                 continue
             for sale in outstanding:
-                # `remaining` re-reads the allocations, so each sotuv is measured
+                # `remaining_own` re-reads the allocations, so each sotuv is measured
                 # against what earlier to'lovlar in this same sweep already put on it.
-                take = min(unspent, sale.remaining)
-                if take > 0:
-                    PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
-                    unspent -= take
+                take = min(_in_sale_currency(payment, sale, unspent), sale.remaining_own)
+                unspent -= _place(payment, sale, take)
                 if unspent <= 0:
                     break
 
@@ -1811,11 +1949,10 @@ def apply_customer_advance(sale):
     with transaction.atomic():
         if sale.reservation_id:
             for payment in sale.reservation.earmarked_payments.order_by("date", "id"):
-                if sale.remaining <= 0:
+                if sale.remaining_own <= 0:
                     break
-                take = min(unspent_payment_amount(payment), sale.remaining)
-                if take > 0:
-                    PaymentAllocation.objects.create(payment=payment, sale=sale, amount=take)
+                pool = _in_sale_currency(payment, sale, unspent_payment_amount(payment))
+                _place(payment, sale, min(pool, sale.remaining_own))
         reconcile_customer_allocations(sale.customer)
 
 
@@ -1824,19 +1961,29 @@ def trim_sale_allocations(sale):
     amount (newest allocation first) so Σ allocations ≤ net_total. The freed amount
     returns to its payment's spendable advance, reachable by apply_customer_advance —
     otherwise a return on a paid sale would strand money in a dead over-cap row."""
-    over = (sale.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0")) - sale.net_total
+    placed = sum((a.in_currency(sale.currency) for a in sale.allocations.all()),
+                 Decimal("0"))
+    over = placed - sale.net_total_own
     if over <= 0:
         return
     with transaction.atomic():
         for alloc in sale.allocations.order_by("-id"):
             if over <= 0:
                 break
-            if alloc.amount <= over:
-                over -= alloc.amount
+            own = alloc.in_currency(sale.currency)
+            if own <= over:
+                over -= own
                 alloc.delete()
             else:
-                alloc.amount -= over
-                alloc.save(update_fields=["amount"])
+                # Shrunk on BOTH sides by the same fraction, so the slice stays a
+                # true part of its to'lov — trimming one column alone would free
+                # money on the sotuv's side that the to'lov still counts as spent.
+                share = (own - over) / own
+                alloc.amount = (alloc.amount * share).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP)
+                alloc.amount_uzs = (alloc.amount_uzs * share).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP)
+                alloc.save(update_fields=["amount", "amount_uzs"])
                 over = Decimal("0")
 
 

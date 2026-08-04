@@ -21,7 +21,7 @@ from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus,
     customer_advance_total, reconcile_customer_allocations,
-    unspent_payment_amount,
+    unspent_payment_amount, unspent_payment_pair,
 )
 
 
@@ -375,10 +375,33 @@ def test_customer_balance_equals_sales_minus_allocations_plus_advance(admin_clie
         {"currency": "uzs", "amount": "24000000", "exchange_rate": "12000"},
         customer=customer))
 
+    # Both sides read in dollars here, because `balance` is the blended figure the
+    # kassa keeps; the per-currency reading is the next test.
     remaining = sum((s.remaining for s in customer.sales.all()), Decimal("0"))
-    unspent = sum((unspent_payment_amount(p)
+    unspent = sum((unspent_payment_pair(p)[0]
                    for p in customer.customer_payments.all()), Decimal("0"))
     assert remaining - unspent == customer.balance
+
+
+def test_a_sotuv_is_settled_in_the_currency_it_was_agreed_in(admin_client, db):
+    """The same reconciliation per currency: a so'm sotuv paid off by a so'm to'lov
+    lands on exactly zero, however far the kurs moved between the two."""
+    customer = _customer()
+    lot = _lot()
+    sale = _som_sale(customer, lot, "1000", "12650", rate="12650",
+                     date="2026-07-10")
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "uzs", "amount": "12650000", "exchange_rate": "13100"},
+        customer=customer))
+
+    sale.refresh_from_db()
+    assert sale.net_total_own == Decimal("12650000.00")
+    assert sale.paid_own == Decimal("12650000.00")
+    assert sale.remaining_own == Decimal("0.00")
+    assert sale.is_paid
+    # the dollar twin cannot line up — the two were rated a kurs apart — and that is
+    # exactly why it is not what settles anything
+    assert sale.remaining != Decimal("0.00")
 
 
 def test_a_payment_larger_than_the_debt_becomes_an_advance(admin_client, db):
@@ -425,8 +448,7 @@ def test_allocation_som_slices_sum_back_to_the_payments_som_value(admin_client, 
                               amount="12345678", exchange_rate="12345")
 
     slices = sum((a.amount_uzs for a in payment.allocations.all()), Decimal("0"))
-    unspent_uzs = (payment.amount_uzs * unspent_payment_amount(payment)
-                   / payment.amount)
+    unspent_uzs = unspent_payment_pair(payment)[1]
     assert abs(slices + unspent_uzs - payment.net_amount_uzs) <= Decimal("0.02")
 
 

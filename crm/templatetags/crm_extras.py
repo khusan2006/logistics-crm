@@ -116,6 +116,16 @@ def money_other(usd_value, som_value=None, currency=None):
     return som(som_value)
 
 
+@register.filter
+def neg(value):
+    """Flip the sign. A negative balance is an avans, and "avans $500" is what the
+    operator reads — the minus is carried by the word, not repeated in the figure."""
+    try:
+        return -Decimal(value or 0)
+    except (TypeError, ValueError, ArithmeticError):
+        return value
+
+
 @register.simple_tag
 def money_in(value, currency):
     """A figure that exists in ONE currency and has no twin.

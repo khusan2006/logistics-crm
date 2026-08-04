@@ -292,10 +292,10 @@ def test_customer_page_dollar_header_equals_the_sum_of_its_rows(admin_client, db
     assert sum((s.remaining for s in rows), Decimal("0")) == customer.balance
 
 
-@pytest.mark.xfail(reason="BUG: Sale.paid_uzs re-rates the allocations at the "
-                          "SOTUV's kurs (in_som) instead of using each to'lov's own "
-                          "stored so'm value, so the so'm header and the so'm Qoldiq "
-                          "column on the same page disagree", strict=False)
+# Regression guard. Was an xfail: Sale.paid_uzs re-rated the allocations at the
+# SOTUV's kurs instead of reading each to'lov's own so'm value, so the so'm header and
+# the so'm Qoldiq column on the same page disagreed. paid_uzs sums the stored column
+# now, which is also what let a so'm sotuv finally settle to zero.
 def test_customer_page_som_header_equals_the_sum_of_its_rows(admin_client, db):
     """Sotuv booked at 12 000, to'lov received at 13 000.
 
@@ -314,12 +314,8 @@ def test_customer_page_som_header_equals_the_sum_of_its_rows(admin_client, db):
     assert sum((s.remaining_uzs for s in rows), Decimal("0")) == customer.balance_uzs
 
 
-@pytest.mark.xfail(reason="BUG (root cause): Sale.paid_uzs = in_som(paid) re-rates "
-                          "the allocations at the sotuv's kurs, while "
-                          "PaymentAllocation.amount_uzs — the value sale_detail.html "
-                          "actually prints for the very same rows — carries the "
-                          "to'lov's kurs. Jami − Σ taqsimot ≠ Qoldiq, in so'm",
-                    strict=False)
+# Regression guard, and the narrowest statement of the same root cause: a sotuv's
+# so'm arithmetic now closes against the very allocation rows its page prints.
 def test_sale_som_arithmetic_closes_against_its_own_allocation_rows(admin_client, db):
     """The narrowest statement of the defect, with no page in the way."""
     customer, lot = _customer(), _lot()
@@ -457,10 +453,9 @@ def test_extreme_kursi_round_trip_without_drifting(admin_client, db):
     assert huge.balance_uzs == Decimal("9999999999.00")
 
 
-@pytest.mark.xfail(reason="BUG: debt_list/debt_customer gate on the USD balance "
-                          "alone, so a mijoz who settled a so'm sotuv to the tiyin "
-                          "keeps a rounding-residue qarz and never leaves Qarzlar",
-                    strict=False)
+# Regression guard. This was an xfail documenting that Qarzlar gated on the USD
+# balance alone, so a mijoz who settled a so'm sotuv to the tiyin kept a rounding
+# residue and never left the list. Qarzlar reads each currency on its own now.
 def test_a_som_debt_settled_in_full_leaves_the_qarzlar_list(admin_client, db):
     """12 500 so'm/kg × 1000 kg = 12 500 000 so'm, paid in full in so'm at the same
     kurs. balance_uzs is 0; balance is $0.03, because the derived USD price was
