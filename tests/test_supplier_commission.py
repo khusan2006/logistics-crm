@@ -126,7 +126,10 @@ def test_payment_modal_kelishuv_option_shows_narx(admin_client, db):
     contract = _contract(kg="1000", price="1.25")
     label = SupplierPaymentForm().fields["contract"].label_from_instance(contract)
     assert contract.code in label and "1.25 $/kg" in label
-    assert "jami 1000 kg" in label
+    # The tail is money here, not kg: this form spends the qarz down, and this is
+    # the ceiling it will check the entry against (see TestKelishuvOptionShows...
+    # in test_supplier_payments.py). The yuk form keeps "jami N kg".
+    assert "to'lash: $1" in label
     # the code already opens with the hamkor (pars-1), so naming them again stutters
     assert label.lower().count(contract.partner.name.lower()) == 1
 

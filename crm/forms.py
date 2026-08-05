@@ -330,9 +330,15 @@ def _keep_if(queryset, predicate, keep_pk=None):
     return queryset.filter(pk__in=ids)
 
 
-def contract_option_label(contract):
+def contract_option_label(contract, payable=False):
     """Kelishuv <option>: code, products, what is still owed, the agreed price —
     a range when the products are priced differently — and the whole agreement.
+
+    `payable` swaps the trailing "jami N kg" for what is still owed IN MONEY. On the
+    yuk form the kg is the figure being spent down, so that is what it says; on the
+    to'lov form the money is, and it is also the form's ceiling — without it the
+    operator had to leave the modal, look the kelishuv up on Kelishuvlar, and come
+    back to type a number the form already knew.
 
     Each narx reads in the currency ITS line was agreed in, so a kelishuv struck in
     so'm is offered in so'm. That is also why both ends of a range carry their unit
@@ -350,9 +356,16 @@ def contract_option_label(contract):
         price = narxlar[0]
     else:
         price = f"{narxlar[0]} – {narxlar[-1]}"
+    if payable:
+        left = contract.payable_left_own
+        # In the kelishuv's own currency, like every other qarz figure — the dollar
+        # column of a so'm kelishuv drifts with the kurs and would offer to collect
+        # money that is not owed.
+        tail = f"to'lash: {som(left) if contract.is_som else usd(left)}"
+    else:
+        tail = f"jami {_clean_number(contract.kg)} kg"
     return (f"{contract.code} · {contract.brand_summary} · "
-            f"{_clean_number(contract.remaining_kg)} kg qolgan · {price} · "
-            f"jami {_clean_number(contract.kg)} kg")
+            f"{_clean_number(contract.remaining_kg)} kg qolgan · {price} · {tail}")
 
 
 def customer_option_label(customer):
@@ -838,7 +851,10 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
                 .prefetch_related("lines__shipment_lines", "supplier_payments"))
         self.fields["contract"].queryset = _keep_if(
             base, lambda c: c.payable_left_own > 0, self.instance.contract_id)
-        self.fields["contract"].label_from_instance = contract_option_label
+        # Money, not kg, in the tail here: it is what this form is about to spend
+        # down, and it is the ceiling the form will check the entry against.
+        self.fields["contract"].label_from_instance = (
+            lambda c: contract_option_label(c, payable=True))
 
     def clean_commission_percent(self):
         percent = self.cleaned_data.get("commission_percent")

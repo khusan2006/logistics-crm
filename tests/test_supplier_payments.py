@@ -425,3 +425,45 @@ def test_the_payment_cap_follows_the_real_cost(admin_client, db):
     c = make_contract(kg="1000", price="1.00")
     _one_truck(c, "1000", price="2.00")                 # haqiqatda 2 000$ turadi
     assert _post_payment(admin_client, c, "2000").status_code == 302
+
+
+class TestKelishuvOptionShowsWhatIsLeftToPay:
+    """The to'lov form's kelishuv picker carries the figure the form is about to
+    spend down — and the very ceiling it will check the entry against. Without it
+    the operator left the modal to look it up on Kelishuvlar and came back."""
+
+    def _label(self, contract):
+        from crm.forms import SupplierPaymentForm
+        labels = [str(label) for _value, label in
+                  list(SupplierPaymentForm().fields["contract"].choices)[1:]]
+        return next(l for l in labels if l.startswith(contract.code))
+
+    def test_a_dollar_kelishuv_offers_its_qarz_in_dollars(self, db):
+        c = make_contract(kg="100", price="1.20")        # jami $120
+        SupplierPayment.objects.create(contract=c, amount=Decimal("20"))
+        assert f"to'lash: $100" in self._label(c)
+
+    def test_a_som_kelishuv_offers_its_qarz_in_som(self, db):
+        """Never the dollar column: it drifts with the kurs and would offer to
+        collect money that is not owed."""
+        c = make_contract(kg="200", price="1.00")
+        c.currency, c.exchange_rate = Currency.UZS, Decimal("12000")
+        c.save()
+        line = c.lines.first()
+        line.currency, line.price_uzs = Currency.UZS, Decimal("12000")
+        line.exchange_rate = Decimal("12000")
+        line.save()
+
+        label = self._label(c)
+        assert "so'm" in label.split("to'lash:")[1]
+        assert "$" not in label.split("to'lash:")[1]
+
+    def test_the_yuk_form_still_counts_in_kg(self, db):
+        """Two forms, two questions: a yuk spends kg down, a to'lov spends money."""
+        from crm.forms import ShipmentForm
+        c = make_contract(kg="100", price="1.20")
+        labels = [str(label) for _v, label in
+                  list(ShipmentForm().fields["contract"].choices)[1:]]
+        label = next(l for l in labels if l.startswith(c.code))
+        assert "jami 100 kg" in label
+        assert "to'lash" not in label
