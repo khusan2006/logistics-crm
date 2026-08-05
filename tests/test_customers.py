@@ -80,3 +80,45 @@ def test_sale_form_customer_has_quick_add_hook(db):
     from crm.forms import SaleForm
     html = str(SaleForm())
     assert "data-quick-add-url" in html and "/customers/quick/" in html
+
+
+# --- boshlang'ich avans -----------------------------------------------------
+
+def test_a_new_mijoz_can_be_created_with_the_money_they_already_paid(admin_client, db):
+    """A mijoz who paid up front, before any sotuv was written. The figure becomes an
+    ordinary to'lov sitting on no sotuv — which is what an avans is — so it settles
+    their first sotuv by itself instead of needing a second trip through the form."""
+    from decimal import Decimal
+
+    from crm.models import CustomerPayment, customer_balance_by_currency
+
+    resp = admin_client.post("/customers/new/", {
+        "name": "Avansli", "phone": "", "address": "", "note": "",
+        "opening_avans": "12650000", "opening_avans_currency": "uzs"})
+    assert resp.status_code == 302
+
+    customer = Customer.objects.get(name="Avansli")
+    payment = CustomerPayment.objects.get(customer=customer)
+    assert payment.amount_uzs == Decimal("12650000.00")     # typed side, exact
+    assert payment.currency == "uzs"
+    assert payment.note == "Boshlang'ich avans"
+    # negative = an avans we are holding, in the currency it arrived in
+    assert customer_balance_by_currency(customer) == [("uzs", Decimal("-12650000.00"))]
+
+
+def test_a_new_mijoz_without_an_avans_books_no_tolov(admin_client, db):
+    from crm.models import CustomerPayment
+
+    assert admin_client.post("/customers/new/", {
+        "name": "Avanssiz", "phone": "", "address": "", "note": "",
+        "opening_avans": "", "opening_avans_currency": "usd"}).status_code == 302
+    assert not CustomerPayment.objects.filter(customer__name="Avanssiz").exists()
+
+
+def test_the_avans_box_is_not_offered_when_editing_a_mijoz(admin_client, db):
+    """Editing a mijoz is not the place to book money — the To'lov button beside
+    them is, and it records a date and a usul."""
+    customer = Customer.objects.create(name="Bor Mijoz", phone="", address="")
+    form = admin_client.get(f"/customers/{customer.pk}/edit/").context["form"]
+    assert "opening_avans" not in form.fields
+    assert "opening_avans" in admin_client.get("/customers/new/").context["form"].fields

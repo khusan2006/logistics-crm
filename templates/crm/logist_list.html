@@ -13,17 +13,21 @@ Two current-state figures, the same shape the kassa uses. A logist holds our mon
 between the day we send it and the day a driver takes it, so "how much is out there"
 is the question this page opens with — not how many logistlar there are.
 {% endcomment %}
+{% comment %}
+Dollar only, with no converted so'm line under it. A logist's hisob is kept in
+dollars — every driver advance is booked in dollars — so the so'm figure was this
+same money restated, not a second heap. A top-up sent in so'm converts into the
+float at the kurs recorded on that to'lov, which is what the figure already shows.
+{% endcomment %}
 <div class="ktiles">
   <a class="ktile ktile--in" href="?state=holding">
     <div class="ktile-label">Logistlarda turgan pulimiz</div>
     <div class="ktile-num">{{ held|usd }}</div>
-    <div class="ktile-som">{{ held_uzs|som }}</div>
     <div class="ktile-note">yuborilgan, hali haydovchilarga berilmagan</div>
   </a>
   <a class="ktile ktile--out" href="?state=owed">
     <div class="ktile-label">Logistlarga qarzimiz</div>
     <div class="ktile-num">{{ owed|usd }}</div>
-    <div class="ktile-som">{{ owed_uzs|som }}</div>
     <div class="ktile-note">o'z pulidan haydovchiga bergani</div>
   </a>
 </div>
@@ -62,15 +66,15 @@ is the question this page opens with — not how many logistlar there are.
   <tr>
     <td class="sticky-col"><a href="{% url 'logist_detail' l.pk %}">{{ l.name }}</a></td>
     <td class="muted">{{ l.phone|default:"—" }}</td>
-    <td class="num">{% money_both l.received_total l.received_total_uzs %}</td>
-    <td class="num">{% money_both l.paid_total l.paid_total_uzs %}</td>
+    <td class="num">{{ l.received_total|usd }}</td>
+    <td class="num">{{ l.paid_total|usd }}</td>
     {% comment %}
     Positive = our money still in their pocket; negative = they fronted it and we
     owe them. Both are normal, so both get a colour rather than one being an error.
     {% endcomment %}
     <td class="num">
-      {% if l.balance > 0 %}<span class="badge badge-ok">{% money_both l.balance l.balance_uzs %}</span>
-      {% elif l.balance < 0 %}<span class="badge badge-warning">{% money_both l.balance l.balance_uzs %}</span>
+      {% if l.balance > 0 %}<span class="badge badge-ok">{{ l.balance|usd }}</span>
+      {% elif l.balance < 0 %}<span class="badge badge-warning">{{ l.balance|usd }}</span>
       {% else %}<span class="muted">0</span>{% endif %}
     </td>
     <td class="num muted">{{ l.shipments.count }}</td>

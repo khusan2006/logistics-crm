@@ -256,13 +256,56 @@ class PartnerForm(forms.ModelForm):
 
 
 class CustomerForm(forms.ModelForm):
+    """A mijoz, and optionally the money they have already handed over.
+
+    A new mijoz often arrives having paid something up front — for an order that has
+    not been written yet. Without a box for it the operator has to save the mijoz,
+    find them again and open the to'lov modal; with one the opening avans is part of
+    creating them. It becomes an ordinary CustomerPayment sitting on no sotuv, which
+    is exactly what an avans is, so it settles their first sotuv by itself."""
+
+    opening_avans = forms.DecimalField(
+        label="Oldindan to'lagan puli", required=False, min_value=0, max_digits=14,
+        decimal_places=2,
+        help_text="Ixtiyoriy — mijoz oldindan pul bergan bo'lsa. Avans bo'lib turadi "
+                  "va birinchi sotuvidan yechiladi.",
+        widget=forms.NumberInput(attrs={"placeholder": "0", "data-money": ""}))
+    opening_avans_currency = forms.ChoiceField(
+        label="Avans valyutasi", choices=Currency.choices, initial=Currency.USD,
+        required=False)
+
     class Meta:
         model = Customer
         fields = ["name", "phone", "address", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Only when creating. Editing a mijoz is not the place to book money — the
+        # To'lov button beside them already is, and it records a date and a usul.
+        if self.instance.pk:
+            self.fields.pop("opening_avans")
+            self.fields.pop("opening_avans_currency")
+
     def clean_phone(self):
         return validate_intl_phone(self.cleaned_data.get("phone"))
+
+    def opening_payment(self, customer, user=None):
+        """The avans as a saved CustomerPayment, or None when nothing was typed.
+
+        Naqd, and no kurs asked: an opening avans is money in hand in one currency,
+        and nothing is being converted to know what it is worth. The row still gets a
+        rate for the kassa's other column, inherited like every other one."""
+        amount = self.cleaned_data.get("opening_avans")
+        if not amount:
+            return None
+        currency = self.cleaned_data.get("opening_avans_currency") or Currency.USD
+        rate = latest_exchange_rate()
+        usd, uzs = convert_pair(amount, currency, rate)
+        return CustomerPayment.objects.create(
+            customer=customer, date=timezone.localdate(), amount=usd, amount_uzs=uzs,
+            currency=currency, exchange_rate=rate, method=PayMethod.CASH,
+            note="Boshlang'ich avans", created_by=user)
 
 
 class ContractForm(forms.ModelForm):

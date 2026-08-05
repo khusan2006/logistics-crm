@@ -11,7 +11,6 @@
   <div class="ktile ktile--cash">
     <div class="ktile-label">Qoldiq</div>
     <div class="ktile-num {% if logist.balance < 0 %}late{% elif logist.balance > 0 %}avans{% endif %}">{{ logist.balance|usd }}</div>
-    <div class="ktile-som">{{ logist.balance_uzs|som }}</div>
     <div class="ktile-note">
       {% if logist.balance > 0 %}bizning pulimiz shu odamda turibdi
       {% elif logist.balance < 0 %}o'z pulidan bergan — biz qarzdormiz
@@ -21,13 +20,11 @@
   <div class="ktile ktile--in">
     <div class="ktile-label">Biz yuborganmiz</div>
     <div class="ktile-num">{{ logist.received_total|usd }}</div>
-    <div class="ktile-som">{{ logist.received_total_uzs|som }}</div>
     <div class="ktile-note">kassadan chiqqan pul</div>
   </div>
   <div class="ktile ktile--out">
     <div class="ktile-label">Haydovchilarga bergan</div>
     <div class="ktile-num">{{ logist.paid_total|usd }}</div>
-    <div class="ktile-som">{{ logist.paid_total_uzs|som }}</div>
     <div class="ktile-note">yuklarning tannarxiga kirgan</div>
   </div>
 </div>

@@ -265,10 +265,18 @@ def customer_create(request):
     form = CustomerForm(request.POST or None)
     if request.method == "POST":
         if form.is_valid():
-            customer = form.save()
+            with transaction.atomic():
+                customer = form.save()
+                avans = form.opening_payment(customer, request.user)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Mijoz", customer.pk, f"Yangi mijoz: {customer.name}"
             )
+            if avans:
+                # Booked as its own line: money arriving is the fact an audit reader
+                # looks for, and it did not arrive because a mijoz was named.
+                AuditLog.record(
+                    request.user, AuditLog.Action.PAYMENT, "Mijoz to'lovi", avans.pk,
+                    f"Boshlang'ich avans: {avans.amount}$ · {customer.name}")
             messages.success(request, "Mijoz qo'shildi")
             return form_success(request, reverse("customer_list"))
         return form_response(request, form, "Yangi mijoz", invalid=True)
