@@ -52,7 +52,6 @@ under Tugallangan, where a kelishuv is fully paid by definition.
 </form>
 
 {% if page.object_list %}
-<noscript><style>tr[data-hamkor-rows] { display: table-row !important; }</style></noscript>
 <div class="table-wrap">
 <table>
   <tr>
@@ -68,11 +67,11 @@ under Tugallangan, where a kelishuv is fully paid by definition.
   </tr>
   {% for g in groups %}
   {% comment %}
-  One line per hamkor: who they are, how many kelishuv they hold, what it is all
-  worth and what is still owed on it — then Ko'rish opens their kelishuvlar
-  underneath. Jami and Qolgan to'lov are one badge PER CURRENCY, because a hamkor
-  dealt with in both is owed two separate debts and adding them would need a kurs
-  neither kelishuv was struck at.
+  The head of a hamkor's block: who they are, how many kelishuv they hold, what it
+  is all worth and what is still owed on it — with their kelishuvlar listed under
+  it. Jami and Qolgan to'lov are one figure PER CURRENCY, because a hamkor dealt
+  with in both is owed two separate debts and adding them would need a kurs neither
+  kelishuv was struck at.
   {% endcomment %}
   <tr class="kelishuv-row">
     <td colspan="9">
@@ -91,23 +90,11 @@ under Tugallangan, where a kelishuv is fully paid by definition.
           <span class="badge badge-ok">Qarzsiz</span>
           {% endfor %}
         </span>
-        {% comment %}
-        The rows ship with `hidden` so the block opens closed with no flash of the
-        full list; the <noscript> below puts them back, since a page without JS has
-        no way to open them and a column of names with nothing under it is worse
-        than a long list. A search is served open — you asked for those rows.
-        {% endcomment %}
-        <button type="button" class="btn btn-sm btn-ghost hamkor-toggle"
-                data-hamkor-toggle="{{ g.partner.pk }}"
-                aria-expanded="{% if q %}true{% else %}false{% endif %}">
-          <svg class="hamkor-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-          <span data-hamkor-label>{% if q %}Yopish{% else %}Ko'rish{% endif %}</span>
-        </button>
       </div>
     </td>
   </tr>
   {% for c in g.contracts %}
-  <tr data-hamkor-rows="{{ g.partner.pk }}"{% if not q %} hidden{% endif %}>
+  <tr>
     <td class="sticky-col">
       <a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
     </td>

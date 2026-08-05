@@ -1434,26 +1434,6 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
-  // Kelishuvlar is a list of HAMKOR, each one a line saying how many kelishuv they
-  // hold and what is owed on them; Ko'rish opens that hamkor's kelishuvlar under it.
-  // The rows are served hidden (see the noscript in contract_list.html), so nothing
-  // has to be folded away on load and there is no flash of the full list.
-  (function () {
-    function setOpen(button, open) {
-      button.setAttribute('aria-expanded', open ? 'true' : 'false');
-      var label = button.querySelector('[data-hamkor-label]');
-      if (label) { label.textContent = open ? 'Yopish' : "Ko'rish"; }
-      var rows = document.querySelectorAll(
-        '[data-hamkor-rows="' + button.dataset.hamkorToggle + '"]');
-      Array.prototype.forEach.call(rows, function (row) { row.hidden = !open; });
-    }
-    document.addEventListener('click', function (e) {
-      var button = e.target.closest && e.target.closest('[data-hamkor-toggle]');
-      if (!button) { return; }
-      setOpen(button, button.getAttribute('aria-expanded') !== 'true');
-    });
-  })();
-
   // A kelishuv's mahsulot narx is typed in the currency the header picked, so the
   // box has to say which — and keep saying it while the picker is still moving.
   // ContractLineForm labels it server-side, which is what a reload and a validation

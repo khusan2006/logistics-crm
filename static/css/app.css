@@ -1994,10 +1994,6 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Two currencies in a row are two figures, not one long one — "$288 120" next to
    "2 400 000 so'm" with only a gap between them reads as a single number. */
 .kelishuv-money-val + .kelishuv-money-val::before { content: "·"; color: var(--text-faint); margin-right: 7px; font-weight: 400; }
-/* The opener sits last, after the figures it is offering to explain. */
-.hamkor-toggle { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; }
-.hamkor-chevron { width: 14px; height: 14px; transition: transform 0.15s ease; }
-.hamkor-toggle[aria-expanded="true"] .hamkor-chevron { transform: rotate(180deg); }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;

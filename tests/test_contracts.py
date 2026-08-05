@@ -523,31 +523,17 @@ class TestHamkorGrouping:
         assert len(groups[0]["contracts"]) == 25
         assert resp.context["page"].paginator.count == 1     # one hamkor, one page
 
-    def test_the_block_ships_closed_with_an_opener(self, admin_client, db):
-        """One line per hamkor until asked otherwise: the kelishuv rows are served
-        with `hidden` so the page opens closed and nothing has to be folded away
-        on load."""
+    def test_every_kelishuv_is_drawn_under_its_hamkor(self, admin_client, db):
+        """No opener, no folding: the head summarises the block and the kelishuvlar
+        are simply listed beneath it."""
         partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
-        _contract(partner=partner)
-        _contract(partner=partner)
+        a = _contract(partner=partner, brand="7000 campaund")
+        b = _contract(partner=partner, brand="2102")
 
         html = self._groups(admin_client)[0].content.decode()
-        assert f'data-hamkor-toggle="{partner.pk}"' in html
-        assert 'aria-expanded="false"' in html
-        # Template literal, so it reaches the page unescaped.
-        assert "Ko'rish" in html
-        assert html.count(f'data-hamkor-rows="{partner.pk}" hidden') == 2
-
-    def test_a_search_serves_the_matching_rows_open(self, admin_client, db):
-        """Somebody who searched for a marka asked for those rows — making them
-        press Ko'rish to see what they just searched for is a step for nothing."""
-        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
-        _contract(partner=partner, brand="7000 campaund")
-
-        html = self._groups(admin_client, q="7000")[0].content.decode()
-        assert 'aria-expanded="true"' in html
-        assert "Yopish" in html
-        assert "hidden" not in html.split("data-hamkor-rows")[1][:40]
+        assert "hamkor-toggle" not in html and "Ko'rish" not in html
+        for c in (a, b):
+            assert c.code in html
 
     def test_the_head_totals_the_block_in_both_currencies(self, admin_client, db):
         """Jami answers "how much business is this", Qolgan to'lov "how much is
