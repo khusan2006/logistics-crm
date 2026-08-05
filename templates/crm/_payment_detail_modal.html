@@ -1,0 +1,18 @@
+{% load crm_extras %}
+{% comment %}
+Where one to'lov went. The Kirim ledger says how much of it came off a qarz; this
+says which qarz, one line per sotuv, each read in the currency that sotuv was
+agreed in. Read-only on purpose: the split is derived, so it is changed by editing
+the to'lov and letting it re-spread, not by typing over it here.
+{% endcomment %}
+<div class="modal-head">
+  <h2>{{ title }}</h2>
+  <button type="button" class="modal-x" data-modal-close aria-label="Yopish">&times;</button>
+</div>
+
+{% include "crm/_payment_detail_body.html" %}
+
+<div class="modal-actions">
+  <a class="btn" href="{% url 'customer_payment_edit' payment.pk %}" data-modal>Tahrirlash</a>
+  <button type="button" class="btn btn-ghost" data-modal-close>Yopish</button>
+</div>

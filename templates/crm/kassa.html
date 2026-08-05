@@ -134,12 +134,20 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
     <p class="field-hint" style="margin:2px 0 8px;">Mijozlardan qabul qilingan to'lovlar — eng yangisi yuqorida.</p>
     <div class="table-wrap">
     <table class="ledger-table">
+      {% comment %}
+      Kurs is printed only where it was CHOSEN — a to'lov that settled a sotuv in the
+      other currency. On a same-currency row the stored rate was inherited from the
+      last one anybody typed and decides nothing about this to'lov, so an em dash is
+      the honest cell. The bank's foiz shares the column: both answer "what happened
+      to this figure on the way in", and neither fills a column on its own.
+      {% endcomment %}
       <tr>
         <th>Sana</th>
         <th>Kimdan</th>
-        <th>Usul</th>
-        <th class="num">Kurs / ekvivalent</th>
-        <th class="num">Kirim</th>
+        <th>Kirim turi</th>
+        <th class="num">Foiz / kurs</th>
+        <th class="num">Kirim summa</th>
+        <th class="num">Qarzga ta'sir</th>
         <th></th>
       </tr>
       {% for p in income_page %}
@@ -147,15 +155,25 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
         <td>{{ p.date|date:"d.m.Y" }}</td>
         <td>{{ p.customer.name }}</td>
         <td>{% include "crm/_method_badge.html" with code=p.method label=p.get_method_display %}</td>
-        <td class="num muted">{% money_other p.net_amount p.net_amount_uzs p.currency %} · {{ p.exchange_rate|floatformat:"0g" }}</td>
+        <td class="num muted">{% if p.fee_percent %}{{ p.fee_percent|floatformat:"-2" }}%{% endif %}{% if p.fee_percent and p.crosses_currency %} · {% endif %}{% if p.crosses_currency %}{{ p.exchange_rate|floatformat:"0g" }}{% endif %}{% if not p.fee_percent and not p.crosses_currency %}—{% endif %}</td>
         {# What landed, not what was sent: a perechisleniya foiz never reached the kassa. #}
-        <td class="num amt-in"><strong>+{% money p.net_amount p.net_amount_uzs p.currency %}</strong>
-          {% if p.fee_amount %}<br><small class="muted">{% money p.amount p.amount_uzs p.currency %} − {{ p.fee_percent|floatformat:"-2" }}%</small>{% endif %}</td>
+        <td class="num amt-in"><strong>+{% money p.net_amount p.net_amount_uzs p.currency %}</strong></td>
+        {% comment %}
+        How much of the money actually came off a qarz. A to'lov bigger than what the
+        mijoz owed settles what there was and the rest stays an avans — money we are
+        holding, not money that cleared anything — so the two figures differ and the
+        remainder is named rather than left to be worked out from the difference.
+        {% endcomment %}
+        <td class="num">
+          {% if p.allocated_own %}<strong class="amt-in">+{% money_in p.allocated_own p.currency %}</strong>{% else %}<span class="muted">—</span>{% endif %}
+          {% if p.unspent_own %}<br><small class="avans">avans {% money_in p.unspent_own p.currency %}</small>{% endif %}
+        </td>
         <td class="row-actions">
-          <a class="icon-action" href="{% url 'customer_payment_edit' p.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+          <a class="icon-action act-edit" href="{% url 'customer_payment_edit' p.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+          <a class="icon-action" href="{% url 'customer_payment_detail' p.pk %}" data-modal title="Batafsil"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg></a>
         </td>
       </tr>
-      {% empty %}<tr><td colspan="6" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="7" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
     </table>
     </div>
     {% if income_page.has_other_pages %}
@@ -179,9 +197,9 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
       <tr>
         <th>Sana</th>
         <th>Tavsif</th>
-        <th>Usul</th>
-        <th class="num">Kurs / ekvivalent</th>
-        <th class="num">Chiqim</th>
+        <th>Turi</th>
+        <th class="num">Kurs</th>
+        <th class="num">Chiqim summa</th>
         <th></th>
       </tr>
       {% for t in outflow_page %}
@@ -189,7 +207,8 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
         <td>{{ t.date|date:"d.m.Y" }}</td>
         <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}</td>
         <td>{% include "crm/_method_badge.html" with code=t.method_code label=t.method %}</td>
-        <td class="num muted">{% money_other t.amount t.amount_uzs t.currency %} · {{ t.exchange_rate|floatformat:"0g" }}</td>
+        {# Same rule as Kirim: an inherited kurs decided nothing, so it is not shown. #}
+        <td class="num muted">{% if t.crossed %}{{ t.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</td>
         <td class="num amt-out"><strong>−{% money t.amount t.amount_uzs t.currency %}</strong></td>
         <td class="row-actions">
           {% comment %}

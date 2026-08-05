@@ -1,0 +1,56 @@
+{% load crm_extras %}
+<div class="pay-detail">
+  <dl class="pay-facts">
+    <div><dt>Sana</dt><dd>{{ payment.date|date:"d.m.Y" }}</dd></div>
+    <div><dt>Kirim turi</dt>
+      <dd>{% include "crm/_method_badge.html" with code=payment.method label=payment.get_method_display %}</dd></div>
+    {% comment %}
+    Yuborilgan vs kelgan: a perechisleniya foiz never reached the kassa, so it is
+    named here rather than folded into one figure the operator cannot reconcile
+    against their bank.
+    {% endcomment %}
+    <div><dt>Mijoz yubordi</dt>
+      <dd>{% money payment.amount payment.amount_uzs payment.currency %}</dd></div>
+    {% if payment.fee_amount %}
+    <div><dt>Bank foizi</dt>
+      <dd class="amt-out">−{% money payment.fee_amount payment.fee_amount_uzs payment.currency %}
+        <span class="muted">({{ payment.fee_percent|floatformat:"-2" }}%)</span></dd></div>
+    {% endif %}
+    <div><dt>Kassaga tushdi</dt>
+      <dd class="amt-in"><strong>{% money payment.net_amount payment.net_amount_uzs payment.currency %}</strong></dd></div>
+    {% if payment.crosses_currency %}
+    <div><dt>Kurs</dt><dd>{{ payment.exchange_rate|floatformat:"0g" }}</dd></div>
+    {% endif %}
+    {% if payment.note %}<div><dt>Izoh</dt><dd>{{ payment.note }}</dd></div>{% endif %}
+  </dl>
+
+  <h3 class="pay-sub">Qaysi sotuvlarga tushdi</h3>
+  <div class="table-wrap">
+  <table class="ledger-table">
+    <tr>
+      <th>Sotuv</th>
+      <th>Sana</th>
+      <th>Marka</th>
+      <th class="num">Tushgan summa</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td><a href="{% url 'sale_detail' r.sale.pk %}">#{{ r.sale.pk }}</a></td>
+      <td>{{ r.sale.date|date:"d.m.Y" }}</td>
+      <td>{{ r.sale.line.contract_line.brand }}</td>
+      <td class="num amt-in"><strong>{% money_in r.amount r.currency %}</strong></td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="4" class="muted">Hali birorta sotuvga tushmagan — hammasi avans.</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+
+  <dl class="pay-facts pay-facts--foot">
+    <div><dt>Qarzga ta'sir</dt>
+      <dd class="amt-in"><strong>{% money_in payment.allocated_own payment.currency %}</strong></dd></div>
+    <div><dt>Avans bo'lib qoldi</dt>
+      <dd class="{% if payment.unspent_own %}avans{% else %}muted{% endif %}">
+        {% money_in payment.unspent_own payment.currency %}</dd></div>
+  </dl>
+</div>

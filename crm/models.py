@@ -783,6 +783,13 @@ class SupplierPayment(CashEntry):
     def total_out_uzs(self):
         return self.amount_uzs + self.commission_amount_uzs + self.fee_amount_uzs
 
+    @property
+    def crosses_currency(self):
+        """True when the money is not the money the kelishuv was struck in — the one
+        case `SupplierPaymentForm` asks for a kurs at all. Paying a so'm kelishuv in
+        so'm settles it at face value and converts nothing."""
+        return self.currency != self.contract.currency
+
     def __str__(self):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
 
@@ -832,6 +839,12 @@ class LogistPayment(CashEntry):
     @property
     def total_out_uzs(self):
         return self.amount_uzs + self.in_som(self.fee_amount)
+
+    @property
+    def crosses_currency(self):
+        """A logist's hisob is kept in dollars whatever they hand a driver, so a
+        so'm top-up is the crossing and the kurs on it was really chosen."""
+        return self.currency != Currency.USD
 
     def __str__(self):
         return f"{self.logist_id} · {self.amount}$ ({self.date})"
@@ -1837,6 +1850,43 @@ class CustomerPayment(CashEntry):
         to'lov has to be spent down to zero in."""
         return own_side(self, self.net_amount, self.net_amount_uzs)
 
+    @property
+    def allocated_pair(self):
+        """(usd, uzs) of this to'lov that is sitting on sotuvlar rather than waiting
+        as an avans. Read as the parent minus its unspent remainder so both sides
+        stay exact — the rule every derived pair here follows."""
+        unspent, unspent_uzs = unspent_payment_pair(self)
+        return self.net_amount - unspent, self.net_amount_uzs - unspent_uzs
+
+    @property
+    def allocated_own(self):
+        """How much of this to'lov actually came off a qarz, in the currency it
+        arrived in — what the Kirim ledger calls Qarzga ta'sir.
+
+        Not the same question as how much money arrived: a to'lov bigger than the
+        mijoz's qarz settles what there is and the rest stays an avans, money we are
+        holding rather than money that cleared anything."""
+        return own_side(self, *self.allocated_pair)
+
+    @property
+    def unspent_own(self):
+        """The other half of `allocated_own` — what is still an avans, in the money
+        it arrived in. Named on the row rather than left as a subtraction the reader
+        has to do, because "500 000 came in, 340 000 cleared a qarz" leaves the
+        obvious next question unanswered."""
+        return unspent_payment_amount(self)
+
+    @property
+    def crosses_currency(self):
+        """True when this to'lov paid down a sotuv agreed in the OTHER currency.
+
+        That is the only case where the kurs on this row was chosen by the operator
+        rather than inherited from the last one anybody typed (see
+        `latest_exchange_rate`), so it is the only case where printing it beside the
+        row tells the reader something they did not already know."""
+        return any(alloc.sale.currency != self.currency
+                   for alloc in self.allocations.all())
+
     def __str__(self):
         return f"{self.customer_id} · {self.amount}$ ({self.date})"
 
@@ -2169,6 +2219,13 @@ class ShipmentExpense(CashEntry):
         if not self.from_kassa:
             return Decimal("0")
         return self.amount_uzs + self.in_som(self.fee_amount)
+
+    @property
+    def crosses_currency(self):
+        """True when the xarajat is not in the kelishuv's money. The kurs then does
+        real work — it is what folds a so'm transport bill into the landed cost of a
+        kg bought in dollars — so it is worth printing beside the row."""
+        return self.currency != self.shipment.contract.currency
 
     def __str__(self):
         return f"{self.get_category_display()}: {self.amount}$ (yuk #{self.shipment_id})"

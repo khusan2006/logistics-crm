@@ -848,6 +848,36 @@ def customer_payment_edit(request, pk):
 
 
 @role_required(User.Role.ADMIN)
+def customer_payment_detail(request, pk):
+    """Where one to'lov actually went — the sotuvlar it paid down and what is left.
+
+    The Kirim ledger's Qarzga ta'sir column says HOW MUCH of a to'lov came off a
+    qarz; this says which qarz. It exists because that column raises the question
+    the moment the two figures differ, and the answer used to be reachable only by
+    opening the mijoz and reading their sotuvlar back against the to'lovlar.
+
+    Read-only, and deliberately not a form: the allocation is derived (FIFO, or the
+    picks made when the to'lov was entered), so the way to change it is to edit the
+    to'lov and let it re-spread."""
+    payment = get_object_or_404(
+        CustomerPayment.objects.select_related("customer")
+        .prefetch_related("allocations__sale__line__contract_line"), pk=pk)
+    # Each slice read in the SOTUV's currency, not the to'lov's: the row is answering
+    # what the qarz it cleared was measured in, and a so'm sotuv is owed in so'm
+    # however the money that settled it arrived.
+    rows = [{"sale": alloc.sale,
+             "amount": alloc.in_currency(alloc.sale.currency),
+             "currency": alloc.sale.currency}
+            for alloc in payment.allocations.all()]
+    rows.sort(key=lambda r: r["sale"].date)
+    context = {"payment": payment, "rows": rows,
+               "title": f"To'lov · {payment.customer.name}"}
+    template = ("crm/_payment_detail_modal.html" if is_ajax(request)
+                else "crm/payment_detail.html")
+    return render(request, template, context)
+
+
+@role_required(User.Role.ADMIN)
 def customer_payment_delete(request, pk):
     payment = get_object_or_404(CustomerPayment, pk=pk)
     if request.method == "POST":
@@ -2162,7 +2192,11 @@ def kassa(request):
             "note": "o'z pulidan haydovchiga bergani",
             "url": reverse("logist_list") + "?state=owed"})
 
-    cust_pays = _range(CustomerPayment.objects.select_related("customer"))
+    # The Kirim ledger asks each row what it settled and whether its kurs was chosen,
+    # and both answers are read off the allocations — without the prefetch that is a
+    # query per to'lov, then one per slice, for every row on the page.
+    cust_pays = _range(CustomerPayment.objects.select_related("customer")
+                       .prefetch_related("allocations__sale"))
     sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
     expenses = _range(ShipmentExpense.objects.select_related("shipment__contract", "logist"))
     logist_pays = _range(LogistPayment.objects.select_related("logist"))
@@ -2195,6 +2229,7 @@ def kassa(request):
     for p in sup_pays:
         outflow_rows.append({
             "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
             # The hamkor is already inside the code, so the brand is the useful half here
             "title": f"Kelishuv {p.contract.code} · {p.contract.brand_summary}",
             "method_code": p.method, "method": p.get_method_display(),
@@ -2206,6 +2241,7 @@ def kassa(request):
             continue
         outflow_rows.append({
             "kind": "commission", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
             "title": (f"Vositachi ({p.commission_percent}%) · "
                       f"kelishuv {p.contract.code}"),
             "method_code": p.method, "method": p.get_method_display(),
@@ -2220,6 +2256,7 @@ def kassa(request):
             continue
         outflow_rows.append({
             "kind": "fee_supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
             "title": f"Perechisleniya foizi ({p.fee_percent}%) · kelishuv {p.contract.code}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
@@ -2228,6 +2265,7 @@ def kassa(request):
     for p in logist_pays:
         outflow_rows.append({
             "kind": "logist", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
             "title": f"Logist {p.logist.name}ga" + (f" · {p.note}" if p.note else ""),
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
@@ -2238,6 +2276,7 @@ def kassa(request):
             continue
         outflow_rows.append({
             "kind": "fee_logist", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
             "title": f"Perechisleniya foizi ({p.fee_percent}%) · logist {p.logist.name}",
             "method_code": p.method, "method": p.get_method_display(),
             "currency": p.currency, "exchange_rate": p.exchange_rate,
@@ -2251,6 +2290,7 @@ def kassa(request):
             continue
         outflow_rows.append({
             "kind": "expense", "pk": e.pk, "date": e.date, "obj": e,
+            "crossed": e.crosses_currency,
             "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
             "method_code": e.method, "method": e.get_method_display(),
             "currency": e.currency, "exchange_rate": e.exchange_rate,
@@ -2261,6 +2301,7 @@ def kassa(request):
             continue
         outflow_rows.append({
             "kind": "fee_expense", "pk": e.pk, "date": e.date, "obj": e,
+            "crossed": e.crosses_currency,
             "title": f"Perechisleniya foizi ({e.fee_percent}%) · yuk #{e.shipment_id}",
             "method_code": e.method, "method": e.get_method_display(),
             "currency": e.currency, "exchange_rate": e.exchange_rate,

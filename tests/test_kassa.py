@@ -497,3 +497,113 @@ class TestWaterfall:
             assert re.fullmatch(r"left: \d+(\.\d+)?%; width: \d+(\.\d+)?%;", style), style
         zero = re.search(r'--zero: ([^;]+);', html).group(1)
         assert "," not in zero, zero
+
+
+class TestLedgerColumns:
+    """Kirim and Chiqim answer, per row, what happened to the money on the way
+    through: what was taken off it, what it settled, and what is still ours to
+    hand back."""
+
+    def _sale(self, customer, lot, kg="100", price="1.00", **kwargs):
+        from crm.models import Sale
+        return Sale.objects.create(customer=customer, line=lot, kg=Decimal(kg),
+                                   price=Decimal(price), date="2026-07-17", **kwargs)
+
+    def test_kurs_is_shown_only_where_it_was_chosen(self, admin_client, db):
+        """Rule 4 on screen. A to'lov in the sotuv's own currency needs no kurs —
+        the one stored on it was inherited from whatever anybody typed last, so
+        printing it would dress an irrelevant number up as a fact about this row."""
+        from crm.models import allocate_customer_payment
+        contract = _contract()
+        lot = _arrived_shipment(contract).lines.first()
+        customer = _customer()
+        self._sale(customer, lot)                       # a $100 sotuv
+        same = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("100"),
+            amount_uzs=Decimal("1200000"), exchange_rate=Decimal("12000"),
+            currency=Currency.USD, method="cash")
+        allocate_customer_payment(same)
+        assert same.crosses_currency is False
+
+        crossing = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-21", amount=Decimal("100"),
+            amount_uzs=Decimal("1250000"), exchange_rate=Decimal("12500"),
+            currency=Currency.UZS, method="cash")
+        self._sale(customer, lot, price="2.00")         # another dollar sotuv
+        allocate_customer_payment(crossing)
+        assert crossing.crosses_currency is True
+
+        html = admin_client.get("/kassa/").content.decode()
+        assert "Foiz / kurs" in html and "Qarzga ta'sir" in html
+        assert "12 500" in html.replace(" ", " ")   # the crossing row's kurs
+
+    def test_qarzga_tasir_names_what_settled_and_what_stayed_avans(self, admin_client, db):
+        """A to'lov bigger than the qarz clears what there is; the rest is money we
+        are HOLDING. One figure cannot say both, so the row says both."""
+        from crm.models import allocate_customer_payment
+        contract = _contract()
+        lot = _arrived_shipment(contract).lines.first()
+        customer = _customer()
+        self._sale(customer, lot, kg="100", price="1.00")        # owes $100
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("250"),
+            amount_uzs=Decimal("3000000"), exchange_rate=Decimal("12000"),
+            currency=Currency.USD, method="cash")
+        allocate_customer_payment(payment)
+
+        assert payment.allocated_own == Decimal("100.00")
+        assert payment.unspent_own == Decimal("150.00")
+        assert payment.net_amount_own == Decimal("250.00")
+        html = admin_client.get("/kassa/").content.decode()
+        assert "avans" in html
+
+    def test_a_foiz_is_taken_off_before_anything_is_settled(self, admin_client, db):
+        """The bank's cut never reached us, so it cannot pay down a qarz either."""
+        from crm.models import allocate_customer_payment
+        contract = _contract()
+        lot = _arrived_shipment(contract).lines.first()
+        customer = _customer()
+        self._sale(customer, lot, kg="1000", price="1.00")       # owes $1 000
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("500"),
+            amount_uzs=Decimal("6000000"), exchange_rate=Decimal("12000"),
+            currency=Currency.USD, method="transfer", fee_percent=Decimal("2"))
+        allocate_customer_payment(payment)
+
+        assert payment.net_amount == Decimal("490.00")           # 500 − 2%
+        assert payment.allocated_own == Decimal("490.00")
+        assert payment.unspent_own == Decimal("0")
+
+
+class TestPaymentDetail:
+    def test_it_lists_the_sotuvlar_the_tolov_paid_down(self, admin_client, db):
+        from crm.models import Sale, allocate_customer_payment
+        contract = _contract()
+        lot = _arrived_shipment(contract).lines.first()
+        customer = _customer()
+        Sale.objects.create(customer=customer, line=lot, kg=Decimal("100"),
+                            price=Decimal("1.00"), date="2026-07-17")
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("250"),
+            amount_uzs=Decimal("3000000"), exchange_rate=Decimal("12000"),
+            currency=Currency.USD, method="cash")
+        allocate_customer_payment(payment)
+
+        resp = admin_client.get(f"/customer-payments/{payment.pk}/",
+                                HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        assert "Qaysi sotuvlarga tushdi" in html
+        assert "LLDPE" in html                       # the marka it was sold as
+        assert "Qarzga ta&#x27;sir" in html or "Qarzga ta'sir" in html
+
+    def test_it_still_renders_as_a_full_page_without_ajax(self, admin_client, db):
+        customer = _customer()
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("100"),
+            amount_uzs=Decimal("1200000"), method="cash")
+        resp = admin_client.get(f"/customer-payments/{payment.pk}/")
+        assert resp.status_code == 200
+        html = resp.content.decode()
+        # Nothing on it yet, so the table says so rather than showing an empty grid.
+        assert "hammasi avans" in html

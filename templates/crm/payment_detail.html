@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% comment %}
+The non-AJAX fallback for the Kirim ledger's batafsil action — reached by opening
+the link in a new tab, or with JS off. Same body as the modal; only the chrome
+around it differs.
+{% endcomment %}
+{% block title %}{{ title }} · GranulaLog{% endblock %}
+{% block topbar_title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 720px;">
+  {% include "crm/_payment_detail_body.html" %}
+  <div class="modal-actions">
+    <a class="btn" href="{% url 'customer_payment_edit' payment.pk %}">Tahrirlash</a>
+    <a class="btn btn-ghost" href="{% url 'kassa' %}">Kassaga qaytish</a>
+  </div>
+</div>
+{% endblock %}

@@ -72,6 +72,7 @@ urlpatterns = [
     path("returns/<int:pk>/delete/", crm_views.return_delete, name="return_delete"),
     path("customer-payments/", crm_views.customer_payment_list, name="customer_payment_list"),
     path("customer-payments/new/", crm_views.customer_payment_create, name="customer_payment_create"),
+    path("customer-payments/<int:pk>/", crm_views.customer_payment_detail, name="customer_payment_detail"),
     path("customer-payments/<int:pk>/edit/", crm_views.customer_payment_edit, name="customer_payment_edit"),
     path("customer-payments/<int:pk>/delete/", crm_views.customer_payment_delete, name="customer_payment_delete"),
     path("debts/", crm_views.debt_list, name="debt_list"),

@@ -456,6 +456,18 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 /* A second currency on a split tile is a peer, not a footnote: same size, but
    tucked up under the first so the pair still reads as one tile's answer. */
 .ktile-num + .ktile-num { margin-top: 2px; }
+
+/* ── To'lov tafsiloti ───────────────────────────────────────────────────────
+   Facts as a two-column list rather than a table: they are one row's fields,
+   not a set of rows, and a label beside its value reads faster than a header
+   above it. The foot pair repeats the shape so the answer lands where the eye
+   already is. */
+.pay-facts { margin: 0 0 14px; display: grid; gap: 7px; }
+.pay-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.pay-facts dt { font-size: 12px; color: var(--text-muted); }
+.pay-facts dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+.pay-facts--foot { margin: 14px 0 0; padding-top: 11px; border-top: 1px solid var(--border); }
+.pay-sub { margin: 0 0 7px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 700; }
 .ktile-som { margin-top: 2px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .ktile-note { margin-top: 10px; font-size: 12.5px; color: var(--text-muted); line-height: 1.45; }
 .ktile-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); font-weight: 650; }
