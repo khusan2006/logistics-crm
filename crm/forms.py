@@ -8,7 +8,7 @@ from django.utils import timezone
 from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment, Logist,
     LogistPayment, Partner,
-    PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
+    FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate,
@@ -81,7 +81,32 @@ class FeePercentFormMixin:
 
     A foiz outside 0–100 is a typo, and it does not fail loudly on its own: the
     arithmetic happily accepts 200%, which turns an incoming to'lov into a negative
-    one and bills the kassa twice over on the way out."""
+    one and bills the kassa twice over on the way out.
+
+    The foiz also has to say WHOSE it is. The bank takes its cut either way, but
+    whether we carry it — crediting the other side the whole figure and coming up
+    short ourselves — or they do is a decision per to'lov, so the form asks. Left
+    alone it stays blank, which each model reads as the way that kind of row has
+    always behaved (CashEntry.fee_on_company)."""
+
+    #: What the "other side" is called on this form, for the radio label.
+    fee_counterparty = "Qarshi tomondan ushlansin"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields.get("fee_bearer")
+        if field is None:
+            return
+        field.required = False
+        field.widget = forms.RadioSelect(attrs={"data-fee-bearer": ""})
+        field.choices = [(FeeBearer.COMPANY, "Kompaniyadan ushlansin"),
+                         (FeeBearer.COUNTERPARTY, self.fee_counterparty)]
+        # A blank row keeps its historical meaning, so the box opens on whichever
+        # option that is rather than on an empty pair of radios.
+        instance = getattr(self, "instance", None)
+        default = getattr(instance, "default_fee_bearer", FeeBearer.COMPANY)
+        if not self.initial.get("fee_bearer") and not getattr(instance, "fee_bearer", ""):
+            self.initial["fee_bearer"] = default
 
     def clean_fee_percent(self):
         percent = self.cleaned_data.get("fee_percent")
@@ -870,7 +895,7 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
     class Meta:
         model = SupplierPayment
         fields = ["contract", "date", "currency", "amount", "exchange_rate",
-                  "commission_percent", "method", "fee_percent", "note"]
+                  "commission_percent", "method", "fee_percent", "fee_bearer", "note"]
         widgets = {
             "date": date_widget(),
             "contract": ContractChoiceSelect(attrs={"data-contract-currency": ""}),
@@ -879,6 +904,8 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
                 "placeholder": "0"}),
         }
         labels = {"amount": "Hamkor oladigan summa"}
+
+    fee_counterparty = "Hamkordan ushlansin"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1202,10 +1229,12 @@ class CustomerPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
     """One to'lov, edited on its own. The create screen uses the target + rows pair
     below instead — a single settlement often arrives in two currencies."""
 
+    fee_counterparty = "Mijozdan ushlansin"
+
     class Meta:
         model = CustomerPayment
         fields = ["customer", "date", "currency", "amount", "exchange_rate",
-                  "method", "fee_percent", "note"]
+                  "method", "fee_percent", "fee_bearer", "note"]
         widgets = {"date": date_widget()}
 
     def __init__(self, *args, **kwargs):
@@ -1234,14 +1263,18 @@ class CustomerPaymentRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Mod
     """One slice of a settlement: a sum, the currency it came in, and how it moved.
     Same shape as a xarajat row — see .lineset--payment in the stylesheet."""
 
+    fee_counterparty = "Mijozdan ushlansin"
+
     # A to'lov row carries one select fewer than a xarajat (no turkum), so the foiz
     # joins Valyuta and To'lov usuli on the second line rather than being stranded.
-    field_order = ["amount", "currency", "method", "fee_percent", "exchange_rate", "note"]
+    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
+                   "exchange_rate", "note"]
 
     class Meta:
         model = CustomerPayment
         # No mijoz, no sana: they are shared, so the modal asks once in the header.
-        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent", "note"]
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
+                  "fee_bearer", "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
 
     def __init__(self, *args, **kwargs):
@@ -1645,11 +1678,12 @@ class LogistPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelFor
 
     #: The currency the logist's balance is kept in — see the class docstring.
     float_currency = Currency.USD
+    fee_counterparty = "Logistdan ushlansin"
 
     class Meta:
         model = LogistPayment
         fields = ["logist", "date", "currency", "amount", "exchange_rate",
-                  "method", "fee_percent", "note"]
+                  "method", "fee_percent", "fee_bearer", "note"]
         widgets = {"date": date_widget()}
         labels = {"amount": "Yuboriladigan summa"}
 

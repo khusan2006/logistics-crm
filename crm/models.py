@@ -125,6 +125,18 @@ class MoneyEntry(models.Model):
             Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+class FeeBearer(models.TextChoices):
+    """Who is out of pocket for the bank's cut on a perechisleniya.
+
+    The bank takes its foiz either way — that is not a choice. What IS a choice is
+    whose side of the ledger absorbs it: if we do, the other party is credited the
+    whole figure and we are short by the fee; if they do, they are credited what
+    actually reached them and the rest is still owed."""
+
+    COMPANY = "company", "Kompaniyadan ushlansin"
+    COUNTERPARTY = "counterparty", "Qarshi tomondan ushlansin"
+
+
 class CashEntry(MoneyEntry):
     """Abstract: a row where money physically enters or leaves the kassa, so it can
     carry a bank foiz. Subclasses supply their own `amount` and `method` — the two
@@ -134,9 +146,25 @@ class CashEntry(MoneyEntry):
     fee_percent = models.DecimalField(
         "Perechisleniya foizi (%)", max_digits=5, decimal_places=2, default=0, blank=True,
         help_text="Faqat perechisleniya uchun; naqd va kartada e'tiborga olinmaydi")
+    # Blank means "as this kind of row has always behaved" — see `fee_on_company`.
+    # Stored blank rather than back-filled so no existing row is restated: a to'lov
+    # booked before the question was asked is left saying nothing about it.
+    fee_bearer = models.CharField(
+        "Komissiyani kim ko'taradi", max_length=12, choices=FeeBearer.choices,
+        blank=True, default="")
+
+    #: What a blank `fee_bearer` means for this model. Money coming IN has always
+    #: been the sender's loss — 1000 sent at 2% paid off 980 — while money going OUT
+    #: has always ridden on top, so the other side received the full figure.
+    default_fee_bearer = FeeBearer.COMPANY
 
     class Meta:
         abstract = True
+
+    @property
+    def fee_on_company(self):
+        """True when WE are the ones short by the bank's cut."""
+        return (self.fee_bearer or self.default_fee_bearer) == FeeBearer.COMPANY
 
     @property
     def fee_amount(self):
@@ -334,13 +362,13 @@ class Customer(models.Model):
         only fell by 980, and the two screens would disagree by the fee."""
         if not hasattr(self, "customer_payments"):  # relation lands in a later Phase-2 task
             return Decimal("0")
-        return sum((p.net_amount for p in self.customer_payments.all()), Decimal("0"))
+        return sum((p.settled_amount for p in self.customer_payments.all()), Decimal("0"))
 
     @property
     def paid_total_uzs(self):
         if not hasattr(self, "customer_payments"):
             return Decimal("0")
-        return sum((p.net_amount_uzs for p in self.customer_payments.all()), Decimal("0"))
+        return sum((p.settled_amount_uzs for p in self.customer_payments.all()), Decimal("0"))
 
     @property
     def balance(self):
@@ -494,13 +522,14 @@ class Contract(models.Model):
         coming out of it. Their qarz falls by what they receive."""
         if not hasattr(self, "supplier_payments"):  # relation lands in Task 5
             return Decimal("0")
-        return sum((p.amount for p in self.supplier_payments.all()), Decimal("0"))
+        return sum((p.credited_amount for p in self.supplier_payments.all()), Decimal("0"))
 
     @property
     def paid_total_uzs(self):
         if not hasattr(self, "supplier_payments"):
             return Decimal("0")
-        return sum((p.amount_uzs for p in self.supplier_payments.all()), Decimal("0"))
+        return sum((p.credited_amount_uzs for p in self.supplier_payments.all()),
+                   Decimal("0"))
 
     @property
     def shipped_value_uzs(self):
@@ -765,11 +794,27 @@ class SupplierPayment(CashEntry):
         return (self.amount * self.commission_percent / 100).quantize(Decimal("0.01"))
 
     @property
+    def credited_amount(self):
+        """What the hamkor is credited — the figure their qarz falls by.
+
+        The vositachi cut always rides on top, so it never shortens what they get.
+        The bank foiz is the choice: we can carry it, and they are credited the whole
+        `amount`, or they can, and they are credited what actually reached them."""
+        return self.amount if self.fee_on_company else self.amount - self.fee_amount
+
+    @property
+    def credited_amount_uzs(self):
+        return (self.amount_uzs if self.fee_on_company
+                else self.amount_uzs - self.fee_amount_uzs)
+
+    @property
     def total_out(self):
-        """What actually leaves the kassa: the hamkor's money, the middleman's cut
-        and the bank's foiz. Every charge here rides ON TOP — the hamkor is credited
-        the full `amount` either way, so a fee never shortens their qarz."""
-        return self.amount + self.commission_amount + self.fee_amount
+        """What actually leaves the kassa: the hamkor's money and the middleman's
+        cut, plus the bank's foiz when WE are the ones carrying it. Carried by the
+        hamkor instead, the bank takes its cut out of the same `amount` we sent, so
+        the kassa is out that figure and no more."""
+        fee = self.fee_amount if self.fee_on_company else Decimal("0")
+        return self.amount + self.commission_amount + fee
 
     @property
     def commission_amount_uzs(self):
@@ -781,7 +826,8 @@ class SupplierPayment(CashEntry):
 
     @property
     def total_out_uzs(self):
-        return self.amount_uzs + self.commission_amount_uzs + self.fee_amount_uzs
+        fee = self.fee_amount_uzs if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + self.commission_amount_uzs + fee
 
     @property
     def crosses_currency(self):
@@ -823,9 +869,17 @@ class LogistPayment(CashEntry):
 
     @property
     def net_amount(self):
-        """What actually reached the logist, after any bank foiz — that is what
-        becomes theirs to spend, so that is what their balance grows by."""
-        return self.amount - self.fee_amount
+        """What actually reached the logist — what becomes theirs to spend, so what
+        their balance grows by.
+
+        The whole `amount` when we carry the bank's cut, which is how a top-up has
+        always been sent. Carried by the logist instead, the cut comes out of the
+        same money, so they are funded by that much less.
+
+        (Before the bearer was a choice this read `amount - fee` while `total_out`
+        read `amount + fee`, which charged the fee twice — once to us and once to
+        them. The two now come off the same decision.)"""
+        return self.amount if self.fee_on_company else self.amount - self.fee_amount
 
     @property
     def net_amount_uzs(self):
@@ -833,12 +887,14 @@ class LogistPayment(CashEntry):
 
     @property
     def total_out(self):
-        """What the kassa loses: the logist's money plus the bank's cut on top."""
-        return self.amount + self.fee_amount
+        """What the kassa loses: the logist's money, plus the bank's cut when we are
+        the ones carrying it."""
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
 
     @property
     def total_out_uzs(self):
-        return self.amount_uzs + self.in_som(self.fee_amount)
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
 
     @property
     def crosses_currency(self):
@@ -1933,11 +1989,15 @@ class CustomerPayment(CashEntry):
         verbose_name = "Mijoz to'lovi"
         verbose_name_plural = "Mijoz to'lovlari"
 
+    #: Money coming IN has always been the sender's loss: 1000 sent by
+    #: perechisleniya at 2% paid off 980 of their qarz.
+    default_fee_bearer = FeeBearer.COUNTERPARTY
+
     @property
     def net_amount(self):
-        """What actually reached us, after the bank's foiz. This — not `amount` — is
-        the payment's worth: the kassa gains it and the mijoz's qarz falls by it.
-        Sending more so the fee "cancels out" is the mijoz's own business."""
+        """What actually reached us, after the bank's foiz — the figure the kassa
+        gains. Always `amount` less the cut, because that is physics rather than a
+        choice; who is out of pocket for it is `settled_amount`."""
         return self.amount - self.fee_amount
 
     @property
@@ -1951,9 +2011,28 @@ class CustomerPayment(CashEntry):
 
     @property
     def net_amount_own(self):
-        """What reached us, in the currency it actually arrived in — the figure this
-        to'lov has to be spent down to zero in."""
+        """What reached us, in the currency it actually arrived in."""
         return own_side(self, self.net_amount, self.net_amount_uzs)
+
+    @property
+    def settled_amount(self):
+        """What the mijoz is CREDITED — the figure their qarz falls by, and the pool
+        an allocation is drawn from.
+
+        Apart from `net_amount` only when we carry the bank's cut: then they are
+        credited everything they sent and we are short the fee, which the kassa
+        already shows because only the net arrived."""
+        return self.amount if self.fee_on_company else self.net_amount
+
+    @property
+    def settled_amount_uzs(self):
+        return self.amount_uzs if self.fee_on_company else self.net_amount_uzs
+
+    @property
+    def settled_amount_own(self):
+        """The credited figure in the currency it arrived in — what this to'lov has
+        to be spent down to zero in."""
+        return own_side(self, self.settled_amount, self.settled_amount_uzs)
 
     @property
     def allocated_pair(self):
@@ -2064,7 +2143,8 @@ def unspent_payment_pair(payment):
     for alloc in payment.allocations.all():
         allocated += alloc.amount
         allocated_uzs += alloc.amount_uzs
-    return payment.net_amount - allocated, payment.net_amount_uzs - allocated_uzs
+    return (payment.settled_amount - allocated,
+            payment.settled_amount_uzs - allocated_uzs)
 
 
 def allocation_pair(payment, spent_own):
@@ -2075,12 +2155,12 @@ def allocation_pair(payment, spent_own):
     one to'lov then add up to exactly that to'lov on both sides, so a to'lov spent in
     full leaves nothing behind and a sotuv covered in full lands on zero. Converting
     each slice separately leaves a tiyin adrift on one side or the other."""
-    total_own = payment.net_amount_own
+    total_own = payment.settled_amount_own
     if not total_own:
         return Decimal("0"), Decimal("0")
     share = Decimal(spent_own) / total_own
-    return ((payment.net_amount * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-            (payment.net_amount_uzs * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return ((payment.settled_amount * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            (payment.settled_amount_uzs * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _place(payment, sale, take_own):
@@ -2317,13 +2397,14 @@ class ShipmentExpense(CashEntry):
         does not change what the granula cost."""
         if not self.from_kassa:
             return Decimal("0")
-        return self.amount + self.fee_amount
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
 
     @property
     def total_out_uzs(self):
         if not self.from_kassa:
             return Decimal("0")
-        return self.amount_uzs + self.in_som(self.fee_amount)
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
 
     @property
     def crosses_currency(self):

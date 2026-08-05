@@ -1415,6 +1415,22 @@
       var isTransfer = methodEl.value === 'transfer';
       box.hidden = !isTransfer;
       if (!isTransfer) { feeEl.value = '0'; }
+      // Whose the foiz is only means anything when there is one. The radios ride
+      // with the box rather than being cleared: a naqd row has no cut to carry, so
+      // the answer is moot, and blanking it would throw away the operator's pick if
+      // they switch usul back.
+      //
+      // A RadioSelect renders as a <div> of its own carrying the field's auto id,
+      // with the caption stranded in the <p> before it — so both have to move, and
+      // the id is what ties one radio back to the group it belongs to.
+      var bearerEl = root.querySelector('[data-fee-bearer]');
+      if (bearerEl) {
+        var group = document.getElementById(bearerEl.id.replace(/_\d+$/, ''))
+                 || bearerEl.closest('.lineset-field') || bearerEl;
+        group.hidden = !isTransfer;
+        var caption = group.previousElementSibling;
+        if (caption && caption.querySelector('label')) { caption.hidden = !isTransfer; }
+      }
     }
     function enhance(root) {
       // Once per usul control. Run per radio, this called update() three times and

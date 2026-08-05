@@ -352,14 +352,26 @@ def test_a_som_gap_survives_when_the_dollar_balance_happens_to_be_square(
 # ── the bank foiz on a top-up ────────────────────────────────────────────────────
 
 
-def test_a_bank_foiz_never_becomes_the_logists_money(admin_client, db):
+def test_a_bank_foiz_is_charged_to_exactly_one_side(admin_client, db):
+    """The cut comes off ONE decision, not both ends of it.
+
+    Carried by us (the default, and how every existing top-up was booked), the
+    logist is funded the whole 1 000 and the kassa is out 1 020. Carried by the
+    logist, 1 000 leaves the kassa and 980 of it reaches them. It used to do both at
+    once — funded 980 while costing 1 020 — which billed the same 20 twice."""
     logist = _logist()
-    payment = _send(admin_client, logist, amount="1000", method="transfer",
-                    fee_percent="2", exchange_rate="12000")
-    assert payment.fee_amount == Decimal("20.00")
-    assert logist.received_total == Decimal("980.00")      # what reached them
-    assert logist.received_total_uzs == Decimal("11760000.00")
-    assert payment.total_out == Decimal("1020.00")         # what the kassa lost
+    ours = _send(admin_client, logist, amount="1000", method="transfer",
+                 fee_percent="2", exchange_rate="12000")
+    assert ours.fee_amount == Decimal("20.00")
+    assert ours.net_amount == Decimal("1000.00")           # funded in full
+    assert ours.total_out == Decimal("1020.00")            # what the kassa lost
+    assert logist.received_total == Decimal("1000.00")
+
+    theirs = _send(admin_client, logist, amount="1000", method="transfer",
+                   fee_percent="2", exchange_rate="12000",
+                   fee_bearer="counterparty", date="2026-07-11")
+    assert theirs.net_amount == Decimal("980.00")          # what reached them
+    assert theirs.total_out == Decimal("1000.00")          # what the kassa lost
 
 
 def test_the_kassa_loses_the_top_up_and_the_foiz_and_nothing_else(admin_client, db):

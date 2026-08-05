@@ -61,12 +61,21 @@ class TestBalance:
         _advance(shipment, logist, "3200")
         assert logist.balance == Decimal("-1200.00")
 
-    def test_only_what_reached_them_counts_as_theirs(self, db):
-        """A bank foiz never arrived, so it never became theirs to spend."""
+    def test_a_foiz_we_carry_still_funds_them_in_full(self, db):
+        """By default the bank's cut is ours: the logist is funded the whole figure
+        and the kassa is out that plus the cut. Only when the cut is charged to THEM
+        does less than the figure become theirs to spend."""
         logist = _logist()
-        _send(logist, "1000", method="transfer", fee_percent=Decimal("2"))
+        payment = _send(logist, "1000", method="transfer", fee_percent=Decimal("2"))
+        assert logist.received_total == Decimal("1000.00")
+        assert logist.balance == Decimal("1000.00")
+        assert payment.total_out == Decimal("1020.00")
+
+        payment.fee_bearer = "counterparty"
+        payment.save(update_fields=["fee_bearer"])
+        logist = Logist.objects.get(pk=logist.pk)
         assert logist.received_total == Decimal("980.00")
-        assert logist.balance == Decimal("980.00")
+        assert payment.total_out == Decimal("1000.00")
 
     def test_positions_keep_the_two_directions_apart(self, db):
         holder, ower = _logist("Pulimiz turgan"), _logist("Qarzdormiz")
