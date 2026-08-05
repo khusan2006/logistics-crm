@@ -65,35 +65,13 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     <th title="Kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th></th>
   </tr>
-  {% for g in groups %}
   {% comment %}
-  The head of a hamkor's block: who they are, how many kelishuv they hold, what it
-  is all worth and what is still owed on it — with their kelishuvlar listed under
-  it. Jami and Qolgan to'lov are one figure PER CURRENCY, because a hamkor dealt
-  with in both is owed two separate debts and adding them would need a kurs neither
-  kelishuv was struck at.
+  A flat list: one row per kelishuv, in whatever order Saralash asked for. No
+  hamkor heading over the block — the kod already opens with the hamkor's name
+  (majid-mehdi-1), so a separate line for it only repeated what the first column
+  says, and grouping under it quietly overrode the chosen sort.
   {% endcomment %}
-  <tr class="kelishuv-row">
-    <td colspan="9">
-      <div class="kelishuv-head">
-        <span class="kelishuv-sub">{{ g.partner.name }}</span>
-        <span class="kelishuv-count">{{ g.contracts|length }} kelishuv</span>
-        <span class="kelishuv-money">
-          <span class="kelishuv-money-label">Jami</span>
-          {% for currency, amount in g.total %}
-          <span class="kelishuv-money-val">{% money_in amount currency %}</span>
-          {% empty %}<span class="kelishuv-money-val">—</span>{% endfor %}
-          <span class="kelishuv-money-label">Qolgan to'lov</span>
-          {% for currency, amount in g.payable %}
-          <span class="badge badge-warning">{% money_in amount currency %}</span>
-          {% empty %}
-          <span class="badge badge-ok">Qarzsiz</span>
-          {% endfor %}
-        </span>
-      </div>
-    </td>
-  </tr>
-  {% for c in g.contracts %}
+  {% for c in page %}
   <tr>
     <td class="sticky-col">
       <a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
@@ -137,14 +115,9 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     </td>
   </tr>
   {% endfor %}
-  {% endfor %}
 </table>
 </div>
-{% comment %}
-Paged by hamkor, so the count beside the pager counts hamkorlar — a page here is
-"these N hamkor and all of their kelishuvlar".
-{% endcomment %}
-{% include "crm/_pagination.html" with label="hamkor" %}
+{% include "crm/_pagination.html" with label="kelishuv" %}
 {% else %}
 <p class="muted">Kelishuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}

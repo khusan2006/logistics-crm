@@ -461,94 +461,45 @@ class TestNarxBoxNamesItsCurrency:
         assert "<span>1 kg narxi (USD)</span>" not in html
 
 
-class TestHamkorGrouping:
-    """One hamkor is one block, however many kelishuv they hold. Repeating their
-    name down a column made a hamkor with three kelishuv read as three hamkor, and
-    hid the fact that one of them was owed in a different currency."""
+class TestFlatKelishuvList:
+    """One row per kelishuv, nothing over it. The hamkor heading that used to head
+    each block said the name a second time — the kod already opens with it."""
 
-    def _groups(self, client, **params):
+    def _get(self, client, **params):
         resp = client.get("/contracts/", {"state": "", **params})
         assert resp.status_code == 200
-        return resp, resp.context["groups"]
+        return resp
 
-    def test_a_hamkor_appears_once_however_many_kelishuv_they_hold(self, admin_client, db):
-        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
-        _contract(partner=partner, kg="200", price="1.00")
-        _contract(partner=partner, kg="100", price="1.20")
-        _contract(partner=Partner.objects.create(name="abulqosim", phone="1", city="T"))
-
-        _, groups = self._groups(admin_client)
-        # Which hamkor lands first is the sort's business (pinned separately); what
-        # this pins is that each of them appears exactly once, with all their rows.
-        held = {g["partner"].name: len(g["contracts"]) for g in groups}
-        assert held == {"Majid Mehdi": 2, "abulqosim": 1}
-        assert len(groups) == 2
-
-    def test_two_currencies_are_two_figures_on_the_hamkor_head(self, admin_client, db):
-        """The whole point of the grouping. Majid Mehdi is owed dollars on one
-        kelishuv and so'm on another; the head says both and adds neither."""
-        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
-        _contract(partner=partner, kg="100", price="1.20")           # $120
-        som = _contract(partner=partner, kg="200", price="1.00")
-        som.currency = Currency.UZS
-        som.exchange_rate = Decimal("12000")
-        som.save()
-        line = som.lines.first()
-        line.currency, line.price_uzs = Currency.UZS, Decimal("12000")
-        line.exchange_rate = Decimal("12000")
-        line.save()
-
-        _, groups = self._groups(admin_client)
-        payable = dict(groups[0]["payable"])
-        assert payable[Currency.USD] == Decimal("120.00")
-        assert payable[Currency.UZS] == Decimal("2400000.00")
-
-    def test_a_settled_hamkor_head_says_qarzsiz_rather_than_zero(self, admin_client, db):
-        partner = Partner.objects.create(name="sobir", phone="1", city="T")
-        c = _contract(partner=partner, kg="100", price="1.00")
-        SupplierPayment.objects.create(contract=c, amount=Decimal("100"))
-
-        _, groups = self._groups(admin_client)
-        assert groups[0]["payable"] == []
-        assert "Qarzsiz" in _.content.decode()
-
-    def test_paging_never_splits_a_hamkor_across_two_pages(self, admin_client, db):
-        """Paging the flat list cut a hamkor wherever their 20th kelishuv fell, so
-        the rest turned up on page two under a second copy of their name."""
-        partner = Partner.objects.create(name="vazifadon", phone="1", city="T")
-        for _i in range(25):
-            _contract(partner=partner)
-        resp, groups = self._groups(admin_client)
-        assert len(groups) == 1
-        assert len(groups[0]["contracts"]) == 25
-        assert resp.context["page"].paginator.count == 1     # one hamkor, one page
-
-    def test_every_kelishuv_is_drawn_under_its_hamkor(self, admin_client, db):
-        """No opener, no folding: the head summarises the block and the kelishuvlar
-        are simply listed beneath it."""
+    def test_no_hamkor_heading_sits_over_the_rows(self, admin_client, db):
         partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
         a = _contract(partner=partner, brand="7000 campaund")
         b = _contract(partner=partner, brand="2102")
 
-        html = self._groups(admin_client)[0].content.decode()
-        assert "hamkor-toggle" not in html and "Ko'rish" not in html
+        # The Hamkor filter above the table lists every hamkor by name, so what is
+        # pinned here is the table itself, not the page.
+        table = self._get(admin_client).content.decode().split("<table>")[1]
+        assert "kelishuv-row" not in table and "kelishuv-count" not in table
+        assert partner.name not in table               # nor the name the head carried
         for c in (a, b):
-            assert c.code in html
+            assert c.code in table                     # both rows still listed
 
-    def test_the_head_totals_the_block_in_both_currencies(self, admin_client, db):
-        """Jami answers "how much business is this", Qolgan to'lov "how much is
-        still owed" — and neither adds a dollar figure to a so'm one."""
-        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
-        _contract(partner=partner, kg="100", price="1.20")            # jami $120
-        som = _contract(partner=partner, kg="200", price="1.00")
-        som.currency, som.exchange_rate = Currency.UZS, Decimal("12000")
-        som.save()
-        line = som.lines.first()
-        line.currency, line.price_uzs = Currency.UZS, Decimal("12000")
-        line.exchange_rate = Decimal("12000")
-        line.save()
+    def test_the_sort_orders_the_page_and_nothing_reorders_it(self, admin_client, db):
+        """Grouping pulled a hamkor's older kelishuv up beside their newest, so a
+        list sorted newest-first did not come out newest-first."""
+        majid = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
+        other = Partner.objects.create(name="abulqosim", phone="1", city="T")
+        oldest = _contract(partner=majid, created="2026-07-01")
+        middle = _contract(partner=other, created="2026-07-15")
+        newest = _contract(partner=majid, created="2026-08-01")
 
-        _, groups = self._groups(admin_client)
-        total = dict(groups[0]["total"])
-        assert total[Currency.USD] == Decimal("120.00")
-        assert total[Currency.UZS] == Decimal("2400000.00")
+        resp = self._get(admin_client, sort="-created")
+        assert [c.pk for c in resp.context["rows"]] == [newest.pk, middle.pk, oldest.pk]
+
+    def test_the_page_holds_twenty_kelishuv(self, admin_client, db):
+        partner = Partner.objects.create(name="vazifadon", phone="1", city="T")
+        for _i in range(25):
+            _contract(partner=partner)
+        resp = self._get(admin_client)
+        assert resp.context["page"].paginator.count == 25      # kelishuv, not hamkor
+        assert len(resp.context["rows"]) == 20
+

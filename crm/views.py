@@ -33,7 +33,7 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
-    bron_queue, commission_total, contract_value_by_currency, convert_pair,
+    bron_queue, commission_total, convert_pair,
     draw_down_bron, release_bron,
     logist_positions, payable_by_currency,
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
@@ -429,35 +429,14 @@ def contract_list(request):
     _, _, sort_key, sort_reverse = next(e for e in CONTRACT_SORTS if e[0] == sort)
     rows.sort(key=sort_key, reverse=sort_reverse)
 
-    # Group under the hamkor. One Majid Mehdi on the screen, not one per kelishuv he
-    # happens to have open — and his name said once, at the head of his block, rather
-    # than repeated down a column. Groups come out in the order the sort left their
-    # first kelishuv in, so whichever sort is picked still drives the page.
-    groups = []
-    by_partner = {}
-    for contract in rows:
-        group = by_partner.get(contract.partner_id)
-        if group is None:
-            group = by_partner[contract.partner_id] = {
-                "partner": contract.partner, "contracts": []}
-            groups.append(group)
-        group["contracts"].append(contract)
-    for group in groups:
-        # Never one converted total: a hamkor owed on a dollar kelishuv and on a
-        # so'm one is owed two separate debts, and the head of their block is
-        # exactly where that has to be said.
-        group["payable"] = payable_by_currency(group["contracts"])
-        group["total"] = contract_value_by_currency(group["contracts"])
-
-    # Paged by HAMKOR, not by kelishuv — the same reason Yuklar pages by kelishuv.
-    # Paging the flat list cut a hamkor wherever their 20th kelishuv fell, so the
-    # rest turned up on the next page under a second copy of their name, with a
-    # Qolgan to'lov heading that counted only the half below it.
-    page = Paginator(groups, 10).get_page(request.GET.get("page"))
-    groups = list(page.object_list)
-    rows = [c for g in groups for c in g["contracts"]]
+    # One row per kelishuv, in the order the sort left them. Grouping them under a
+    # hamkor heading put the hamkor's name on the screen twice — the kod already
+    # opens with it — and reordered the page behind the reader's back, since a
+    # hamkor's older kelishuv was pulled up beside their newest.
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    rows = list(page.object_list)
     return render(request, "crm/contract_list.html", {
-        "page": page, "groups": groups, "rows": rows,
+        "page": page, "rows": rows,
         "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
         "sort": sort, "sort_options": [(key, label) for key, label, *_ in CONTRACT_SORTS],
