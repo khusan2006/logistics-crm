@@ -25,7 +25,8 @@ def _contract(partner, brand="LLDPE 209AA", **kw):
 def _listed(client, **params):
     resp = client.get("/contracts/", params)
     assert resp.status_code == 200
-    return [c.code for c in resp.context["page"].object_list]
+    # `page` pages HAMKOR groups now; `rows` is this page's kelishuvlar, flattened.
+    return [c.code for c in resp.context["rows"]]
 
 
 # --- slug ------------------------------------------------------------------

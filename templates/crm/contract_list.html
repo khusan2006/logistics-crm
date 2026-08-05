@@ -57,7 +57,6 @@ under Tugallangan, where a kelishuv is fully paid by definition.
   <tr>
     <th class="sticky-col">KOD</th>
     <th>Sana</th>
-    <th>Hamkor</th>
     <th>Marka</th>
     <th>Kelishilgan kg</th>
     <th>Narx</th>
@@ -66,13 +65,34 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     <th title="Kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th></th>
   </tr>
-  {% for c in page %}
+  {% for g in groups %}
+  {% comment %}
+  The hamkor said once, at the head of their block, instead of repeated down a
+  column beside every kelishuv they hold. Qolgan to'lov rides up here as one line
+  PER CURRENCY: a hamkor owed on a dollar kelishuv and a so'm one is owed two
+  debts, and adding them would need a kurs neither side agreed on.
+  {% endcomment %}
+  <tr class="kelishuv-row">
+    <td colspan="9">
+      <div class="kelishuv-head">
+        <span class="kelishuv-sub">{{ g.partner.name }}</span>
+        <span class="kelishuv-count">{{ g.contracts|length }} kelishuv</span>
+        <span class="kelishuv-payable">
+          {% for currency, amount in g.payable %}
+          <span class="badge badge-warning">{% money_in amount currency %}</span>
+          {% empty %}
+          <span class="badge badge-ok">Qarzsiz</span>
+          {% endfor %}
+        </span>
+      </div>
+    </td>
+  </tr>
+  {% for c in g.contracts %}
   <tr>
     <td class="sticky-col">
       <a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
     </td>
     <td>{{ c.created }}</td>
-    <td>{{ c.partner.name }}</td>
     {% comment %}
     Marka / kg / narx / qolgan kg are per product, so each cell lists one line per
     product and the four columns stay aligned row-for-row. Trucks are booked against
@@ -111,9 +131,14 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     </td>
   </tr>
   {% endfor %}
+  {% endfor %}
 </table>
 </div>
-{% include "crm/_pagination.html" with label="kelishuv" %}
+{% comment %}
+Paged by hamkor, so the count beside the pager counts hamkorlar — a page here is
+"these N hamkor and all of their kelishuvlar".
+{% endcomment %}
+{% include "crm/_pagination.html" with label="hamkor" %}
 {% else %}
 <p class="muted">Kelishuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}

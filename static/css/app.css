@@ -1981,6 +1981,10 @@ ul.errorlist li::before { content: "⚠ "; }
 .kelishuv-title { font-weight: 700; color: var(--accent); }
 .kelishuv-sub { color: var(--text); font-weight: 600; }
 .kelishuv-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
+/* Pushed to the far end of the head so the qarz lands under the Qolgan to'lov
+   column it totals, rather than trailing the hamkor's name. One badge per
+   currency, side by side and never added up. */
+.kelishuv-payable { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;
