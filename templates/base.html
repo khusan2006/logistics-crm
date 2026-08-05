@@ -1434,6 +1434,42 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
+  // A kelishuv's mahsulot narx is typed in the currency the header picked, so the
+  // box has to say which — and keep saying it while the picker is still moving.
+  // ContractLineForm labels it server-side, which is what a reload and a validation
+  // error come back with; without this the label stayed "1 kg narxi (USD)" after
+  // switching to So'm and the operator typed a so'm figure into a box calling
+  // itself dollars.
+  (function () {
+    function retitle(root) {
+      var form = root.closest ? (root.closest('form') || root) : root;
+      var currencyEl = form.querySelector('[name=currency]');
+      if (!currencyEl) { return; }
+      var som = currencyEl.value === 'uzs';
+      Array.prototype.forEach.call(form.querySelectorAll('[data-currency-label]'), function (input) {
+        var field = input.closest('.lineset-field');
+        var span = field && field.querySelector('span');
+        if (span) { span.textContent = input.dataset.currencyLabel + (som ? " (so'm)" : ' (USD)'); }
+        // Four decimals are what a dollar $/kg needs and what a so'm/kg never does.
+        input.step = som ? '1' : '0.0001';
+        input.placeholder = som ? '0' : '0.0000';
+      });
+    }
+    document.addEventListener('change', function (e) {
+      if (e.target.matches && e.target.matches('[name=currency]')) { retitle(e.target); }
+    });
+    // A row cloned from <template> carries the label the page was SERVED with, so
+    // it has to be retitled after the formset adds one.
+    document.addEventListener('click', function (e) {
+      var add = e.target.closest && e.target.closest('[data-line-add]');
+      if (add) { setTimeout(function () { retitle(add); }, 0); }
+    });
+    document.addEventListener('modal:loaded', function (e) {
+      var root = e.detail || document;
+      if (root.querySelector && root.querySelector('[data-currency-label]')) { retitle(root); }
+    });
+  })();
+
   // A kelishuv is owed and settled in the one currency it was struck in, so paying
   // it in that same currency needs no kurs — the figure is the qarz. The box appears
   // only when the to'lov crosses a currency boundary, which is the one case where

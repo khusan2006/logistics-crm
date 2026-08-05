@@ -404,7 +404,12 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         widgets = {
             "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
             "kg": forms.NumberInput(attrs={"placeholder": "0"}),
-            "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "0.0000"}),
+            # data-currency-label marks the box as one whose unit follows the
+            # header's Valyuta. The label below is the one the page is SERVED with —
+            # right on a reload and after a validation error — and base.html retitles
+            # it live from this attribute while the operator is still picking.
+            "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "0.0000",
+                                              "data-currency-label": "1 kg narxi"}),
         }
 
     def __init__(self, *args, currency=None, **kwargs):
@@ -414,6 +419,10 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         # one; here it is known, so it goes back on.
         self.line_currency = currency or Currency.USD
         self.fields["price"].label = f"1 kg narxi ({currency_suffix(self.line_currency)})"
+        # A so'm narx is a whole-so'm figure; the four decimals a dollar $/kg needs
+        # (a cent per kg is dollars on a 24-tonne lot) read as a dollar box on it.
+        if self.line_currency == Currency.UZS:
+            self.fields["price"].widget.attrs.update({"step": "1", "placeholder": "0"})
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")

@@ -644,6 +644,31 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .ledger-table .icon-action.danger:hover { color: var(--danger); }
 .ledger-table .badge { padding: 2px 8px; font-size: 11px; }
 
+/* The two ledgers sit side by side and mean opposite things, so the header row
+   carries the tone: money in reads green, money out red. The tint stays on the
+   header — tinting the rows would fight the +/− figures, which is where the
+   colour is actually doing work. */
+.ledger-table--in th { background: var(--success-soft); color: var(--success); }
+.ledger-table--out th { background: var(--danger-soft); color: var(--danger); }
+
+/* Six and seven columns inside a half-width card, so both ledgers scroll
+   sideways. An overlay scrollbar only surfaces once you are already scrolling,
+   which is no use to somebody looking for something to drag — so these keep a
+   handle on screen whether or not the pointer is moving. */
+.kassa-ledger .table-wrap {
+  overflow-x: scroll;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) var(--surface-2);
+}
+.kassa-ledger .table-wrap::-webkit-scrollbar { height: 12px; }
+.kassa-ledger .table-wrap::-webkit-scrollbar-track { background: var(--surface-2); }
+.kassa-ledger .table-wrap::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid var(--surface-2);
+  border-radius: 999px;
+}
+.kassa-ledger .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
 /* A single production-till figure line */
 .prod-stat { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .prod-stat:last-child { border-bottom: none; }

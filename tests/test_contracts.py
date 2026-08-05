@@ -412,3 +412,43 @@ def test_the_currency_is_frozen_once_money_or_goods_are_attached(admin_client, d
                      "kg": "50000", "price": "0.96"}, initial=1)})
     c.refresh_from_db()
     assert c.currency == Currency.USD
+
+
+class TestNarxBoxNamesItsCurrency:
+    """A so'm kelishuv's narx box used to keep calling itself USD, so the operator
+    typed 12 500 into a field labelled dollars. The label is served correct and
+    base.html retitles it live off data-currency-label while the picker moves."""
+
+    def _price_field(self, currency):
+        from crm.forms import ContractLineForm
+        return ContractLineForm(currency=currency).fields["price"]
+
+    def test_the_label_follows_the_kelishuv_currency(self, db):
+        assert self._price_field(Currency.USD).label == "1 kg narxi (USD)"
+        assert self._price_field(Currency.UZS).label == "1 kg narxi (so'm)"
+
+    def test_a_som_narx_drops_the_dollar_decimals(self, db):
+        """0.0000 in a so'm box reads as a dollar box. Four decimals are what a
+        $/kg needs — a cent per kg is dollars on a 24-tonne lot — and what a
+        so'm/kg never does."""
+        dollars = self._price_field(Currency.USD).widget.attrs
+        sums = self._price_field(Currency.UZS).widget.attrs
+        assert (dollars["step"], dollars["placeholder"]) == ("0.0001", "0.0000")
+        assert (sums["step"], sums["placeholder"]) == ("1", "0")
+
+    def test_the_box_is_marked_for_the_live_retitle(self, db):
+        """Without the attribute the JS has nothing to find, and the label goes
+        stale again the moment Valyuta is switched without a reload."""
+        for currency in (Currency.USD, Currency.UZS):
+            attrs = self._price_field(currency).widget.attrs
+            assert attrs["data-currency-label"] == "1 kg narxi"
+
+    def test_a_som_kelishuv_form_renders_the_som_label(self, admin_client, db):
+        c = _contract()
+        c.currency = Currency.UZS
+        c.save()
+        html = admin_client.get(f"/contracts/{c.pk}/edit/").content.decode()
+        # The label span itself, not just the text — base.html carries both spellings
+        # in a comment explaining the bug this pins.
+        assert "<span>1 kg narxi (so&#x27;m)</span>" in html
+        assert "<span>1 kg narxi (USD)</span>" not in html
