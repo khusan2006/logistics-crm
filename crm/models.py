@@ -1206,6 +1206,20 @@ class Reservation(MoneyEntry):
 # same rule as everything else that shows both currencies.
 
 
+def _by_currency(entries):
+    """[(currency, total)] from (currency, amount) pairs — dollars first, zeros dropped.
+
+    The shape every per-currency figure takes, so a hamkor row, a mijoz row and a
+    kassa plitka all read the same way round. A side that nets to zero is left out
+    rather than printed: "0 so'm" beside a real dollar figure reads as a second,
+    empty debt, and a business that has never taken a so'm has no so'm side."""
+    totals = {}
+    for currency, amount in entries:
+        totals[currency] = totals.get(currency, Decimal("0")) + amount
+    return [(currency, totals[currency]) for currency in (Currency.USD, Currency.UZS)
+            if totals.get(currency)]
+
+
 def customer_balance_by_currency(customer):
     """[(currency, balance)] for one mijoz — positive is qarz, negative is avans.
 
@@ -1216,15 +1230,10 @@ def customer_balance_by_currency(customer):
 
     Only non-zero sides are returned, so the common single-currency mijoz still reads
     as one figure."""
-    balances = {}
-    for sale in customer.sales.all():
-        balances[sale.currency] = balances.get(sale.currency, Decimal("0")) + sale.remaining_own
-    for payment in customer.customer_payments.all():
-        unspent = unspent_payment_amount(payment)
-        if unspent:
-            balances[payment.currency] = balances.get(payment.currency, Decimal("0")) - unspent
-    return [(currency, balances[currency]) for currency in (Currency.USD, Currency.UZS)
-            if balances.get(currency)]
+    entries = [(sale.currency, sale.remaining_own) for sale in customer.sales.all()]
+    entries += [(payment.currency, -unspent_payment_amount(payment))
+                for payment in customer.customer_payments.all()]
+    return _by_currency(entries)
 
 
 def customer_advance_total():
@@ -1261,6 +1270,62 @@ def customer_receivable_total():
             total_uzs += customer.balance_uzs
             count += 1
     return total, total_uzs, count
+
+
+def kassa_cash_by_currency():
+    """What is physically in the till, each pile in its OWN currency.
+
+    Kirim minus chiqim, counted on one side only: a to'lov that arrived in so'm put
+    so'm in the till and no dollars at all. The pair this sits beside sums BOTH
+    stored columns of every row, so each dollar row also contributes its converted
+    so'm twin — a till holding 87.8 mln real so'm reported 9 313 mln, the dollar
+    side counted a second time in so'm clothing.
+
+    Unlike a qarz, the two piles are not two obligations — they are two heaps of
+    cash, and nothing stops them being exchanged. What is refused is doing it
+    silently, at a kurs nobody chose, in the one figure the operator checks against
+    what is actually in the safe."""
+    entries = []
+    for payment in CustomerPayment.objects.all():
+        entries.append((payment.currency,
+                        own_side(payment, payment.net_amount, payment.net_amount_uzs)))
+    for rows in (SupplierPayment.objects.all(), ShipmentExpense.objects.all(),
+                 LogistPayment.objects.all()):
+        for row in rows:
+            entries.append((row.currency,
+                            -own_side(row, row.total_out, row.total_out_uzs)))
+    return _by_currency(entries)
+
+
+def customer_advance_by_currency():
+    """Mijoz money in the till that sits on no sotuv yet, per currency.
+
+    The side the money arrived in is the side it goes back out in when a bron or an
+    order is cancelled, so that is the side an avans is held in."""
+    return _by_currency(
+        (payment.currency, unspent_payment_amount(payment))
+        for payment in CustomerPayment.objects.prefetch_related("allocations"))
+
+
+def customer_receivable_by_currency():
+    """([(currency, qarz)], how many mijoz) — what customers still owe, per currency.
+
+    Only positive sides count, for the same reason `customer_receivable_total` takes
+    only positive balances: a mijoz sitting in avans does not pay another mijoz's
+    qarz. The count is of people, not of sides — somebody who owes in both currencies
+    is one debtor, not two."""
+    entries = []
+    debtors = 0
+    customers = Customer.objects.prefetch_related(
+        "sales__returns", "sales__allocations", "customer_payments__allocations")
+    for customer in customers:
+        owed = [(currency, amount)
+                for currency, amount in customer_balance_by_currency(customer)
+                if amount > 0]
+        if owed:
+            entries += owed
+            debtors += 1
+    return _by_currency(entries), debtors
 
 
 def payable_by_currency(contracts):
@@ -1308,6 +1373,28 @@ def partner_positions():
             "contracts": prepaid_contracts}
 
 
+def partner_positions_by_currency():
+    """Both sides of the hamkor relationship, per currency and still kept apart.
+
+    Same split as `partner_positions`, read in the currency the kelishuv was struck
+    in: a kelishuv is agreed in one currency and what is owed on it is owed in that
+    one. The counts are of hamkorlar and kelishuvlar, not of currency sides."""
+    owed, prepaid = [], []
+    owed_partners, prepaid_contracts = set(), 0
+    contracts = Contract.objects.select_related("partner").prefetch_related(
+        "lines__shipment_lines", "supplier_payments")
+    for contract in contracts:
+        debt = contract.debt_own
+        if debt > 0:
+            owed.append((contract.currency, debt))
+            owed_partners.add(contract.partner_id)
+        elif debt < 0:
+            prepaid.append((contract.currency, -debt))
+            prepaid_contracts += 1
+    return {"owed": _by_currency(owed), "partners": len(owed_partners),
+            "prepaid": _by_currency(prepaid), "contracts": prepaid_contracts}
+
+
 def stock_value():
     """Granula sitting in the ombor, at its landed cost — goods we paid for and
     still own. Costed rather than priced: what it will sell for is not knowable
@@ -1342,6 +1429,28 @@ def transit_value():
         kg += line.kg
         loads.add(line.shipment_id)
     return total, total_uzs, kg, len(loads)
+
+
+def transit_value_by_currency():
+    """([(currency, value)], kg, loads) — goods sent and not yet arrived, per currency.
+
+    Split rather than blended, unlike the ombor beside it on the board: transit is
+    valued at the agreed kelishuv narx, and a kelishuv has exactly one currency.
+    `stock_value` cannot follow — a landed cost mixes a dollar mol with a so'm
+    transport bill on purpose (see ShipmentLine.landed_cost_per_kg), so the ombor
+    keeps its converted pair."""
+    entries = []
+    kg = Decimal("0")
+    loads = set()
+    lines = (ShipmentLine.objects
+             .filter(shipment__arrived__isnull=True)
+             .select_related("shipment", "contract_line"))
+    for line in lines:
+        entries.append((line.currency,
+                        own_side(line, line.goods_value, line.goods_value_uzs)))
+        kg += line.kg
+        loads.add(line.shipment_id)
+    return _by_currency(entries), kg, len(loads)
 
 
 def arrived_lots():

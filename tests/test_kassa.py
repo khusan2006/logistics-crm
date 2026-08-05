@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from crm.models import (
-    Contract, ContractLine, Customer, CustomerPayment, Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
+    Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
 
 
@@ -240,6 +240,13 @@ class TestCurrentStateTiles:
     def _tiles(self, admin_client):
         return {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
 
+    def _own(self, tile, currency=Currency.USD):
+        """One currency's line off a split tile.
+
+        A split drops the sides that net to zero, so a missing side is not missing
+        data — it is the answer, and it is zero."""
+        return dict(tile["split"]).get(currency, Decimal("0"))
+
     def test_every_tile_states_a_current_fact_and_links_somewhere(self, admin_client, db):
         contract = _contract()
         shipment = _arrived_shipment(contract)
@@ -255,7 +262,7 @@ class TestCurrentStateTiles:
         for tile in tiles.values():
             assert tile["note"], tile["label"]
             assert tile["url"].startswith("/"), tile["label"]
-        assert tiles["Kassada"]["amount"] == resp_cash(admin_client)
+        assert self._own(tiles["Kassada"]) == resp_cash(admin_client)
 
     def test_no_derived_total_is_published(self, admin_client, db):
         """Sof holat is gone: it summed things that are not the same kind of thing."""
@@ -285,7 +292,7 @@ class TestCurrentStateTiles:
                                 kg=Decimal("100"), price=Decimal("1.00"),
                                 price_uzs=Decimal("12000"), date="2026-07-17")
         tiles = self._tiles(admin_client)
-        assert tiles["Mijozlar qarzi"]["amount"] == Decimal("200.00")
+        assert self._own(tiles["Mijozlar qarzi"]) == Decimal("200.00")
         assert tiles["Mijozlar qarzi"]["meta"] == "2 ta mijozda"
 
     def test_customer_advance_is_named_on_the_kassa_tile(self, admin_client, db):
@@ -301,9 +308,9 @@ class TestCurrentStateTiles:
         SupplierPayment.objects.create(contract=contract, date="2026-07-11",
                                        amount=Decimal("600.00"), method="cash")
         tiles = self._tiles(admin_client)
-        assert tiles["Hamkorlarda avansimiz"]["amount"] == Decimal("600.00")
+        assert self._own(tiles["Hamkorlarda avansimiz"]) == Decimal("600.00")
         assert tiles["Hamkorlarda avansimiz"]["meta"] == "1 ta kelishuvda"
-        assert tiles["Hamkorlarga qarzimiz"]["amount"] == Decimal("0")
+        assert tiles["Hamkorlarga qarzimiz"]["split"] == []
 
     def test_both_hamkor_directions_can_be_non_zero_at_once(self, admin_client, db):
         owing = _contract("Qarzdor")
@@ -312,8 +319,59 @@ class TestCurrentStateTiles:
         SupplierPayment.objects.create(contract=prepaid, date="2026-07-11",
                                        amount=Decimal("300.00"), method="cash")
         tiles = self._tiles(admin_client)
-        assert tiles["Hamkorlarga qarzimiz"]["amount"] == Decimal("500.00")
-        assert tiles["Hamkorlarda avansimiz"]["amount"] == Decimal("300.00")
+        assert self._own(tiles["Hamkorlarga qarzimiz"]) == Decimal("500.00")
+        assert self._own(tiles["Hamkorlarda avansimiz"]) == Decimal("300.00")
+
+    def test_the_till_counts_each_row_on_one_side_only(self, admin_client, db):
+        """The bug this tile was split to kill: the pair beside it sums BOTH stored
+        columns of every row, so a dollar to'lov also lands in the so'm figure as its
+        converted twin. On the real database that reported 9 313 mln so'm in a till
+        holding 87.8 mln. Here $1 000 arrives in dollars and 2.5 mln in so'm, and
+        neither side may borrow from the other."""
+        customer = _customer()
+        CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("1000"),
+            amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"),
+            currency=Currency.USD, method="cash")
+        CustomerPayment.objects.create(
+            customer=customer, date="2026-07-21", amount=Decimal("200"),
+            amount_uzs=Decimal("2500000"), exchange_rate=Decimal("12500"),
+            currency=Currency.UZS, method="cash")
+
+        till = self._tiles(admin_client)["Kassada"]
+        assert self._own(till, Currency.USD) == Decimal("1000.00")
+        assert self._own(till, Currency.UZS) == Decimal("2500000.00")
+        # The dollar row's twin is 12.5 mln; if it leaked in, the so'm side would be 15.
+        assert self._own(till, Currency.UZS) != Decimal("15000000.00")
+
+    def test_a_hamkor_owed_in_both_currencies_reads_as_two_debts(self, admin_client, db):
+        """Never one converted total: the two kelishuv were struck at different
+        kurslar and settled in different money, so they stay two figures."""
+        dollars = _contract("Dollarli")
+        _arrived_shipment(dollars)                     # 500 kg @ $1, nothing paid
+        sums = _contract("So'mli")
+        sums.currency = Currency.UZS
+        sums.exchange_rate = Decimal("12500")
+        sums.save()
+        line = sums.lines.first()
+        line.currency, line.price_uzs = Currency.UZS, Decimal("12500")
+        line.exchange_rate = Decimal("12500")
+        line.save()
+        _arrived_shipment(sums)                        # 500 kg @ 12 500 so'm
+
+        owed = dict(self._tiles(admin_client)["Hamkorlarga qarzimiz"]["split"])
+        assert owed[Currency.USD] == Decimal("500.00")
+        assert owed[Currency.UZS] == Decimal("6250000.00")
+
+    def test_a_cost_tile_keeps_its_converted_pair(self, admin_client, db):
+        """Omborda is the deliberate exception. A kg has ONE landed cost even though
+        the mol was bought in dollars and the transport paid in so'm, so this tile
+        stays a dollar figure with its so'm twin — no split to draw."""
+        _arrived_shipment(_contract())
+        ombor = self._tiles(admin_client)["Omborda"]
+        assert ombor["split"] is None
+        assert ombor["amount"] > 0
+        assert ombor["amount_uzs"] > 0
 
 
 def resp_cash(admin_client):

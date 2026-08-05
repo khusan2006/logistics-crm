@@ -14,13 +14,34 @@ money or goods is sitting right now, each with the second fact that makes it
 actionable — kg, mijoz count, yuk count — and each linking to the screen where you
 act on it. Nothing is summed across them on purpose: adding cash to granula to
 somebody else's unpaid invoice gives a number that describes no actual thing.
+
+A tile reads one of two ways, and the difference is deliberate.
+
+A tile with a `split` prints one full-size figure PER CURRENCY, because that is how
+many facts it holds: the till keeps a dollar heap and a so'm heap, and a hamkor owed
+on a dollar kelishuv and a so'm one is owed two separate debts. Neither side is the
+subordinate of the other, so neither is set in the smaller type.
+
+A tile without one keeps the older stacked pair — the dollar figure with its so'm
+twin beneath — because its figure is a COST, and a cost blends on purpose: a kg has
+one landed price even though the mol was bought in dollars and the transport paid in
+so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
 {% endcomment %}
 <div class="ktiles">
   {% for t in tiles %}
   <a class="ktile ktile--{{ t.tone }}" href="{{ t.url }}">
     <div class="ktile-label">{{ t.label }}</div>
+    {% if t.split %}
+    {% for currency, amount in t.split %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% endfor %}
+    {% elif t.split is not None %}
+    {% comment %}An empty split is a real answer — nothing owed, nothing held.{% endcomment %}
+    <div class="ktile-num">{% money_in 0 "usd" %}</div>
+    {% else %}
     <div class="ktile-num">{{ t.amount|usd }}</div>
     <div class="ktile-som">{{ t.amount_uzs|som }}</div>
+    {% endif %}
     <div class="ktile-note">{{ t.note }}</div>
     {% if t.meta %}<div class="ktile-meta">{{ t.meta }}</div>{% endif %}
   </a>
@@ -30,6 +51,10 @@ somebody else's unpaid invoice gives a number that describes no actual thing.
   Hammasi <b>bugungi holat</b> — pastdagi sana filtri bu raqamlarga ta'sir qilmaydi.
   Kassadagi raqam tizim boshlangandan beri bo'lgan kirim va chiqim ayirmasi; biznesni
   moliyalashtirgan kapital hali kirim sifatida kiritilmagan.
+  <b>Dollar va so'm alohida</b> ko'rsatiladi va hech qachon qo'shilmaydi — pul ham,
+  qarz ham o'z valyutasida turadi. <b>Omborda</b> va <b>Logistlarda</b> esa tannarx
+  raqami: 1 kg narxi bitta bo'lishi kerak, shuning uchun u yerda dollar figurasi
+  ostida uning so'mdagi qiymati turadi.
 </p>
 
 <form method="get" class="kassa-filter">

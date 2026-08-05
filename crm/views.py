@@ -17,7 +17,7 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .exports import xlsx_response
-from .templatetags.crm_extras import usd
+from .templatetags.crm_extras import som, usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm,
     contract_currency,
@@ -34,8 +34,11 @@ from .models import (
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
     bron_queue, commission_total, convert_pair, logist_positions, payable_by_currency,
-    customer_advance_total, customer_balance_by_currency, customer_receivable_total, fifo_lots, partner_positions,
-    reconcile_customer_allocations, stock_value, transit_value, trim_sale_allocations,
+    customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
+    customer_receivable_by_currency, customer_receivable_total, fifo_lots,
+    kassa_cash_by_currency, partner_positions, partner_positions_by_currency,
+    reconcile_customer_allocations, stock_value, transit_value,
+    transit_value_by_currency, trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
@@ -1979,6 +1982,16 @@ def _kg(value):
     return text.replace(",", " ")
 
 
+def _money_line(pairs):
+    """A [(currency, amount)] figure as one line of plain text — "$500 · 6 000 000 so'm".
+
+    The tile captions are built as strings here rather than as markup in the
+    template, so they reach for the formatters directly. Joined with a raised dot
+    and never a plus: the two sides sit beside each other, they do not add up."""
+    return " · ".join(som(amount) if currency == Currency.UZS else usd(amount)
+                      for currency, amount in pairs)
+
+
 def _waterfall(opening, opening_uzs, steps):
     """Lay out a waterfall: turn (label, delta) steps into bars positioned against a
     shared scale, so the template does no arithmetic.
@@ -2059,11 +2072,13 @@ def kassa(request):
         return sum((r.total_out_uzs for r in qs), Decimal("0"))
 
     # Joriy holat (all-time, filter-independent): money physically in the till.
-    # The so'm figure is the sum of each row's OWN so'm value, so it is what was
-    # actually banked over time — not the dollar total re-rated at today's kurs.
     # ShipmentExpense.total_out is already zero for a logist-funded row, so the
     # whole queryset can be summed: the money left when we topped the logist up,
     # and LogistPayment below is where that shows.
+    #
+    # The converted pair is still what the Oqim waterfall closes on — it has to be,
+    # since the waterfall is a single running line and cannot be two. The tiles
+    # above it read the per-currency figures instead; see the `split` note there.
     cash_total = (_in(CustomerPayment.objects.all())
                   - _out(SupplierPayment.objects.all())
                   - _out(ShipmentExpense.objects.all())
@@ -2078,45 +2093,58 @@ def kassa(request):
     advance, advance_uzs = customer_advance_total()
     own_cash, own_cash_uzs = cash_total - advance, cash_total_uzs - advance_uzs
 
+    # The same two facts as heaps rather than as one sum converted twice: so'm in
+    # the safe is not dollars in the safe.
+    cash_split = kassa_cash_by_currency()
+    advance_split = customer_advance_by_currency()
+
     # Pozitsiya: what the cash figure MEANS. Cash alone reads as a disaster while
     # the money is sitting in trucks and mijoz qarzi; these are the lines that say
     # where it went. Current-state, so the date filter does not touch them.
-    receivable, receivable_uzs, debtors = customer_receivable_total()
-    hamkor = partner_positions()
+    receivable, debtors = customer_receivable_by_currency()
+    hamkor = partner_positions_by_currency()
     logist_held, logist_held_uzs, logist_owed, logist_owed_uzs = logist_positions()
     stock, stock_uzs, stock_kg = stock_value()
-    transit, transit_uzs, transit_kg, transit_loads = transit_value()
+    transit, transit_kg, transit_loads = transit_value_by_currency()
     # A board of current facts, not a balance sheet. Each tile is one place money
     # or goods is sitting RIGHT NOW, says so in plain words, and carries the second
     # fact that makes it actionable — how many kg, how many mijoz, how many yuk.
     # Nothing is summed across tiles: adding cash to granula to somebody else's debt
     # produces a number that describes no actual thing.
+    #
+    # `split` is what makes a tile read per-currency: a list of (currency, amount)
+    # drawn as one line each, never added up. Cash and every obligation carry one —
+    # a dollar debt and a so'm debt are two debts, and the till holds two heaps.
+    # `amount`/`amount_uzs` is the older converted pair, and the tiles still on it
+    # are the ones whose figure is a COST: a kg has one landed cost even though the
+    # mol was bought in dollars and the transport paid in so'm, which is the one
+    # place currencies are deliberately blended (tests/test_cost_blends_currencies.py).
     tiles = [
-        {"label": "Kassada", "amount": cash_total, "amount_uzs": cash_total_uzs,
+        {"label": "Kassada", "split": cash_split,
          "note": "hozir qo'lda va hisobda turgan pul", "tone": "cash",
-         "meta": f"shundan mijoz avansi {usd(advance)}" if advance else "",
+         "meta": (f"shundan mijoz avansi {_money_line(advance_split)}"
+                  if advance_split else ""),
          "url": reverse("customer_payment_list")},
-        {"label": "Mijozlar qarzi", "amount": receivable, "amount_uzs": receivable_uzs,
+        {"label": "Mijozlar qarzi", "split": receivable,
          "note": "mol berilgan, puli hali olinmagan", "tone": "in",
          "meta": f"{debtors} ta mijozda" if debtors else "",
          "url": reverse("debt_list")},
-        {"label": "Omborda", "amount": stock, "amount_uzs": stock_uzs,
+        {"label": "Omborda", "split": None, "amount": stock, "amount_uzs": stock_uzs,
          "note": "kelgan, hali sotilmagan mol — tannarxda", "tone": "in",
          "meta": f"{_kg(stock_kg)} kg", "url": reverse("ombor")},
-        {"label": "Yo'lda", "amount": transit, "amount_uzs": transit_uzs,
+        {"label": "Yo'lda", "split": transit,
          "note": "jo'natilgan, hali yetib kelmagan mol", "tone": "in",
          "meta": f"{_kg(transit_kg)} kg · {transit_loads} ta yuk",
          "url": reverse("shipment_list")},
-        {"label": "Hamkorlarda avansimiz", "amount": hamkor["prepaid"],
-         "amount_uzs": hamkor["prepaid_uzs"], "tone": "in",
+        {"label": "Hamkorlarda avansimiz", "split": hamkor["prepaid"], "tone": "in",
          "note": "yuk kelishidan oldin to'lab qo'yganimiz",
          "meta": f"{hamkor['contracts']} ta kelishuvda" if hamkor["contracts"] else "",
          "url": reverse("contract_list")},
-        {"label": "Logistlarda", "amount": logist_held, "amount_uzs": logist_held_uzs,
+        {"label": "Logistlarda", "split": None,
+         "amount": logist_held, "amount_uzs": logist_held_uzs,
          "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
          "tone": "in", "meta": "", "url": reverse("logist_list")},
-        {"label": "Hamkorlarga qarzimiz", "amount": hamkor["owed"],
-         "amount_uzs": hamkor["owed_uzs"], "tone": "out",
+        {"label": "Hamkorlarga qarzimiz", "split": hamkor["owed"], "tone": "out",
          "note": "kelgan yuk uchun hali to'lamaganimiz",
          "meta": f"{hamkor['partners']} ta hamkorga" if hamkor["partners"] else "",
          "url": reverse("supplier_payment_list")},
@@ -2124,9 +2152,12 @@ def kassa(request):
     # A logist who fronted their own cash is a debt we owe, and a debt nobody can
     # see is one nobody pays. Appended only when it exists: unlike every other tile
     # this one is usually zero, and a permanently empty tile is noise, not a fact.
+    #
+    # Still a converted pair: a logist's hisob is kept in dollars whatever they hand
+    # a driver, so there is no per-currency split to draw yet.
     if logist_owed:
         tiles.append({
-            "label": "Logistlarga qarzimiz", "amount": -logist_owed,
+            "label": "Logistlarga qarzimiz", "split": None, "amount": -logist_owed,
             "amount_uzs": -logist_owed_uzs, "tone": "out", "meta": "",
             "note": "o'z pulidan haydovchiga bergani",
             "url": reverse("logist_list") + "?state=owed"})
