@@ -33,7 +33,8 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
-    bron_queue, commission_total, convert_pair, logist_positions, payable_by_currency,
+    bron_queue, commission_total, contract_value_by_currency, convert_pair,
+    logist_positions, payable_by_currency,
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
     kassa_cash_by_currency, partner_positions, partner_positions_by_currency,
@@ -445,6 +446,7 @@ def contract_list(request):
         # so'm one is owed two separate debts, and the head of their block is
         # exactly where that has to be said.
         group["payable"] = payable_by_currency(group["contracts"])
+        group["total"] = contract_value_by_currency(group["contracts"])
 
     # Paged by HAMKOR, not by kelishuv — the same reason Yuklar pages by kelishuv.
     # Paging the flat list cut a hamkor wherever their 20th kelishuv fell, so the

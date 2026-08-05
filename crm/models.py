@@ -1360,6 +1360,16 @@ def payable_by_currency(contracts):
             for currency in (Currency.USD, Currency.UZS) if currency in totals]
 
 
+def contract_value_by_currency(contracts):
+    """[(currency, jami)] over a set of kelishuvlar, each at the value it was agreed
+    at and in the money it was agreed in.
+
+    The companion to `payable_by_currency` for the head of a hamkor's block: one
+    says what the whole business with them is worth, the other what is still owed
+    on it. Both refuse to add across currencies, for the same reason."""
+    return _by_currency((c.currency, c.total_value_own) for c in contracts)
+
+
 def partner_positions():
     """Both directions of the hamkor relationship, kept apart.
 

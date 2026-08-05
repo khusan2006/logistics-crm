@@ -522,3 +522,47 @@ class TestHamkorGrouping:
         assert len(groups) == 1
         assert len(groups[0]["contracts"]) == 25
         assert resp.context["page"].paginator.count == 1     # one hamkor, one page
+
+    def test_the_block_ships_closed_with_an_opener(self, admin_client, db):
+        """One line per hamkor until asked otherwise: the kelishuv rows are served
+        with `hidden` so the page opens closed and nothing has to be folded away
+        on load."""
+        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
+        _contract(partner=partner)
+        _contract(partner=partner)
+
+        html = self._groups(admin_client)[0].content.decode()
+        assert f'data-hamkor-toggle="{partner.pk}"' in html
+        assert 'aria-expanded="false"' in html
+        # Template literal, so it reaches the page unescaped.
+        assert "Ko'rish" in html
+        assert html.count(f'data-hamkor-rows="{partner.pk}" hidden') == 2
+
+    def test_a_search_serves_the_matching_rows_open(self, admin_client, db):
+        """Somebody who searched for a marka asked for those rows — making them
+        press Ko'rish to see what they just searched for is a step for nothing."""
+        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
+        _contract(partner=partner, brand="7000 campaund")
+
+        html = self._groups(admin_client, q="7000")[0].content.decode()
+        assert 'aria-expanded="true"' in html
+        assert "Yopish" in html
+        assert "hidden" not in html.split("data-hamkor-rows")[1][:40]
+
+    def test_the_head_totals_the_block_in_both_currencies(self, admin_client, db):
+        """Jami answers "how much business is this", Qolgan to'lov "how much is
+        still owed" — and neither adds a dollar figure to a so'm one."""
+        partner = Partner.objects.create(name="Majid Mehdi", phone="1", city="T")
+        _contract(partner=partner, kg="100", price="1.20")            # jami $120
+        som = _contract(partner=partner, kg="200", price="1.00")
+        som.currency, som.exchange_rate = Currency.UZS, Decimal("12000")
+        som.save()
+        line = som.lines.first()
+        line.currency, line.price_uzs = Currency.UZS, Decimal("12000")
+        line.exchange_rate = Decimal("12000")
+        line.save()
+
+        _, groups = self._groups(admin_client)
+        total = dict(groups[0]["total"])
+        assert total[Currency.USD] == Decimal("120.00")
+        assert total[Currency.UZS] == Decimal("2400000.00")

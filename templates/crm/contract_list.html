@@ -52,6 +52,7 @@ under Tugallangan, where a kelishuv is fully paid by definition.
 </form>
 
 {% if page.object_list %}
+<noscript><style>tr[data-hamkor-rows] { display: table-row !important; }</style></noscript>
 <div class="table-wrap">
 <table>
   <tr>
@@ -67,28 +68,46 @@ under Tugallangan, where a kelishuv is fully paid by definition.
   </tr>
   {% for g in groups %}
   {% comment %}
-  The hamkor said once, at the head of their block, instead of repeated down a
-  column beside every kelishuv they hold. Qolgan to'lov rides up here as one line
-  PER CURRENCY: a hamkor owed on a dollar kelishuv and a so'm one is owed two
-  debts, and adding them would need a kurs neither side agreed on.
+  One line per hamkor: who they are, how many kelishuv they hold, what it is all
+  worth and what is still owed on it — then Ko'rish opens their kelishuvlar
+  underneath. Jami and Qolgan to'lov are one badge PER CURRENCY, because a hamkor
+  dealt with in both is owed two separate debts and adding them would need a kurs
+  neither kelishuv was struck at.
   {% endcomment %}
   <tr class="kelishuv-row">
     <td colspan="9">
       <div class="kelishuv-head">
         <span class="kelishuv-sub">{{ g.partner.name }}</span>
         <span class="kelishuv-count">{{ g.contracts|length }} kelishuv</span>
-        <span class="kelishuv-payable">
+        <span class="kelishuv-money">
+          <span class="kelishuv-money-label">Jami</span>
+          {% for currency, amount in g.total %}
+          <span class="kelishuv-money-val">{% money_in amount currency %}</span>
+          {% empty %}<span class="kelishuv-money-val">—</span>{% endfor %}
+          <span class="kelishuv-money-label">Qolgan to'lov</span>
           {% for currency, amount in g.payable %}
           <span class="badge badge-warning">{% money_in amount currency %}</span>
           {% empty %}
           <span class="badge badge-ok">Qarzsiz</span>
           {% endfor %}
         </span>
+        {% comment %}
+        The rows ship with `hidden` so the block opens closed with no flash of the
+        full list; the <noscript> below puts them back, since a page without JS has
+        no way to open them and a column of names with nothing under it is worse
+        than a long list. A search is served open — you asked for those rows.
+        {% endcomment %}
+        <button type="button" class="btn btn-sm btn-ghost hamkor-toggle"
+                data-hamkor-toggle="{{ g.partner.pk }}"
+                aria-expanded="{% if q %}true{% else %}false{% endif %}">
+          <svg class="hamkor-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          <span data-hamkor-label>{% if q %}Yopish{% else %}Ko'rish{% endif %}</span>
+        </button>
       </div>
     </td>
   </tr>
   {% for c in g.contracts %}
-  <tr>
+  <tr data-hamkor-rows="{{ g.partner.pk }}"{% if not q %} hidden{% endif %}>
     <td class="sticky-col">
       <a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
     </td>
