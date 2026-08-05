@@ -34,6 +34,7 @@ from .models import (
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
     bron_queue, commission_total, contract_value_by_currency, convert_pair,
+    draw_down_bron, release_bron,
     logist_positions, payable_by_currency,
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
@@ -1525,6 +1526,10 @@ def sale_create(request):
                     )
                     slices.append(sale)
                     remaining -= take
+                    # Serving this mijoz makes their own promise smaller, whichever
+                    # lot the granula came off. Per slice and in order, so the bron
+                    # is drawn down by exactly what was sold.
+                    draw_down_bron(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
                 f"Yangi sotuv (FIFO): {data['kg']} kg {data['brand']} · "
@@ -1568,6 +1573,7 @@ def sale_create_lot(request, lot_id):
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
             )
+            draw_down_bron(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
                 f"Yangi sotuv (lot #{sale.line_id}): {sale.kg} kg "
@@ -1588,7 +1594,16 @@ def sale_edit(request, pk):
     title = "Sotuvni tahrirlash"
     if request.method == "POST":
         if form.is_valid():
+            # The bron this sotuv drew from is holding kg that are about to change
+            # (or move to another mijoz). Put them back before the edit lands, then
+            # draw again from whatever the sotuv now is — releasing afterwards would
+            # give back the NEW kg, which is not what was taken.
+            release_bron(sale)
             sale = form.save()
+            if sale.reservation_id:
+                sale.reservation = None
+                sale.save(update_fields=["reservation"])
+            draw_down_bron(sale)
             moved = sale.customer_id != previous_customer_id
             if moved:
                 # The allocations are slices of the PREVIOUS mijoz's to'lovlar. They
@@ -1620,6 +1635,9 @@ def sale_delete(request, pk):
         label = f"{sale.kg} kg · {sale.customer.name}"
         customer = sale.customer
         try:
+            # The promise this sotuv settled is unkept again, so its kg go back on
+            # the bron and a bron it closed reopens.
+            release_bron(sale)
             sale.delete()
             # Its allocations went with it (CASCADE); that money is avans again, and
             # the mijoz's other open sotuvlar have first claim on it.

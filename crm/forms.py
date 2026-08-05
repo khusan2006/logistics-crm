@@ -935,22 +935,30 @@ class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
         # can see where the difference went rather than wondering.
         costed = brand_stock_costed()
         self.stock = {row["brand"]: row["free"] for row in costed}
+        # A bronned marka stays on the list even with nothing free: its own bron
+        # holder is allowed to buy it, and dropping it left them unable to pick the
+        # granula that was reserved FOR them. Which mijoz is buying is not known
+        # until clean(), so the ceiling is checked there, per customer.
         self.fields["brand"].choices = [
             (row["brand"],
              f"{row['brand']} · {', '.join(row['codes'])} · "
              f"{_clean_number(row['free'])} kg bo'sh"
              + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
              + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for row in costed if row["free"] > 0
+            for row in costed if row["free"] > 0 or row["reserved"] > 0
         ]
 
     def clean(self):
         cleaned = super().clean()
         brand, kg = cleaned.get("brand"), cleaned.get("kg")
+        customer = cleaned.get("customer")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
         if brand and kg is not None and kg > 0:
-            available = self.stock.get(brand, Decimal("0"))
+            # Per BUYER: this mijoz's own bron does not block them, somebody else's
+            # does. Falls back to the shelf-wide figure while the mijoz is missing,
+            # so an incomplete form still cannot oversell.
+            available = brand_free_kg(brand, customer)
             if kg > available:
                 self.add_error(
                     "kg", f"Sotish mumkin bo'lgan qoldiqdan oshmasligi kerak "
@@ -986,17 +994,19 @@ class SaleLotForm(PriceEntryFormMixin, forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         lot, kg = cleaned.get("lot"), cleaned.get("kg")
+        customer = cleaned.get("customer")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
         if lot and kg is not None and kg > 0:
             # Two ceilings, both real: this lot's own physical kg, and what is left
-            # of the marka once the bron queue has its share. Selling one lot dry is
-            # still overselling if the granula was promised to somebody.
+            # of the marka once OTHER mijozlar's brons have their share. Selling one
+            # lot dry is still overselling if the granula was promised to somebody
+            # else — but the buyer's own bron is not somebody else.
             if kg > lot.available_kg:
                 self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
                                      f"({_clean_number(lot.available_kg)} kg)")
             else:
-                free = brand_free_kg(lot.brand)
+                free = brand_free_kg(lot.brand, customer)
                 if kg > free:
                     self.add_error(
                         "kg", f"Bu markadan {_clean_number(free)} kg sotish mumkin — "

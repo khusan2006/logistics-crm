@@ -1498,10 +1498,17 @@ def bron_queue(brand=None):
     return [r for r in qs if r.remaining_kg > 0]
 
 
-def brand_reserved_kg(brand):
+def brand_reserved_kg(brand, exclude_customer=None):
     """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
-    a bron half filled from an earlier truck only blocks the half still owed."""
-    return sum((r.remaining_kg for r in bron_queue(brand)), Decimal("0"))
+    a bron half filled from an earlier truck only blocks the half still owed.
+
+    `exclude_customer` leaves that mijoz's OWN brons out. Their promise does not
+    stand between them and the granula it promises them: counting it did, and a
+    bron holder could not buy their own bronned marka over the counter at all —
+    which in turn meant an ordinary sotuv could never draw the bron down."""
+    keep = (r for r in bron_queue(brand)
+            if exclude_customer is None or r.customer_id != exclude_customer.pk)
+    return sum((r.remaining_kg for r in keep), Decimal("0"))
 
 
 def brand_on_hand_kg(brand):
@@ -1512,13 +1519,19 @@ def brand_on_hand_kg(brand):
                Decimal("0"))
 
 
-def brand_free_kg(brand):
-    """What an ordinary sotuv may take: on the shelf, minus what is bronned.
+def brand_free_kg(brand, customer=None):
+    """What an ordinary sotuv may take: on the shelf, minus what is bronned for
+    SOMEBODY ELSE.
+
+    Pass the buyer and their own bron stops counting against them — see
+    `brand_reserved_kg`. Without a buyer this is the shelf-wide figure the ombor
+    screens show, which still nets off every bron.
 
     Never negative — brons can be taken against goods that have not landed yet, so
     promised can legitimately exceed on-hand, and reporting that as a negative
     shelf figure would be nonsense rather than information."""
-    return max(brand_on_hand_kg(brand) - brand_reserved_kg(brand), Decimal("0"))
+    return max(brand_on_hand_kg(brand) - brand_reserved_kg(brand, customer),
+               Decimal("0"))
 
 
 def bron_brands():
@@ -1548,6 +1561,64 @@ def fifo_lots(brand):
     lots = arrived_lots().filter(contract_line__brand=brand).order_by(
         "shipment__arrived", "id")
     return [lot for lot in lots if lot.available_kg > 0]
+
+
+def draw_down_bron(sale):
+    """Take a sotuv out of its OWN mijoz's bron for that marka. Returns the kg drawn.
+
+    A bron is a promise of kg of one marka to one mijoz. When that mijoz is served,
+    the promise is smaller — however the granula reached them. Only the Brondan
+    sotuv button used to say so, so an ordinary sotuv to the bron's own holder left
+    the bron sitting at its full kg forever.
+
+    That is not a cosmetic drift. A bron blocks the shelf, so bron #1 (74 400 kg of
+    2102 campaund) went on blocking 74 400 kg against 41 640 kg on hand while its
+    holder bought 24 000 kg of it over the counter — the marka read as unsellable
+    for everybody, its own holder included.
+
+    Their own brons only, oldest first: somebody else's bron is somebody else's
+    promise and this sotuv does not settle it. A sotuv that already came FROM a
+    bron is left alone — `reservation_convert` has booked it."""
+    if sale.reservation_id:
+        return Decimal("0")
+    remaining, drawn = sale.kg, Decimal("0")
+    for bron in bron_queue(sale.line.brand):
+        if remaining <= 0:
+            break
+        if bron.customer_id != sale.customer_id:
+            continue
+        take = min(bron.remaining_kg, remaining)
+        bron.fulfilled_kg += take
+        if bron.remaining_kg <= 0:
+            bron.status = Reservation.Status.CONVERTED
+        bron.save(update_fields=["fulfilled_kg", "status"])
+        # Linked to the FIRST bron it touched, so the sotuv can say which promise it
+        # went against and `release_bron` knows where to put the kg back.
+        if sale.reservation_id is None:
+            sale.reservation = bron
+            sale.save(update_fields=["reservation"])
+        remaining -= take
+        drawn += take
+    return drawn
+
+
+def release_bron(sale):
+    """Give a sotuv's kg back to the bron it was drawn from — for an edit or a
+    delete. Returns the kg released.
+
+    A bron closed by the sotuv reopens: the promise is unkept again, and a bron
+    that stayed CONVERTED would go on reading as served while the mijoz waits."""
+    bron = sale.reservation
+    if bron is None:
+        return Decimal("0")
+    give = min(sale.kg, bron.fulfilled_kg)
+    if give <= 0:
+        return Decimal("0")
+    bron.fulfilled_kg -= give
+    if bron.status == Reservation.Status.CONVERTED and bron.remaining_kg > 0:
+        bron.status = Reservation.Status.ACTIVE
+    bron.save(update_fields=["fulfilled_kg", "status"])
+    return give
 
 
 def brand_stock_costed():

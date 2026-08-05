@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
+    brand_free_kg,
 )
 
 
@@ -400,3 +401,93 @@ class TestReservationTotal:
         r = Reservation.objects.get()
         assert r.total == Decimal("7500.00")
         assert r.total_uzs == Decimal("90000000.00")   # 5000 × 1.50 × 12000
+
+
+class TestAnOrdinarySotuvDrawsTheBronDown:
+    """The bug: fulfilled_kg was only ever written by the Brondan sotuv button, so
+    an ordinary sotuv to the bron's OWN holder left the promise at its full kg. And
+    since a bron blocks the shelf, bron #1 in the real book (74 400 kg of 2102
+    campaund against 41 640 kg on hand) froze the marka for everybody while its
+    holder bought 24 000 kg of it over the counter."""
+
+    def _bron(self, customer, brand="LLDPE", kg="6000"):
+        return Reservation.objects.create(
+            customer=customer, brand=brand, kg=Decimal(kg), price=Decimal("1.50"))
+
+    def _sell(self, client, customer, brand, kg):
+        return client.post("/sales/new/", {
+            "customer": customer.pk, "brand": brand, "kg": kg,
+            "currency": "usd", "price": "1.50", "exchange_rate": "12000",
+            "date": "2026-07-20"})
+
+    def test_selling_to_the_holder_shrinks_their_bron(self, admin_client, db):
+        lot = _arrived_lot(kg="10000")
+        customer = _customer()
+        bron = self._bron(customer)                       # 6 000 kg promised
+
+        assert self._sell(admin_client, customer, lot.brand, "2000").status_code in (204, 302)
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("2000.000")
+        assert bron.remaining_kg == Decimal("4000.000")
+        assert bron.status == Reservation.Status.ACTIVE
+
+    def test_the_sotuv_says_which_bron_it_went_against(self, admin_client, db):
+        lot = _arrived_lot(kg="10000")
+        customer = _customer()
+        bron = self._bron(customer)
+        self._sell(admin_client, customer, lot.brand, "2000")
+        assert Sale.objects.get().reservation_id == bron.pk
+
+    def test_a_bron_served_in_full_closes(self, admin_client, db):
+        lot = _arrived_lot(kg="10000")
+        customer = _customer()
+        bron = self._bron(customer, kg="2000")
+        self._sell(admin_client, customer, lot.brand, "2000")
+        bron.refresh_from_db()
+        assert bron.remaining_kg == Decimal("0.000")
+        assert bron.status == Reservation.Status.CONVERTED
+
+    def test_somebody_elses_bron_is_not_touched(self, admin_client, db):
+        """A bron is a promise to ONE mijoz. Serving a different one does not
+        settle it, and must not quietly hand their granula away."""
+        lot = _arrived_lot(kg="10000")
+        holder, walk_in = _customer("Bron egasi"), _customer("Boshqa mijoz")
+        bron = self._bron(holder, kg="6000")
+
+        self._sell(admin_client, walk_in, lot.brand, "1000")
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
+
+    def test_the_holders_own_bron_does_not_block_them(self, admin_client, db):
+        """The freeze. On-hand 4 000, bronned 6 000 for this mijoz — shelf-wide free
+        is 0, so the marka used to be unsellable even to the person it was being
+        held for."""
+        lot = _arrived_lot(kg="4000")
+        customer = _customer()
+        self._bron(customer, kg="6000")
+
+        assert brand_free_kg(lot.brand) == Decimal("0")
+        assert brand_free_kg(lot.brand, customer) == Decimal("4000.000")
+        self._sell(admin_client, customer, lot.brand, "4000")
+        assert Sale.objects.count() == 1
+
+    def test_a_walk_in_is_still_blocked_by_that_bron(self, admin_client, db):
+        lot = _arrived_lot(kg="4000")
+        holder, walk_in = _customer("Bron egasi"), _customer("Boshqa mijoz")
+        self._bron(holder, kg="6000")
+
+        self._sell(admin_client, walk_in, lot.brand, "4000")
+        assert Sale.objects.count() == 0                  # rejected, all of it promised
+
+    def test_deleting_the_sotuv_gives_the_kg_back(self, admin_client, db):
+        lot = _arrived_lot(kg="10000")
+        customer = _customer()
+        bron = self._bron(customer, kg="2000")
+        self._sell(admin_client, customer, lot.brand, "2000")
+        bron.refresh_from_db()
+        assert bron.status == Reservation.Status.CONVERTED
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/delete/")
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert bron.status == Reservation.Status.ACTIVE   # the promise is unkept again
