@@ -68,14 +68,14 @@ def test_hamkor_qarzi_covers_every_kelishuv_not_just_shipped_goods(admin_client,
 
     resp = admin_client.get("/")
     assert c.debt == Decimal("200")                     # yuborilgani bo'yicha
-    assert resp.context["debt_total"] == Decimal("1000")   # butun kelishuv bo'yicha
+    assert resp.context["debt_split"] == [("usd", Decimal("1000"))]   # butun kelishuv bo'yicha
 
 
 def test_hamkor_qarzi_drops_as_payments_land(admin_client, db):
     c = make_contract(kg="1000", price="1.00")
     SupplierPayment.objects.create(contract=c, date="2026-07-20",
                                    amount=Decimal("300"), method="cash")
-    assert admin_client.get("/").context["debt_total"] == Decimal("700")
+    assert admin_client.get("/").context["debt_split"] == [("usd", Decimal("700"))]
 
 
 def test_kelishuvlar_chart_labels_every_marka(admin_client, db):

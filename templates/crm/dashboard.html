@@ -34,7 +34,13 @@
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
       <span class="kpi-label">Jami to'langan</span>
     </div>
-    <div class="kpi-value">{% money_both paid_total paid_total_uzs %}</div>
+    {% comment %}
+    One figure per currency, never added — the same rule the kassa board follows.
+    Summing both stored columns counted every dollar row a second time in so'm.
+    {% endcomment %}
+    {% for currency, amount in paid_split %}
+    <div class="kpi-value">{% money_in amount currency %}</div>
+    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
   </div>
 
   <div class="kpi kpi--red">
@@ -42,7 +48,9 @@
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
       <span class="kpi-label">Hamkor qarzi</span>
     </div>
-    <div class="kpi-value">{% money_both debt_total debt_total_uzs %}</div>
+    {% for currency, amount in debt_split %}
+    <div class="kpi-value">{% money_in amount currency %}</div>
+    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
     <div class="kpi-meta muted">barcha kelishuvlar bo'yicha</div>
   </div>
 
@@ -67,7 +75,9 @@
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
       <span class="kpi-label">Mijoz qarzi</span>
     </div>
-    <div class="kpi-value">{% money_both customer_debt_total customer_debt_total_uzs %}</div>
+    {% for currency, amount in customer_debt_split %}
+    <div class="kpi-value">{% money_in amount currency %}</div>
+    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
   </div>
 
   <div class="kpi kpi--gold">
@@ -75,6 +85,10 @@
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
       <span class="kpi-label">Sotuvdan foyda</span>
     </div>
+    {% comment %}
+    Deliberately still a converted pair: foyda is measured against the landed cost,
+    and a tannarx blends a dollar mol with a so'm transport bill by design.
+    {% endcomment %}
     <div class="kpi-value">{% money_both sales_profit_total sales_profit_total_uzs %}</div>
   </div>
 </div>

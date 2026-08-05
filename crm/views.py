@@ -33,9 +33,11 @@ from .models import (
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
-    bron_queue, commission_total, convert_pair,
+    _by_currency, bron_queue, commission_total, contract_value_by_currency,
+    convert_pair,
+    customer_paid_by_currency, customer_sales_by_currency,
     draw_down_bron, release_bron,
-    logist_positions, payable_by_currency,
+    logist_positions, payable_by_currency, supplier_paid_by_currency,
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
     kassa_cash_by_currency, partner_positions, partner_positions_by_currency,
@@ -55,13 +57,15 @@ def dashboard(request):
     shipped_kg = ShipmentLine.objects.aggregate(s=Sum("kg"))["s"] or 0
     arrived_kg = ShipmentLine.objects.filter(
         shipment__arrived__isnull=False).aggregate(s=Sum("kg"))["s"] or 0
-    paid_total = SupplierPayment.objects.aggregate(s=Sum("amount"))["s"] or 0
-    paid_total_uzs = SupplierPayment.objects.aggregate(s=Sum("amount_uzs"))["s"] or 0
+    # Per currency, like the kassa board: summing both stored columns counts every
+    # dollar row a second time in so'm clothing, which is what put 3 758 mln so'm of
+    # mijoz qarzi on a book that holds 1 128 mln.
+    paid_split = supplier_paid_by_currency(SupplierPayment.objects.all())
     # Across every kelishuv, not only the goods already sent: this is the whole
     # remaining obligation to hamkorlar. Kassa keeps its own narrower figure for
     # what is due right now — that one is captioned as such.
-    debt_total = sum((c.payable_left for c in contracts), Decimal("0"))
-    debt_total_uzs = sum((c.payable_left_uzs for c in contracts), Decimal("0"))
+    debt_split = payable_by_currency(
+        contracts.prefetch_related("lines__shipment_lines", "supplier_payments"))
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
     # Each holat with how many trucks each hamkor has sitting in it. Listing the
@@ -103,22 +107,21 @@ def dashboard(request):
 
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
-    in_debt = [c for c in Customer.objects.all() if c.balance > 0]
-    customer_debt_total = sum((c.balance for c in in_debt), Decimal("0"))
-    customer_debt_total_uzs = sum((c.balance_uzs for c in in_debt), Decimal("0"))
+    customer_debt_split, _debtors = customer_receivable_by_currency()
+    # Foyda stays a converted pair on purpose: it is measured against the landed
+    # cost, and a tannarx blends a dollar mol with a so'm transport bill by design.
     sales_profit_total = sum((s.profit for s in Sale.objects.all()), Decimal("0"))
     sales_profit_total_uzs = sum((s.profit_uzs for s in Sale.objects.all()), Decimal("0"))
 
     return render(request, "crm/dashboard.html", {
         "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
-        "paid_total": paid_total, "debt_total": debt_total, "overdue": overdue,
-        "paid_total_uzs": paid_total_uzs, "debt_total_uzs": debt_total_uzs,
-        "customer_debt_total_uzs": customer_debt_total_uzs,
+        "paid_split": paid_split, "debt_split": debt_split, "overdue": overdue,
+        "customer_debt_split": customer_debt_split,
         "sales_profit_total_uzs": sales_profit_total_uzs,
         "contracts": chart_contracts, "contracts_shown": len(chart_contracts),
         "contracts_total": contracts_total, "status_rows": status_rows,
         "truck_plan_rows": truck_plan_rows,
-        "stock_kg": stock_kg, "customer_debt_total": customer_debt_total,
+        "stock_kg": stock_kg,
         "sales_profit_total": sales_profit_total,
         "monthly": _monthly_rows(),
     })
@@ -2534,17 +2537,17 @@ def reports(request):
     yuborilgan_kg = _sum(ShipmentLine.objects.filter(shipment__in=shipments), "kg")
     omborga_kelgan_kg = _sum(ShipmentLine.objects.filter(
         shipment__in=shipments.filter(arrived__isnull=False)), "kg")
-    kontrakt_summasi = sum((c.total_value for c in contracts), Decimal("0"))
-    hamkorga_tolangan = _sum(sup_pays)
-    hamkor_qarzi = sum((c.debt for c in contracts), Decimal("0"))
-    in_debt = [c for c in Customer.objects.all() if c.balance > 0]
-    mijoz_qarzi = sum((c.balance for c in in_debt), Decimal("0"))
+    # Every money KPI here is per currency, the same rule the kassa board follows:
+    # summing both stored columns counts each dollar row a second time in so'm
+    # clothing, which reported 3 758 mln so'm of mijoz qarzi against a real 1 128 mln.
+    priced = contracts.prefetch_related("lines__shipment_lines", "supplier_payments")
+    kontrakt_summasi = contract_value_by_currency(priced)
+    hamkorga_tolangan = supplier_paid_by_currency(sup_pays)
+    hamkor_qarzi = _by_currency((c.currency, c.debt_own) for c in priced)
+    mijoz_qarzi, _debtors = customer_receivable_by_currency()
+    # Foyda stays a converted pair: it is measured against the landed cost, and a
+    # tannarx blends a dollar mol with a so'm transport bill by design.
     profit_total = sum((s.profit for s in sales), Decimal("0"))
-    # so'm twins — each summed from the rows' own stored so'm values
-    kontrakt_summasi_uzs = sum((c.total_value_uzs for c in contracts), Decimal("0"))
-    hamkorga_tolangan_uzs = _sum(sup_pays, "amount_uzs")
-    hamkor_qarzi_uzs = sum((c.debt_uzs for c in contracts), Decimal("0"))
-    mijoz_qarzi_uzs = sum((c.balance_uzs for c in in_debt), Decimal("0"))
     profit_total_uzs = sum((s.profit_uzs for s in sales), Decimal("0"))
     late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False) if s.is_overdue]
     kechikkan_soni = len(late_shipments)
@@ -2557,14 +2560,15 @@ def reports(request):
             "partner": partner,
             "contracts_count": p_contracts.count(),
             "kg": _sum(ContractLine.objects.filter(contract__in=p_contracts), "kg"),
-            "kontrakt_summasi": sum((c.total_value for c in p_contracts), Decimal("0")),
-            "tolangan": _sum(sup_pays.filter(contract__partner=partner)),
-            "qarz": sum((c.debt for c in p_contracts), Decimal("0")),
-            "kontrakt_summasi_uzs": sum((c.total_value_uzs for c in p_contracts), Decimal("0")),
-            "tolangan_uzs": _sum(sup_pays.filter(contract__partner=partner), "amount_uzs"),
-            "qarz_uzs": sum((c.debt_uzs for c in p_contracts), Decimal("0")),
+            "kontrakt_summasi": contract_value_by_currency(p_contracts),
+            "tolangan": supplier_paid_by_currency(
+                sup_pays.filter(contract__partner=partner)),
+            "qarz": _by_currency((c.currency, c.debt_own) for c in p_contracts),
         })
-    partner_rows.sort(key=lambda r: r["qarz"], reverse=True)
+    # Ordered by the largest single side, since two currencies cannot be added into
+    # one sort key. Nothing on screen is built from it.
+    partner_rows.sort(key=lambda r: max([a for _c, a in r["qarz"]] or [Decimal("0")]),
+                      reverse=True)
 
     # Per-customer table
     customer_rows = []
@@ -2572,27 +2576,23 @@ def reports(request):
     for customer in Customer.objects.filter(pk__in=customer_ids):
         c_sales = sales.filter(customer=customer)
         # net (post-returns) so the row reconciles with the net-based qarz column
-        sotildi = sum((s.net_total for s in c_sales), Decimal("0"))
-        tolandi = sum((p.net_amount for p in cust_pays.filter(customer=customer)),
-                      Decimal("0"))
-        qarz = customer.balance if customer.balance > 0 else Decimal("0")
+        owed = [(currency, amount)
+                for currency, amount in customer_balance_by_currency(customer)
+                if amount > 0]
         customer_rows.append({
-            "customer": customer, "sotildi": sotildi, "tolandi": tolandi, "qarz": qarz,
-            "sotildi_uzs": sum((s.net_total_uzs for s in c_sales), Decimal("0")),
-            "tolandi_uzs": sum((p.net_amount_uzs for p in cust_pays.filter(customer=customer)),
-                               Decimal("0")),
-            "qarz_uzs": customer.balance_uzs if customer.balance > 0 else Decimal("0"),
+            "customer": customer,
+            "sotildi": customer_sales_by_currency(c_sales),
+            "tolandi": customer_paid_by_currency(cust_pays.filter(customer=customer)),
+            "qarz": owed,
         })
-    customer_rows.sort(key=lambda r: r["qarz"], reverse=True)
+    customer_rows.sort(key=lambda r: max([a for _c, a in r["qarz"]] or [Decimal("0")]),
+                       reverse=True)
 
     return render(request, "crm/reports.html", {
         "kelishilgan_kg": kelishilgan_kg, "yuborilgan_kg": yuborilgan_kg,
         "omborga_kelgan_kg": omborga_kelgan_kg, "kontrakt_summasi": kontrakt_summasi,
         "hamkorga_tolangan": hamkorga_tolangan, "hamkor_qarzi": hamkor_qarzi,
         "mijoz_qarzi": mijoz_qarzi, "profit_total": profit_total,
-        "kontrakt_summasi_uzs": kontrakt_summasi_uzs,
-        "hamkorga_tolangan_uzs": hamkorga_tolangan_uzs,
-        "hamkor_qarzi_uzs": hamkor_qarzi_uzs, "mijoz_qarzi_uzs": mijoz_qarzi_uzs,
         "profit_total_uzs": profit_total_uzs,
         "kechikkan_soni": kechikkan_soni, "late_shipments": late_shipments,
         "partner_rows": partner_rows, "customer_rows": customer_rows,
@@ -2675,14 +2675,28 @@ def export_sales(request):
 
 @role_required(User.Role.ADMIN)
 def export_debts(request):
+    # A qarz column carries only what is owed IN that currency. Putting a dollar
+    # sotuv's so'm face in the so'm column too counts it twice, and this figure
+    # leaves the app — it is read in Excel with no row context to correct it.
     headers = ["Mijoz", "Telefon", "Jami savdo ($)", "Jami savdo (so'm)",
                "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
-    rows = (
-        [c.name, c.phone, c.sales_total, c.sales_total_uzs,
-         c.paid_total, c.paid_total_uzs, c.balance, c.balance_uzs]
-        for c in Customer.objects.all() if c.balance > 0
-    )
-    return xlsx_response("qarzdorlar.xlsx", headers, rows)
+
+    def _rows():
+        customers = Customer.objects.prefetch_related(
+            "sales__returns", "sales__allocations", "customer_payments__allocations")
+        for customer in customers:
+            owed = dict(customer_balance_by_currency(customer))
+            usd, uzs = owed.get(Currency.USD, Decimal("0")), owed.get(Currency.UZS, Decimal("0"))
+            if usd <= 0 and uzs <= 0:
+                continue
+            sold = dict(customer_sales_by_currency(customer.sales.all()))
+            paid = dict(customer_paid_by_currency(customer.customer_payments.all()))
+            yield [customer.name, customer.phone,
+                   sold.get(Currency.USD, Decimal("0")), sold.get(Currency.UZS, Decimal("0")),
+                   paid.get(Currency.USD, Decimal("0")), paid.get(Currency.UZS, Decimal("0")),
+                   max(usd, Decimal("0")), max(uzs, Decimal("0"))]
+
+    return xlsx_response("qarzdorlar.xlsx", headers, _rows())
 
 
 # ── Logistlar ────────────────────────────────────────────────────────────────────

@@ -81,6 +81,19 @@ def _total(rows, column):
     return sum((_dec(r[column]) for r in rows), Decimal("0"))
 
 
+def _side(split, currency="usd"):
+    """One currency out of a per-currency screen figure.
+
+    The report KPIs are lists of (currency, amount) now, so an export column is
+    compared against the side it belongs to — and, where the file mixes currencies
+    down one column, against only the rows typed in that currency."""
+    return dict(split).get(currency, Decimal("0"))
+
+
+def _in_currency(rows, valyuta):
+    return [r for r in rows if r["Valyuta"] == valyuta]
+
+
 def _close(left, right, quantum="0.01"):
     """Excel round-trips a Decimal through a float, so a column total is compared
     to the screen's Decimal at the column's own precision, not bit for bit."""
@@ -399,8 +412,8 @@ def test_contracts_export_jami_sums_to_the_screen_kontrakt_summasi(admin_client,
     rows = _rows(admin_client.get(CONTRACTS))
     screen = admin_client.get("/reports/").context
     assert len(rows) == 2
-    assert _total(rows, "Jami ($)") == screen["kontrakt_summasi"]
-    assert _total(rows, "Jami (so'm)") == screen["kontrakt_summasi_uzs"]
+    assert _total(rows, "Jami ($)") == _side(screen["kontrakt_summasi"])
+    assert _side(screen["kontrakt_summasi"], "uzs") == Decimal("0")  # dollar kelishuvlar
 
 
 # withdrawn: the original marker called the repeated To'langan/Qarz a bug ("summing
@@ -438,10 +451,15 @@ def test_contracts_export_repeats_the_per_kelishuv_money_on_every_product_row(ad
     assert {_dec(r["Qarz ($)"]) for r in rows} == {Decimal("2500")}
     assert {_dec(r["To'langan (so'm)"]) for r in rows} == {Decimal("6000000")}
     # counted once per kelishuv they are exactly the screen's KPIs
-    assert _once_per(rows, "Kelishuv", "To'langan ($)") == screen["hamkorga_tolangan"]
-    assert _once_per(rows, "Kelishuv", "To'langan (so'm)") == screen["hamkorga_tolangan_uzs"]
-    assert _once_per(rows, "Kelishuv", "Qarz ($)") == screen["hamkor_qarzi"]
-    assert _once_per(rows, "Kelishuv", "Qarz (so'm)") == screen["hamkor_qarzi_uzs"]
+    assert (_once_per(rows, "Kelishuv", "To'langan ($)")
+            == _side(screen["hamkorga_tolangan"]))
+    # The so'm column of a DOLLAR kelishuv is that kelishuv's twin, which the screen
+    # no longer counts as a so'm obligation at all — so the file's so'm column has a
+    # figure the KPI deliberately leaves empty.
+    assert _once_per(rows, "Kelishuv", "To'langan (so'm)") == Decimal("6000000")
+    assert _side(screen["hamkorga_tolangan"], "uzs") == Decimal("0")
+    assert _once_per(rows, "Kelishuv", "Qarz ($)") == _side(screen["hamkor_qarzi"])
+    assert _side(screen["hamkor_qarzi"], "uzs") == Decimal("0")
 
 
 def test_supplier_payments_export_sums_to_the_screen_kpi(admin_client, db):
@@ -457,8 +475,12 @@ def test_supplier_payments_export_sums_to_the_screen_kpi(admin_client, db):
 
     rows = _rows(admin_client.get(SUP_PAYS))
     screen = admin_client.get("/reports/").context
-    assert _total(rows, "Hamkorga ($)") == screen["hamkorga_tolangan"]
-    assert _total(rows, "Hamkorga (so'm)") == screen["hamkorga_tolangan_uzs"]
+    # Compared side for side: the file keeps every row's twin in both columns, so
+    # only the rows typed in a currency add up to that side of the screen figure.
+    assert (_total(_in_currency(rows, "Dollar"), "Hamkorga ($)")
+            == _side(screen["hamkorga_tolangan"]))
+    assert (_total(_in_currency(rows, "So'm"), "Hamkorga (so'm)")
+            == _side(screen["hamkorga_tolangan"], "uzs"))
 
 
 def test_sales_export_foyda_sums_to_the_screen_profit_total(admin_client, db):
@@ -492,8 +514,8 @@ def test_debts_export_qarz_sums_to_the_screen_mijoz_qarzi(admin_client, db):
     rows = _rows(admin_client.get(DEBTS))
     screen = admin_client.get("/reports/").context
     assert len(rows) == 2
-    assert _close(_total(rows, "Qarz ($)"), screen["mijoz_qarzi"])
-    assert _close(_total(rows, "Qarz (so'm)"), screen["mijoz_qarzi_uzs"])
+    assert _close(_total(rows, "Qarz ($)"), _side(screen["mijoz_qarzi"]))
+    assert _close(_total(rows, "Qarz (so'm)"), _side(screen["mijoz_qarzi"], "uzs"))
 
 
 def test_shipments_export_kg_matches_the_screen_yuborilgan_kg(admin_client, db):
@@ -663,9 +685,9 @@ def test_customer_row_qarz_adds_up_with_no_date_filter(admin_client, db):
         amount_uzs=Decimal("4800000.00"), method="cash")
 
     row = admin_client.get("/reports/").context["customer_rows"][0]
-    assert row["sotildi"] == Decimal("1500.00")
-    assert row["tolandi"] == Decimal("400.00")
-    assert row["qarz"] == row["sotildi"] - row["tolandi"] == Decimal("1100.00")
+    assert _side(row["sotildi"]) == Decimal("1500.00")
+    assert _side(row["tolandi"]) == Decimal("400.00")
+    assert _side(row["qarz"]) == _side(row["sotildi"]) - _side(row["tolandi"]) == Decimal("1100.00")
 
 
 # ── every money column is supposed to ship both currencies ───────────────────
@@ -954,5 +976,6 @@ def test_deleting_one_hamkor_tolovi_leaves_the_other_rows_untouched(admin_client
     assert len(rows) == 1
     assert rows[0] == before
     screen = admin_client.get("/reports/").context
-    assert screen["hamkorga_tolangan"] == keep.amount
-    assert screen["hamkorga_tolangan_uzs"] == keep.amount_uzs
+    kept_side = "uzs" if keep.is_som else "usd"
+    assert _side(screen["hamkorga_tolangan"], kept_side) == (
+        keep.amount_uzs if keep.is_som else keep.amount)

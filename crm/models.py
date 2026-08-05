@@ -1386,6 +1386,40 @@ def partner_positions():
             "contracts": prepaid_contracts}
 
 
+def contract_value_by_currency(contracts):
+    """[(currency, jami)] over a set of kelishuvlar, each at the value it was agreed
+    at and in the money it was agreed in.
+
+    The companion to `payable_by_currency` at the head of a report: one says what the
+    whole business with a hamkor is worth, the other what is still owed on it. Both
+    refuse to add across currencies, for the same reason."""
+    return _by_currency((c.currency, c.total_value_own) for c in contracts)
+
+
+def supplier_paid_by_currency(payments):
+    """[(currency, hamkorga to'langan)] over a set of hamkor to'lovlari.
+
+    Read in the currency each to'lov was MADE in — the same bucketing the To'lovlar
+    list uses, so the report header and the rows behind it cannot disagree."""
+    return _by_currency(
+        (payment.currency, own_side(payment, payment.amount, payment.amount_uzs))
+        for payment in payments)
+
+
+def customer_sales_by_currency(sales):
+    """[(currency, sotildi)] — turnover in the currency each sotuv was agreed in."""
+    return _by_currency((sale.currency, sale.net_total_own) for sale in sales)
+
+
+def customer_paid_by_currency(payments):
+    """[(currency, to'landi)] — what mijozlar handed over, in the currency it
+    arrived in. `net_amount`, so a bank foiz that never reached us is not counted
+    as money received."""
+    return _by_currency(
+        (payment.currency, own_side(payment, payment.net_amount, payment.net_amount_uzs))
+        for payment in payments)
+
+
 def partner_positions_by_currency():
     """Both sides of the hamkor relationship, per currency and still kept apart.
 

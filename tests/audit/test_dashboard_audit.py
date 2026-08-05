@@ -28,7 +28,8 @@ from conftest import make_contract, make_shipment
 from crm.models import (
     ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation,
     Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
-    SupplierPayment, arrived_lots, brand_on_hand_kg, customer_receivable_total,
+    SupplierPayment, arrived_lots, brand_on_hand_kg,
+    customer_receivable_by_currency, customer_receivable_total,
     partner_positions, stock_value,
 )
 
@@ -38,9 +39,17 @@ TODAY = timezone.localdate()
 
 #: Everything the dashboard prints as a number, so a whole board can be snapshotted.
 FIGURES = ("total_kg", "shipped_kg", "arrived_kg", "stock_kg",
-           "paid_total", "paid_total_uzs", "debt_total", "debt_total_uzs",
-           "customer_debt_total", "customer_debt_total_uzs",
+           "paid_split", "debt_split", "customer_debt_split",
            "sales_profit_total", "sales_profit_total_uzs")
+
+
+def _side(split, currency=Currency.USD):
+    """One currency out of a per-currency figure.
+
+    The board prints a list of (currency, amount) now rather than a dollar figure
+    with a so'm twin under it: summing both stored columns counted every dollar row
+    a second time in so'm clothing. A side with no rows is absent, not zero."""
+    return dict(split).get(currency, Decimal("0"))
 
 
 # --- helpers ---------------------------------------------------------------
@@ -53,7 +62,10 @@ def _dash(client):
 
 def _figures(client):
     ctx = _dash(client).context
-    return {key: Decimal(ctx[key]) for key in FIGURES}
+    # A split is a list of (currency, amount); everything else is a plain figure.
+    # Both compare fine as-is, so a board snapshot stays one dict either way.
+    return {key: (list(ctx[key]) if key.endswith("_split") else Decimal(ctx[key]))
+            for key in FIGURES}
 
 
 def _months(client):
@@ -164,11 +176,10 @@ def test_jami_tolangan_sums_both_stored_columns_across_mixed_kurslar(admin_clien
     _pay_supplier(contract, "800", "10400000", rate="13000", currency=Currency.UZS)
 
     ctx = _dash(admin_client).context
-    assert ctx["paid_total"] == Decimal("1800")
-    assert ctx["paid_total_uzs"] == Decimal("22400000")
-    # 22 400 000 is not 1800 at any single kurs — mixed rates must not collapse.
-    assert ctx["paid_total_uzs"] != ctx["paid_total"] * Decimal("12000")
-    assert ctx["paid_total_uzs"] != ctx["paid_total"] * Decimal("13000")
+    # Each side counts ONLY the rows typed in it. The dollar to'lov is not counted a
+    # second time as its so'm twin, which is what inflated the so'm figure before.
+    assert _side(ctx["paid_split"]) == Decimal("1000")
+    assert _side(ctx["paid_split"], Currency.UZS) == Decimal("10400000")
 
 
 def test_hamkor_tolov_typed_in_som_reaches_the_dashboard_exact(admin_client):
@@ -188,8 +199,9 @@ def test_hamkor_tolov_typed_in_som_reaches_the_dashboard_exact(admin_client):
         Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     ctx = _dash(admin_client).context
-    assert ctx["paid_total_uzs"] == Decimal("12345678.00")
-    assert ctx["paid_total"] == payment.amount
+    assert _side(ctx["paid_split"], Currency.UZS) == Decimal("12345678.00")
+    # a so'm to'lov puts nothing on the dollar side
+    assert _side(ctx["paid_split"]) == Decimal("0")
 
 
 def test_hamkor_tolov_typed_in_usd_reaches_the_dashboard_exact(admin_client):
@@ -205,7 +217,8 @@ def test_hamkor_tolov_typed_in_usd_reaches_the_dashboard_exact(admin_client):
     assert payment.amount_uzs == (Decimal("1234.56") * Decimal("12345.67")).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP)
     ctx = _dash(admin_client).context
-    assert (ctx["paid_total"], ctx["paid_total_uzs"]) == (payment.amount, payment.amount_uzs)
+    assert _side(ctx["paid_split"]) == payment.amount
+    assert _side(ctx["paid_split"], Currency.UZS) == Decimal("0")
 
 
 # --- (b)/(c) idempotence and stickiness through the real edit views ---------
@@ -276,8 +289,8 @@ def test_resaving_a_som_kelishuv_unchanged_moves_nothing(admin_client):
     # which in an empty book is LEGACY_RATE — 15 000 / 12 000
     assert (line.price, line.price_uzs) == (Decimal("1.2500"), Decimal("15000.00"))
     before = _figures(admin_client)
-    assert before["debt_total"] == Decimal("1250.00")
-    assert before["debt_total_uzs"] == Decimal("15000000.00")
+    assert _side(before["debt_split"]) == Decimal("0")          # a so'm kelishuv
+    assert _side(before["debt_split"], Currency.UZS) == Decimal("15000000.00")
 
     _resave(admin_client, f"/contracts/{line.contract_id}/edit/",
             extra_forms=("lines_after",), formsets=("lines",))
@@ -317,9 +330,9 @@ def test_hamkor_qarzi_equals_the_sum_of_each_kelishuv_payable_left(admin_client)
     _pay_supplier(b, "500", "6500000", rate="13000", currency=Currency.UZS)
 
     ctx = _dash(admin_client).context
-    assert ctx["debt_total"] == a.payable_left + b.payable_left
-    assert ctx["debt_total_uzs"] == a.payable_left_uzs + b.payable_left_uzs
-    assert ctx["debt_total"] == Decimal("1000") - Decimal("300") + Decimal("1500") - Decimal("500")
+    assert _side(ctx["debt_split"]) == a.payable_left_own + b.payable_left_own
+    assert _side(ctx["debt_split"], Currency.UZS) == Decimal("0")   # both are dollar kelishuvlar
+    assert _side(ctx["debt_split"]) == Decimal("1000") - Decimal("300") + Decimal("1500") - Decimal("500")
 
 
 # TRIAGE: UPHELD. Not a documented decision — crm/views.py:54-56 only documents summing
@@ -327,24 +340,11 @@ def test_hamkor_qarzi_equals_the_sum_of_each_kelishuv_payable_left(admin_client)
 # negative rows in. The mijoz KPI eleven lines below (crm/views.py:100) drops negative
 # balances for precisely this reason, so the same dashboard treats the two sides of the
 # ledger differently.
-@pytest.mark.xfail(reason="BUG: 'Hamkor qarzi' NETS an over-paid kelishuv against the "
-                          "debt owed on unrelated ones, and across DIFFERENT hamkorlar. "
-                          "crm/views.py:57-58 sums Contract.payable_left / "
-                          "payable_left_uzs over every kelishuv without dropping the "
-                          "negative ones. A kelishuv paid $1 000 / 12 000 000 so'm whose "
-                          "truck then goes out at half the agreed narx has its "
-                          "expected_value fall to $500 (crm/models.py:600 "
-                          "ContractLine.expected_value: 'a truck may be priced up or "
-                          "down against it'), contributing -500.00 / -6 000 000. The "
-                          "headline then reads 500,00 $ / 6 000 000 so'm while 1 000 $ / "
-                          "12 000 000 so'm is genuinely owed to another hamkor. "
-                          "crm/models.py:1126 customer_receivable_total() filters "
-                          "balance > 0 for the mijoz side ('a mijoz sitting in avans "
-                          "does not net off another mijoz's qarz') and "
-                          "crm/models.py:1144 partner_positions() names this exact "
-                          "netting as the thing that 'hid $203 030.5 of prepayment "
-                          "behind a $50 480 payable'. The dashboard does neither.",
-                   strict=False)
+# Regression guard. This was an xfail: "Hamkor qarzi" summed Contract.payable_left
+# over every kelishuv without dropping the negative ones, so a kelishuv paid ahead of
+# a truck that then went out cheaper netted its avans against a debt owed to a
+# DIFFERENT hamkor. The KPI reads payable_by_currency now, which counts only what is
+# still owed — the same rule the mijoz side and partner_positions already followed.
 def test_hamkor_qarzi_does_not_net_a_prepaid_kelishuv_against_an_owed_one(admin_client):
     owing = make_contract(kg="1000", price="1.00")            # $1 000 still to pay
     prepaid = make_contract(kg="1000", price="1.00")
@@ -361,10 +361,10 @@ def test_hamkor_qarzi_does_not_net_a_prepaid_kelishuv_against_an_owed_one(admin_
     assert owing.payable_left == Decimal("1000.00")
     position = partner_positions()
     ctx = _dash(admin_client).context
-    assert ctx["debt_total"] == Decimal("1000.00"), (
-        f"netted to {ctx['debt_total']}; kassa reports owed={position['owed']} "
+    assert _side(ctx["debt_split"]) == Decimal("1000.00"), (
+        f"netted to {_side(ctx['debt_split'])}; kassa reports owed={position['owed']} "
         f"prepaid={position['prepaid']} separately")
-    assert ctx["debt_total_uzs"] == Decimal("12000000.00")
+    assert _side(ctx["debt_split"], Currency.UZS) == Decimal("0")   # a dollar kelishuv
 
 
 # --- (d) Mijoz qarzi -------------------------------------------------------
@@ -389,8 +389,8 @@ def test_mijoz_qarzi_drops_settled_and_overpaid_customers(admin_client):
     assert settled.balance == Decimal("0")
     assert overpaid.balance == Decimal("-300")
     ctx = _dash(admin_client).context
-    assert ctx["customer_debt_total"] == Decimal("500.00")     # only the real debtor
-    assert ctx["customer_debt_total_uzs"] == Decimal("6000000.00")
+    assert _side(ctx["customer_debt_split"]) == Decimal("500.00")     # only the real debtor
+    assert _side(ctx["customer_debt_split"], Currency.UZS) == Decimal("0")
 
 
 def test_mijoz_qarzi_matches_the_kassa_receivable_across_mixed_kurslar(admin_client):
@@ -415,12 +415,18 @@ def test_mijoz_qarzi_matches_the_kassa_receivable_across_mixed_kurslar(admin_cli
 
     total, total_uzs, count = customer_receivable_total()
     ctx = _dash(admin_client).context
-    assert (ctx["customer_debt_total"], ctx["customer_debt_total_uzs"]) == (total, total_uzs)
+    # Both boards read customer_receivable_by_currency, so they cannot disagree.
+    assert ctx["customer_debt_split"] == customer_receivable_by_currency()[0]
     assert count == 2
-    # And it is the sum of the parts, each at its OWN kurs — not a re-rated total.
+    # And each side is the sum of the sotuvlar agreed in THAT currency, not a
+    # re-rated total: the so'm buyer owes 15 000 000 less the 6 500 000 they paid.
+    assert _side(ctx["customer_debt_split"], Currency.UZS) == Decimal("8500000.00")
+    assert _side(ctx["customer_debt_split"]) == Decimal("1000.00")
     expected_uzs = sum((c.balance_uzs for c in Customer.objects.all() if c.balance > 0),
                        Decimal("0"))
-    assert ctx["customer_debt_total_uzs"] == expected_uzs == Decimal("20500000.00")
+    # the old blended twin still adds a dollar sotuv's so'm face to the so'm side;
+    # that figure is no longer what the board prints
+    assert expected_uzs == Decimal("20500000.00")
 
 
 # --- (d) Omborda qoldiq ----------------------------------------------------
@@ -615,8 +621,8 @@ def test_a_kelishuv_with_no_movement_and_a_zero_paid_row_still_renders(admin_cli
                                    currency=Currency.USD, exchange_rate=Decimal("12000"),
                                    method="cash")
     ctx = _dash(admin_client).context
-    assert ctx["paid_total"] == Decimal("0") and ctx["paid_total_uzs"] == Decimal("0")
-    assert ctx["debt_total"] == Decimal("1000.00")
+    assert _side(ctx["paid_split"]) == Decimal("0") and _side(ctx["paid_split"], Currency.UZS) == Decimal("0")
+    assert _side(ctx["debt_split"]) == Decimal("1000.00")
     assert ctx["stock_kg"] == Decimal("0")
     assert ctx["monthly"] == []                    # nothing sent, nothing sold
     assert ctx["truck_plan_rows"] == []
@@ -634,8 +640,10 @@ def test_a_legacy_rateless_row_is_counted_in_dollars_and_missing_in_som(admin_cl
     _pay_supplier(contract, "500", "6000000", rate="12000")
 
     ctx = _dash(admin_client).context
-    assert ctx["paid_total"] == Decimal("1000.00")
-    assert ctx["paid_total_uzs"] == Decimal("6000000.00")     # half the rows only
+    # Both rows were typed in dollars, so the whole figure sits on the dollar side
+    # and the so'm side has no rows of its own at all.
+    assert _side(ctx["paid_split"]) == Decimal("1000.00")
+    assert _side(ctx["paid_split"], Currency.UZS) == Decimal("0")
 
 
 def test_a_huge_and_a_tiny_kurs_both_survive_the_round_trip(admin_client):
@@ -657,8 +665,9 @@ def test_a_huge_and_a_tiny_kurs_both_survive_the_round_trip(admin_client):
     assert payments[1].amount_uzs == Decimal("1.00")           # 100 * 0.01
 
     ctx = _dash(admin_client).context
-    assert ctx["paid_total_uzs"] == Decimal("1000000000.99")
-    assert ctx["paid_total"] == payments[0].amount + Decimal("100.00")
+    # Each extreme lands on its own side, undiluted by the other's twin.
+    assert _side(ctx["paid_split"], Currency.UZS) == Decimal("999999999.99")
+    assert _side(ctx["paid_split"]) == Decimal("100.00")
 
 
 # --- (a)/(c) the Mijoz qarzi KPI, entered the way an operator enters it ------
@@ -683,11 +692,11 @@ def test_a_som_sotuv_reaches_mijoz_qarzi_exact_and_stays_a_som_sotuv(admin_clien
     assert sale.price == Decimal("1.2000")                     # 15000 / 12500
 
     ctx = _dash(admin_client).context
-    assert ctx["customer_debt_total_uzs"] == Decimal("15000000.00")
-    assert ctx["customer_debt_total"] == Decimal("1200.00")
+    assert _side(ctx["customer_debt_split"], Currency.UZS) == Decimal("15000000.00")
+    assert _side(ctx["customer_debt_split"]) == Decimal("0")   # a so'm sotuv only
     # and the KPI is the kassa's figure, not a second opinion
     total, total_uzs, count = customer_receivable_total()
-    assert (ctx["customer_debt_total"], ctx["customer_debt_total_uzs"]) == (total, total_uzs)
+    assert ctx["customer_debt_split"] == customer_receivable_by_currency()[0]
     assert count == 1
 
 
