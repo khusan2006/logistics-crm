@@ -1978,6 +1978,17 @@ class CustomerPayment(CashEntry):
                                      default=0)
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
                               default=PayMethod.TRANSFER)
+    # WHICH qarz this settlement is aimed at, when the mijoz owes in both currencies
+    # at once. A dollar qarz and a so'm qarz are two separate debts — the operator
+    # knows which one they are collecting, and without somewhere to say so the money
+    # went oldest-first across both and settled a debt nobody was paying.
+    #
+    # Blank means "wherever it fits, oldest first" — the behaviour every row written
+    # before this field existed was booked under, and still the right answer for a
+    # mijoz who only owes in one currency.
+    target_currency = models.CharField(
+        "Qaysi qarzga", max_length=3, choices=Currency.choices, blank=True, default="",
+        help_text="Mijozning qaysi valyutadagi qarzi to'lanmoqda")
     note = models.CharField("Izoh", max_length=255, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="customer_payments",
@@ -2163,15 +2174,28 @@ def allocation_pair(payment, spent_own):
             (payment.settled_amount_uzs * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _place(payment, sale, take_own):
+def _place(payment, sale, take_own, pool_own=None):
     """Put `take_own` of a to'lov — measured in the SOTUV's currency — onto that sotuv.
 
     The figure the operator and the sotuv care about is how much qarz was cleared, so
     that is what is asked for; the slice is then sized in the to'lov's own currency so
-    it can be taken as a fraction of it."""
+    it can be taken as a fraction of it.
+
+    `pool_own` is what this to'lov still has, in ITS OWN currency, and caps the slice.
+    Crossing a currency rounds twice — once into the sotuv's money to decide what to
+    take, once back into the to'lov's to size the slice — and when both rounds go the
+    same way the round trip returns MORE than was there: 5 000 000 so'm put against a
+    dollar sotuv comes back as 5 000 040. Booking that as spent left the to'lov 40
+    so'm overdrawn, and an overdrawn to'lov reads as a so'm qarz the mijoz never ran
+    up. Capped, the excess is simply never spent — it stays where it already was, as
+    the mijoz's avans."""
     if take_own <= 0:
         return Decimal("0")
     spent_own = _in_payment_currency(payment, sale, take_own)
+    if pool_own is not None:
+        spent_own = min(spent_own, Decimal(pool_own))
+    if spent_own <= 0:
+        return Decimal("0")
     amount, amount_uzs = allocation_pair(payment, spent_own)
     PaymentAllocation.objects.create(payment=payment, sale=sale,
                                      amount=amount, amount_uzs=amount_uzs)
@@ -2217,10 +2241,25 @@ def uzs_slice(row, part):
         Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def payment_targets(payment, sale):
+    """Whether this to'lov is allowed to land on this sotuv.
+
+    A to'lov that names a `target_currency` is collecting ONE of the mijoz's debts —
+    the dollar one or the so'm one — and must not wander onto the other. Without a
+    target it goes wherever it fits, oldest first, which is what every row written
+    before the field existed was booked under.
+
+    Applied in the automatic paths only. A pick the operator typed against a named
+    sotuv is already an explicit instruction about where that money goes, and second-
+    guessing it here would silently drop money the form said to place."""
+    return not payment.target_currency or sale.currency == payment.target_currency
+
+
 def allocate_customer_payment(payment, picks=None):
     """Allocate a payment across the customer's outstanding sales. `picks` is an
     optional list of (sale_id, amount) chosen in the form; the rest (or all, if no
-    picks) auto-fills oldest-first. Leftover stays unallocated = advance."""
+    picks) auto-fills oldest-first among the sotuvlar this to'lov is aimed at.
+    Leftover stays unallocated = advance."""
     # Carried in the TO'LOV's currency — it is that pot being spent down. Each sotuv
     # is measured in its own, and `_place` bridges the two at the to'lov's kurs.
     remaining = unspent_payment_amount(payment)
@@ -2236,13 +2275,15 @@ def allocate_customer_payment(payment, picks=None):
                 # currency; the pool is what this to'lov can still reach it with.
                 take = min(Decimal(amt), sale.remaining_own,
                            _in_sale_currency(payment, sale, remaining))
-                remaining -= _place(payment, sale, take)
+                remaining -= _place(payment, sale, take, remaining)
         # FIFO the leftover across still-outstanding sales
         for sale in payment.customer.sales.order_by("date", "id"):
             if remaining <= 0:
                 break
+            if not payment_targets(payment, sale):
+                continue
             take = min(sale.remaining_own, _in_sale_currency(payment, sale, remaining))
-            remaining -= _place(payment, sale, take)
+            remaining -= _place(payment, sale, take, remaining)
     return remaining  # the advance left over
 
 
@@ -2272,10 +2313,16 @@ def reconcile_customer_allocations(customer):
             if unspent <= 0:
                 continue
             for sale in outstanding:
+                # The sweep obeys each to'lov's own target. Without this the choice
+                # made on the modal would survive exactly until the next sweep, which
+                # runs after every sotuv, to'lov and qaytarish — so a dollar to'lov
+                # aimed at the dollar qarz would quietly end up on the so'm one.
+                if not payment_targets(payment, sale):
+                    continue
                 # `remaining_own` re-reads the allocations, so each sotuv is measured
                 # against what earlier to'lovlar in this same sweep already put on it.
                 take = min(_in_sale_currency(payment, sale, unspent), sale.remaining_own)
-                unspent -= _place(payment, sale, take)
+                unspent -= _place(payment, sale, take, unspent)
                 if unspent <= 0:
                     break
 
@@ -2295,8 +2342,9 @@ def apply_customer_advance(sale):
             for payment in sale.reservation.earmarked_payments.order_by("date", "id"):
                 if sale.remaining_own <= 0:
                     break
-                pool = _in_sale_currency(payment, sale, unspent_payment_amount(payment))
-                _place(payment, sale, min(pool, sale.remaining_own))
+                unspent = unspent_payment_amount(payment)
+                pool = _in_sale_currency(payment, sale, unspent)
+                _place(payment, sale, min(pool, sale.remaining_own), unspent)
         reconcile_customer_allocations(sale.customer)
 
 

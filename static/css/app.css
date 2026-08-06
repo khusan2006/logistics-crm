@@ -686,6 +686,22 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 /* Handover (topshirish) transaction badge */
 .badge-remit { background: var(--violet-soft); color: var(--violet); }
 
+/* Mijoz tarixi event chip. Four kinds on one timeline, so the colour is what lets
+   the reader pick out "every to'lov" without reading the column — tinted from the
+   theme's own tokens, so it holds up in light and dark alike. */
+.hist {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.hist--sotuv { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.hist--tolov { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
+.hist--qaytarish { color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); }
+.hist--bron { color: var(--violet); background: color-mix(in srgb, var(--violet) 16%, transparent); }
+
 /* Debt deadline "days left / overdue" chip */
 .daybadge {
   display: inline-block;
@@ -1580,7 +1596,9 @@ ul.errorlist li::before { content: "⚠ "; }
 .overdue-mark { color: var(--danger); font-size: 8px; vertical-align: middle; font-style: normal; }
 /* Money balance emphasis, reused across customer/debt/sale views */
 .late { color: var(--danger); font-weight: 700; }
-.avans { color: var(--success); font-weight: 700; }
+/* .money-in is the same green read as an avans, on money that actually reached us
+   rather than on a balance — Qo'lga tegdi on the to'lovlar list. */
+.avans, .money-in { color: var(--success); font-weight: 700; }
 
 /* A TOTAL printed in both currencies (money_both / rate_both / rate_range_both).
    Only totals get two figures: a single row is drawn in the one currency it was
@@ -2149,7 +2167,12 @@ form.stacked .lineset-field[hidden] { display: none; }
      display:flex that outranked the UA rule for [hidden] — so it kept its 2.6em and
      sat as a band of dead space under every Summa and Narx. */
   .lineset-field > span:first-child {
-    min-height: 2.6em;
+    /* 3em, not 2.6: two wrapped lines of a 12px caption measure 36px and 2.6em
+       reserved only 31, so "Perechisleniya foizi (%)" overran its own box and sat
+       its input 5px below the two selects beside it. flex-end keeps every caption
+       bottom-aligned, so the extra room shows up above them and the controls stay
+       on one line. */
+    min-height: 3em;
     display: flex;
     align-items: flex-end;
   }
@@ -2158,19 +2181,57 @@ form.stacked .lineset-field[hidden] { display: none; }
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
 
-/* Money rows — a xarajat, a slice of a mijoz to'lov. The summa takes the first
-   line, then the selects describing how the money moved sit together on the
-   second: Turkum / Valyuta / To'lov usuli on a xarajat, Valyuta / To'lov usuli on
-   a to'lov, which has no turkum. */
+/* Money rows — a slice of a mijoz to'lov. One question per line, in the order the
+   operator answers them: how much, then how it moved, then who paid the bank, then
+   the kurs (only when it crosses), then a note.
+
+   The three columns are deliberately UNEVEN. A Valyuta holds "Dollar", a To'lov
+   usuli holds "Bank o'tkazmasi" and a foiz holds "0" — forced into equal thirds the
+   middle one clipped to "Bank o'ti" while the foiz sat in a box four times wider
+   than anything anyone types into it. */
 @media (min-width: 560px) {
-  .lineset--money .lineset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+  .lineset--money .lineset-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.45fr) minmax(0, 0.85fr) auto;
+  }
   .lineset--money .lineset-field--amount { grid-column: span 3; }
   .lineset--money .lineset-field--rm { grid-row: 1; grid-column: 4; }
-  .lineset--money .lineset-field--note { grid-column: span 2; }
-  /* Kept off the line of selects above it: on a narrow modal the long caption
-     ("Dollar kursi (1$ = so'm)") squeezed them down to "Bo⌄ So⌄ Na⌄". */
-  .lineset--money .lineset-field--exchange_rate { grid-column: 1 / -1; }
+  /* Each of these gets the full width. They are not part of the row of selects:
+     the fee bearer is a pair of radios that reads as a sentence, and the long
+     caption on a kurs ("Dollar kursi (1$ = so'm)") squeezed the selects beside it
+     down to "Bo⌄ So⌄ Na⌄". */
+  .lineset--money .lineset-field--fee_bearer,
+  .lineset--money .lineset-field--exchange_rate,
+  .lineset--money .lineset-field--note { grid-column: 1 / -1; }
 }
+
+/* The fee bearer is a radio PAIR, not a caption with a list beneath it. Django
+   renders each option as its own <label>, and `form.stacked label` makes those
+   full-width blocks — so in the narrow column the − button lives in, every radio
+   ended up stranded on a line above its own words. Laid side by side instead, and
+   each radio kept on the same line as the text it belongs to. */
+.lineset-field--fee_bearer > div { display: flex; flex-wrap: wrap; gap: 4px 20px; }
+.lineset-field--fee_bearer > div > div { margin: 0; }
+form.stacked .lineset-field--fee_bearer label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+/* width:auto is the whole fix. `.lineset-field input { width: 100% }` is right for
+   every text box in a row and catastrophic for a radio: the dot stretched to the
+   full 167px of its column and shoved its own words off the end, which is what made
+   the group read as four stray items instead of two labelled choices. */
+.lineset-field--fee_bearer input[type="radio"] {
+  width: auto;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+/* A disabled − is the ONLY row's remove button. Bordered, it read as a third empty
+   input beside the Summa; ghosted, it is plainly a control that is not available. */
+.lineset-rm[disabled] { border-color: transparent; background: none; }
 
 /* Yuk holatlari: each holat badge with the hamkorlar sitting in it beneath. */
 .status-breakdown { display: flex; flex-direction: column; gap: 14px; }

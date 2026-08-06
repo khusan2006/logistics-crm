@@ -19,7 +19,8 @@ from accounts.models import User
 from .exports import xlsx_response
 from .templatetags.crm_extras import som, usd
 from .forms import (
-    ContractForm, ContractLineFormSet, CustomerForm, TruckPlanForm, CustomerPaymentForm,
+    ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, TruckPlanForm,
+    CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     ExpenseGridForm, LogistForm, LogistPaymentForm,
@@ -257,6 +258,14 @@ def customer_list(request):
     page = Paginator(customers, 20).get_page(request.GET.get("page"))
     for customer in page.object_list:
         customer.positions = customer_balance_by_currency(customer)
+        # "When did they last take goods, and when did they last pay" — the two
+        # dates that say whether a mijoz is live or has gone quiet, which the
+        # balance beside them cannot: a standing qarz looks the same on the day it
+        # was run up and a year later. Taken off the prefetch the balance already
+        # walks rather than annotated, so the pair costs no extra query.
+        customer.last_sale = max((s.date for s in customer.sales.all()), default=None)
+        customer.last_payment = max((p.date for p in customer.customer_payments.all()),
+                                    default=None)
     return render(request, "crm/customer_list.html", {"page": page, "q": q})
 
 
@@ -300,6 +309,31 @@ def customer_quick_create(request):
         AuditLog.record(request.user, AuditLog.Action.CREATE, "Mijoz", customer.pk,
                         f"Tez qo'shildi: {name}")
     return JsonResponse({"id": customer.pk, "text": str(customer), "created": created})
+
+
+@role_required(User.Role.ADMIN)
+def customer_avans(request, pk):
+    """Book an avans for a mijoz who already exists — the opening avans on the
+    create form, reachable on every visit after the first."""
+    customer = get_object_or_404(Customer, pk=pk)
+    form = CustomerAvansForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            with transaction.atomic():
+                rows = form.payments(customer, request.user)
+                # An avans handed over by a mijoz who already owes us is not money we
+                # are holding — it belongs to the sotuv that has been waiting for it.
+                # The sweep places it oldest-sotuv-first like any other to'lov, and
+                # only what is genuinely left over stays an avans.
+                reconcile_customer_allocations(customer)
+            AuditLog.record(
+                request.user, AuditLog.Action.PAYMENT, "Mijoz to'lovi", rows[0].pk,
+                f"Avans: {_money_line([(r.currency, r.amount_uzs if r.currency == Currency.UZS else r.amount) for r in rows])} · "
+                f"mijoz {customer.name}")
+            messages.success(request, "Avans qo'shildi")
+            return form_reload(request, reverse("customer_list"))
+        return form_response(request, form, f"Avans · {customer.name}", invalid=True)
+    return form_response(request, form, f"Avans · {customer.name}")
 
 
 @role_required(User.Role.ADMIN)
@@ -770,8 +804,12 @@ def customer_payment_create(request):
     convert and charge differently; the mijoz and the sana are shared."""
     target = CustomerPaymentTargetForm(request.POST or None,
                                        initial={"customer": request.GET.get("customer")})
-    rows = CustomerPaymentFormSet(request.POST or None,
-                                  queryset=CustomerPayment.objects.none())
+    # Read straight off POST rather than from cleaned_data: the rows have to be
+    # BUILT knowing which qarz is being collected, because that is what decides
+    # whether each one has to ask for a kurs, and the header is not clean yet.
+    rows = CustomerPaymentFormSet(
+        request.POST or None, queryset=CustomerPayment.objects.none(),
+        form_kwargs={"target_currency": (request.POST.get("debt_currency") or "").strip()})
 
     def respond(invalid=False):
         # On a re-render the mijoz is whatever the header holds, not the query
@@ -802,6 +840,10 @@ def customer_payment_create(request):
                     payment = form.save(commit=False)
                     payment.customer = customer
                     payment.date = target.cleaned_data["date"]
+                    # Which qarz this settlement is collecting rides on every row, so
+                    # the later sweeps — which run long after this modal closed — put
+                    # the money back where the operator aimed it.
+                    payment.target_currency = target.cleaned_data["debt_currency"]
                     payment.created_by = request.user
                     payment.save()
                     allocate_customer_payment(payment, picks)
@@ -2019,6 +2061,50 @@ def debt_list(request):
     return render(request, "crm/debt_list.html", {"page": page})
 
 
+def _customer_history(customer):
+    """Everything that has passed between us and one mijoz, newest first.
+
+    One timeline rather than four tables, because the question the page answers —
+    "what has gone on with this mijoz" — is chronological, and a sotuv followed by
+    the to'lov that cleared it only reads as a pair when they sit next to each
+    other. Each row is drawn in the currency that row actually moved in; nothing is
+    converted, so a dollar sotuv and a so'm to'lov stay two separate facts.
+
+    `total` is None on a bron with no narx agreed yet — that is a real state, and
+    the template prints the kg alone rather than inventing a figure."""
+    events = []
+    for sale in customer.sales.select_related("line").all():
+        events.append({
+            "date": sale.date, "kind": "sotuv", "label": "Sotuv",
+            "detail": f"{sale.line.brand} · {_kg(sale.kg)} kg",
+            "total": sale.total, "total_uzs": sale.total_uzs,
+            "currency": sale.currency})
+    for payment in customer.customer_payments.all():
+        events.append({
+            "date": payment.date, "kind": "tolov", "label": "To'lov",
+            "detail": payment.get_method_display(),
+            "total": payment.amount, "total_uzs": payment.amount_uzs,
+            "currency": payment.currency})
+    for ret in (Return.objects.filter(sale__customer=customer)
+                .select_related("sale__line")):
+        events.append({
+            "date": ret.date, "kind": "qaytarish", "label": "Qaytarish",
+            "detail": f"{ret.sale.line.brand} · {_kg(ret.kg)} kg",
+            "total": ret.amount, "total_uzs": ret.amount_uzs,
+            "currency": ret.currency})
+    for bron in customer.reservations.all():
+        events.append({
+            "date": bron.created_at.date(), "kind": "bron",
+            "label": f"Bron · {bron.get_status_display()}",
+            "detail": f"{bron.brand} · {_kg(bron.kg)} kg",
+            "total": bron.price, "total_uzs": bron.price_uzs,
+            "currency": bron.currency, "per_kg": True})
+    # Newest first, and a stable tie-break so two events on one day do not swap
+    # places between page loads.
+    events.sort(key=lambda e: (e["date"], e["label"]), reverse=True)
+    return events
+
+
 @role_required(User.Role.ADMIN)
 def debt_customer(request, pk):
     customer = get_object_or_404(Customer, pk=pk)
@@ -2026,6 +2112,7 @@ def debt_customer(request, pk):
              .prefetch_related("allocations").all() if s.remaining_own > 0]
     return render(request, "crm/debt_customer.html", {
         "customer": customer, "sales": sales,
+        "history": _customer_history(customer),
         "positions": customer_balance_by_currency(customer)})
 
 

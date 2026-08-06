@@ -86,11 +86,15 @@ def translator_client(translator_user):
     return client
 
 
-def payment_rows(*entries, customer, date="2026-07-20"):
-    """POST payload for the mijoz to'lov modal: the shared mijoz and sana, plus one
-    row per way the money arrived. Rows default to a dollar naqd at 12,000 so a test
-    only spells out what it is actually testing."""
+def payment_rows(*entries, customer, date="2026-07-20", debt_currency=""):
+    """POST payload for the mijoz to'lov modal: the shared mijoz, sana and the qarz
+    being collected, plus one row per way the money arrived. Rows default to a dollar
+    naqd at 12,000 so a test only spells out what it is actually testing.
+
+    `debt_currency` defaults to blank — "wherever it fits, oldest first", which is
+    what every to'lov did before the picker existed."""
     data = {"customer": getattr(customer, "pk", customer), "date": date,
+            "debt_currency": debt_currency,
             "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
             "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
     defaults = {"currency": "usd", "amount": "0", "exchange_rate": "12000",

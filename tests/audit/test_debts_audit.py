@@ -423,17 +423,31 @@ def test_debt_list_orders_due_first_then_biggest_and_is_stable(admin_client, db)
 
 # ── boundaries, deletion, edge balances ──────────────────────────────────────
 
-@pytest.mark.parametrize("bad", [{"exchange_rate": "0"}, {"price": "0"},
-                                 {"price": "-5"}, {"exchange_rate": ""}])
+@pytest.mark.parametrize("bad", [{"price": "0"}, {"price": "-5"}])
 def test_sale_form_refuses_money_it_cannot_convert(admin_client, db, bad):
-    """rate=0, zero and negative narx, and a blank kurs all have to be rejected —
-    convert_pair raises on them, and a row that slipped through would carry only
-    one of its two values into every qarz total."""
+    """A zero or negative narx has to be rejected: convert_pair raises on it, and a
+    row that slipped through would carry only one of its two values into every qarz
+    total. A missing kurs is no longer in this list — the form stopped asking for
+    one, so it inherits instead (see below)."""
     customer, lot = _customer(), _lot()
     payload = _sale_payload(lot, customer, kg="100", price="1.00", rate="12000")
     payload.update(bad)
     admin_client.post("/sales/new/", payload)
     assert not Sale.objects.filter(customer=customer).exists()
+
+
+@pytest.mark.parametrize("blank", [{"exchange_rate": "0"}, {"exchange_rate": ""}])
+def test_a_sale_posted_with_no_kurs_still_lands_with_both_columns(admin_client, db, blank):
+    """The invariant the kurs was guarding — never a row with only one of its two
+    money values — now holds by filling the rate in rather than by refusing the row."""
+    customer, lot = _customer(), _lot()
+    payload = _sale_payload(lot, customer, kg="100", price="1.00", rate="12000")
+    payload.update(blank)
+    admin_client.post("/sales/new/", payload)
+    sale = Sale.objects.get(customer=customer)
+    assert sale.exchange_rate > 0
+    assert sale.price == Decimal("1.0000")
+    assert sale.price_uzs == sale.exchange_rate
 
 
 def test_extreme_kursi_round_trip_without_drifting(admin_client, db):

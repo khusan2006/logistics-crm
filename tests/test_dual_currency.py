@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 
 from conftest import line_data, payment_rows
+from crm.forms import SaleCreateForm
 from crm.templatetags.crm_extras import NBSP
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Sale, Shipment,
@@ -93,15 +94,28 @@ def test_a_dollar_sale_still_records_its_som_value(admin_client, db):
     assert sale.price == Decimal("1.1700") and sale.price_uzs == Decimal("14040.00")
 
 
-def test_a_sale_without_a_kurs_is_rejected(admin_client, db):
+def test_a_sale_never_asks_for_a_kurs_and_inherits_the_last_one(admin_client, db):
+    """A sotuv is agreed, owed and settled in one currency, so its kurs moves
+    nothing the operator can see — the form stopped asking. The row still gets a
+    rate, inherited, because the so'm column has to hold something."""
     lot = _lot()
+    assert SaleCreateForm()["exchange_rate"].is_hidden
+    CustomerPayment.objects.create(
+        customer=_customer("Kurs bergan"), date="2026-07-17", amount=Decimal("100"),
+        amount_uzs=Decimal("1300000"), exchange_rate=Decimal("13000"),
+        currency=Currency.USD, method="cash")
+
     resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
         "customer": _customer().pk, "brand": lot.brand, "kg": "1000",
-        "currency": "uzs", "price": "14040", "exchange_rate": "",
+        "currency": "uzs", "price": "13000",
         "date": "2026-07-18", "debt_deadline": "", "note": "",
     })
-    assert resp.status_code == 200
-    assert not Sale.objects.exists()
+    assert resp.status_code == 302
+    sale = Sale.objects.get()
+    # The typed so'm side is exact; the dollar twin is derived at the inherited kurs.
+    assert sale.exchange_rate == Decimal("13000")
+    assert sale.price_uzs == Decimal("13000.0000")
+    assert sale.price == Decimal("1.0000")
 
 
 def test_every_fifo_slice_inherits_the_agreed_currency(admin_client, db):
@@ -280,22 +294,24 @@ def test_a_row_is_drawn_in_the_currency_it_was_typed_in(admin_client, db):
         currency=Currency.UZS, method="cash")
 
     html = admin_client.get("/customer-payments/").content.decode()
-    # Both on one screen, each leading with its own currency. The Sof column is the
-    # headline (<strong>); the twin beside it is a muted reference, not the figure.
-    assert f"<strong>$1{NBSP}000</strong>" in html
-    assert f"<strong>2{NBSP}500{NBSP}000 so&#x27;m</strong>" in html
-    assert f"<strong>$200</strong>" not in html
+    # Both on one screen, each leading with its own currency. Qo'lga tegdi is the
+    # headline (<strong>), green because it is money that actually reached us.
+    assert f'<strong class="money-in">$1{NBSP}000</strong>' in html
+    assert f'<strong class="money-in">2{NBSP}500{NBSP}000 so&#x27;m</strong>' in html
+    assert f'<strong class="money-in">$200</strong>' not in html
 
 
-def test_a_row_also_shows_its_twin_for_reference(admin_client, db):
-    """The counter-currency is still one glance away — it is just no longer the
-    figure the row leads with."""
+def test_a_row_is_never_reconverted_beside_itself(admin_client, db):
+    """A to'lov is printed in the currency it ARRIVED in and in no other. The twin
+    that used to sit under it was a conversion nobody asked for — the same rule the
+    rest of the app already follows, where only a TOTAL carries two figures."""
     CustomerPayment.objects.create(
         customer=_customer(), date="2026-07-20", amount=Decimal("1000"),
         amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"),
         currency=Currency.USD, method="cash")
     html = admin_client.get("/customer-payments/").content.decode()
-    assert f"12{NBSP}500{NBSP}000 so&#x27;m" in html
+    assert f"$1{NBSP}000" in html
+    assert f"12{NBSP}500{NBSP}000 so&#x27;m" not in html
 
 
 def test_a_total_is_printed_in_both_currencies(admin_client, db):

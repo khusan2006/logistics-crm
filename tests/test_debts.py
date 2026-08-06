@@ -139,3 +139,91 @@ def test_translator_forbidden(translator_client, db):
     customer = _customer()
     assert translator_client.get("/debts/").status_code == 403
     assert translator_client.get(f"/debts/{customer.pk}/").status_code == 403
+
+
+# ── Mijoz tarixi ─────────────────────────────────────────────────────────────
+
+def _history(admin_client, customer):
+    """The Mijoz tarixi rows of a mijoz's page, as (sana, voqea, tafsilot, summa)."""
+    import re
+
+    html = admin_client.get(f"/debts/{customer.pk}/").content.decode()
+    assert "Mijoz tarixi" in html, "tarix bo'limi yo'q"
+    section = html.split("Mijoz tarixi")[1]
+    rows = re.findall(r"<tr>(.*?)</tr>", section, re.S)[1:]   # drop the header row
+
+    def text(cell):
+        # Collapses ASCII whitespace only: the NBSP thousands separator is the house
+        # convention being asserted, so it must survive being read back out.
+        return re.sub(r"[ \t\r\n]+", " ", re.sub(r"<[^>]+>", "", cell)).strip()
+
+    return [tuple(text(cell) for cell in re.findall(r"<td.*?>(.*?)</td>", row, re.S))
+            for row in rows]
+
+
+def test_the_history_carries_all_four_kinds_of_event_newest_first(admin_client, db):
+    """Sotuv, to'lov, qaytarish va bron bitta vaqt chizig'ida — the page answers
+    "what has gone on with this mijoz", and that question is chronological."""
+    from crm.models import CustomerPayment, Reservation, Return
+
+    customer = _customer()
+    lot = _lot()
+    sale = _sale(customer, lot, "1000", "1.00", "2026-07-10")
+    CustomerPayment.objects.create(customer=customer, date="2026-07-12",
+                                   amount=Decimal("300.00"), method="cash")
+    Return.objects.create(sale=sale, kg=Decimal("100"), price=Decimal("1.00"),
+                          date="2026-07-14")
+    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("500"),
+                               price=Decimal("1.20"))
+
+    rows = _history(admin_client, customer)
+    labels = [r[1] for r in rows]
+    assert "Sotuv" in labels
+    assert "To&#x27;lov" in labels
+    assert "Qaytarish" in labels
+    assert any(label.startswith("Bron") for label in labels)
+    # newest first — parsed, because d.m.Y does not sort as text
+    from datetime import datetime
+
+    dates = [datetime.strptime(r[0], "%d.%m.%Y").date() for r in rows]
+    assert dates == sorted(dates, reverse=True)
+
+
+def test_each_history_row_is_drawn_in_the_currency_it_moved_in(admin_client, db):
+    """A dollar sotuv and a so'm to'lov stay two separate facts — nothing on this
+    timeline is converted into the other currency."""
+    from crm.models import Currency, CustomerPayment
+
+    customer = _customer()
+    _sale(customer, _lot(), "1000", "1.00", "2026-07-10")          # $1 000
+    CustomerPayment.objects.create(
+        customer=customer, date="2026-07-12", amount=Decimal("500.00"),
+        amount_uzs=Decimal("6000000.00"), exchange_rate=Decimal("12000"),
+        currency=Currency.UZS, method="cash")
+
+    amounts = {r[1]: r[3] for r in _history(admin_client, customer)}
+    assert amounts["Sotuv"] == f"$1{NBSP}000"
+    assert amounts["To&#x27;lov"] == f"6{NBSP}000{NBSP}000 so&#x27;m"
+
+
+def test_a_bron_with_no_narx_agreed_says_so_rather_than_inventing_one(admin_client, db):
+    from crm.models import Reservation
+
+    customer = _customer()
+    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("500"))
+    row = _history(admin_client, customer)[0]
+    assert row[3] == "kelishilmagan"
+
+
+def test_a_mijoz_with_no_dealings_gets_an_empty_history_not_a_crash(admin_client, db):
+    customer = _customer()
+    html = admin_client.get(f"/debts/{customer.pk}/").content.decode()
+    assert "Bu mijoz bilan hali hech qanday amaliyot bo'lmagan" in html
+
+
+def test_the_mijozlar_list_links_the_name_to_that_mijoz_page(admin_client, db):
+    """Tahrirlash is the pencil beside the name, so the name itself is free to open
+    the page that actually says something about the mijoz."""
+    customer = _customer()
+    html = admin_client.get("/customers/").content.decode()
+    assert f'href="/debts/{customer.pk}/">{customer.name}</a>' in html

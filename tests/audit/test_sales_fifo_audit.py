@@ -521,15 +521,21 @@ def test_zero_or_negative_kg_is_rejected(admin_client, db, kg):
 
 
 @pytest.mark.parametrize("rate", ["0", ""])
-def test_missing_or_zero_kurs_is_rejected(admin_client, db, rate):
+def test_missing_or_zero_kurs_is_inherited_rather_than_refused(admin_client, db, rate):
     """A row with no kurs has only one of its two values and could never join a
-    so'm total — convert_pair refuses it, and so must the form."""
+    so'm total — convert_pair still refuses that outright. The sotuv form no longer
+    ASKS for a kurs, though, so it closes the same hole from the other side: an
+    entry that carries none is filled from the last one anybody typed, and the row
+    still lands with both columns and a positive rate."""
     _lot(brand="B3", kg="1000", contract_price="1.00")
     c = _customer()
     resp = admin_client.post("/sales/new/",
                              _sale_post(c, "B3", "100", "1.50", rate=rate))
-    assert resp.status_code == 200
-    assert not Sale.objects.exists()
+    assert resp.status_code == 302
+    sale = Sale.objects.get()
+    assert sale.exchange_rate > 0
+    assert sale.price == Decimal("1.5000")
+    assert sale.price_uzs == Decimal("1.5000") * sale.exchange_rate
     with pytest.raises(ValueError):
         convert_pair("1.50", Currency.USD, Decimal("0"))
 

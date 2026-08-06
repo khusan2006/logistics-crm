@@ -270,6 +270,42 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
     positive_error = "Narx musbat bo'lishi kerak"
 
 
+class InheritedRateMixin:
+    """For a row that needs a kurs but must not ASK for one.
+
+    A sotuv is agreed, owed and settled in a single currency, so the rate decides
+    nothing the operator can see: it never moves what the mijoz owes, it only fills
+    the row's other money column so a total that mixes the two can add up. The box
+    was one more thing to type on every sale and one more thing to get wrong, so it
+    comes off the modal and the row inherits instead — its own rate when editing one
+    that already exists, the last kurs anybody actually typed when creating.
+
+    Hidden rather than removed, the same way a to'lov in its kelishuv's own currency
+    hides its kurs: what is not asked for is filled in, but a rate that IS supplied
+    still stands, so the conversion stays something a caller can pin down. The hidden
+    input also keeps carrying the rate the live so'm/dollar preview reads."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields["exchange_rate"]
+        field.widget = forms.HiddenInput(attrs={"data-money-rate": ""})
+        field.required = False
+        field.label = ""
+        self.initial.setdefault("exchange_rate", self._inherited_rate())
+
+    def _inherited_rate(self):
+        return (self.instance.exchange_rate if self.instance.pk
+                else latest_exchange_rate())
+
+    def clean(self):
+        # Seeded before the money mixin converts, so a post that carried no rate at
+        # all (or a zero one) still lands on a real figure instead of the mixin's
+        # "Dollar kursini kiriting" — a message about a box that is no longer there.
+        if (self.cleaned_data.get("exchange_rate") or Decimal("0")) <= 0:
+            self.cleaned_data["exchange_rate"] = self._inherited_rate()
+        return super().clean()
+
+
 class PartnerForm(forms.ModelForm):
     class Meta:
         model = Partner
@@ -331,6 +367,68 @@ class CustomerForm(forms.ModelForm):
             customer=customer, date=timezone.localdate(), amount=usd, amount_uzs=uzs,
             currency=currency, exchange_rate=rate, method=PayMethod.CASH,
             note="Boshlang'ich avans", created_by=user)
+
+
+class CustomerAvansForm(forms.Form):
+    """Money handed over ahead of an order by a mijoz who ALREADY exists.
+
+    The twin of the opening avans above, which only ever appears while a mijoz is
+    being created — this is the same event on their fifth visit, which until now
+    meant there was no way to book it at all.
+
+    Two amount boxes rather than one valyuta picker: a mijoz commonly puts down
+    dollars AND so'm in the same breath ("1000$ va 5 mln so'm"), and a single-
+    currency form would make that two trips the operator has to remember to file
+    under the same date. Each side is money in hand in its own currency, so neither
+    is converted into the other — they are booked as one row each.
+
+    No kurs asked, for the reason the opening avans does not ask either: nothing is
+    being converted to know what it is worth. The rows still inherit a rate so the
+    kassa's other column holds something."""
+
+    date = forms.DateField(label="Sana", widget=date_widget(),
+                           initial=timezone.localdate)
+    amount_usd = forms.DecimalField(
+        label="Dollarda", required=False, min_value=0, max_digits=14, decimal_places=2,
+        widget=forms.NumberInput(attrs={"placeholder": "0", "data-money": ""}))
+    amount_uzs = forms.DecimalField(
+        label="So'mda", required=False, min_value=0, max_digits=18, decimal_places=2,
+        widget=forms.NumberInput(attrs={"placeholder": "0", "data-money": ""}))
+    method = forms.ChoiceField(label="To'lov usuli", choices=PayMethod.choices,
+                               initial=PayMethod.CASH)
+    note = forms.CharField(label="Izoh", max_length=255, required=False,
+                           widget=forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in ("amount_usd", "amount_uzs"):
+            _group_thousands(self.fields[name])
+
+    def clean(self):
+        cleaned = super().clean()
+        if not (cleaned.get("amount_usd") or cleaned.get("amount_uzs")):
+            raise forms.ValidationError("Kamida bitta summa kiritilishi kerak")
+        return cleaned
+
+    def payments(self, customer, user=None):
+        """The avans as one CustomerPayment per currency that was actually filled in.
+
+        An ordinary to'lov with no sotuv behind it, which is exactly what an avans
+        is — so it settles their next sotuv by itself, and the caller's reconcile
+        puts it on an OLDER unpaid one first if there is one."""
+        inherited = latest_exchange_rate()
+        rows = []
+        for currency, typed in ((Currency.USD, self.cleaned_data.get("amount_usd")),
+                                (Currency.UZS, self.cleaned_data.get("amount_uzs"))):
+            if not typed:
+                continue
+            in_usd, in_uzs = convert_pair(typed, currency, inherited)
+            rows.append(CustomerPayment.objects.create(
+                customer=customer, date=self.cleaned_data["date"],
+                amount=in_usd, amount_uzs=in_uzs, currency=currency,
+                exchange_rate=inherited, method=self.cleaned_data["method"],
+                note=self.cleaned_data.get("note") or "Avans", created_by=user))
+        return rows
 
 
 class ContractForm(forms.ModelForm):
@@ -976,7 +1074,7 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         return cleaned
 
 
-class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
+class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
     """New sales are entered by BRAND, not lot: the view consumes the oldest
     arrived lots first (FIFO), splitting the kg across lots — one Sale row per
     lot slice, each snapshotting its own lot's landed cost."""
@@ -1036,7 +1134,7 @@ class SaleCreateForm(PriceEntryFormMixin, forms.ModelForm):
         return cleaned
 
 
-class SaleLotForm(PriceEntryFormMixin, forms.ModelForm):
+class SaleLotForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
     """Sale from ONE chosen lot, entered from inside a marka in the ombor. The same
     granula can sit in several lots at different landed costs, so picking the lot
     has to beat FIFO here — otherwise you could never sell the dearer one. The lot
@@ -1084,7 +1182,7 @@ class SaleLotForm(PriceEntryFormMixin, forms.ModelForm):
         return cleaned
 
 
-class SaleForm(PriceEntryFormMixin, forms.ModelForm):
+class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
     class Meta:
         model = Sale
         fields = ["customer", "line", "kg", "currency", "price", "exchange_rate",
@@ -1225,7 +1323,57 @@ def _customer_payer_field(field):
     field.label_from_instance = customer_option_label
 
 
-class CustomerPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+#: The "which qarz" picker. Its VALUE is the currency being settled, so the modal's
+#: JS reads it directly — no per-option lookup like ContractChoiceSelect needs — to
+#: decide whether a to'lov row crosses a boundary and must ask for a kurs.
+DEBT_CURRENCY_CHOICES = [("", "Avtomatik — eng eski qarzdan")] + list(Currency.choices)
+
+
+def debt_currency_widget():
+    return forms.Select(attrs={"data-debt-currency": ""})
+
+
+class DebtTargetedRateMixin:
+    """The kurs is asked for only when the money crosses into the other currency.
+
+    Paying a dollar qarz in dollars settles it at face value — the figure IS the
+    qarz, and a rate would decide nothing about it. Paying that same qarz in so'm is
+    the one case where the rate decides how much of the qarz the money actually
+    clears, so that is the only case the box appears for.
+
+    The mirror of what a hamkor to'lov already does against its kelishuv's currency;
+    what is being settled here is the mijoz's qarz, in the currency the operator
+    named on the modal. With no qarz named there is no boundary, so nothing is
+    demanded — the row inherits and the money goes wherever it fits."""
+
+    def settled_against(self):
+        """The currency of the debt this row is aimed at, or "" for none."""
+        raise NotImplementedError
+
+    def settles_at_face_value(self):
+        """True only when we KNOW this row needs no rate: a qarz was named and this
+        money arrived in the same currency, so the figure is the qarz.
+
+        A row with no qarz named is not that case. "Avtomatik" means the money may
+        land on either currency's debt, so the rate still decides how much of one it
+        clears — and is still asked for, exactly as before this field existed."""
+        against = self.settled_against()
+        return bool(against) and self.cleaned_data.get("currency") == against
+
+    def clean(self):
+        # Seeded before the money mixin converts, and only for the face-value case:
+        # a rate the operator did supply always stands, and anywhere else nothing is
+        # seeded at all so the mixin's "Dollar kursini kiriting" is what enforces it.
+        if ((self.cleaned_data.get("exchange_rate") or Decimal("0")) <= 0
+                and self.settles_at_face_value()):
+            self.cleaned_data["exchange_rate"] = (
+                self.instance.exchange_rate if self.instance.pk
+                else latest_exchange_rate())
+        return super().clean()
+
+
+class CustomerPaymentForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                          MoneyEntryFormMixin, forms.ModelForm):
     """One to'lov, edited on its own. The create screen uses the target + rows pair
     below instead — a single settlement often arrives in two currencies."""
 
@@ -1233,33 +1381,50 @@ class CustomerPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
 
     class Meta:
         model = CustomerPayment
-        fields = ["customer", "date", "currency", "amount", "exchange_rate",
-                  "method", "fee_percent", "fee_bearer", "note"]
-        widgets = {"date": date_widget()}
+        fields = ["customer", "date", "target_currency", "currency", "amount",
+                  "exchange_rate", "method", "fee_percent", "fee_bearer", "note"]
+        widgets = {"date": date_widget(), "target_currency": debt_currency_widget()}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _customer_payer_field(self.fields["customer"])
         _mark_incoming_fee(self)
+        field = self.fields["target_currency"]
+        field.required = False
+        field.choices = DEBT_CURRENCY_CHOICES
+
+    def settled_against(self):
+        return self.cleaned_data.get("target_currency") or ""
 
 
 class CustomerPaymentTargetForm(forms.Form):
-    """The header of a multi-row to'lov modal: who paid, and on what date.
+    """The header of a multi-row to'lov modal: who paid, on what date, and against
+    WHICH of their debts.
 
-    Both are shared by every row because they describe the one settlement: a mijoz
-    clearing 10 000$ by handing over 5 000$ naqd and the rest in so'm has made one
-    payment on one day, in two currencies. Splitting them into rows is about how the
-    money arrived, not about when or from whom."""
+    All three are shared by every row because they describe the one settlement: a
+    mijoz clearing 10 000$ by handing over 5 000$ naqd and the rest in so'm has made
+    one payment on one day, in two currencies. Splitting them into rows is about how
+    the money arrived, not about when, from whom, or what it is settling.
+
+    `debt_currency` exists because a mijoz can owe in both currencies at once, and
+    those are two separate debts. Before it, the money went oldest-first across both
+    and there was no way to say which one was being collected — the operator picked a
+    mijoz and could not tell the app what they were being paid for."""
 
     customer = forms.ModelChoiceField(queryset=Customer.objects.all(), label="Mijoz")
     date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+    debt_currency = forms.ChoiceField(
+        label="Qaysi qarzga", required=False, choices=DEBT_CURRENCY_CHOICES,
+        widget=debt_currency_widget(),
+        help_text="Mijozning qarzi ikki valyutada bo'lsa, qaysi biri to'lanayotganini tanlang")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _customer_payer_field(self.fields["customer"])
 
 
-class CustomerPaymentRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+class CustomerPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                             MoneyEntryFormMixin, forms.ModelForm):
     """One slice of a settlement: a sum, the currency it came in, and how it moved.
     Same shape as a xarajat row — see .lineset--payment in the stylesheet."""
 
@@ -1272,14 +1437,22 @@ class CustomerPaymentRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Mod
 
     class Meta:
         model = CustomerPayment
-        # No mijoz, no sana: they are shared, so the modal asks once in the header.
+        # No mijoz, no sana, no qarz: all three are shared, so the modal's header
+        # asks once and every row is settled against the same answer.
         fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
                   "fee_bearer", "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, target_currency="", **kwargs):
+        # Handed down from the header rather than read off the row: which qarz is
+        # being collected is a fact about the settlement, not about how one slice of
+        # it happened to arrive.
+        self.target_currency = target_currency or ""
         super().__init__(*args, **kwargs)
         _mark_incoming_fee(self)
+
+    def settled_against(self):
+        return self.target_currency
 
 
 class BaseCustomerPaymentFormSet(forms.BaseModelFormSet):

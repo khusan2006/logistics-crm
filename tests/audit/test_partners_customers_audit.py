@@ -105,6 +105,17 @@ def _row_html(client, url, name):
     return rows[0]
 
 
+def _balance_cell(client, url, name):
+    """Just the Balans <td> of that mijoz's row.
+
+    Narrower than `_row_html` on purpose: the row also carries the action buttons,
+    one of which is titled "Avans", so a row-wide search for that word answers a
+    different question than "what does this mijoz's balance say"."""
+    cell = _row_html(client, url, name).split('<td class="cell-balance">')
+    assert len(cell) == 2, f"no balance cell for {name} on {url}"
+    return cell[1].split("</td>")[0]
+
+
 # ── phone / container normalisation (crm/formatting.py) ─────────────────────────
 
 def test_phone_accepts_uz_ir_tr_with_and_without_punctuation():
@@ -390,8 +401,8 @@ def test_a_dollar_sotuv_paid_in_dollars_is_square(admin_client):
     # the twin does not land on zero, and is not asked to
     assert sale.remaining_uzs != Decimal("0")
 
-    row = _row_html(admin_client, "/customers/", "Nol Dollar")
-    assert "qarz" not in row and "avans" not in row, row
+    cell = _balance_cell(admin_client, "/customers/", "Nol Dollar")
+    assert "qarz" not in cell and "avans" not in cell, cell
 
 
 @pytest.mark.xfail(reason="BUG: Customer.balance_uzs (crm/models.py:339) subtracts "
@@ -657,10 +668,10 @@ def test_customer_list_keeps_a_two_currency_qarz_apart(admin_client):
     _usd_sale(customer, lot, "1000", "1.00", rate="12000")
     _som_sale(customer, lot, "1000", "13000", rate="13000")
 
-    row = _row_html(admin_client, "/customers/", "Ikki Valyuta")
-    assert "qarz" in row
+    cell = _balance_cell(admin_client, "/customers/", "Ikki Valyuta")
+    assert "qarz" in cell
     # NBSP thousands separator, per the house convention in crm_extras
-    assert f"$1{NBSP}000" in row                       # the dollar sotuv, alone
-    assert f"13{NBSP}000{NBSP}000 so&#x27;m" in row    # the so'm sotuv, alone
-    assert f"$2{NBSP}000" not in row                   # the blend nobody agreed to
-    assert f"25{NBSP}000{NBSP}000" not in row
+    assert f"$1{NBSP}000" in cell                       # the dollar sotuv, alone
+    assert f"13{NBSP}000{NBSP}000 so&#x27;m" in cell    # the so'm sotuv, alone
+    assert f"$2{NBSP}000" not in cell                   # the blend nobody agreed to
+    assert f"25{NBSP}000{NBSP}000" not in cell

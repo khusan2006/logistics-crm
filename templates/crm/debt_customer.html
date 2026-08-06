@@ -49,4 +49,43 @@
 {% else %}
 <p class="muted">Ushbu mijozning to'lanmagan sotuvlari yo'q.</p>
 {% endif %}
+
+{% comment %}
+Mijoz tarixi — sotuv, to'lov, qaytarish va bron bitta vaqt chizig'ida. Har qatorda
+pul o'zi harakatlangan valyutada yoziladi; hech narsa konvertatsiya qilinmaydi, shu
+sababli dollardagi sotuv va so'mdagi to'lov ikki alohida fakt bo'lib qoladi.
+{% endcomment %}
+<div class="card">
+  <div class="card-head">
+    <h2>Mijoz tarixi</h2>
+    <span class="field-hint">Sotuv, to'lov, qaytarish va bronlar — eng yangisi yuqorida</span>
+  </div>
+  {% if history %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Sana</th>
+      <th>Voqea</th>
+      <th>Tafsilot</th>
+      <th>Summa</th>
+    </tr>
+    {% for e in history %}
+    <tr>
+      <td class="sticky-col">{{ e.date|date:"d.m.Y" }}</td>
+      <td><span class="hist hist--{{ e.kind }}">{{ e.label }}</span></td>
+      <td>{{ e.detail }}</td>
+      <td>
+        {% if e.total == None %}<span class="muted">kelishilmagan</span>
+        {% elif e.per_kg %}{% rate e.total e.total_uzs e.currency %}
+        {% elif e.kind == "tolov" %}<span class="money-in">{% money e.total e.total_uzs e.currency %}</span>
+        {% else %}{% money e.total e.total_uzs e.currency %}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Bu mijoz bilan hali hech qanday amaliyot bo'lmagan.</p>
+  {% endif %}
+</div>
 {% endblock %}

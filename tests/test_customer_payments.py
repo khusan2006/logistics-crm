@@ -348,3 +348,180 @@ def test_modal_offers_an_add_row_button(admin_client, db):
         "/customer-payments/new/", HTTP_X_REQUESTED_WITH="XMLHttpRequest").content.decode()
     assert "data-line-add" in html
     assert "+ To&#x27;lov qo&#x27;shish" in html
+
+
+# ── Qaysi qarz: a mijoz who owes in both currencies at once ──────────────────
+#
+# Two debts, not one. Before the picker the money went oldest-first across both, so
+# an operator collecting the dollar qarz could watch it settle the so'm one instead
+# — and there was nowhere on the form to say what they were actually being paid for.
+
+def _two_currency_debtor():
+    """A mijoz owing $1 000 (older) and 12 000 000 so'm (newer)."""
+    from crm.models import Currency
+
+    customer = _customer()
+    lot = _lot(kg="100000")
+    Sale.objects.create(customer=customer, line=lot, kg=Decimal("1000"),
+                        price=Decimal("1.00"), date="2026-07-01")
+    Sale.objects.create(customer=customer, line=lot, kg=Decimal("1000"),
+                        price=Decimal("1.00"), price_uzs=Decimal("12000.00"),
+                        currency=Currency.UZS, exchange_rate=Decimal("12000"),
+                        date="2026-07-05")
+    return customer
+
+
+def test_a_tolov_aimed_at_the_dollar_qarz_leaves_the_som_one_alone(admin_client, db):
+    from crm.models import customer_balance_by_currency
+
+    customer = _two_currency_debtor()
+    resp = admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "usd", "amount": "400"},
+        customer=customer, debt_currency="usd"))
+    assert resp.status_code == 302
+
+    assert customer_balance_by_currency(customer) == [
+        ("usd", Decimal("600.00")), ("uzs", Decimal("12000000.00"))]
+
+
+def test_a_tolov_aimed_at_the_som_qarz_leaves_the_dollar_one_alone(admin_client, db):
+    """Note the dollar sotuv is the OLDER one — under plain FIFO this money would
+    have gone there, which is exactly the behaviour the picker overrides."""
+    from crm.models import customer_balance_by_currency
+
+    customer = _two_currency_debtor()
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "uzs", "amount": "5000000"},
+        customer=customer, debt_currency="uzs"))
+
+    assert customer_balance_by_currency(customer) == [
+        ("usd", Decimal("1000.00")), ("uzs", Decimal("7000000.00"))]
+
+
+def test_money_over_the_named_qarz_stays_an_avans_instead_of_crossing(admin_client, db):
+    """The point of naming a qarz: what is left over is money we are holding, not a
+    reason to go and settle the debt the operator did not mention."""
+    from crm.models import customer_balance_by_currency
+
+    customer = _two_currency_debtor()
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "usd", "amount": "1500"},          # $500 more than the $ qarz
+        customer=customer, debt_currency="usd"))
+
+    assert customer_balance_by_currency(customer) == [
+        ("usd", Decimal("-500.00")), ("uzs", Decimal("12000000.00"))]
+
+
+def test_the_choice_survives_the_sweep_that_runs_after_every_change(admin_client, db):
+    """reconcile_customer_allocations runs after every sotuv, to'lov and qaytarish.
+    Without the target on the row it would re-place this money oldest-first and undo
+    the operator's choice minutes later, from an unrelated screen."""
+    from crm.models import customer_balance_by_currency, reconcile_customer_allocations
+
+    customer = _two_currency_debtor()
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "uzs", "amount": "5000000"},
+        customer=customer, debt_currency="uzs"))
+    before = customer_balance_by_currency(customer)
+
+    reconcile_customer_allocations(customer)
+    reconcile_customer_allocations(customer)
+    assert customer_balance_by_currency(customer) == before
+
+
+def test_paying_a_named_qarz_in_its_own_currency_needs_no_kurs(admin_client, db):
+    """The figure IS the qarz — a rate would decide nothing about it."""
+    payload = payment_rows({"currency": "usd", "amount": "400", "exchange_rate": ""},
+                           customer=_two_currency_debtor(), debt_currency="usd")
+    assert admin_client.post("/customer-payments/new/", payload).status_code == 302
+    assert CustomerPayment.objects.get().exchange_rate > 0   # inherited, not typed
+
+
+def test_paying_a_named_qarz_in_the_other_currency_demands_a_kurs(admin_client, db):
+    """The one case where the rate decides how much of the qarz the money clears."""
+    payload = payment_rows({"currency": "uzs", "amount": "5000000", "exchange_rate": ""},
+                           customer=_two_currency_debtor(), debt_currency="usd")
+    assert admin_client.post("/customer-payments/new/", payload).status_code == 200
+    assert not CustomerPayment.objects.exists()
+
+
+def test_with_no_qarz_named_a_kurs_is_still_required(admin_client, db):
+    """"Avtomatik" is not the face-value case: the money may land on either
+    currency's debt, so the rate still decides something."""
+    payload = payment_rows({"currency": "uzs", "amount": "5000000", "exchange_rate": ""},
+                           customer=_two_currency_debtor(), debt_currency="")
+    assert admin_client.post("/customer-payments/new/", payload).status_code == 200
+    assert not CustomerPayment.objects.exists()
+
+
+def test_with_no_qarz_named_the_money_still_goes_oldest_first(admin_client, db):
+    """Backwards compatible: every to'lov written before the picker existed carries
+    a blank target, and has to keep behaving the way it was booked."""
+    from crm.models import customer_balance_by_currency
+
+    customer = _two_currency_debtor()
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "usd", "amount": "400"}, customer=customer, debt_currency=""))
+    # the dollar sotuv is the older one, so plain FIFO lands there
+    assert customer_balance_by_currency(customer) == [
+        ("usd", Decimal("600.00")), ("uzs", Decimal("12000000.00"))]
+
+
+def test_the_named_qarz_is_stored_on_every_row_of_the_settlement(admin_client, db):
+    """One settlement, two currencies of arrival, one qarz being collected."""
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "usd", "amount": "100"},
+        {"currency": "uzs", "amount": "1200000", "exchange_rate": "12000"},
+        customer=_two_currency_debtor(), debt_currency="usd"))
+    rows = CustomerPayment.objects.all()
+    assert rows.count() == 2
+    assert {r.target_currency for r in rows} == {"usd"}
+
+
+# ── crossing a currency must never overdraw the to'lov ───────────────────────
+
+def test_a_som_tolov_on_a_dollar_sotuv_never_spends_more_som_than_it_has(admin_client, db):
+    """Regression: crossing a currency rounds twice — once into the sotuv's money to
+    decide what to take, once back into the to'lov's to size the slice. When both
+    rounds go the same way the round trip returns MORE than was there: 5 000 000 so'm
+    came back as 5 000 040, the extra 40 was booked as spent, and the overdrawn
+    to'lov surfaced as a 40 so'm qarz the mijoz never ran up."""
+    from crm.models import (Currency, allocate_customer_payment,
+                            customer_balance_by_currency, unspent_payment_amount)
+
+    customer = _customer()
+    _sale(customer, _lot(), "1000", "1.00", "2026-07-01")        # owes $1 000
+    payment = CustomerPayment.objects.create(
+        customer=customer, date="2026-07-20", currency=Currency.UZS,
+        amount=Decimal("416.67"), amount_uzs=Decimal("5000000"),
+        exchange_rate=Decimal("12000"), method="cash")
+    allocate_customer_payment(payment)
+
+    placed = sum((a.amount_uzs for a in payment.allocations.all()), Decimal("0"))
+    assert placed <= payment.amount_uzs, "spent more so'm than the mijoz handed over"
+    assert unspent_payment_amount(payment) >= 0, "the to'lov is overdrawn"
+    # and no so'm qarz is conjured out of the rounding
+    assert [amount for currency, amount in customer_balance_by_currency(customer)
+            if currency == Currency.UZS and amount > 0] == []
+
+
+def test_what_a_crossing_tolov_could_not_spend_stays_an_avans(admin_client, db):
+    """The other side of the cap: money over the qarz is money we are HOLDING, so it
+    waits as an avans rather than being forced onto something."""
+    from crm.models import (Currency, allocate_customer_payment,
+                            customer_balance_by_currency, unspent_payment_amount)
+
+    customer = _customer()
+    _sale(customer, _lot(), "1000", "1.00", "2026-07-01")        # owes $1 000
+    payment = CustomerPayment.objects.create(
+        customer=customer, date="2026-07-20", currency=Currency.UZS,
+        amount=Decimal("2500"), amount_uzs=Decimal("30000000"),
+        exchange_rate=Decimal("12000"), method="cash")
+    allocate_customer_payment(payment)
+
+    # $1 000 of qarz at 12 000 is 12 000 000 so'm; the rest is still the mijoz's
+    assert sum((a.amount_uzs for a in payment.allocations.all()),
+               Decimal("0")) == Decimal("12000000.00")
+    assert unspent_payment_amount(payment) == Decimal("18000000.00")
+    assert customer_balance_by_currency(customer) == [
+        (Currency.UZS, Decimal("-18000000.00"))]

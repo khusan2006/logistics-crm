@@ -16,15 +16,24 @@
 {% if page.object_list %}
 <div class="table-wrap">
 <table>
-  <tr><th class="sticky-col">Ismi</th><th>Telefon</th><th>Manzil</th><th>Balans</th><th></th></tr>
+  <tr><th class="sticky-col">Ismi</th><th>Telefon</th><th>Manzil</th>
+      <th title="Oxirgi marta qachon mol olgan">Oxirgi yuk</th>
+      <th title="Oxirgi marta qachon to'lov qilgan">Oxirgi to'lov</th>
+      <th>Balans</th><th></th></tr>
   {% for c in page %}
   <tr>
+    {% comment %}
+    The name opens the mijoz's own page (balans, to'lanmagan sotuvlar, tarix);
+    tahrirlash is the pencil beside it, so the link is not spent on a modal.
+    {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'customer_edit' c.pk %}">{{ c.name }}</a>
+      <a href="{% url 'debt_customer' c.pk %}">{{ c.name }}</a>
     </td>
     <td>{{ c.phone|default:"—" }}</td>
     <td>{{ c.address|default:"—" }}</td>
-    <td>
+    <td>{% if c.last_sale %}{{ c.last_sale|date:"d.m.Y" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td>{% if c.last_payment %}{{ c.last_payment|date:"d.m.Y" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td class="cell-balance">
       {% comment %}
       One line per currency this mijoz was actually dealt with in. A dollar avans does
       not cancel a so'm qarz, so the two are shown apart rather than netted into a
@@ -40,6 +49,9 @@
     <td class="row-actions">
       <a class="icon-action" href="{% url 'customer_payment_create' %}?customer={{ c.pk }}" data-modal title="To'lov">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+      </a>
+      <a class="icon-action" href="{% url 'customer_avans' c.pk %}" data-modal title="Avans">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><polyline points="7 9 12 14 17 9"/><line x1="4" y1="20" x2="20" y2="20"/></svg>
       </a>
       <a class="icon-action" href="{% url 'reservation_create' %}?customer={{ c.pk }}" data-modal title="Bron">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>

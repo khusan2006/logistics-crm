@@ -1494,33 +1494,51 @@
   // Each kelishuv <option> carries its own currency (ContractChoiceSelect), so the
   // comparison needs no round trip; the server re-derives it either way.
   (function () {
-    var MARKED = '[data-contract-currency], [data-settled-against]';
+    var MARKED = '[data-contract-currency], [data-settled-against], [data-debt-currency]';
     // What this money is settled against. A hamkor to'lov settles a kelishuv, so it
-    // follows whichever one is picked; a logist top-up settles a float that is kept
-    // in one fixed currency, so it is a constant on the picker itself.
-    function settledAgainst(form) {
+    // follows whichever one is picked; a mijoz to'lov settles the qarz the header
+    // names, whose value IS the currency; a logist top-up settles a float that is
+    // kept in one fixed currency, so it is a constant on the picker itself.
+    // `unsetNeedsRate` says what an EMPTY answer means, which differs by form. A
+    // kelishuv not picked yet is simply unknown, so the box stays out of the way
+    // rather than demanding a kurs for a boundary that may not exist. A to'lov with
+    // no qarz named is a decision, not a gap: the money may land on either
+    // currency's debt, so the rate still decides something and is still asked for.
+    function settlement(form) {
       var contractEl = form.querySelector('[data-contract-currency]');
       if (contractEl) {
         var option = contractEl.options[contractEl.selectedIndex];
-        return option ? option.getAttribute('data-currency') : '';
+        return { against: option ? option.getAttribute('data-currency') : '',
+                 unsetNeedsRate: false };
       }
+      var debtEl = form.querySelector('[data-debt-currency]');
+      if (debtEl) { return { against: debtEl.value || '', unsetNeedsRate: true }; }
       var fixedEl = form.querySelector('[data-settled-against]');
-      return fixedEl ? fixedEl.getAttribute('data-settled-against') : '';
+      return { against: fixedEl ? fixedEl.getAttribute('data-settled-against') : '',
+               unsetNeedsRate: false };
     }
     function update(form) {
-      var rateEl = form.querySelector('[data-money-rate]');
-      var currencyEl = window.pickedControl(form, '[data-money-currency]');
-      if (!rateEl || !currencyEl) { return; }
-      var against = settledAgainst(form);
-      var box = rateEl.closest('p') || rateEl.closest('.lineset-field') || rateEl;
-      // Nothing picked to compare against yet: stay out of the way rather than
-      // demand a kurs for a boundary that may not exist.
-      var crosses = !!against && against !== currencyEl.value;
-      box.hidden = !crosses;
-      // Cleared as well as hidden: an invisible rate would still drive the "≈ …"
-      // preview beside the summa, quoting a counter-currency figure off a number
-      // the operator cannot see. The server fills the row's own rate back in.
-      if (!crosses) { rateEl.value = ''; }
+      // WHAT the money settles is a fact about the whole form — the kelishuv picked,
+      // or the qarz the header names. Which currency it ARRIVED in is per row, and a
+      // to'lov modal has several. Scoping the two separately is what lets one
+      // settlement carry a dollar row needing no kurs beside a so'm row that does.
+      var settled = settlement(form);
+      var lineRows = form.querySelectorAll('[data-line-row]');
+      var scopes = lineRows.length ? lineRows : [form];
+      Array.prototype.forEach.call(scopes, function (scope) {
+        var rateEl = scope.querySelector('[data-money-rate]');
+        var currencyEl = window.pickedControl(scope, '[data-money-currency]');
+        if (!rateEl || !currencyEl) { return; }
+        var box = rateEl.closest('p') || rateEl.closest('.lineset-field') || rateEl;
+        var needsRate = settled.against
+          ? settled.against !== currencyEl.value
+          : settled.unsetNeedsRate;
+        box.hidden = !needsRate;
+        // Cleared as well as hidden: an invisible rate would still drive the "≈ …"
+        // preview beside the summa, quoting a counter-currency figure off a number
+        // the operator cannot see. The server fills the row's own rate back in.
+        if (!needsRate) { rateEl.value = ''; }
+      });
     }
     function enhance(root) {
       (root || document).querySelectorAll('form').forEach(function (form) {
@@ -1531,7 +1549,7 @@
       if (!e.target.closest) { return; }
       var form = e.target.closest('form');
       if (!form || !form.querySelector(MARKED)) { return; }
-      if (e.target.matches('[data-contract-currency], [data-money-currency]')) {
+      if (e.target.matches('[data-contract-currency], [data-debt-currency], [data-money-currency]')) {
         update(form);
       }
     });

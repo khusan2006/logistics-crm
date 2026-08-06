@@ -122,3 +122,101 @@ def test_the_avans_box_is_not_offered_when_editing_a_mijoz(admin_client, db):
     form = admin_client.get(f"/customers/{customer.pk}/edit/").context["form"]
     assert "opening_avans" not in form.fields
     assert "opening_avans" in admin_client.get("/customers/new/").context["form"].fields
+
+
+# ── Avans for a mijoz who already exists ─────────────────────────────────────
+
+def test_an_existing_mijoz_can_be_given_an_avans_in_both_currencies(admin_client, db):
+    """The gap the opening avans left: it only ever appears while a mijoz is being
+    created, so from the second visit on there was no way to book money handed over
+    ahead of an order. A mijoz commonly puts down dollars AND so'm at once, and both
+    are booked in the currency they arrived in — neither is converted into the other."""
+    from decimal import Decimal
+
+    from crm.models import CustomerPayment, customer_balance_by_currency
+
+    customer = Customer.objects.create(name="Eski Mijoz", phone="", address="")
+    resp = admin_client.post(f"/customers/{customer.pk}/avans/", {
+        "date": "2026-08-06", "amount_usd": "1000", "amount_uzs": "5000000",
+        "method": "cash", "note": ""})
+    assert resp.status_code == 302
+
+    rows = CustomerPayment.objects.filter(customer=customer)
+    assert rows.count() == 2
+    usd_row = rows.get(currency="usd")
+    uzs_row = rows.get(currency="uzs")
+    assert usd_row.amount == Decimal("1000.00")          # typed side, exact
+    assert uzs_row.amount_uzs == Decimal("5000000.00")   # typed side, exact
+    assert usd_row.note == "Avans" and uzs_row.note == "Avans"
+    # negative = money we are holding, one position per currency it arrived in
+    assert customer_balance_by_currency(customer) == [
+        ("usd", Decimal("-1000.00")), ("uzs", Decimal("-5000000.00"))]
+
+
+def test_an_avans_fills_in_only_the_currency_that_was_typed(admin_client, db):
+    from crm.models import CustomerPayment
+
+    customer = Customer.objects.create(name="Faqat Dollar", phone="", address="")
+    assert admin_client.post(f"/customers/{customer.pk}/avans/", {
+        "date": "2026-08-06", "amount_usd": "250", "amount_uzs": "",
+        "method": "cash", "note": ""}).status_code == 302
+    rows = CustomerPayment.objects.filter(customer=customer)
+    assert [r.currency for r in rows] == ["usd"]
+
+
+def test_an_avans_with_neither_summa_is_rejected(admin_client, db):
+    from crm.models import CustomerPayment
+
+    customer = Customer.objects.create(name="Bo'sh Avans", phone="", address="")
+    resp = admin_client.post(f"/customers/{customer.pk}/avans/", {
+        "date": "2026-08-06", "amount_usd": "", "amount_uzs": "",
+        "method": "cash", "note": ""})
+    assert resp.status_code == 200
+    assert not CustomerPayment.objects.filter(customer=customer).exists()
+
+
+def test_an_avans_never_asks_for_a_kurs_but_the_rows_still_carry_one(admin_client, db):
+    """Nothing here is being converted to know what it is worth — each side is money
+    in hand. The rows still inherit a rate so the kassa's other column holds something."""
+    from crm.models import CustomerPayment
+
+    customer = Customer.objects.create(name="Kurssiz Avans", phone="", address="")
+    form = admin_client.get(f"/customers/{customer.pk}/avans/").context["form"]
+    assert "exchange_rate" not in form.fields
+
+    admin_client.post(f"/customers/{customer.pk}/avans/", {
+        "date": "2026-08-06", "amount_usd": "100", "amount_uzs": "",
+        "method": "cash", "note": ""})
+    assert CustomerPayment.objects.get(customer=customer).exchange_rate > 0
+
+
+def test_an_avans_from_a_mijoz_who_owes_us_goes_onto_the_qarz(admin_client, db):
+    """Not held money: it belongs to the sotuv that has been waiting for it. The
+    same rule every other to'lov follows — money must not skip a queue it is in."""
+    from decimal import Decimal
+
+    from conftest import make_lot
+
+    from crm.models import Sale, customer_balance_by_currency
+
+    customer = Customer.objects.create(name="Qarzdor", phone="", address="")
+    lot = make_lot(kg="1000", arrived="2026-07-16")
+    Sale.objects.create(customer=customer, line=lot, kg=Decimal("1000"),
+                        price=Decimal("1.00"), date="2026-08-01")  # $1 000 owed
+    assert customer_balance_by_currency(customer) == [("usd", Decimal("1000.00"))]
+
+    admin_client.post(f"/customers/{customer.pk}/avans/", {
+        "date": "2026-08-06", "amount_usd": "400", "amount_uzs": "",
+        "method": "cash", "note": ""})
+    assert customer_balance_by_currency(customer) == [("usd", Decimal("600.00"))]
+
+
+def test_the_avans_button_is_on_every_mijoz_row(admin_client, db):
+    customer = Customer.objects.create(name="Tugmali", phone="", address="")
+    html = admin_client.get("/customers/").content.decode()
+    assert f'/customers/{customer.pk}/avans/' in html
+
+
+def test_translator_cannot_book_an_avans(translator_client, db):
+    customer = Customer.objects.create(name="Yopiq", phone="", address="")
+    assert translator_client.get(f"/customers/{customer.pk}/avans/").status_code == 403
