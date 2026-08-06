@@ -45,12 +45,9 @@ shows how many rows picking it would leave.
       {% endfor %}
     </select>
   </label>
-  {% comment %}
-  ?yuk= is set by the arrival banner, not by a control here. It rides as a hidden
-  field so changing a select keeps the load pinned; the chip below is how you see
-  it is on and how you drop it.
-  {% endcomment %}
-  {% if page.object_list %}
+</form>
+
+{% if page.object_list %}
 <div class="table-wrap">
 <table>
   <tr>
