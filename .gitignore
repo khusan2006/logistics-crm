@@ -13,7 +13,13 @@ test-results/
 dev.sqlite3
 # Database snapshots taken before a migration. These hold real customer and
 # financial data — they must never reach the repository.
+#
+# The timestamped patterns are spelled out because the suffix goes AFTER the
+# extension: prod.dump.bak-20260806-153322 is not matched by *.dump, and one such
+# file was staged before this line existed.
 dev.sqlite3.bak-*
+prod.dump.bak-*
+*.bak-*
 *.dump
 *.sql
 
