@@ -46,8 +46,14 @@ def _reserve(admin_client, brand, customer, kg="5000", price="", currency="usd",
     })
 
 
-def _convert(admin_client, reservation, price=None):
-    body = {"price": price} if price else {}
+def _convert(admin_client, reservation, price=None, kg=None):
+    """Hand kg over from a bron. Without `kg` the view gives everything it can —
+    the whole remainder, or whatever of it has landed."""
+    body = {}
+    if price:
+        body["price"] = price
+    if kg is not None:
+        body["kg"] = kg
     return admin_client.post(f"/reservations/{reservation.pk}/convert/", body)
 
 
@@ -87,8 +93,11 @@ class TestBronIsAgainstAMarka:
         assert "hozircha omborda" in html
 
 
-class TestFifoQueue:
-    def test_first_bron_is_served_first(self, admin_client, db):
+class TestBookingOrderIsOnlyVisual:
+    """Who bronned first is shown, never enforced — the hand-over is agreed off the
+    screen, so the screen must not veto it."""
+
+    def test_a_later_bron_can_be_served_first(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         first = _customer("Birinchi")
         second = _customer("Ikkinchi")
@@ -96,52 +105,47 @@ class TestFifoQueue:
         _reserve(admin_client, "LLDPE", second, kg="4000", price="2.00")
         a, b = Reservation.objects.order_by("created_at", "pk")
 
-        # the second cannot jump the queue
-        _convert(admin_client, b)
-        b.refresh_from_db()
-        assert b.fulfilled_kg == Decimal("0")
-        assert not Sale.objects.exists()
-
-        _convert(admin_client, a)
-        a.refresh_from_db()
-        assert a.status == "converted"
-        assert Sale.objects.get().customer == first
-
-        # now the second's turn
         _convert(admin_client, b)
         b.refresh_from_db()
         assert b.status == "converted"
+        assert Sale.objects.get().customer == second
 
-    def test_queue_is_per_marka(self, admin_client, db):
-        """An older bron for a DIFFERENT marka blocks nothing."""
+        # and the earlier one is untouched, still owed its full kg
+        a.refresh_from_db()
+        assert a.fulfilled_kg == Decimal("0")
+        _convert(admin_client, a)
+        a.refresh_from_db()
+        assert a.status == "converted"
+
+    def test_queue_positions_are_per_marka(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _arrived_lot_for("Ikkinchi", kg="10000", brand="HDPE")
         _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
         _reserve(admin_client, "HDPE", _customer("Ikki"), kg="1000", price="2.00")
-        hdpe = Reservation.objects.get(brand="HDPE")
-        _convert(admin_client, hdpe)
-        hdpe.refresh_from_db()
-        assert hdpe.status == "converted"
+        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["page"]}
+        assert rows["Bir"].queue_pos == 1
+        assert rows["Ikki"].queue_pos == 1       # first of its own marka
 
-    def test_cancelling_the_head_lets_the_next_through(self, admin_client, db):
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
-        _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="1000", price="2.00")
-        a, b = Reservation.objects.order_by("created_at", "pk")
-        admin_client.post(f"/reservations/{a.pk}/cancel/", {})
-        _convert(admin_client, b)
-        b.refresh_from_db()
-        assert b.status == "converted"
-
-    def test_list_reports_position_and_who_is_ahead(self, admin_client, db):
+    def test_list_reports_position_and_who_asked_first(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Birinchi"), kg="1000")
         _reserve(admin_client, "LLDPE", _customer("Ikkinchi"), kg="1000")
         rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["page"]}
         assert rows["Birinchi"].queue_pos == 1
         assert rows["Ikkinchi"].queue_pos == 2
-        assert rows["Ikkinchi"].blocked_by.customer.name == "Birinchi"
-        assert rows["Ikkinchi"].servable_kg == Decimal("0")
+        assert rows["Ikkinchi"].ahead_of.customer.name == "Birinchi"
+        # being second says nothing about whether it can be handed over
+        assert rows["Ikkinchi"].servable_kg == Decimal("1000.000")
+
+    def test_cancelling_one_renumbers_the_rest(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
+        _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="1000", price="2.00")
+        a, _b = Reservation.objects.order_by("created_at", "pk")
+        admin_client.post(f"/reservations/{a.pk}/cancel/", {})
+        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["page"]}
+        assert rows["Ikki"].queue_pos == 1
+        assert rows["Ikki"].ahead_of is None
 
 
 class TestPartialFulfilment:
@@ -168,14 +172,15 @@ class TestPartialFulfilment:
         assert bron.status == "converted"
         assert sum(s.kg for s in Sale.objects.all()) == Decimal("20000.000")
 
-    def test_a_part_filled_bron_only_blocks_what_is_still_owed(self, admin_client, db):
+    def test_a_part_filled_bron_only_reports_what_is_still_owed(self, admin_client, db):
         _arrived_lot(kg="12000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="20000", price="2.00")
         _convert(admin_client, Reservation.objects.get())
         _arrived_lot_for("Keyingi", kg="30000", brand="LLDPE")
-        from crm.models import brand_free_kg, brand_reserved_kg
+        from crm.models import brand_on_hand_kg, brand_reserved_kg
         assert brand_reserved_kg("LLDPE") == Decimal("8000.000")
-        assert brand_free_kg("LLDPE") == Decimal("22000.000")   # 30000 − 8000
+        # promised, not held: the whole new truck is still sellable
+        assert brand_on_hand_kg("LLDPE") == Decimal("30000.000")
 
     def test_nothing_on_the_shelf_is_refused_not_half_done(self, admin_client, db):
         _in_transit_lot(kg="5000", brand="HDPE")
@@ -187,20 +192,78 @@ class TestPartialFulfilment:
         assert not Sale.objects.exists()
 
 
+class TestPartOfABronCanBeHandedOver:
+    """The mijoz booked 20 000 and came for 5 000 today. That is the ordinary case,
+    not an exception — so the kg handed over is the operator's to type."""
+
+    def test_giving_less_than_is_available_leaves_the_rest_open(self, admin_client, db):
+        _arrived_lot(kg="20000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="20000", price="2.00")
+        bron = Reservation.objects.get()
+        _convert(admin_client, bron, kg="5000")
+        bron.refresh_from_db()
+        assert Sale.objects.get().kg == Decimal("5000.000")
+        assert bron.fulfilled_kg == Decimal("5000.000")
+        assert bron.remaining_kg == Decimal("15000.000")
+        assert bron.status == "active"
+
+    def test_the_rest_can_be_collected_later(self, admin_client, db):
+        _arrived_lot(kg="20000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="20000", price="2.00")
+        bron = Reservation.objects.get()
+        _convert(admin_client, bron, kg="5000")
+        _convert(admin_client, bron, kg="15000")
+        bron.refresh_from_db()
+        assert bron.status == "converted"
+        assert sum(s.kg for s in Sale.objects.all()) == Decimal("20000.000")
+
+    def test_more_than_is_owed_is_refused(self, admin_client, db):
+        _arrived_lot(kg="20000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="2.00")
+        bron = Reservation.objects.get()
+        _convert(admin_client, bron, kg="6000")
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0")
+        assert not Sale.objects.exists()
+
+    def test_more_than_has_landed_is_refused(self, admin_client, db):
+        _arrived_lot(kg="3000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="20000", price="2.00")
+        bron = Reservation.objects.get()
+        _convert(admin_client, bron, kg="5000")
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0")
+        assert not Sale.objects.exists()
+
+    def test_a_zero_or_negative_kg_is_refused(self, admin_client, db):
+        _arrived_lot(kg="20000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="2.00")
+        bron = Reservation.objects.get()
+        for kg in ["0", "-100", "salom"]:
+            _convert(admin_client, bron, kg=kg)
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0")
+        assert not Sale.objects.exists()
+
+
 class TestBronsBlockOrdinarySales:
-    def test_bronned_kg_cannot_be_sold_over_the_counter(self, admin_client, db):
+    """A bron holds the granula for the mijoz who booked it. Somebody else walking
+    in cannot be sold out from under them — the shelf is not the ceiling, the FREE
+    part of it is."""
+
+    def test_bronned_kg_cannot_be_sold_to_somebody_else(self, admin_client, db):
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         resp = admin_client.post("/sales/new/", {
-            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "5000",
+            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "24000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
         })
         assert resp.status_code == 200          # re-rendered, invalid
         assert not Sale.objects.exists()
-        assert "bronlangan" in resp.content.decode()
 
-    def test_free_kg_still_sells(self, admin_client, db):
+    def test_the_free_part_of_the_shelf_still_sells(self, admin_client, db):
+        """4 000 of the 24 000 is unpromised, and that much goes through."""
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         resp = admin_client.post("/sales/new/", {
@@ -211,16 +274,38 @@ class TestBronsBlockOrdinarySales:
         assert resp.status_code == 302
         assert Sale.objects.get().kg == Decimal("4000.000")
 
-    def test_ombor_says_where_the_kg_went(self, admin_client, db):
-        """The user's ask: nobody should have to work out why Sotish mumkin is
-        smaller than Kirim."""
+    def test_the_bron_holder_may_buy_their_own_bronned_granula(self, admin_client, db):
+        """Their promise does not stand between them and what it promises them."""
+        _arrived_lot(kg="24000", brand="LLDPE")
+        holder = _customer("Bron egasi")
+        _reserve(admin_client, "LLDPE", holder, kg="20000")
+        resp = admin_client.post("/sales/new/", {
+            "customer": holder.pk, "brand": "LLDPE", "kg": "24000",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+        })
+        assert resp.status_code == 302
+        assert Sale.objects.get().kg == Decimal("24000.000")
+
+    def test_the_shelf_is_still_the_ceiling(self, admin_client, db):
+        _arrived_lot(kg="24000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
+        resp = admin_client.post("/sales/new/", {
+            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "24001",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+        })
+        assert resp.status_code == 200          # re-rendered, invalid
+        assert not Sale.objects.exists()
+
+    def test_ombor_shows_the_promise_beside_the_shelf(self, admin_client, db):
+        """Bronlangan says who asked; it does not come out of Sotish mumkin."""
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         ctx = admin_client.get("/ombor/").context
         g = next(x for x in ctx["page"] if x["brand"] == "LLDPE")
         assert g["on_hand"] == Decimal("24000.000")
         assert g["reserved"] == Decimal("20000.000")
-        assert g["available"] == Decimal("4000.000")
         html = admin_client.get("/ombor/").content.decode()
         assert "Bronlangan" in html and "Sotish mumkin" in html
         assert "Bron egasi" in html
@@ -231,7 +316,7 @@ class TestBronsBlockOrdinarySales:
         _reserve(admin_client, "LLDPE", _customer(), kg="20000")
         g = next(x for x in admin_client.get("/ombor/").context["page"]
                  if x["brand"] == "LLDPE")
-        assert g["available"] == Decimal("0")
+        assert g["on_hand"] == Decimal("5000.000")
         assert g["short"] == Decimal("15000.000")
 
 
@@ -311,13 +396,14 @@ class TestEditAndDelete:
 
 
 class TestCancel:
-    def test_cancel_frees_the_kg_for_ordinary_sales(self, admin_client, db):
-        from crm.models import brand_free_kg
+    def test_cancel_drops_the_promise_and_leaves_the_shelf_alone(self, admin_client, db):
+        from crm.models import brand_on_hand_kg, brand_reserved_kg
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
-        assert brand_free_kg("LLDPE") == Decimal("5000.000")
+        assert brand_reserved_kg("LLDPE") == Decimal("5000.000")
         admin_client.post(f"/reservations/{Reservation.objects.get().pk}/cancel/", {})
-        assert brand_free_kg("LLDPE") == Decimal("10000.000")
+        assert brand_reserved_kg("LLDPE") == Decimal("0")
+        assert brand_on_hand_kg("LLDPE") == Decimal("10000.000")   # never moved
 
 
 class TestEarmarkedPayment:

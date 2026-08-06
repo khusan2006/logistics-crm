@@ -1157,7 +1157,7 @@ def ombor(request):
             g = by_brand[brand] = {"brand": brand, "lots": [], "partners": [],
                                    "brons": [],
                                    "kirim": Decimal("0"), "sold": Decimal("0"),
-                                   "reserved": Decimal("0"), "available": Decimal("0")}
+                                   "reserved": Decimal("0")}
             groups.append(g)
         g["lots"].append(lot)
 
@@ -1174,13 +1174,19 @@ def ombor(request):
         g["cost_min"], g["cost_min_uzs"] = min(costed)
         g["cost_max"], g["cost_max_uzs"] = max(costed)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
-        # The bron queue for this marka, oldest first — and the arithmetic that says
-        # where the shelf kg went, so nobody has to work out why Sotish mumkin is
-        # smaller than Kirim.
+        # Who has asked for this marka, oldest first. A bron HOLDS the granula, so
+        # `free` is what an ordinary sotuv may take — the figure the sale form
+        # enforces, and therefore the one this page has to print as sellable.
+        # `on_hand` stays beside it as the physical count, and `short` says when
+        # more is promised than has landed.
         g["brons"] = bron_queue(g["brand"])
         g["reserved"] = sum((r.remaining_kg for r in g["brons"]), Decimal("0"))
-        g["available"] = max(g["on_hand"] - g["reserved"], Decimal("0"))
+        g["free"] = max(g["on_hand"] - g["reserved"], Decimal("0"))
         g["short"] = max(g["reserved"] - g["on_hand"], Decimal("0"))
+        for bron in g["brons"]:
+            # Every open bron can be served, not just the first — and each one only
+            # up to what is still owed on it or still on the shelf.
+            bron.servable_kg = min(bron.remaining_kg, g["on_hand"])
 
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {"page": page, "q": q})
@@ -1706,8 +1712,8 @@ RESERVATION_STATUS_LABELS = [
 # Sorted in Python: jami is kg × narx and lot state reads through two relations,
 # neither of which is a column. Each entry is (key, label, sort key, reverse).
 RESERVATION_SORTS = [
-    # Navbat first: FIFO order is the rule the screen exists to enforce, so it is
-    # what you should be looking at unless you deliberately ask for something else.
+    # Navbat first: who asked for each marka and in what order is the thing the
+    # screen exists to show, so it is the default unless you ask for another sort.
     ("queue", "Navbat bo'yicha", lambda r: (r.brand, r.created_at, r.pk), False),
     ("-created", "Sana — yangi avval", lambda r: (r.created_at, r.pk), True),
     ("created", "Sana — eski avval", lambda r: (r.created_at, r.pk), False),
@@ -1727,8 +1733,8 @@ def reservation_list(request):
     rows become a list once and are narrowed in Python from there."""
     q = request.GET.get("q", "").strip()
     customer_id = request.GET.get("customer", "").strip()
-    # "ready" = at the head of its marka's queue with stock on the shelf; "waiting"
-    # = open but blocked, either by the queue or by an empty ombor.
+    # "ready" = open with some of its marka on the shelf; "waiting" = open with an
+    # empty ombor, which is now the only thing that can hold a hand-over up.
     lot = request.GET.get("lot", "").strip()
     # Faol is the working view — an open bron is the only kind with anything left
     # to act on, so it is where you land rather than the whole history.
@@ -1746,9 +1752,11 @@ def reservation_list(request):
         reservations = reservations.filter(customer_id=int(customer_id))
 
     rows = list(reservations)
-    # Queue position and what is on the shelf for that marka right now — the two
-    # facts that decide whether a bron can be filled today. Computed once per marka
-    # rather than per row: the queue walk is the same for every bron of a marka.
+    # What is on the shelf for that marka right now, plus the position in the
+    # booking order. Stock is the only thing that decides whether a bron can be
+    # filled today; the position is shown so the operator can see who asked first,
+    # and a bron behind another is still servable. Computed once per marka rather
+    # than per row: the walk is the same for every bron of a marka.
     shelf, queues = {}, {}
     for brand in {r.brand for r in rows}:
         shelf[brand] = brand_on_hand_kg(brand)
@@ -1758,8 +1766,9 @@ def reservation_list(request):
         row.queue_pos = order.index(row.pk) + 1 if row.pk in order else None
         row.brand_on_hand = shelf.get(row.brand, Decimal("0"))
         row.servable_kg = (min(row.remaining_kg, row.brand_on_hand)
-                           if row.queue_pos == 1 else Decimal("0"))
-        row.blocked_by = (
+                           if row.is_open else Decimal("0"))
+        # Only who is ahead in the booking order — a label, not a block.
+        row.ahead_of = (
             Reservation.objects.filter(pk=order[0]).select_related("customer").first()
             if row.queue_pos and row.queue_pos > 1 else None)
     if lot == "ready":
@@ -1888,33 +1897,46 @@ def reservation_cancel(request, pk):
 @require_POST
 @role_required(User.Role.ADMIN)
 def reservation_convert(request, pk):
-    """Fill a bron from whatever of its marka is on the shelf, oldest lot first.
+    """Hand over part or all of a bron from whatever of its marka is on the shelf,
+    oldest lot first.
 
-    Two rules the mijoz is entitled to. FIFO: an older open bron for the same marka
-    must be served first, so nobody is jumped in the queue. Partial: if only some of
-    the kg has landed, that part becomes a sotuv now and the bron stays open for the
-    rest — loads arrive in pieces and making the mijoz wait for a full truck would
-    hold their granula hostage to a later one."""
+    The booking order is not enforced here: a bron behind another can be served,
+    because the two are settled between the operator and the mijoz, not by the
+    screen. The only ceilings are real ones — what is still owed on this bron, and
+    what has actually landed.
+
+    How much of that to give is the operator's call. POST `kg` hands over less than
+    the ceiling (the mijoz wanted 5 000 of their 20 000 today); no `kg` gives
+    everything available. Either way the bron stays open for the rest, because loads
+    arrive in pieces and a mijoz may collect in pieces too."""
     reservation = get_object_or_404(Reservation, pk=pk)
     if not reservation.is_open:
         messages.error(request, "Bu bron ochiq emas")
         return form_reload(request, reverse("reservation_list"))
 
-    queue = bron_queue(reservation.brand)
-    if queue and queue[0].pk != reservation.pk:
-        first = queue[0]
-        messages.error(
-            request,
-            f"Navbat buzilmaydi: {first.brand} bo'yicha birinchi navbatda "
-            f"{first.customer.name} turibdi ({_kg(first.remaining_kg)} kg). "
-            "Avval o'shani bering yoki bronini bekor qiling.")
-        return form_reload(request, reverse("reservation_list"))
-
     on_shelf = brand_on_hand_kg(reservation.brand)
-    take_total = min(reservation.remaining_kg, on_shelf)
-    if take_total <= 0:
+    servable = min(reservation.remaining_kg, on_shelf)
+    if servable <= 0:
         messages.error(request, f"{reservation.brand} omborda yo'q — yuk kutilmoqda")
         return form_reload(request, reverse("reservation_list"))
+
+    take_total = servable
+    raw_kg = (request.POST.get("kg") or "").strip()
+    if raw_kg:
+        typed_kg = _typed_decimal(raw_kg)
+        if typed_kg is None or typed_kg <= 0:
+            messages.error(request, "Berilayotgan kg musbat son bo'lishi kerak")
+            return form_reload(request, reverse("reservation_list"))
+        if typed_kg > servable:
+            # Which ceiling was hit changes what the operator should do next — wait
+            # for a truck, or edit the bron — so the message says which one it was.
+            reason = ("bron bo'yicha shuncha qolgan"
+                      if reservation.remaining_kg <= on_shelf else "omborda shuncha bor")
+            messages.error(
+                request,
+                f"Ko'pi bilan {_kg(servable)} kg berish mumkin — {reason}")
+            return form_reload(request, reverse("reservation_list"))
+        take_total = typed_kg
 
     # The bron's own money shape carries over whole — currency, kurs and both
     # values. A bron struck in so'm must not become a dollar sotuv re-rated at
@@ -1967,7 +1989,7 @@ def reservation_convert(request, pk):
         request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
         f"Brondan sotuv: {_kg(take_total - remaining)} kg {reservation.brand} · "
         f"{reservation.customer.name}"
-        + (f" · {_kg(left)} kg navbatda qoldi" if left > 0 else " · bron yopildi"),
+        + (f" · {_kg(left)} kg bronda qoldi" if left > 0 else " · bron yopildi"),
     )
     for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
         apply_customer_advance(sale)
@@ -1975,7 +1997,7 @@ def reservation_convert(request, pk):
         messages.success(
             request,
             f"{_kg(take_total - remaining)} kg sotuvga aylandi — "
-            f"{_kg(left)} kg navbatda qoldi")
+            f"{_kg(left)} kg bronda qoldi")
     else:
         messages.success(request, "Bron to'liq sotuvga aylantirildi")
     return form_reload(request, reverse("reservation_list"))
@@ -2124,6 +2146,21 @@ WATERFALL_EXPENSE_GROUPS = [
     ("transport", "Transport"),
 ]
 WATERFALL_EXPENSE_OTHER = "Boshqa xarajatlar"
+
+
+def _typed_decimal(raw):
+    """A number as the operator's field hands it over, or None if it is not one.
+
+    The money inputs group thousands and take a comma for the decimal point, and
+    their JS normally strips that back before submit. This does the same server-side
+    so a hand-typed "12 000,5" is a number here rather than a confusing refusal."""
+    text = (raw or "").strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except (ValueError, ArithmeticError):
+        return None
 
 
 def _kg(value):

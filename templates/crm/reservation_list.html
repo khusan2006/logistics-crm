@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load crm_extras %}
+{% load crm_extras l10n %}
 {% block title %}Bronlar · GranulaLog{% endblock %}
 {% block topbar_title %}Bronlar{% endblock %}
 {% block fab %}<a class="fab" href="{% url 'reservation_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi bron</a>{% endblock %}
@@ -54,7 +54,7 @@ shows how many rows picking it would leave.
     <th class="sticky-col">Mijoz</th>
     <th>Sana</th>
     <th>Marka</th>
-    <th title="Shu marka bo'yicha navbatdagi o'rni — birinchi turgan birinchi oladi">Navbat</th>
+    <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi">Navbat</th>
     <th>Kg</th>
     <th title="Hali berilmagan qismi">Qolgan</th>
     <th>Narx</th>
@@ -86,10 +86,7 @@ shows how many rows picking it would leave.
       {% if r.status == "active" %}
         {% if r.servable_kg > 0 %}
           <span class="badge badge-ok">Berish mumkin</span>
-          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor</div>
-        {% elif r.blocked_by %}
-          <span class="badge badge-warning">Navbatda</span>
-          <div class="muted load-sub">oldida {{ r.blocked_by.customer.name }}</div>
+          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name }} bron qilgan{% endif %}</div>
         {% else %}
           <span class="badge badge-warning">Mol kutilmoqda</span>
           <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>
@@ -100,18 +97,23 @@ shows how many rows picking it would leave.
     <td class="row-actions">
       {% if r.is_open %}
         {% comment %}
-        Convert is offered only to the head of the marka's queue with stock behind
-        it. Anything else is disabled with the reason on it, so the FIFO rule is
-        visible on screen rather than discovered by getting an error.
+        Hand-over is offered to every open bron with stock behind it — the booking
+        order does not gate it. The kg box comes pre-filled with the most that can
+        be given so the common case is one click, and is editable because the mijoz
+        often takes only part of what they booked.
         {% endcomment %}
         {% if r.servable_kg > 0 %}
         <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal class="row-inline-form">
           {% csrf_token %}
+          {% comment %}
+          Unlocalized in value= — the money JS is what turns it into "12 000" for
+          the eye and hands a plain number back at submit, same as every other
+          numeric field. The title keeps the readable form.
+          {% endcomment %}
+          <input type="text" data-money name="kg" value="{{ r.servable_kg|unlocalize }}" required style="width:88px;" title="Ko'pi bilan {{ r.servable_kg|floatformat:"-3" }} kg" aria-label="Beriladigan kg">
           {% if not r.price %}<input type="number" step="0.0001" min="0" name="price" placeholder="Narx" required style="width:88px;" aria-label="Sotuv narxi">{% endif %}
-          <button type="submit" class="btn btn-sm">{{ r.servable_kg|floatformat:"-3" }} kg berish</button>
+          <button type="submit" class="btn btn-sm">Berish</button>
         </form>
-        {% elif r.blocked_by %}
-        <button type="button" class="btn btn-sm" disabled title="Navbatda oldida {{ r.blocked_by.customer.name }} turibdi">Navbati kelmadi</button>
         {% else %}
         <button type="button" class="btn btn-sm" disabled title="{{ r.brand }} omborda yo'q — yuk kutilmoqda">Mol yo'q</button>
         {% endif %}

@@ -31,8 +31,8 @@ def test_arrived_shipment_is_lot_with_full_available_kg(db):
     s = _arrived_shipment(kg="400")
     assert s.is_lot is True
     assert s.sold_kg == Decimal("0")
-    # No reserved_kg on a lot any more: a bron is a claim on a MARKA across every
-    # kelishuv, so the block is applied once at brand level by brand_free_kg.
+    # No reserved_kg on a lot: a bron is a claim on a MARKA across every kelishuv,
+    # and it holds nothing back anyway — it is reported, never subtracted.
     assert s.returned_kg == Decimal("0")
     assert s.available_kg == s.kg == Decimal("400")
 
@@ -88,7 +88,7 @@ def test_ombor_groups_lots_of_one_marka_into_a_single_row(admin_client, db):
     merged = by_brand["2102 kampaund"]
     assert [lot.pk for lot in merged["lots"]] == [cheap.pk, dear.pk]   # FIFO order
     assert merged["kirim"] == Decimal("120000")
-    assert merged["available"] == Decimal("120000")
+    assert merged["on_hand"] == Decimal("120000")
     assert merged["cost_min"] == Decimal("1.2000")
     assert merged["cost_max"] == Decimal("1.3000")
     assert by_brand["7000 kampaund"]["lots"] == [other]
@@ -112,7 +112,7 @@ def test_ombor_group_totals_net_out_sales(admin_client, db):
                         price=Decimal("2"), date="2026-07-20")
 
     group = admin_client.get("/ombor/").context["page"].object_list[0]
-    assert group["sold"] == Decimal("400") and group["available"] == Decimal("600")
+    assert group["sold"] == Decimal("400") and group["on_hand"] == Decimal("600")
 
 
 def test_ombor_search_still_matches_by_marka(admin_client, db):

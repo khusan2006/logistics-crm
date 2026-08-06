@@ -1098,9 +1098,10 @@ class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
         # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
         # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
         # readable ("24000", not Decimal.normalize()'s "2.4E+4").
-        # FREE kg, not on-hand: bronned granula is promised to a queue and must not
-        # be sellable over the counter. The option says both figures so the operator
-        # can see where the difference went rather than wondering.
+        # FREE kg, not on-hand: bronned granula is promised to somebody and must
+        # not be sellable over the counter. The option says both figures, so the
+        # operator can see where the difference went rather than wondering why the
+        # shelf will not sell.
         costed = brand_stock_costed()
         self.stock = {row["brand"]: row["free"] for row in costed}
         # A bronned marka stays on the list even with nothing free: its own bron
@@ -1129,8 +1130,8 @@ class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
             available = brand_free_kg(brand, customer)
             if kg > available:
                 self.add_error(
-                    "kg", f"Sotish mumkin bo'lgan qoldiqdan oshmasligi kerak "
-                          f"({_clean_number(available)} kg — qolgani bronlangan)")
+                    "kg", f"Ombor qoldig'idan oshmasligi kerak "
+                          f"({_clean_number(available)} kg)")
         return cleaned
 
 
@@ -1222,9 +1223,10 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     on a kelishuv plus everything already in the ombor — deliberately including
     markalar with zero stock today, since booking ahead is the point.
 
-    There is no kg ceiling here for the same reason. Reserving 40 000 kg against a
-    kelishuv that has not shipped yet is normal business, and capping the bron at
-    today's shelf would forbid exactly the case this screen exists for."""
+    There is no kg ceiling here, and none against what is already bronned either.
+    Reserving 40 000 kg against a kelishuv that has not shipped yet is normal
+    business, and since a bron holds nothing back, two mijoz booking the same kg is
+    a fact the operator settles at hand-over rather than an error to refuse now."""
 
     #: the narx is optional on a bron — the price can be agreed later
     allow_blank = True
@@ -1242,12 +1244,12 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
         choices = []
         for brand in bron_brands():
             row = stock.get(brand)
-            if row and row["free"] > 0:
-                hint = f"omborda {_clean_number(row['free'])} kg bo'sh"
-            elif row:
-                hint = f"omborda {_clean_number(row['on_hand'])} kg, hammasi bronlangan"
+            if row:
+                hint = f"omborda {_clean_number(row['on_hand'])} kg"
+                if row["reserved"]:
+                    hint += f", {_clean_number(row['reserved'])} kg bronlangan"
             else:
-                hint = "hozircha omborda yo'q — kelganda navbat bo'yicha beriladi"
+                hint = "hozircha omborda yo'q — kelganda beriladi"
             choices.append((brand, f"{brand} · {hint}"))
         self.fields["brand"].choices = choices
         # An existing bron keeps its marka even if that marka has since dropped off
