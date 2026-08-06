@@ -76,54 +76,6 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
   <button type="submit" class="btn btn-sm">Filtrlash</button>
 </form>
 
-<div class="kassa-grid">
-  {% comment %}
-  Oqim — the period's money as a sequence. Each bar spans from the balance before
-  the step to the balance after, so the bar IS the movement and where it sits is
-  the level it moved from. The closing bar has to land on Kassadagi pul above.
-
-  `u` on every floatformat is load-bearing: the active locale writes a decimal with
-  a comma, and `left: 70,72%` is not a length — the bars silently collapse to zero
-  width while every figure beside them stays correct.
-  {% endcomment %}
-  <section class="card kcard" style="--zero: {{ zero_line|floatformat:"2u" }}%;">
-    <div class="kcard-head">
-      <h2>Oqim</h2>
-      <span class="kcard-note">tanlangan davrda pul qayerdan kelib qayerga ketdi</span>
-    </div>
-    {% comment %}
-    The method split lives HERE, not in the band above: it is filtered by the date
-    range like everything else in this card, while both figures in the band are
-    current-state. Sitting in the band it looked like the same kind of number and
-    silently changed when the filter moved.
-    {% endcomment %}
-    <div class="kmethods">
-      {% for key, b in balances.items %}
-      <div class="ksm">
-        <div class="ksm-label">{{ b.label }}</div>
-        <div class="ksm-val">{{ b.balance|usd }}</div>
-        <div class="ksm-flow">
-          <span class="avans">kirim {{ b.in|usd }}</span>
-          <span class="late">chiqim {{ b.out|usd }}</span>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    <div class="waterfall">
-      {% for b in waterfall %}
-      <div class="wf-row wf-{{ b.kind }}" {% if b.kind != "total" %}title="Qoldiq: {{ b.running|usd }}"{% endif %}>
-        <div class="wf-label">{{ b.label }}</div>
-        <div class="wf-track">
-          <div class="wf-bar" style="left: {{ b.left|floatformat:"2u" }}%; width: {{ b.width|floatformat:"2u" }}%;"></div>
-        </div>
-        <div class="wf-amount">{{ b.amount|usd }}</div>
-      </div>
-      {% endfor %}
-    </div>
-  </section>
-
-</div>
-
 <div class="grid-2 kassa-ledger">
   {# ── Kirim: mijozlardan qabul qilingan to'lovlar ── #}
   <div class="card" style="margin-bottom:0;">
@@ -147,7 +99,6 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
         <th>Kirim turi</th>
         <th class="num">Foiz / kurs</th>
         <th class="num">Kirim summa</th>
-        <th class="num">Qarzga ta'sir</th>
         <th></th>
       </tr>
       {% for p in income_page %}
@@ -158,22 +109,12 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
         <td class="num muted">{% if p.fee_percent %}{{ p.fee_percent|floatformat:"-2" }}%{% endif %}{% if p.fee_percent and p.crosses_currency %} · {% endif %}{% if p.crosses_currency %}{{ p.exchange_rate|floatformat:"0g" }}{% endif %}{% if not p.fee_percent and not p.crosses_currency %}—{% endif %}</td>
         {# What landed, not what was sent: a perechisleniya foiz never reached the kassa. #}
         <td class="num amt-in"><strong>+{% money p.net_amount p.net_amount_uzs p.currency %}</strong></td>
-        {% comment %}
-        How much of the money actually came off a qarz. A to'lov bigger than what the
-        mijoz owed settles what there was and the rest stays an avans — money we are
-        holding, not money that cleared anything — so the two figures differ and the
-        remainder is named rather than left to be worked out from the difference.
-        {% endcomment %}
-        <td class="num">
-          {% if p.allocated_own %}<strong class="amt-in">+{% money_in p.allocated_own p.currency %}</strong>{% else %}<span class="muted">—</span>{% endif %}
-          {% if p.unspent_own %}<br><small class="avans">avans {% money_in p.unspent_own p.currency %}</small>{% endif %}
-        </td>
         <td class="row-actions">
           <a class="icon-action act-edit" href="{% url 'customer_payment_edit' p.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
           <a class="icon-action" href="{% url 'customer_payment_detail' p.pk %}" data-modal title="Batafsil"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg></a>
         </td>
       </tr>
-      {% empty %}<tr><td colspan="7" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="6" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
     </table>
     </div>
     {% if income_page.has_other_pages %}

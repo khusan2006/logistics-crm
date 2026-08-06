@@ -479,25 +479,6 @@ class TestWaterfall:
         for bar in ctx["waterfall"]:
             assert 0 <= bar["left"] <= 100
 
-    def test_bar_geometry_is_written_as_valid_css(self, admin_client, db):
-        """Regression: the active locale renders a decimal with a comma, so
-        `floatformat:2` emitted `left: 70,72%` — not a length. Every bar collapsed
-        to zero width while the figures beside them stayed right, so the page looked
-        fine in every assertion and wrong on screen."""
-        import re
-
-        customer = _customer()
-        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
-                                       amount=Decimal("500.50"), method="cash")
-        html = admin_client.get("/kassa/").content.decode()
-        styles = re.findall(r'class="wf-bar" style="([^"]+)"', html)
-        assert styles, "no waterfall bars rendered"
-        for style in styles:
-            assert "," not in style, style
-            assert re.fullmatch(r"left: \d+(\.\d+)?%; width: \d+(\.\d+)?%;", style), style
-        zero = re.search(r'--zero: ([^;]+);', html).group(1)
-        assert "," not in zero, zero
-
 
 class TestLedgerColumns:
     """Kirim and Chiqim answer, per row, what happened to the money on the way
@@ -534,12 +515,13 @@ class TestLedgerColumns:
         assert crossing.crosses_currency is True
 
         html = admin_client.get("/kassa/").content.decode()
-        assert "Foiz / kurs" in html and "Qarzga ta'sir" in html
+        assert "Foiz / kurs" in html
         assert "12 500" in html.replace(" ", " ")   # the crossing row's kurs
 
-    def test_qarzga_tasir_names_what_settled_and_what_stayed_avans(self, admin_client, db):
+    def test_what_settled_and_what_stayed_avans_are_named_apart(self, admin_client, db):
         """A to'lov bigger than the qarz clears what there is; the rest is money we
-        are HOLDING. One figure cannot say both, so the row says both."""
+        are HOLDING. One figure cannot say both, so both are named — on the to'lov's
+        own detail card, since the Kirim ledger no longer carries the column."""
         from crm.models import allocate_customer_payment
         contract = _contract()
         lot = _arrived_shipment(contract).lines.first()
@@ -554,7 +536,7 @@ class TestLedgerColumns:
         assert payment.allocated_own == Decimal("100.00")
         assert payment.unspent_own == Decimal("150.00")
         assert payment.net_amount_own == Decimal("250.00")
-        html = admin_client.get("/kassa/").content.decode()
+        html = admin_client.get(f"/customer-payments/{payment.pk}/").content.decode()
         assert "avans" in html
 
     def test_a_foiz_is_taken_off_before_anything_is_settled(self, admin_client, db):
