@@ -105,32 +105,14 @@ shows how many rows picking it would leave.
     <td class="row-actions">
       {% if r.is_open %}
         {% comment %}
-        Hand-over is offered to every open bron with stock behind it — the booking
-        order does not gate it. The kg box comes pre-filled with the most that can
-        be given so the common case is one click, and is editable because the mijoz
-        often takes only part of what they booked.
+        Handing the granula over is a sotuv, so it goes through the sotuv form —
+        prefilled with this mijoz and marka. There used to be a one-click Berish
+        here that created the sale outright; it was removed because a stray click
+        handed goods over and put a mijoz in debt with nothing asked, and undoing
+        that means deleting every FIFO slice it wrote. The form makes the same act
+        deliberate, and carries the sana, to'lov muddati and izoh it never had.
         {% endcomment %}
-        {% if r.servable_kg > 0 %}
-        <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal class="row-inline-form">
-          {% csrf_token %}
-          {% comment %}
-          Unlocalized in value= — the money JS is what turns it into "12 000" for
-          the eye and hands a plain number back at submit, same as every other
-          numeric field. The title keeps the readable form.
-          {% endcomment %}
-          <input type="text" data-money name="kg" value="{{ r.servable_kg|unlocalize }}" required style="width:88px;" title="Ko'pi bilan {{ r.servable_kg|floatformat:"-3" }} kg" aria-label="Beriladigan kg">
-          {% if not r.price %}<input type="number" step="0.0001" min="0" name="price" placeholder="Narx" required style="width:88px;" aria-label="Sotuv narxi">{% endif %}
-          <button type="submit" class="btn btn-sm">Berish</button>
-        </form>
-        {% else %}
-        <button type="button" class="btn btn-sm" disabled title="{{ r.brand }} omborda yo'q — yuk kutilmoqda">Mol yo'q</button>
-        {% endif %}
-        {% comment %}
-        A full sotuv from here, prefilled with this mijoz and marka. Berish above is
-        the quick hand-over — kg and a narx; this one is for the sotuv that needs a
-        sana, a to'lov muddati or a note, without retyping who and what.
-        {% endcomment %}
-        <a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;brand={{ r.brand|urlencode }}" data-modal title="To'liq sotuv">
+        <a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;brand={{ r.brand|urlencode }}&amp;currency={{ r.currency }}{% if r.price_own %}&amp;price={{ r.price_own|unlocalize }}{% endif %}" data-modal title="To'liq sotuv">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
         </a>
         <a class="icon-action act-edit" href="{% url 'reservation_edit' r.pk %}" data-modal title="Tahrirlash">

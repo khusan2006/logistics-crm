@@ -1602,6 +1602,18 @@ def sale_create(request):
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
+    # Serving a bron from Bronlar or Ombor: the narx and the valyuta were agreed
+    # when the bron was struck and must not have to be retyped from memory —
+    # retyping is how an agreed price quietly becomes a different one.
+    currency = (request.GET.get("currency") or "").strip()
+    if currency in dict(Currency.choices):
+        initial["currency"] = currency
+    price = (request.GET.get("price") or "").strip()
+    if price:
+        try:
+            initial["price"] = Decimal(price)
+        except (ArithmeticError, ValueError):
+            pass
     form = SaleCreateForm(request.POST or None, initial=initial)
     if request.method == "POST":
         if form.is_valid():
@@ -1994,115 +2006,6 @@ def reservation_close(request, pk):
         "Ha, tugatish",
         cancel_url_name="reservation_list",
     )
-
-
-@require_POST
-@role_required(User.Role.ADMIN)
-def reservation_convert(request, pk):
-    """Hand over part or all of a bron from whatever of its marka is on the shelf,
-    oldest lot first.
-
-    The booking order is not enforced here: a bron behind another can be served,
-    because the two are settled between the operator and the mijoz, not by the
-    screen. The only ceilings are real ones — what is still owed on this bron, and
-    what has actually landed.
-
-    How much of that to give is the operator's call. POST `kg` hands over less than
-    the ceiling (the mijoz wanted 5 000 of their 20 000 today); no `kg` gives
-    everything available. Either way the bron stays open for the rest, because loads
-    arrive in pieces and a mijoz may collect in pieces too."""
-    reservation = get_object_or_404(Reservation, pk=pk)
-    if not reservation.is_open:
-        messages.error(request, "Bu bron ochiq emas")
-        return form_reload(request, reverse("reservation_list"))
-
-    on_shelf = brand_on_hand_kg(reservation.brand)
-    servable = min(reservation.remaining_kg, on_shelf)
-    if servable <= 0:
-        messages.error(request, f"{reservation.brand} omborda yo'q — yuk kutilmoqda")
-        return form_reload(request, reverse("reservation_list"))
-
-    take_total = servable
-    raw_kg = (request.POST.get("kg") or "").strip()
-    if raw_kg:
-        typed_kg = _typed_decimal(raw_kg)
-        if typed_kg is None or typed_kg <= 0:
-            messages.error(request, "Berilayotgan kg musbat son bo'lishi kerak")
-            return form_reload(request, reverse("reservation_list"))
-        if typed_kg > servable:
-            # Which ceiling was hit changes what the operator should do next — wait
-            # for a truck, or edit the bron — so the message says which one it was.
-            reason = ("bron bo'yicha shuncha qolgan"
-                      if reservation.remaining_kg <= on_shelf else "omborda shuncha bor")
-            messages.error(
-                request,
-                f"Ko'pi bilan {_kg(servable)} kg berish mumkin — {reason}")
-            return form_reload(request, reverse("reservation_list"))
-        take_total = typed_kg
-
-    # The bron's own money shape carries over whole — currency, kurs and both
-    # values. A bron struck in so'm must not become a dollar sotuv re-rated at
-    # today's kurs, which would quietly change the price the mijoz agreed to.
-    price, price_uzs = reservation.price, reservation.price_uzs
-    if price is None:
-        raw_price = request.POST.get("price")
-        try:
-            typed = Decimal(raw_price) if raw_price else None
-        except (ValueError, ArithmeticError):
-            typed = None
-        if typed is not None and typed > 0:
-            # An unpriced bron is settled now, in the currency the bron was taken in.
-            price, price_uzs = convert_pair(
-                typed, reservation.currency, reservation.exchange_rate, "0.0001")
-    if price is None:
-        messages.error(request, "Narx ko'rsatilishi kerak")
-        return form_reload(request, reverse("reservation_list"))
-    if price_uzs is None:
-        # Reservation.price_uzs is nullable (an unpriced bron), Sale.price_uzs is
-        # not — a bron carrying a narx but no so'm twin still has to become a
-        # complete sotuv, so derive the missing side at the bron's own kurs.
-        _, price_uzs = convert_pair(price, Currency.USD, reservation.exchange_rate, "0.0001")
-
-    remaining = take_total
-    slices = []
-    with transaction.atomic():
-        # One Sale per lot slice, exactly as a by-brand sotuv does: each slice keeps
-        # its own lot's landed cost, which differs per truck.
-        for lot in fifo_lots(reservation.brand):
-            if remaining <= 0:
-                break
-            take = min(lot.available_kg, remaining)
-            if take <= 0:
-                continue
-            slices.append(Sale.objects.create(
-                customer=reservation.customer, line=lot, kg=take,
-                price=price, price_uzs=price_uzs, currency=reservation.currency,
-                exchange_rate=reservation.exchange_rate, date=timezone.localdate(),
-                reservation=reservation, created_by=request.user,
-            ))
-            remaining -= take
-        reservation.fulfilled_kg += take_total - remaining
-        if reservation.remaining_kg <= 0:
-            reservation.status = Reservation.Status.CONVERTED
-        reservation.save(update_fields=["fulfilled_kg", "status"])
-
-    left = reservation.remaining_kg
-    AuditLog.record(
-        request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
-        f"Brondan sotuv: {_kg(take_total - remaining)} kg {reservation.brand} · "
-        f"{reservation.customer.name}"
-        + (f" · {_kg(left)} kg bronda qoldi" if left > 0 else " · bron yopildi"),
-    )
-    for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
-        apply_customer_advance(sale)
-    if left > 0:
-        messages.success(
-            request,
-            f"{_kg(take_total - remaining)} kg sotuvga aylandi — "
-            f"{_kg(left)} kg bronda qoldi")
-    else:
-        messages.success(request, "Bron to'liq sotuvga aylantirildi")
-    return form_reload(request, reverse("reservation_list"))
 
 
 @role_required(User.Role.ADMIN)

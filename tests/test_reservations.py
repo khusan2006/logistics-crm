@@ -47,14 +47,35 @@ def _reserve(admin_client, brand, customer, kg="5000", price="", currency="usd",
 
 
 def _convert(admin_client, reservation, price=None, kg=None):
-    """Hand kg over from a bron. Without `kg` the view gives everything it can —
-    the whole remainder, or whatever of it has landed."""
-    body = {}
-    if price:
-        body["price"] = price
-    if kg is not None:
-        body["kg"] = kg
-    return admin_client.post(f"/reservations/{reservation.pk}/convert/", body)
+    """Hand kg over from a bron.
+
+    Through the ordinary sotuv form with Brondan ushlansin ticked, which is what the
+    Bronlar row links to now that the one-click Berish is gone. Without `kg`, the
+    most the bron can still take off the shelf — the ceiling the old button used.
+
+    The bron's money shape is posted with it, the way the button used to carry it
+    over: its currency, its kurs and its agreed narx, so a so'm bron does not become
+    a dollar sotuv re-rated at today's kurs.
+    """
+    from crm.models import brand_on_hand_kg
+
+    reservation.refresh_from_db()
+    give = kg if kg is not None else min(reservation.remaining_kg,
+                                         brand_on_hand_kg(reservation.brand))
+    if price is not None:
+        narx = price
+    elif reservation.is_som:
+        narx = reservation.price_uzs      # typed in the row's own currency
+    else:
+        narx = reservation.price
+    return admin_client.post("/sales/new/", {
+        "customer": reservation.customer_id, "brand": reservation.brand,
+        "kg": str(give), "currency": reservation.currency,
+        "price": "" if narx is None else str(narx),
+        "exchange_rate": str(reservation.exchange_rate),
+        "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "draw_from_bron_asked": "1", "draw_from_bron": "on",
+    })
 
 
 class TestBronIsAgainstAMarka:
@@ -217,14 +238,21 @@ class TestPartOfABronCanBeHandedOver:
         assert bron.status == "converted"
         assert sum(s.kg for s in Sale.objects.all()) == Decimal("20000.000")
 
-    def test_more_than_is_owed_is_refused(self, admin_client, db):
+    def test_more_than_is_owed_draws_the_bron_dry_and_sells_the_rest(self, admin_client, db):
+        """The old one-click Berish refused this outright; the sotuv form does not,
+        and should not. The mijoz booked 5 000, wants 6 000, and there are 20 000 on
+        the shelf — the bron is served in full and the extra 1 000 is an ordinary
+        sotuv. Only the shelf can say no."""
         _arrived_lot(kg="20000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="2.00")
         bron = Reservation.objects.get()
-        _convert(admin_client, bron, kg="6000")
+        assert _convert(admin_client, bron, kg="6000").status_code == 302
+
         bron.refresh_from_db()
-        assert bron.fulfilled_kg == Decimal("0")
-        assert not Sale.objects.exists()
+        assert bron.fulfilled_kg == Decimal("5000.000")   # drawn dry, never past it
+        assert bron.remaining_kg == Decimal("0.000")
+        assert bron.status == "converted"
+        assert sum(s.kg for s in Sale.objects.all()) == Decimal("6000.000")
 
     def test_more_than_has_landed_is_refused(self, admin_client, db):
         _arrived_lot(kg="3000", brand="LLDPE")

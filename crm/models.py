@@ -1254,6 +1254,17 @@ class Reservation(MoneyEntry):
         return self.status == self.Status.ACTIVE and self.remaining_kg > 0
 
     @property
+    def price_own(self):
+        """The agreed narx in the currency it was agreed in — what the sotuv form
+        has to be handed when this bron is served, because the narx box there is
+        read as whichever currency the Valyuta picker says.
+
+        None while the narx is still open, same as `total`."""
+        if self.price is None:
+            return None
+        return own_side(self, self.price, self.price_uzs)
+
+    @property
     def total(self):
         """What the bron is worth at the agreed narx — None while the narx is still
         open, which is a real state here: a bron may be struck before the price is.

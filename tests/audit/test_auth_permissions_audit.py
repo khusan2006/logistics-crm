@@ -111,7 +111,7 @@ ADMIN_ONLY_WRITE_ROUTES = [
     ("sale_create", None), ("sale_edit", "sale"), ("sale_delete", "sale"),
     ("reservation_create", None), ("reservation_edit", "reservation"),
     ("reservation_delete", "reservation"), ("reservation_cancel", "reservation"),
-    ("reservation_convert", "reservation"),
+    ("reservation_close", "reservation"),
     ("return_create", None), ("return_delete", "return"),
     ("customer_payment_create", None), ("customer_payment_edit", "customer_payment"),
     ("customer_payment_delete", "customer_payment"),

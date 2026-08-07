@@ -128,20 +128,14 @@
             <td class="num">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}—{% endif %}</td>
             <td class="row-actions">
               {% comment %}
-              Any bron here can be served, in any order. The kg box is pre-filled
-              with the most this one can take and stays editable, so giving part of
-              a bron is one edit rather than a workaround.
+              Same as on Bronlar: handing the granula over goes through the sotuv
+              form rather than a one-click button, prefilled with this mijoz and
+              marka. The old Berish created the sale outright, so a stray click put
+              a mijoz in debt with nothing asked.
               {% endcomment %}
-              {% if r.servable_kg > 0 %}
-              <form method="post" action="{% url 'reservation_convert' r.pk %}" data-modal class="row-inline-form">
-                {% csrf_token %}
-                <input type="text" data-money name="kg" value="{{ r.servable_kg|unlocalize }}" required style="width:88px;" title="Ko'pi bilan {{ r.servable_kg|floatformat:"-3" }} kg" aria-label="Beriladigan kg">
-                {% if not r.price %}<input type="number" step="0.0001" min="0" name="price" placeholder="Narx" required style="width:88px;" aria-label="Sotuv narxi">{% endif %}
-                <button type="submit" class="btn btn-sm">Berish</button>
-              </form>
-              {% else %}
-              <button type="button" class="btn btn-sm" disabled title="{{ g.brand }} omborda yo'q">Mol yo'q</button>
-              {% endif %}
+              <a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;brand={{ r.brand|urlencode }}&amp;currency={{ r.currency }}{% if r.price_own %}&amp;price={{ r.price_own|unlocalize }}{% endif %}" data-modal title="Sotuv">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              </a>
               <a class="icon-action" href="{% url 'reservation_cancel' r.pk %}" data-modal title="Bronni bekor qilish">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="8" x2="16" y2="16"/></svg>
               </a>
