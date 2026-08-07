@@ -697,10 +697,14 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   border-radius: 999px;
   white-space: nowrap;
 }
-.hist--sotuv { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.hist--sotuv,
+.hist--kelishuv { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .hist--tolov { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
 .hist--qaytarish { color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); }
 .hist--bron { color: var(--violet); background: color-mix(in srgb, var(--violet) 16%, transparent); }
+/* A yuk carries goods rather than money, and its row prints no figure — so it is
+   the one kind drawn without a colour of its own. */
+.hist--yuk { color: var(--text-muted); background: var(--surface-2); }
 
 /* Debt deadline "days left / overdue" chip */
 .daybadge {

@@ -37,7 +37,7 @@
 {% if page.object_list %}
 <div class="card">
   <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-    <h2 style="margin:0;">Hisob varaqasi</h2>
+    <h2 style="margin:0;">Logist tarixi</h2>
     <span class="ledger-total">{{ page.paginator.count }} ta yozuv</span>
   </div>
   <div class="table-wrap">
@@ -49,8 +49,17 @@
     {% for r in page %}
     <tr>
       <td>{{ r.date|date:"d.m.Y" }}</td>
-      <td>{% if r.kind == "in" %}<span class="badge badge-ok">Bizdan</span>{% else %}<span class="badge badge-remit">Haydovchiga</span>{% endif %} {{ r.title }}</td>
-      <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
+      <td>
+        {% if r.kind == "in" %}<span class="badge badge-ok">Bizdan</span>
+        {% elif r.kind == "out" %}<span class="badge badge-remit">Haydovchiga</span>
+        {% else %}<span class="hist hist--yuk">Yuk</span>{% endif %} {{ r.title }}
+      </td>
+      {% comment %}
+      A yuk moves no money of ours on its own — the driver's advance is its own row
+      below — so its Usul, Kirim and Chiqim cells are left empty rather than filled
+      with a zero that would read as a payment of nothing.
+      {% endcomment %}
+      <td>{% if r.kind != "yuk" %}{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}{% endif %}</td>
       <td class="num amt-in">{% if r.kind == "in" %}<strong>+{% money r.amount r.amount_uzs r.currency %}</strong>{% endif %}</td>
       <td class="num amt-out">{% if r.kind == "out" %}<strong>−{% money r.amount r.amount_uzs r.currency %}</strong>{% endif %}</td>
       <td class="row-actions">
@@ -62,8 +71,10 @@
         {% if r.kind == "in" %}
         <a class="icon-action" href="{% url 'logist_payment_edit' r.obj.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
         <a class="icon-action danger" href="{% url 'logist_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-        {% else %}
+        {% elif r.kind == "out" %}
         <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        {% else %}
+        <a class="icon-action" href="{% url 'shipment_detail' r.obj.pk %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
         {% endif %}
       </td>
     </tr>

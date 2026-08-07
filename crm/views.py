@@ -190,6 +190,65 @@ def partner_list(request):
     return render(request, "crm/partner_list.html", {"page": page, "q": q})
 
 
+def _partner_history(partner):
+    """Everything that has passed between us and one hamkor, newest first.
+
+    The three things that actually happen with a hamkor, on one timeline: a
+    kelishuv is struck, money goes out against it, and goods come the other way.
+    Read separately they never line up — the yuk that a to'lov paid for is on
+    another screen — and lining them up is the whole point of the page.
+
+    Each row is drawn in the currency that row moved in; a yuk carries no money of
+    its own, so it reports kg and the template prints no figure for it."""
+    events = []
+    contracts = partner.contracts.prefetch_related("lines__shipment_lines",
+                                                   "supplier_payments").all()
+    for contract in contracts:
+        events.append({
+            "date": contract.created, "kind": "kelishuv", "label": "Kelishuv",
+            "detail": f"{contract.code} · {contract.brand_summary}",
+            "total": contract.total_value, "total_uzs": contract.total_value_uzs,
+            "currency": contract.currency})
+        for payment in contract.supplier_payments.all():
+            # What the HAMKOR received, not what left the kassa. This page is about
+            # our standing with them, so its rows have to reconcile with the qolgan
+            # to'lov printed above: kelishuv value less these figures IS that number.
+            # The vositachi cut and the bank's foiz ride on top and are money spent
+            # on the transfer rather than paid to the hamkor, so they are named in
+            # the detail instead of quietly inflating the column.
+            extra = payment.total_out - payment.amount
+            events.append({
+                "date": payment.date, "kind": "tolov", "label": "To'lov",
+                "detail": f"{contract.code} · {payment.get_method_display()}"
+                          + (f" · ustiga {usd(extra)} xarajat" if extra else ""),
+                "total": payment.amount, "total_uzs": payment.amount_uzs,
+                "currency": payment.currency})
+    for shipment in (Shipment.objects.filter(contract__partner=partner)
+                     .select_related("contract").prefetch_related("lines")):
+        # Sent is the date the hamkor acted on; a load still being loaded has none
+        # yet, so it falls back to when the row was created rather than dropping off
+        # the timeline entirely.
+        events.append({
+            "date": shipment.sent or shipment.created_at.date(),
+            "kind": "yuk", "label": "Yuk",
+            "detail": f"#{shipment.pk} · {shipment.contract.code} · "
+                      f"{shipment.brand_summary} · {_kg(shipment.kg)} kg",
+            "total": None, "total_uzs": None, "currency": shipment.contract.currency})
+    events.sort(key=lambda e: (e["date"], e["label"]), reverse=True)
+    return events
+
+
+@role_required(User.Role.ADMIN)
+def partner_detail(request, pk):
+    """One hamkor's page: what we still owe them, and everything that has passed
+    between us."""
+    partner = get_object_or_404(Partner, pk=pk)
+    return render(request, "crm/partner_detail.html", {
+        "partner": partner,
+        "payable": payable_by_currency(partner.contracts.all()),
+        "history": _partner_history(partner)})
+
+
 @role_required(User.Role.ADMIN)
 def partner_create(request):
     form = PartnerForm(request.POST or None)
@@ -2866,11 +2925,29 @@ def logist_list(request):
 
 @role_required(User.Role.ADMIN)
 def logist_detail(request, pk):
-    """One logist's account: every top-up in, every driver advance out, newest
-    first, with the running balance the list page shows."""
+    """One logist's history: every top-up in, every driver advance out, and every
+    yuk they arranged, newest first, with the running balance the list page shows.
+
+    The loads sit on the same timeline as the money rather than in a table of their
+    own, because the question the page answers is "what has this logist been doing
+    for us" — and an advance paid out three days after a truck was handed to them
+    only reads as one story when the two are next to each other. A yuk moves no
+    money of ours on its own, so its Kirim and Chiqim cells stay empty."""
     logist = get_object_or_404(
         Logist.objects.prefetch_related("payments", "driver_advances__shipment"), pk=pk)
     rows = []
+    for shipment in (logist.shipments.select_related("contract")
+                     .prefetch_related("lines")):
+        rows.append({
+            "kind": "yuk",
+            # Sent is the date they acted on; a load still being put together has
+            # none yet, so it falls back to when the row was made rather than
+            # dropping off the timeline.
+            "date": shipment.sent or shipment.created_at.date(),
+            "obj": shipment,
+            "title": f"Yuk #{shipment.pk} · {shipment.contract.code} · "
+                     f"{shipment.brand_summary} · {_kg(shipment.kg)} kg",
+        })
     for payment in logist.payments.all():
         rows.append({"kind": "in", "date": payment.date, "obj": payment,
                      "title": payment.note or "Bizdan olindi",

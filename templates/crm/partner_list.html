@@ -19,8 +19,12 @@
   <tr><th class="sticky-col">Nomi</th><th>Qolgan to'lov</th><th>Telefon</th><th>Shahar</th><th>Izoh</th><th></th></tr>
   {% for partner in page %}
   <tr>
+    {% comment %}
+    The name opens the hamkor's own page (qolgan to'lov and their history);
+    tahrirlash is the pencil beside it, the same way Mijozlar reads.
+    {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'partner_edit' partner.pk %}">{{ partner.name }}</a>
+      <a href="{% url 'partner_detail' partner.pk %}">{{ partner.name }}</a>
     </td>
     {% comment %}
     One line per currency the hamkor was actually dealt with in — never one converted

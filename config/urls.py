@@ -13,6 +13,7 @@ urlpatterns = [
     path("audit/", crm_views.audit_list, name="audit_list"),
     path("partners/", crm_views.partner_list, name="partner_list"),
     path("partners/new/", crm_views.partner_create, name="partner_create"),
+    path("partners/<int:pk>/", crm_views.partner_detail, name="partner_detail"),
     path("partners/<int:pk>/edit/", crm_views.partner_edit, name="partner_edit"),
     path("partners/<int:pk>/delete/", crm_views.partner_delete, name="partner_delete"),
     path("customers/", crm_views.customer_list, name="customer_list"),
