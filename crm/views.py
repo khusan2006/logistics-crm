@@ -1623,10 +1623,12 @@ def sale_create(request):
                     )
                     slices.append(sale)
                     remaining -= take
-                    # Serving this mijoz makes their own promise smaller, whichever
-                    # lot the granula came off. Per slice and in order, so the bron
-                    # is drawn down by exactly what was sold.
-                    draw_down_bron(sale)
+                    # Serving this mijoz normally makes their own promise smaller,
+                    # whichever lot the granula came off — per slice and in order, so
+                    # the bron falls by exactly what was sold. Unticked, the sotuv is
+                    # something else they bought and the booking stands untouched.
+                    if data.get("draw_from_bron"):
+                        draw_down_bron(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
                 f"Yangi sotuv (FIFO): {data['kg']} kg {data['brand']} · "
@@ -1670,7 +1672,8 @@ def sale_create_lot(request, lot_id):
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
             )
-            draw_down_bron(sale)
+            if data.get("draw_from_bron"):
+                draw_down_bron(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
                 f"Yangi sotuv (lot #{sale.line_id}): {sale.kg} kg "
@@ -1695,12 +1698,17 @@ def sale_edit(request, pk):
             # (or move to another mijoz). Put them back before the edit lands, then
             # draw again from whatever the sotuv now is — releasing afterwards would
             # give back the NEW kg, which is not what was taken.
-            release_bron(sale)
+            # Whether this sotuv came out of a bron is decided when it is created and
+            # must survive an edit. Re-drawing unconditionally would quietly convert a
+            # sotuv booked alongside a bron into one taken from it, the first time
+            # anybody corrected a kg.
+            was_from_bron = release_bron(sale) > 0
             sale = form.save()
             if sale.reservation_id:
                 sale.reservation = None
                 sale.save(update_fields=["reservation"])
-            draw_down_bron(sale)
+            if was_from_bron:
+                draw_down_bron(sale)
             moved = sale.customer_id != previous_customer_id
             if moved:
                 # The allocations are slices of the PREVIOUS mijoz's to'lovlar. They
@@ -1765,7 +1773,7 @@ def sale_detail(request, pk):
 #: bron is the only kind there is anything left to do about.
 RESERVATION_STATUS_LABELS = [
     ("active", "Faol"), ("converted", "Sotuvga aylandi"),
-    ("cancelled", "Bekor qilindi"), ("", "Hammasi"),
+    ("closed", "Tugatildi"), ("cancelled", "Bekor qilindi"), ("", "Hammasi"),
 ]
 
 # Sorted in Python: jami is kg × narx and lot state reads through two relations,
@@ -1949,6 +1957,41 @@ def reservation_cancel(request, pk):
         f"“{reservation.kg} kg · {reservation.customer.name}” broni bekor qilinadi.",
         "Ha, bekor qilish",
         confirm_class="btn-danger",
+        cancel_url_name="reservation_list",
+    )
+
+
+@role_required(User.Role.ADMIN)
+def reservation_close(request, pk):
+    """Close a bron the mijoz is done with: they took what they took, and the rest
+    is released.
+
+    Not the same act as cancelling. A cancelled bron never happened; a closed one
+    was served in part and ended by agreement, and reading back months later which
+    of the two it was is the whole reason for the second status. Nothing is undone
+    either way — the sotuvlar already drawn from it stand, and only the kg still
+    promised go back on the shelf, which happens by itself because `is_open` and
+    `brand_reserved_kg` both stop counting a bron that is no longer ACTIVE."""
+    reservation = get_object_or_404(Reservation, pk=pk)
+    if not reservation.is_open:
+        messages.error(request, "Bu bron allaqachon yopilgan")
+        return form_reload(request, reverse("reservation_list"))
+    if request.method == "POST":
+        freed = reservation.remaining_kg
+        reservation.status = Reservation.Status.CLOSED
+        reservation.save(update_fields=["status"])
+        AuditLog.record(
+            request.user, AuditLog.Action.STATUS, "Bron", reservation.pk,
+            f"Bron tugatildi: {_kg(freed)} kg qaytdi · {reservation.customer.name}")
+        messages.success(request, f"Bron tugatildi — {_kg(freed)} kg omborga qaytdi")
+        return form_reload(request, reverse("reservation_list"))
+    return render_confirm(
+        request,
+        "Bronni tugatish",
+        f"“{reservation.customer.name}” broni tugatiladi. Berilgan "
+        f"{_kg(reservation.fulfilled_kg)} kg o'z holicha qoladi, qolgan "
+        f"{_kg(reservation.remaining_kg)} kg omborga qaytadi.",
+        "Ha, tugatish",
         cancel_url_name="reservation_list",
     )
 

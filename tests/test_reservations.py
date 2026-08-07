@@ -471,7 +471,8 @@ class TestReservationList:
             f"/reservations/{Reservation.objects.order_by('pk').first().pk}/cancel/", {})
         tabs = {t["key"]: t["count"]
                 for t in admin_client.get("/reservations/").context["status_tabs"]}
-        assert tabs == {"active": 1, "converted": 0, "cancelled": 1, "": 2}
+        assert tabs == {"active": 1, "converted": 0, "closed": 0,
+                        "cancelled": 1, "": 2}
 
 
 class TestReservationTotal:
@@ -577,3 +578,146 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         bron.refresh_from_db()
         assert bron.fulfilled_kg == Decimal("0.000")
         assert bron.status == Reservation.Status.ACTIVE   # the promise is unkept again
+
+
+# ── Brondan ushlansinmi ──────────────────────────────────────────────────────
+
+def _sell(admin_client, brand, customer, kg="2000", price="1.50", **extra):
+    """The Yangi sotuv form as the browser posts it — the box ticked unless a test
+    says otherwise, because that is how it renders."""
+    data = {"customer": customer.pk, "brand": brand, "kg": kg, "currency": "usd",
+            "price": price, "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "draw_from_bron_asked": "1", "draw_from_bron": "on"}
+    data.update(extra)
+    return admin_client.post("/sales/new/", data)
+
+
+class TestBronDrawIsAsked:
+    """Serving a bron holder normally makes their promise smaller — else the bron
+    goes on blocking the shelf for granula they already took. But a sotuv to that
+    same mijoz may be something extra they bought, with the booking still standing.
+    Only the operator knows which, so the form asks."""
+
+    def test_ticked_draws_the_sotuv_out_of_the_bron(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="6000")
+        assert _sell(admin_client, "LLDPE", customer, kg="2000").status_code == 302
+
+        bron = Reservation.objects.get()
+        assert bron.fulfilled_kg == Decimal("2000.000")
+        assert bron.remaining_kg == Decimal("4000.000")
+        assert Sale.objects.get().reservation_id == bron.pk
+
+    def test_unticked_leaves_the_bron_whole(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="6000")
+        resp = _sell(admin_client, "LLDPE", customer, kg="2000", draw_from_bron="")
+        assert resp.status_code == 302
+
+        bron = Reservation.objects.get()
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert bron.remaining_kg == Decimal("6000.000")
+        assert Sale.objects.get().reservation_id is None
+
+    def test_a_post_that_never_saw_the_box_still_draws(self, admin_client, db):
+        """An unticked checkbox posts nothing, which is byte-for-byte a POST that
+        never carried the field. Those must not mean the same thing: a caller that
+        predates the box keeps the behaviour it always had."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="6000")
+        resp = admin_client.post("/sales/new/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "2000",
+            "currency": "usd", "price": "1.50", "date": "2026-07-20",
+            "debt_deadline": "", "note": ""})          # no box, no twin
+        assert resp.status_code == 302
+        assert Reservation.objects.get().fulfilled_kg == Decimal("2000.000")
+
+    def test_an_edit_does_not_turn_a_plain_sotuv_into_a_bron_one(self, admin_client, db):
+        """Whether a sotuv came out of a bron is decided when it is made. Re-drawing
+        on every edit would flip that the first time anybody fixed a kg."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="6000")
+        _sell(admin_client, "LLDPE", customer, kg="2000", draw_from_bron="")
+        sale = Sale.objects.get()
+
+        admin_client.post(f"/sales/{sale.pk}/edit/", {
+            "customer": customer.pk, "line": lot.pk, "kg": "2500",
+            "currency": "usd", "price": "1.50", "date": "2026-07-20",
+            "debt_deadline": "", "note": ""})
+        sale.refresh_from_db()
+        assert sale.kg == Decimal("2500.000")
+        assert sale.reservation_id is None
+        assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")
+
+
+# ── Bronni tugatish ──────────────────────────────────────────────────────────
+
+class TestClosingABron:
+    """The mijoz took what they took and wants no more. Not the same act as
+    cancelling, which is a bron that never happened."""
+
+    def test_closing_frees_the_rest_of_the_shelf(self, admin_client, db):
+        from crm.models import brand_free_kg, brand_reserved_kg
+
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="6000")
+        _sell(admin_client, "LLDPE", customer, kg="2000")     # takes 2 000 of it
+        assert brand_reserved_kg("LLDPE") == Decimal("4000.000")
+
+        resp = admin_client.post(
+            f"/reservations/{Reservation.objects.get().pk}/close/", {})
+        assert resp.status_code == 302
+
+        bron = Reservation.objects.get()
+        assert bron.status == Reservation.Status.CLOSED
+        assert bron.fulfilled_kg == Decimal("2000.000")   # what was served stands
+        assert bron.is_open is False
+        # and the 4 000 it was holding is on the shelf for anybody
+        assert brand_reserved_kg("LLDPE") == Decimal("0")
+        assert brand_free_kg("LLDPE") == Decimal("8000.000")
+
+    def test_closed_is_its_own_status_not_cancelled(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="6000")
+        admin_client.post(f"/reservations/{Reservation.objects.get().pk}/close/", {})
+        assert Reservation.objects.get().get_status_display() == "Tugatildi"
+
+    def test_a_closed_bron_cannot_be_closed_again(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="6000")
+        pk = Reservation.objects.get().pk
+        admin_client.post(f"/reservations/{pk}/close/", {})
+        admin_client.post(f"/reservations/{pk}/close/", {})
+        assert Reservation.objects.get().status == Reservation.Status.CLOSED
+
+    def test_the_list_can_be_filtered_to_closed_brons(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("A"), kg="2000")
+        _reserve(admin_client, "LLDPE", _customer("B"), kg="3000")
+        admin_client.post(
+            f"/reservations/{Reservation.objects.order_by('pk').first().pk}/close/", {})
+        rows = admin_client.get("/reservations/?status=closed").context["page"].object_list
+        assert [r.customer.name for r in rows] == ["A"]
+
+
+def test_the_bron_row_offers_a_full_sotuv_prefilled(admin_client, db):
+    """Berish is the quick hand-over; this is for the sotuv that needs a sana or a
+    to'lov muddati, without retyping who and what."""
+    _arrived_lot(kg="10000", brand="LLDPE")
+    customer = _customer()
+    _reserve(admin_client, "LLDPE", customer, kg="6000")
+    html = admin_client.get("/reservations/").content.decode()
+    assert f"/sales/new/?customer={customer.pk}&amp;brand=LLDPE" in html
+
+
+def test_the_bron_row_links_the_name_to_that_mijoz_page(admin_client, db):
+    _arrived_lot(kg="10000", brand="LLDPE")
+    customer = _customer()
+    _reserve(admin_client, "LLDPE", customer, kg="6000")
+    html = admin_client.get("/reservations/").content.decode()
+    assert f'href="/debts/{customer.pk}/">{customer.name}</a>' in html

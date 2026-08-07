@@ -270,6 +270,47 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
     positive_error = "Narx musbat bo'lishi kerak"
 
 
+class BronDrawFormMixin:
+    """The "Brondan ushlansin" question, on the forms that create a sotuv.
+
+    Serving a mijoz who holds a bron for this marka normally makes their promise
+    smaller — otherwise the bron goes on blocking the shelf for granula they have
+    already taken. But not every sotuv to a bron holder is against the bron: they
+    may be buying something extra and still expect their booking to stand. Only the
+    operator knows which, so the form asks instead of always drawing.
+
+    The hidden twin is what makes the question safe to add. An unticked checkbox
+    posts NOTHING, which is byte-for-byte the same as a POST that never carried the
+    field — and those two must not mean the same thing. An operator clearing the box
+    means "leave the bron alone"; a caller that does not know the box exists must
+    keep the behaviour it has always had. The twin is always submitted, so its
+    presence is what says the question was actually put.
+
+    Added in __init__ rather than declared: Django's form metaclass only collects
+    fields from bases that already carry `declared_fields`, so a Field sitting on a
+    plain mixin is silently ignored — the box never renders and the answer is always
+    absent."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["draw_from_bron"] = forms.BooleanField(
+            label="Brondan ushlansin", required=False, initial=True,
+            help_text="Mijozning shu markada broni bo'lsa, sotilgan kg o'sha "
+                      "brondan ayiriladi. Belgilanmasa, bron to'liq holicha qoladi.")
+        self.fields["draw_from_bron_asked"] = forms.CharField(
+            required=False, initial="1", widget=forms.HiddenInput())
+        # Straight under the kg, because that is what the question is about. Appended
+        # (which is what adding a field in __init__ does) it landed below Izoh, three
+        # screens from the number it governs.
+        self.order_fields([name for name in ("customer", "lot", "brand", "kg",
+                                             "draw_from_bron")
+                           if name in self.fields])
+
+    def clean_draw_from_bron(self):
+        ticked = self.cleaned_data.get("draw_from_bron", False)
+        return ticked if self.data.get("draw_from_bron_asked") else True
+
+
 class InheritedRateMixin:
     """For a row that needs a kurs but must not ASK for one.
 
@@ -1074,7 +1115,8 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         return cleaned
 
 
-class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
+class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin,
+                     PriceEntryFormMixin, forms.ModelForm):
     """New sales are entered by BRAND, not lot: the view consumes the oldest
     arrived lots first (FIFO), splitting the kg across lots — one Sale row per
     lot slice, each snapshotting its own lot's landed cost."""
@@ -1135,7 +1177,8 @@ class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
         return cleaned
 
 
-class SaleLotForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
+class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
+                  PriceEntryFormMixin, forms.ModelForm):
     """Sale from ONE chosen lot, entered from inside a marka in the ombor. The same
     granula can sit in several lots at different landed costs, so picking the lot
     has to beat FIFO here — otherwise you could never sell the dearer one. The lot

@@ -1211,6 +1211,11 @@ class Reservation(MoneyEntry):
     class Status(models.TextChoices):
         ACTIVE = "active", "Faol"
         CONVERTED = "converted", "Sotuvga aylandi"
+        # Served in part and closed by agreement: the mijoz took what they took and
+        # does not want the rest. Distinct from CANCELLED, which is a bron that
+        # never happened — the difference matters when reading back why a promise
+        # ended, and CONVERTED would claim the whole of it turned into a sotuv.
+        CLOSED = "closed", "Tugatildi"
         CANCELLED = "cancelled", "Bekor qilindi"
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,

@@ -69,6 +69,7 @@ urlpatterns = [
     path("reservations/<int:pk>/edit/", crm_views.reservation_edit, name="reservation_edit"),
     path("reservations/<int:pk>/delete/", crm_views.reservation_delete, name="reservation_delete"),
     path("reservations/<int:pk>/cancel/", crm_views.reservation_cancel, name="reservation_cancel"),
+    path("reservations/<int:pk>/close/", crm_views.reservation_close, name="reservation_close"),
     path("reservations/<int:pk>/convert/", crm_views.reservation_convert, name="reservation_convert"),
     path("returns/new/", crm_views.return_create, name="return_create"),
     path("returns/<int:pk>/delete/", crm_views.return_delete, name="return_delete"),
