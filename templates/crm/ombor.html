@@ -21,8 +21,8 @@
     <th>Oxirgi kelgan</th>
     <th class="num">Kirim</th>
     <th class="num">Sotilgan</th>
-    <th class="num" title="Mijozlarga va'da qilingan — shu kg boshqa mijozga sotilmaydi">Bronlangan</th>
-    <th class="num" title="Bronlardan ortgan kg — oddiy sotuvga shuncha berish mumkin">Sotish mumkin</th>
+    <th class="num" title="Mijozlarga va'da qilingan — eslatma, taqiq emas: kerak bo'lsa boshqa mijozga ham sotiladi">Bronlangan</th>
+    <th class="num" title="Omborda turgan kg — hammasi sotuvga tayyor">Sotish mumkin</th>
     <th class="num">Tan narx</th>
     <th></th>
   </tr>
@@ -38,16 +38,15 @@
     <td class="num">{{ g.kirim|floatformat:"-3" }}</td>
     <td class="num">{{ g.sold|floatformat:"-3" }}</td>
     {% comment %}
-    Sotish mumkin is the shelf LESS what is bronned, because that is the ceiling the
-    sotuv form actually enforces — printing the physical count here would promise the
-    operator kg the next screen refuses. The physical figure stays underneath it
-    whenever the two differ, so "why can I only sell 4 000 of 24 000" answers itself.
+    Sotish mumkin is the whole physical shelf, because that is the ceiling the sotuv
+    form enforces. Bronlangan sits beside it rather than coming out of it: the bron is
+    said out loud so the operator knows whose granula they are about to sell, and then
+    it is their call. Deducting it used to refuse the sotuv outright.
     {% endcomment %}
     <td class="num">{% if g.reserved %}{{ g.reserved|floatformat:"-3" }}
       <div class="muted load-sub">{{ g.brons|length }} ta bron</div>
       {% else %}<span class="muted">—</span>{% endif %}</td>
-    <td class="num"><strong>{{ g.free|floatformat:"-3" }}</strong>
-      {% if g.reserved %}<div class="muted load-sub">omborda {{ g.on_hand|floatformat:"-3" }} kg</div>{% endif %}
+    <td class="num"><strong>{{ g.on_hand|floatformat:"-3" }}</strong>
       {% if g.short %}<div class="late load-sub">bronlarga {{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
     <td class="num">
       {% if g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}

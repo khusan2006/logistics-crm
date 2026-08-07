@@ -10,7 +10,7 @@ from .models import (
     LogistPayment, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
+    arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
@@ -711,8 +711,13 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             "sent": date_widget(),
             "eta": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
+            # Plain text on purpose. It used to carry a UZ/IR country picker that
+            # uppercased and re-spaced what was typed, which read as "only these two
+            # countries" — an operator holding a Turkish waybill had nowhere to put
+            # it. A raqam is copied off the waybill, whichever country issued it, so
+            # nothing here reformats or rejects it.
             "transport": forms.TextInput(attrs={
-                "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
+                "autocomplete": "off", "placeholder": "01 777 AAA · 34 ABC 123 · …"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
             "responsible": forms.TextInput(attrs={
@@ -814,11 +819,10 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             if advance:
                 self.initial.setdefault("driver_advance", advance.amount)
 
-    def clean_transport(self):
-        """Free text. There used to be a plate-shaped regex here, which rejected
-        anything that was not 5–12 alphanumerics with a digit — no help to an
-        operator holding a waybill that says something else."""
-        return (self.cleaned_data.get("transport") or "").strip()
+    # No clean_transport: the raqam is free text, and Django's CharField already
+    # trims the spaces around it. There used to be a plate-shaped regex here, which
+    # rejected anything that was not 5–12 alphanumerics with a digit — no help to an
+    # operator holding a waybill that says something else.
 
     def clean_container(self):
         """Tidied, never rejected: uppercased and grouped when it looks like ISO
@@ -959,9 +963,10 @@ class ShipmentLegForm(forms.ModelForm):
             "arrived": date_widget(),
             "from_location": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "to_location": forms.TextInput(attrs={"placeholder": "Masalan: Chegara"}),
+            # Free text, same as the yuk's own raqam — see ShipmentForm.
             "transport": forms.TextInput(attrs={
-                "data-plate-intl": "", "autocomplete": "off",
-                "placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+                "autocomplete": "off",
+                "placeholder": "Haydovchi ismi yoki mashina raqami"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
         }
@@ -1098,36 +1103,30 @@ class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
         # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
         # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
         # readable ("24000", not Decimal.normalize()'s "2.4E+4").
-        # FREE kg, not on-hand: bronned granula is promised to somebody and must
-        # not be sellable over the counter. The option says both figures, so the
-        # operator can see where the difference went rather than wondering why the
-        # shelf will not sell.
+        # The kg offered is what is physically on the shelf. Anything bronned is
+        # named after it as a warning, not deducted: the granula may be sold to
+        # whoever is in front of the operator, bron or no bron.
         costed = brand_stock_costed()
-        self.stock = {row["brand"]: row["free"] for row in costed}
-        # A bronned marka stays on the list even with nothing free: its own bron
-        # holder is allowed to buy it, and dropping it left them unable to pick the
-        # granula that was reserved FOR them. Which mijoz is buying is not known
-        # until clean(), so the ceiling is checked there, per customer.
         self.fields["brand"].choices = [
             (row["brand"],
              f"{row['brand']} · {', '.join(row['codes'])} · "
-             f"{_clean_number(row['free'])} kg bo'sh"
+             f"{_clean_number(row['on_hand'])} kg omborda"
              + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
              + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for row in costed if row["free"] > 0 or row["reserved"] > 0
+            for row in costed if row["on_hand"] > 0
         ]
 
     def clean(self):
         cleaned = super().clean()
         brand, kg = cleaned.get("brand"), cleaned.get("kg")
-        customer = cleaned.get("customer")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
         if brand and kg is not None and kg > 0:
-            # Per BUYER: this mijoz's own bron does not block them, somebody else's
-            # does. Falls back to the shelf-wide figure while the mijoz is missing,
-            # so an incomplete form still cannot oversell.
-            available = brand_free_kg(brand, customer)
+            # The shelf is the only ceiling. A bron is a promise between the operator
+            # and a mijoz, and the operator is the one who decides whether to keep it
+            # today — granula that was refused to a buyer standing at the counter is
+            # a sale lost to a rule that was never the mijoz's.
+            available = brand_on_hand_kg(brand)
             if kg > available:
                 self.add_error(
                     "kg", f"Ombor qoldig'idan oshmasligi kerak "
@@ -1163,23 +1162,14 @@ class SaleLotForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         lot, kg = cleaned.get("lot"), cleaned.get("kg")
-        customer = cleaned.get("customer")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if lot and kg is not None and kg > 0:
-            # Two ceilings, both real: this lot's own physical kg, and what is left
-            # of the marka once OTHER mijozlar's brons have their share. Selling one
-            # lot dry is still overselling if the granula was promised to somebody
-            # else — but the buyer's own bron is not somebody else.
-            if kg > lot.available_kg:
-                self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
-                                     f"({_clean_number(lot.available_kg)} kg)")
-            else:
-                free = brand_free_kg(lot.brand, customer)
-                if kg > free:
-                    self.add_error(
-                        "kg", f"Bu markadan {_clean_number(free)} kg sotish mumkin — "
-                              "qolgani bronlangan")
+        if lot and kg is not None and kg > 0 and kg > lot.available_kg:
+            # One ceiling, and it is a physical one: this lot's own kg. A bron on the
+            # marka used to be a second ceiling here and is not any more — it names
+            # who is waiting, it does not refuse the sotuv.
+            self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
+                                 f"({_clean_number(lot.available_kg)} kg)")
         return cleaned
 
 

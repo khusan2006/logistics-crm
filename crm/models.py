@@ -1586,40 +1586,28 @@ def bron_queue(brand=None):
     return [r for r in qs if r.remaining_kg > 0]
 
 
-def brand_reserved_kg(brand, exclude_customer=None):
+def brand_reserved_kg(brand):
     """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
-    a bron half filled from an earlier truck only blocks the half still owed.
+    a bron half filled from an earlier truck only reports the half still owed.
 
-    `exclude_customer` leaves that mijoz's OWN brons out. Their promise does not
-    stand between them and the granula it promises them: counting it did, and a
-    bron holder could not buy their own bronned marka over the counter at all —
-    which in turn meant an ordinary sotuv could never draw the bron down."""
-    keep = (r for r in bron_queue(brand)
-            if exclude_customer is None or r.customer_id != exclude_customer.pk)
-    return sum((r.remaining_kg for r in keep), Decimal("0"))
+    Reported, never enforced: this figure tells the operator who is waiting on the
+    granula, and nothing more. It is not subtracted from what a sotuv may take —
+    see `brand_on_hand_kg`."""
+    return sum((r.remaining_kg for r in bron_queue(brand)), Decimal("0"))
 
 
 def brand_on_hand_kg(brand):
     """Physical kg of this marka in the ombor — what arrived, minus what has been
     sold, plus what came back. This is the only ceiling a sotuv has: bronned kg are
-    still sellable to whoever walks in."""
+    still sellable to whoever walks in.
+
+    A bron used to come off this figure, so a marka promised to one mijoz could not
+    be sold to another at all. Real trade does not work that way — a mijoz turns up
+    with cash for granula that was promised to somebody who is not collecting, and
+    that sotuv has to be enterable. Who gets the kg is settled between the operator
+    and the mijozlar; the screen reports the promise and lets it be overridden."""
     return sum((lot.kg - lot.sold_kg + lot.returned_kg
                 for lot in arrived_lots().filter(contract_line__brand=brand)),
-               Decimal("0"))
-
-
-def brand_free_kg(brand, customer=None):
-    """What an ordinary sotuv may take: on the shelf, minus what is bronned for
-    SOMEBODY ELSE.
-
-    Pass the buyer and their own bron stops counting against them — see
-    `brand_reserved_kg`. Without a buyer this is the shelf-wide figure the ombor
-    screens show, which still nets off every bron.
-
-    Never negative — brons can be taken against goods that have not landed yet, so
-    promised can legitimately exceed on-hand, and reporting that as a negative
-    shelf figure would be nonsense rather than information."""
-    return max(brand_on_hand_kg(brand) - brand_reserved_kg(brand, customer),
                Decimal("0"))
 
 
@@ -1712,16 +1700,12 @@ def release_bron(sale):
 
 def brand_stock_costed():
     """Per marka in the ombor: what is on the shelf, how much of it somebody has
-    bronned, what is therefore free to sell over the counter, the blended landed
-    cost, and which kelishuvlar it came from.
+    bronned, the blended landed cost, and which kelishuvlar it came from.
 
-    `free` is on-hand less bronned, and never below zero — a bron can be taken
-    against granula that has not landed, so promised may legitimately exceed the
-    shelf. It is carried BESIDE on_hand rather than replacing it because the two
-    answer different questions: on_hand is what is physically there, free is what
-    an ordinary sotuv may take. A brand's lots can carry different landed costs and
-    come from different kelishuvlar, so the cost is kg-weighted and the codes are
-    the full set."""
+    `reserved` rides beside `on_hand` rather than being taken off it: what is
+    physically there is what may be sold, and the promise is a note next to it. A
+    brand's lots can carry different landed costs and come from different
+    kelishuvlar, so the cost is kg-weighted and the codes are the full set."""
     on_hand, cost, codes = {}, {}, {}
     for lot in arrived_lots():
         a = lot.available_kg
@@ -1737,7 +1721,6 @@ def brand_stock_costed():
             "brand": b,
             "on_hand": on_hand[b],
             "reserved": reserved,
-            "free": max(on_hand[b] - reserved, Decimal("0")),
             "cost": (cost[b] / on_hand[b]).quantize(Decimal("0.0001")),
             "codes": sorted(codes[b]),
         })

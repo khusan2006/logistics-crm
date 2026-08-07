@@ -1174,14 +1174,12 @@ def ombor(request):
         g["cost_min"], g["cost_min_uzs"] = min(costed)
         g["cost_max"], g["cost_max_uzs"] = max(costed)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
-        # Who has asked for this marka, oldest first. A bron HOLDS the granula, so
-        # `free` is what an ordinary sotuv may take — the figure the sale form
-        # enforces, and therefore the one this page has to print as sellable.
-        # `on_hand` stays beside it as the physical count, and `short` says when
-        # more is promised than has landed.
+        # Who has asked for this marka, oldest first. A bron holds nothing back, so
+        # `on_hand` is both the physical count and what may be sold; `reserved` says
+        # how much of it is spoken for and `short` when more is promised than has
+        # landed. Both are there to be read before selling, not to refuse the sotuv.
         g["brons"] = bron_queue(g["brand"])
         g["reserved"] = sum((r.remaining_kg for r in g["brons"]), Decimal("0"))
-        g["free"] = max(g["on_hand"] - g["reserved"], Decimal("0"))
         g["short"] = max(g["reserved"] - g["on_hand"], Decimal("0"))
         for bron in g["brons"]:
             # Every open bron can be served, not just the first — and each one only

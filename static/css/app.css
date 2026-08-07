@@ -1129,7 +1129,7 @@ input:focus, select:focus, textarea:focus {
 }
 input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); vertical-align: middle; }
 
-/* Country-code picker joined to a phone/plate field (base.html enhancers) */
+/* Country-code picker joined to a phone field (base.html enhancers) */
 .intl-field { display: flex; align-items: stretch; width: 100%; max-width: 480px; }
 .intl-field > select.intl-cc {
   width: auto;

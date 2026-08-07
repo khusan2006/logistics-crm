@@ -185,6 +185,23 @@ def test_shipment_transport_accepts_uz_plate(db):
     assert f.is_valid(), f.errors
 
 
+def test_a_raqam_from_any_country_is_stored_as_typed(admin_client, db):
+    """Turkish, Kazakh, Russian — a yuk arrives behind whichever plate the waybill
+    carries, and the field neither reshapes nor refuses it. The container beside it
+    still tidies itself; this one does not, on purpose."""
+    c = _contract()
+    _post_shipment(admin_client, c, kg="100", transport="34 abc 123")
+    assert Shipment.objects.get().transport == "34 abc 123"
+
+
+def test_the_raqam_field_has_no_country_picker(admin_client, db):
+    """It used to be wrapped in a UZ/IR picker that uppercased and re-spaced what
+    was typed — two flags, and no room for a plate issued anywhere else."""
+    html = admin_client.get("/shipments/new/").content.decode()
+    assert 'name="transport"' in html
+    assert "data-plate-intl" not in html
+
+
 def test_shipment_contract_select_carries_prefill_data(db):
     """Each product option carries its qolgan kg and narx, so the form JS can
     filter the list by kelishuv and prefill the row."""
