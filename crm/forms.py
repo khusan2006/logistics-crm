@@ -1,3 +1,4 @@
+import json
 import re
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -270,6 +271,27 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
     positive_error = "Narx musbat bo'lishi kerak"
 
 
+class CustomerBronSelect(forms.Select):
+    """A mijoz <select> whose options carry the markalar that mijoz still has an
+    open bron for, so the form's JS can ask the question only when there is one.
+
+    Same idea as ContractChoiceSelect: the answer travels on the option, because
+    which mijoz is buying is not known until they pick one and a round trip per
+    change would be a request per keystroke on a searchable list."""
+
+    #: {customer_id: [brand, ...]}, set by the form.
+    bron_brands = {}
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        pk = getattr(value, "value", value)
+        brands = self.bron_brands.get(pk if isinstance(pk, int) else None)
+        if brands is None and str(pk).isdigit():
+            brands = self.bron_brands.get(int(pk))
+        option["attrs"]["data-bron-brands"] = json.dumps(sorted(brands or []))
+        return option
+
+
 class BronDrawFormMixin:
     """The "Brondan ushlansin" question, on the forms that create a sotuv.
 
@@ -295,8 +317,26 @@ class BronDrawFormMixin:
         super().__init__(*args, **kwargs)
         self.fields["draw_from_bron"] = forms.BooleanField(
             label="Brondan ushlansin", required=False, initial=True,
-            help_text="Mijozning shu markada broni bo'lsa, sotilgan kg o'sha "
-                      "brondan ayiriladi. Belgilanmasa, bron to'liq holicha qoladi.")
+            help_text="Sotilgan kg shu mijozning broniidan ayiriladi. "
+                      "Belgilanmasa, bron to'liq holicha qoladi.")
+        # Which markalar each mijoz still has an open bron for, so the question is
+        # only put when there IS one — asking a mijoz with no bron whether to draw
+        # from it is noise on every ordinary sotuv. One query, walked in Python
+        # because `is_open` reads remaining_kg, which is not a column.
+        brons = {}
+        for bron in Reservation.objects.filter(status=Reservation.Status.ACTIVE):
+            if bron.remaining_kg > 0:
+                brons.setdefault(bron.customer_id, set()).add(bron.brand)
+        picker = self.fields["customer"]
+        widget = CustomerBronSelect(attrs=dict(picker.widget.attrs))
+        widget.choices = picker.widget.choices     # keeps the field's queryset
+        widget.bron_brands = brons
+        picker.widget = widget
+        # Which marka is being sold: a select on the by-brand form, a fixed one on
+        # the per-lot form, where the lot already decided it.
+        if "brand" in self.fields:
+            self.fields["brand"].widget.attrs["data-bron-brand"] = ""
+        self.fields["draw_from_bron"].widget.attrs["data-bron-draw"] = ""
         self.fields["draw_from_bron_asked"] = forms.CharField(
             required=False, initial="1", widget=forms.HiddenInput())
         # Straight under the kg, because that is what the question is about. Appended
@@ -1202,6 +1242,12 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["lot"].queryset = arrived_lots()
+        # No marka picker here — the lot decided it — so the Brondan ushlansin box
+        # carries the brand itself for the JS that shows or hides it.
+        lot = self.initial.get("lot") or self.data.get("lot")
+        chosen = arrived_lots().filter(pk=lot).first() if lot else None
+        if chosen is not None:
+            self.fields["draw_from_bron"].widget.attrs["data-bron-fixed-brand"] = chosen.brand
 
     def clean(self):
         cleaned = super().clean()

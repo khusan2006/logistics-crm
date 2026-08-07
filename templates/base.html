@@ -2004,6 +2004,50 @@
     document.addEventListener('modal:loaded', function (e) { enhanceComboboxes(e.detail || document); });
   })();
 
+  // "Brondan ushlansin" is only a real question when the chosen mijoz actually
+  // holds an open bron for the chosen marka. Put on every other sotuv it is noise,
+  // and noise on a money form is how a box ends up ticked without being read. Each
+  // mijoz <option> carries the markalar they have booked (CustomerBronSelect), so
+  // the answer needs no round trip.
+  (function () {
+    function brandOf(form) {
+      var picker = form.querySelector('[data-bron-brand]');
+      if (picker) { return picker.value || ''; }
+      // The per-lot form has no marka picker — the lot already decided it.
+      var box = form.querySelector('[data-bron-draw]');
+      return box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+    }
+    function update(form) {
+      var box = form.querySelector('[data-bron-draw]');
+      var customer = form.querySelector('select[name=customer]');
+      if (!box || !customer) { return; }
+      var option = customer.options[customer.selectedIndex];
+      var brands = [];
+      try {
+        brands = JSON.parse((option && option.getAttribute('data-bron-brands')) || '[]');
+      } catch (err) { brands = []; }
+      var asks = brands.indexOf(brandOf(form)) !== -1;
+      (box.closest('p') || box.closest('label') || box).hidden = !asks;
+      // Ticked whenever it comes back: serving a bron holder normally draws the
+      // bron down, and a box that reappeared unticked would change that silently.
+      if (asks) { box.checked = true; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('form').forEach(function (form) {
+        if (form.querySelector('[data-bron-draw]')) { update(form); }
+      });
+    }
+    document.addEventListener('change', function (e) {
+      if (!e.target.closest) { return; }
+      var form = e.target.closest('form');
+      if (!form || !form.querySelector('[data-bron-draw]')) { return; }
+      if (e.target.matches('select[name=customer], [data-bron-brand]')) { update(form); }
+    });
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+  })();
+
   // Grab-and-drag a table that is wider than its box. On a laptop with no
   // horizontal wheel the only way sideways was the scrollbar at the bottom of a
   // long table, which means scrolling down to reach it and losing the rows you
