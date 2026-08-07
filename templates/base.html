@@ -1984,6 +1984,74 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhanceComboboxes(); }); }
     document.addEventListener('modal:loaded', function (e) { enhanceComboboxes(e.detail || document); });
   })();
+
+  // Grab-and-drag a table that is wider than its box. On a laptop with no
+  // horizontal wheel the only way sideways was the scrollbar at the bottom of a
+  // long table, which means scrolling down to reach it and losing the rows you
+  // were reading. Mouse events rather than pointer ones on purpose: touch already
+  // scrolls these natively, and a second handler would fight it.
+  (function () {
+    // Below this a press is still a click. Without it, the tiny movement between
+    // pressing and releasing on a link would swallow the click.
+    var DRAG_THRESHOLD = 4;
+    var active = null;
+
+    function refresh(root) {
+      (root || document).querySelectorAll('.table-wrap').forEach(function (wrap) {
+        // +1 for sub-pixel widths, which otherwise report a scrollable pixel on a
+        // table that visibly fits.
+        wrap.classList.toggle('is-draggable',
+                              wrap.scrollWidth > wrap.clientWidth + 1);
+      });
+    }
+
+    document.addEventListener('mousedown', function (e) {
+      if (e.button !== 0 || !e.target.closest) { return; }
+      var wrap = e.target.closest('.table-wrap.is-draggable');
+      if (!wrap) { return; }
+      // Selecting text in a field beats dragging the table under it.
+      if (e.target.closest('input, textarea, select, [contenteditable]')) { return; }
+      active = { wrap: wrap, x: e.clientX, left: wrap.scrollLeft, moved: false };
+    });
+
+    document.addEventListener('mousemove', function (e) {
+      if (!active) { return; }
+      var dx = e.clientX - active.x;
+      if (!active.moved && Math.abs(dx) < DRAG_THRESHOLD) { return; }
+      active.moved = true;
+      active.wrap.classList.add('is-dragging');
+      active.wrap.scrollLeft = active.left - dx;
+      e.preventDefault();          // or the browser starts selecting rows instead
+    });
+
+    document.addEventListener('mouseup', function () {
+      if (!active) { return; }
+      active.wrap.classList.remove('is-dragging');
+      // A drag that happens to end on a link must not also open it. click fires
+      // after mouseup, so the flag is read there and dropped on the next tick.
+      if (active.moved) {
+        var wrap = active.wrap;
+        wrap.dataset.justDragged = '1';
+        setTimeout(function () { delete wrap.dataset.justDragged; }, 0);
+      }
+      active = null;
+    });
+
+    // Capture phase, so it runs before the [data-modal] opener bound on document.
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest) { return; }
+      var wrap = e.target.closest('.table-wrap');
+      if (wrap && wrap.dataset.justDragged) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
+    window.addEventListener('resize', function () { refresh(); });
+    document.addEventListener('modal:loaded', function (e) { refresh(e.detail || document); });
+    if (document.readyState !== 'loading') { refresh(); }
+    else { document.addEventListener('DOMContentLoaded', function () { refresh(); }); }
+  })();
 </script>
 </body>
 </html>
