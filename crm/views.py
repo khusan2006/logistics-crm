@@ -786,14 +786,54 @@ def _parse_alloc_picks(post):
     return picks
 
 
+# Sorted in SQL, like the hamkor page — every key here is a real column.
+CUSTOMER_PAYMENT_SORTS = [
+    ("-date", "Sana — yangi avval", ["-date", "-created_at"]),
+    ("date", "Sana — eski avval", ["date", "created_at"]),
+    ("-amount", "Summa — kattadan", ["-amount", "-date"]),
+    ("amount", "Summa — kichikdan", ["amount", "-date"]),
+    ("customer", "Mijoz — A-Z", ["customer__name", "-date"]),
+]
+CUSTOMER_PAYMENT_SORT_DEFAULT = "-date"
+
+
 @role_required(User.Role.ADMIN)
 def customer_payment_list(request):
+    q = request.GET.get("q", "").strip()
+    customer_id = request.GET.get("customer", "").strip()
+    method = request.GET.get("method", "").strip()
+    date_from = _date_param(request, "date_from")
+    date_to = _date_param(request, "date_to")
+    sort = request.GET.get("sort", "").strip()
+    if sort not in {key for key, *_ in CUSTOMER_PAYMENT_SORTS}:
+        sort = CUSTOMER_PAYMENT_SORT_DEFAULT
+
     payments = CustomerPayment.objects.select_related("customer")
-    customer_id = request.GET.get("customer")
-    if customer_id and customer_id.isdigit():
-        payments = payments.filter(customer_id=customer_id)
+    if q:
+        payments = payments.filter(Q(customer__name__icontains=q) | Q(note__icontains=q))
+    if customer_id.isdigit():
+        payments = payments.filter(customer_id=int(customer_id))
+    if method in dict(PayMethod.choices):
+        payments = payments.filter(method=method)
+    if date_from:
+        payments = payments.filter(date__gte=date_from)
+    if date_to:
+        payments = payments.filter(date__lte=date_to)
+
+    ordering = next(e[2] for e in CUSTOMER_PAYMENT_SORTS if e[0] == sort)
+    payments = payments.order_by(*ordering)
+
+    # No per-currency totals here, unlike the hamkor page: this screen is read to find
+    # a to'lov, not to add a column up. The queryset goes to the Paginator unevaluated
+    # so only the 20 rows on the page are fetched.
     page = Paginator(payments, 20).get_page(request.GET.get("page"))
-    return render(request, "crm/customer_payment_list.html", {"page": page})
+    return render(request, "crm/customer_payment_list.html", {
+        "page": page, "q": q, "customer_id": customer_id, "method": method,
+        "date_from": date_from, "date_to": date_to, "sort": sort,
+        "sort_options": [(key, label) for key, label, *_ in CUSTOMER_PAYMENT_SORTS],
+        "methods": PayMethod.choices, "customers": Customer.objects.all(),
+        "has_filters": bool(q or customer_id or method or date_from or date_to),
+    })
 
 
 @role_required(User.Role.ADMIN)

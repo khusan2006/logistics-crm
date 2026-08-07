@@ -12,6 +12,13 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["manage.py", "runserver", "127.0.0.1:8010", "--settings=config.settings_prodcopy"],
       "port": 8010
+    },
+    {
+      "_comment": "Same server as `granulalog`, for a macOS venv — the interpreter lives in bin/ rather than Scripts/, and a launch config cannot spell both in one path.",
+      "name": "granulalog-mac",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["manage.py", "runserver", "127.0.0.1:8009", "--settings=config.settings_dev"],
+      "port": 8009
     }
   ]
 }
