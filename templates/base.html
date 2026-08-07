@@ -353,8 +353,27 @@
         });
     }
 
+    // A [data-modal] FORM is not an opener — it is a form that SUBMITS through the
+    // modal machinery: fetch, 204 + X-Redirect, errors rendered back into the
+    // dialog. The Berish button on Bronlar and Ombor is one. bindForm only ever
+    // reached the form inside the dialog, so a page-level one was never bound at
+    // all and fell through to the click handler below, which read its (missing)
+    // href and navigated to /reservations/null.
+    function bindPageForms(root) {
+      (root || document).querySelectorAll('form[data-modal]').forEach(function (form) {
+        if (form.dataset.modalBound) { return; }
+        form.dataset.modalBound = '1';
+        bindForm(form);
+      });
+    }
+    if (document.readyState !== 'loading') { bindPageForms(); }
+    else { document.addEventListener('DOMContentLoaded', function () { bindPageForms(); }); }
+    document.addEventListener('modal:loaded', function (e) { bindPageForms(e.detail || document); });
+
     document.addEventListener('click', function (e) {
-      var opener = e.target.closest('[data-modal]');
+      // Links only. Matching bare [data-modal] swept up those forms as well, and
+      // an opener with no href is not an opener.
+      var opener = e.target.closest('[data-modal][href]');
       if (opener) {
         e.preventDefault();
         openModal(opener.getAttribute('href'));
