@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Yuklar bo'yicha bojxona hisobi · GranulaLog{% endblock %}
+{% block topbar_title %}Yuklar bo'yicha bojxona hisobi{% endblock %}
+{% block fab %}
+<a class="fab" href="{% url 'customs_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Pul yuborish</a>
+{% endblock %}
+{% block content %}
+
+{% comment %}
+The three columns are the whole question: what we sent for this truck before anybody
+knew, what clearing it actually cost, and the gap between them. Nothing here is
+typed twice — the first column adds up the to'lovlar naming this yuk, the second the
+xarajatlar the bojxonachi paid on it. So the farq cannot drift from the rows behind
+it the way a hand-kept figure would.
+
+Only loads money actually touched appear. A yuk nobody has sent clearing money for
+is not a settled load, it is simply not part of this ledger.
+{% endcomment %}
+<div class="ktiles">
+  <div class="ktile ktile--in">
+    <div class="ktile-label">Yuborilgan</div>
+    {% for currency, amount in totals.sent %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
+    <div class="ktile-note">rasmiylashtirish uchun oldindan</div>
+  </div>
+  <div class="ktile ktile--out">
+    <div class="ktile-label">Sarflangan</div>
+    {% for currency, amount in totals.spent %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
+    <div class="ktile-note">bojxonada haqiqatda ketgani</div>
+  </div>
+  <div class="ktile ktile--cash">
+    <div class="ktile-label">Farq</div>
+    {% for currency, amount in totals.diff %}
+    <div class="ktile-num {% if amount < 0 %}late{% else %}avans{% endif %}">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
+    <div class="ktile-note">
+      {% if totals.diff %}musbat — bojxonachida ortib qolgan, manfiy — u o'zidan qo'shgan
+      {% else %}hisob teng{% endif %}
+    </div>
+  </div>
+</div>
+
+<form method="get" class="searchbar" data-autosubmit>
+  <label>Holat
+    <select name="state">
+      <option value=""{% if not state %} selected{% endif %}>Hammasi</option>
+      <option value="left"{% if state == "left" %} selected{% endif %}>Ortib qolgan</option>
+      <option value="over"{% if state == "over" %} selected{% endif %}>Kamayib qolgan</option>
+      <option value="settled"{% if state == "settled" %} selected{% endif %}>Hisob teng</option>
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
+  {% if has_filters %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
+  <a class="btn btn-ghost btn-sm" href="{% url 'customs_list' %}">Bojxonachilar</a>
+</form>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Yuk</th>
+    <th>Kelishuv</th>
+    <th>Jo'natilgan</th>
+    <th>Bojxonachi</th>
+    <th class="num" title="Shu yuk uchun oldindan yuborilgan pul">Yuborilgan</th>
+    <th class="num" title="Shu yukni rasmiylashtirishga haqiqatda ketgan pul">Sarflangan</th>
+    <th class="num">Farq</th>
+    <th></th>
+  </tr>
+  {% for r in page %}
+  <tr>
+    <td class="sticky-col"><a href="{% url 'shipment_detail' r.shipment.pk %}">#{{ r.shipment.pk }}</a></td>
+    <td class="muted">{{ r.shipment.contract.code }}</td>
+    <td class="muted">{{ r.shipment.sent|date:"d.m.Y"|default:"—" }}</td>
+    <td class="muted">{{ r.agents|default:"—" }}</td>
+    <td class="num">{% for currency, amount in r.sent %}
+      <div>{% money_in amount currency %}</div>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+    <td class="num">
+      {% for currency, amount in r.spent %}
+      <div>{% money_in amount currency %}</div>
+      {% comment %}
+      Nothing spent yet is the normal state of a truck still being cleared, and it is
+      NOT the same fact as a clearing that cost zero — so it says so in words rather
+      than printing a 0 the reader has to interpret.
+      {% endcomment %}
+      {% empty %}<span class="muted">hali kiritilmagan</span>{% endfor %}
+    </td>
+    {% comment %}
+    Positive = money we sent that this load did not need, still with the bojxonachi
+    and funding the next truck. Negative = clearing cost more than we sent and he
+    covered the rest. Neither is an error; both are things somebody has to know —
+    and a load can be both at once when the so'm and dollar heaps went different ways.
+    {% endcomment %}
+    <td class="num">
+      {% for currency, amount in r.diff %}
+      <div>
+        {% if amount > 0 %}<span class="badge badge-ok">+{% money_in amount currency %}</span>
+        {% else %}<span class="badge badge-warning">{% money_in amount currency %}</span>{% endif %}
+      </div>
+      {% empty %}<span class="muted">teng</span>{% endfor %}
+    </td>
+    <td class="row-actions">
+      <a class="btn btn-ghost btn-sm" href="{% url 'expense_create' %}?shipment={{ r.shipment.pk }}" data-modal>+ Xarajat</a>
+      <a class="btn btn-ghost btn-sm" href="{% url 'customs_payment_create' %}?shipment={{ r.shipment.pk }}" data-modal>+ Pul</a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% include "crm/_pagination.html" with label="yuk" %}
+{% else %}
+<p class="muted">
+  {% if has_filters %}Tanlangan filtr bo'yicha yuk topilmadi.
+  {% else %}Hali birorta yuk uchun bojxonaga pul yuborilmagan.{% endif %}
+</p>
+{% endif %}
+
+{% endblock %}

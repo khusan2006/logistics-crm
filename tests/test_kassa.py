@@ -257,7 +257,7 @@ class TestCurrentStateTiles:
                                        amount=Decimal("200.00"), method="cash")
         tiles = self._tiles(admin_client)
         assert list(tiles) == ["Kassada", "Mijozlar qarzi", "Omborda", "Yo'lda",
-                               "Hamkorlarda avansimiz", "Logistlarda",
+                               "Hamkorlarda avansimiz", "Logistlarda", "Bojxonada",
                                "Hamkorlarga qarzimiz"]
         for tile in tiles.values():
             assert tile["note"], tile["label"]

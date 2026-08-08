@@ -1630,6 +1630,23 @@ ul.errorlist li::before { content: "⚠ "; }
 .hbar-fill--danger { background: var(--danger); }
 .hbar-value { font-size: 12.5px; font-weight: 600; color: var(--text-muted); white-space: nowrap; text-align: right; }
 
+/* Kelishuvlar bajarilishi: one block per kelishuv — the mashina count as the
+   headline, then the two axes a kelishuv is finished on, yuk and to'lov. Two bars
+   rather than one because they move apart: goods can be fully sent on a kelishuv
+   that is barely paid, and an avans can run ahead of every truck. */
+.cprogs { display: flex; flex-direction: column; gap: 17px; }
+.cprog { display: flex; flex-direction: column; gap: 6px; }
+.cprog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.cprog-name { font-size: 13px; font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
+.cprog-trucks {
+  font-size: 12.5px; font-weight: 700; color: var(--text);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.cprog-trucks.muted { font-weight: 600; color: var(--text-faint); }
+.cprog-bar { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+.cprog-key { font-size: 11.5px; color: var(--text-faint); }
+.xf-row:hover .cprog-name { color: var(--accent); }
+
 /* ============================================================
    Flash messages
    ============================================================ */
@@ -2248,6 +2265,16 @@ form.stacked .lineset-field--fee_bearer label {
 .status-breakdown-list span { color: var(--text-muted); }
 .status-breakdown-list .load-id { font-variant-numeric: tabular-nums; }
 .status-breakdown-more { justify-content: flex-end; font-size: 12px; }
+/* Each hamkor row opens into the markalar sitting in those trucks. The hamkor line
+   keeps the flex row it always had; the li around it turns into a column so the
+   marka list can sit underneath rather than beside the count. */
+.status-breakdown-list li.sb-partner { display: block; }
+.sb-line { display: flex; justify-content: space-between; gap: 12px; }
+.sb-brands { list-style: none; margin: 2px 0 1px; padding: 0 0 0 12px; }
+.status-breakdown-list .sb-brands li {
+  border-bottom: none; padding: 1px 0; font-size: 12px; color: var(--text-faint);
+}
+.status-breakdown-list .sb-brands span { color: var(--text-faint); }
 
 /* Bron queue position. FIFO is the rule the bron screens exist to enforce, so the
    place in line is a first-class column rather than something inferred from the
@@ -2364,6 +2391,25 @@ form.stacked .lineset-field--fee_bearer label {
   font-size: 11px; border-radius: 5px;
   border: 1px solid var(--border); background: var(--input); color: var(--text-muted);
 }
+/* Kim to'laydi, on the two turkumlar somebody's balance ever pays. Spans the cell
+   like .xcell-fee rather than joining the 86px satellites: those hold one word
+   each, and a person's name truncated to "Bahrom a…" is worse than no picker. */
+.xcell-payer {
+  grid-column: 1 / -1; display: flex; flex-direction: column; gap: 3px;
+  margin-top: 2px; padding-top: 6px; border-top: 1px dashed var(--border);
+}
+.xcell-payer-label { font-size: 11px; color: var(--text-muted); }
+.modal form.stacked .xcell-payer select.xpayer,
+.xcell-payer select.xpayer {
+  width: 100%; max-width: none; padding: 3px 6px;
+  font-size: 11px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--input); color: var(--text-muted);
+}
+/* A named payer is a decision about whose money this is — it should not read like
+   the greyed-out default sitting beside it. */
+.xcell-payer select.xpayer:focus { color: var(--text); }
+.xcell-payer select.xpayer:valid:not(:placeholder-shown) { color: var(--text); }
+
 .xcell-side select.xmini:focus { color: var(--text); }
 /* A chosen override is not the default — say so, or it reads as decoration. */
 .xcell-side select.xmini:valid:not(:placeholder-shown) { color: var(--text); }

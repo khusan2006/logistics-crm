@@ -1,0 +1,89 @@
+{% load crm_extras %}
+{% comment %}
+Which yuklar this person's money went to. Include with:
+
+    {% include "crm/_holder_loads.html" with loads=loads paid_label="Haydovchiga" %}
+
+and, for a bojxonachi, `show_sent=1` to bring in the Yuborilgan and Farq columns —
+a CustomsPayment names the yuk it was sent for, so what went out for a truck can be
+set against what clearing it cost. A LogistPayment names none, so those two columns
+would be blank on every row and are left out entirely.
+
+The leading columns are the Yuklar page's own — kelishuv, marka, kg, holat, sana —
+because that is how a load is recognised. "Yuk #14" alone tells the operator nothing
+they can act on; "Kelishuv pars-4 · LLDPE · 24 000 kg · Bojxonada" is the load.
+{% endcomment %}
+{% if loads %}
+<div class="card">
+  <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+    <h2 style="margin:0;">Qaysi yuklarga</h2>
+    <span class="ledger-total">{{ loads|length }} ta yuk</span>
+  </div>
+  <div class="table-wrap">
+  <table class="loads-table">
+    <tr>
+      <th class="sticky-col">Yuk</th>
+      <th>Kelishuv</th>
+      <th>Marka</th>
+      <th class="num">Kg</th>
+      <th>Holat</th>
+      <th>Sana</th>
+      {% if show_sent %}<th class="num" title="Shu yuk uchun oldindan yuborilgan">Yuborilgan</th>{% endif %}
+      <th class="num">{{ paid_label|default:"To'lagan" }}</th>
+      {% if show_sent %}<th class="num">Farq</th>{% endif %}
+      <th></th>
+    </tr>
+    {% for r in loads %}
+    <tr class="load-row">
+      <td class="sticky-col"><a class="load-id" href="{% url 'shipment_detail' r.shipment.pk %}">#{{ r.shipment.pk }}</a></td>
+      <td>
+        <div>{{ r.shipment.contract.code }}</div>
+        <div class="muted load-sub">{{ r.shipment.contract.partner.name }}</div>
+      </td>
+      <td>{{ r.shipment.brand_summary|default:"—" }}</td>
+      <td class="num">{{ r.shipment.kg|floatformat:"-3" }}</td>
+      <td class="muted">{{ r.shipment.status.name }}</td>
+      {% comment %}
+      `r.date` — how far the load has actually got, arrived or else sent. The rows
+      are ordered by this same value, so the column reads top to bottom; see
+      holder_loads(), where sorting on one date while printing another made the
+      table look unsorted.
+      {% endcomment %}
+      <td class="muted">
+        {% if r.date %}{{ r.date|date:"d.m.Y" }}
+        <div class="load-sub">{% if r.shipment.arrived %}yetib keldi{% else %}jo'natilgan{% endif %}</div>
+        {% else %}<span class="muted">hali jo'natilmagan</span>{% endif %}
+      </td>
+      {% if show_sent %}
+      <td class="num">{% for currency, amount in r.sent %}
+        <div>{% money_in amount currency %}</div>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+      {% endif %}
+      <td class="num">{% for currency, amount in r.paid %}
+        <div>{% money_in amount currency %}</div>{% empty %}<span class="muted">hali yo'q</span>{% endfor %}</td>
+      {% if show_sent %}
+      {% comment %}
+      Positive = sent for this load and not spent on it, still with them. Negative =
+      clearing cost more than we sent and they covered the rest. Both directions are
+      normal, and a load can be both at once when the so'm and dollar heaps went
+      different ways — see Shipment.customs_diff_by_currency.
+      {% endcomment %}
+      <td class="num">
+        {% for currency, amount in r.diff %}
+        <div>
+          {% if amount > 0 %}<span class="badge badge-ok">+{% money_in amount currency %}</span>
+          {% else %}<span class="badge badge-warning">{% money_in amount currency %}</span>{% endif %}
+        </div>
+        {% empty %}<span class="muted">teng</span>{% endfor %}
+      </td>
+      {% endif %}
+      <td class="row-actions">
+        <a class="icon-action" href="{% url 'shipment_detail' r.shipment.pk %}" title="Yukni ochish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endif %}

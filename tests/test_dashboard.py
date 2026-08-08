@@ -103,8 +103,44 @@ def test_yuk_holatlari_counts_trucks_per_hamkor(admin_client, db):
     row = {r["status"].name: r for r in resp.context["status_rows"]}[loading.name]
     assert row["total"] == 5
     # eng ko'pi yuqorida, tenglashsa nom bo'yicha
-    assert row["partners"] == [("Pars", 4), ("Arya", 1)]
+    assert [(p["name"], p["count"]) for p in row["partners"]] == [("Pars", 4), ("Arya", 1)]
     assert "4 ta" in resp.content.decode()
+
+
+def test_yuk_holatlari_opens_each_hamkor_into_markalar(admin_client, db):
+    """"sobir 6 ta" o'zi kam narsa aytadi — hamkor ostida qaysi marka nechta
+    mashinada ketayotgani ko'rinadi."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="T")
+    loading = ShipmentStatus.objects.first()
+    a = make_contract(partner=pars, brand="2102", kg="9000")
+    b = make_contract(partner=pars, brand="7000", kg="9000")
+    for _ in range(3):
+        make_shipment(contract=a, kg="100", status=loading)
+    make_shipment(contract=b, kg="100", status=loading)
+
+    resp = admin_client.get("/")
+    row = {r["status"].name: r for r in resp.context["status_rows"]}[loading.name]
+    partner = row["partners"][0]
+    assert partner["count"] == 4
+    assert partner["brands"] == [("2102", 3), ("7000", 1)]   # ko'pi yuqorida
+    assert "2102" in resp.content.decode()
+
+
+def test_yuk_holatlari_counts_a_two_marka_yuk_under_both(admin_client, db):
+    """Ikki marka olib ketayotgan mashina ikkalasiga ham sanaladi, shuning uchun
+    marka yig'indisi hamkorning mashina sonidan katta bo'lishi mumkin."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="T")
+    loading = ShipmentStatus.objects.first()
+    contract = make_contract(partner=pars, brand="2102", kg="9000")
+    other = ContractLine.objects.create(
+        contract=contract, brand="7000", kg=Decimal("9000"), price=Decimal("1"))
+    shipment = make_shipment(contract=contract, kg="100", status=loading)
+    ShipmentLine.objects.create(shipment=shipment, contract_line=other, kg=Decimal("100"))
+
+    row = admin_client.get("/").context["status_rows"][0]
+    partner = row["partners"][0]
+    assert partner["count"] == 1
+    assert partner["brands"] == [("2102", 1), ("7000", 1)]
 
 
 def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):
@@ -142,19 +178,60 @@ def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, d
     assert admin_client.get("/").context["truck_plan_rows"] == []
 
 
-def test_progress_chart_shows_the_kelishuvlar_that_actually_moved(admin_client, db):
-    """Chart eng yangi 8 tasini emas, harakatdagilarini ko'rsatadi — aks holda
-    yangi kelishuvlar bo'sh chiziqlar bilan chartni to'ldirib, yuk ketayotgan
-    kelishuvlarni pastga surib yuboradi."""
-    moving = make_contract(brand="Ketgan", kg="1000", price="1.00",
-                           created="2026-01-01")          # eng eskisi
-    make_shipment(contract=moving, kg="400")
-    for i in range(9):                                     # 9 ta yangi, bo'sh
-        make_contract(brand=f"Bo'sh {i}", kg="1000", price="1.00", created="2026-09-09")
+def test_progress_chart_drops_yopilgan_kelishuvlar(admin_client, db):
+    """Yuki ham to'lovi ham tugagan kelishuv chartdan tushadi — aks holda karta
+    to'la 120 000 / 120 000 chiziqlar bilan to'lib, haqiqatan yo'ldagisi ko'rinmay
+    qoladi. To'lovi qolgani esa turaveradi."""
+    done = make_contract(brand="Yopilgan", kg="1000", price="1.00", planned_trucks=1)
+    make_shipment(contract=done, kg="1000")
+    SupplierPayment.objects.create(contract=done, amount=Decimal("1000"),
+                                   date="2026-07-05")
+    unpaid = make_contract(brand="To'lanmagan", kg="1000", price="1.00", planned_trucks=1)
+    make_shipment(contract=unpaid, kg="1000")              # yuki tugadi, puli yo'q
 
     shown = admin_client.get("/").context["contracts"]
-    assert moving.pk in [c.pk for c in shown]
-    assert shown[0].pk == moving.pk                        # harakatdagisi birinchi
+    assert [r["contract"].pk for r in shown] == [unpaid.pk]
+
+
+def test_progress_chart_leads_with_the_kelishuv_owing_the_most_mashina(admin_client, db):
+    behind = make_contract(brand="Ko'p qolgan", kg="9000", price="1.00", planned_trucks=5)
+    make_shipment(contract=behind, kg="100")
+    close = make_contract(brand="Oz qolgan", kg="9000", price="1.00", planned_trucks=2)
+    make_shipment(contract=close, kg="100")
+    unplanned = make_contract(brand="Rejasiz", kg="9000", price="1.00")
+
+    shown = admin_client.get("/").context["contracts"]
+    assert [r["contract"].pk for r in shown] == [behind.pk, close.pk, unplanned.pk]
+    assert [r["trucks_left"] for r in shown] == [4, 1, 0]
+    assert (shown[0]["sent"], shown[0]["planned"]) == (1, 5)
+    assert shown[2]["planned"] is None                     # rejasiz: maxraji yo'q
+    assert "1 / 5 mashina" in admin_client.get("/").content.decode()
+
+
+def test_progress_chart_measures_yuk_and_tolov_apart(admin_client, db):
+    """Ikki chiziq: kg yetkazilgani va shu kelishuv o'z valyutasida qancha
+    to'langani. Ular birga yurmaydi — mol ketib puli kelmasligi ham mumkin."""
+    contract = make_contract(kg="1000", price="1.00", planned_trucks=4)
+    make_shipment(contract=contract, kg="250")
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("100"),
+                                   date="2026-07-05")
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert (row["shipped_kg"], row["kg"]) == (Decimal("250.000"), Decimal("1000.000"))
+    assert row["kg_pct"] == 25
+    assert (row["paid"], row["due"]) == (Decimal("100"), Decimal("1000"))
+    assert row["pay_pct"] == 10
+
+
+def test_progress_chart_bar_never_runs_past_its_track(admin_client, db):
+    """Avans mol ketishidan oldin to'lansa foiz 100 dan oshib ketardi — chiziq
+    kartadan chiqib ketmasin."""
+    contract = make_contract(kg="1000", price="1.00", planned_trucks=2)
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("1500"),
+                                   date="2026-07-05")
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert row["pay_pct"] == 100
 
 
 def test_progress_chart_says_when_it_is_showing_a_subset(admin_client, db):

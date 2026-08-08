@@ -102,16 +102,36 @@
       {% endif %}
     </div>
     {% if contracts %}
-    <div class="hbars">
-      {% for c in contracts %}
-      <a class="hbar-row xf-row" href="{% url 'contract_list' %}" title="{{ c.brand_summary }}">
-        <span class="hbar-label">{{ c.brand_summary }} · {{ c.partner.name }}</span>
-        <div class="hbar-track"><div class="hbar-fill" style="width:{% widthratio c.shipped_kg c.kg 100 %}%"></div></div>
-        <span class="hbar-value">{{ c.shipped_kg|floatformat:"0g" }} / {{ c.kg|floatformat:"0g" }} kg</span>
+    <div class="cprogs">
+      {% for row in contracts %}
+      <a class="cprog xf-row" href="{% url 'contract_list' %}" title="{{ row.contract.code }} · {{ row.contract.brand_summary }}">
+        <div class="cprog-head">
+          <span class="cprog-name">{{ row.contract.brand_summary }} · {{ row.contract.partner.name }}</span>
+          {% comment %}
+          Without Nechta mashina there is no denominator to fill against, so the
+          kelishuv shows what has gone out and no target — the same rule the
+          Yuklar list follows.
+          {% endcomment %}
+          {% if row.planned %}
+          <span class="cprog-trucks">{{ row.sent }} / {{ row.planned }} mashina</span>
+          {% else %}
+          <span class="cprog-trucks muted">{{ row.sent }} mashina</span>
+          {% endif %}
+        </div>
+        <div class="cprog-bar">
+          <span class="cprog-key">Yuk</span>
+          <div class="hbar-track"><div class="hbar-fill" style="width:{{ row.kg_pct }}%"></div></div>
+          <span class="hbar-value">{{ row.shipped_kg|floatformat:"0g" }} / {{ row.kg|floatformat:"0g" }} kg</span>
+        </div>
+        <div class="cprog-bar">
+          <span class="cprog-key">To'lov</span>
+          <div class="hbar-track"><div class="hbar-fill hbar-fill--gold" style="width:{{ row.pay_pct }}%"></div></div>
+          <span class="hbar-value">{% money_progress_in row.paid row.due row.contract.currency %}</span>
+        </div>
       </a>
       {% endfor %}
     </div>
-    {% else %}<p class="muted">Hozircha kelishuvlar yo'q.</p>{% endif %}
+    {% else %}<p class="muted">Tugallanmagan kelishuv yo'q.</p>{% endif %}
   </div>
 
   <div class="card chart-card">
@@ -122,8 +142,19 @@
       <div class="status-breakdown-group">
         <span class="badge badge-neutral">{{ row.status.name }} <strong>{{ row.total }}</strong></span>
         <ul class="status-breakdown-list">
-          {% for name, count in row.partners %}
-          <li><span>{{ name }}</span><strong>{{ count }} ta</strong></li>
+          {% for p in row.partners %}
+          <li class="sb-partner">
+            <div class="sb-line"><span>{{ p.name }}</span><strong>{{ p.count }} ta</strong></div>
+            {% comment %}
+            What is in those trucks. A yuk carrying two markalar is counted under
+            both, so these can add up past the hamkor's own figure — see the view.
+            {% endcomment %}
+            <ul class="sb-brands">
+              {% for brand, count in p.brands %}
+              <li><span>{{ brand }}</span><span>{{ count }} ta</span></li>
+              {% endfor %}
+            </ul>
+          </li>
           {% endfor %}
         </ul>
       </div>

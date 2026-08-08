@@ -157,6 +157,7 @@
       <th>Turkum</th>
       <th>Summa</th>
       <th>Usul</th>
+      <th>Kim to'ladi</th>
       <th>Izoh</th>
       <th></th>
     </tr>
@@ -169,6 +170,12 @@
         <div class="muted" style="font-size: 12px;">{% money_other e.amount e.amount_uzs e.currency %}</div>
       </td>
       <td>{{ e.get_method_display }}</td>
+      {% comment %}
+      Who the cash came from, because it decides whether this row also left the
+      kassa. Funded by a holder we had already topped up, it did not — and a column
+      that says so is what stops somebody entering the same money twice.
+      {% endcomment %}
+      <td>{% if e.from_kassa %}<span class="muted">Kassadan</span>{% else %}{{ e.paid_by.name }}{% endif %}</td>
       <td>{{ e.note|default:"—" }}</td>
       <td class="row-actions">
         <a class="btn btn-ghost" href="{% url 'expense_edit' e.pk %}" data-modal>Tahrirlash</a>
@@ -183,6 +190,25 @@
   </p>
   {% else %}
   <p class="muted">Hali xarajat kiritilmagan — tan narx mahsulot narxiga teng.</p>
+  {% endif %}
+
+  {% comment %}
+  The bojxona reconciliation for THIS load, on the page the operator is already on
+  when they enter what clearing cost. Shown only once money has been sent for it:
+  on every other yuk the line would be three zeros about a thing that never happened.
+  {% endcomment %}
+  {% if shipment.customs_sent_by_currency %}
+  <p class="muted" style="margin-top: 6px;">
+    Bojxonaga oldindan yuborilgan:
+    <strong>{% for currency, amount in shipment.customs_sent_by_currency %}{% if not forloop.first %} · {% endif %}{% money_in amount currency %}{% endfor %}</strong> ·
+    sarflangan:
+    <strong>{% for currency, amount in shipment.customs_spent_by_currency %}{% if not forloop.first %} · {% endif %}{% money_in amount currency %}{% empty %}—{% endfor %}</strong> ·
+    farq:
+    {% for currency, amount in shipment.customs_diff_by_currency %}
+      {% if amount > 0 %}<span class="badge badge-ok">+{% money_in amount currency %}</span> (bojxonachida qoldi)
+      {% else %}<span class="badge badge-warning">{% money_in amount currency %}</span> (o'zidan qo'shgan){% endif %}
+    {% empty %}<span class="badge badge-ok">teng</span>{% endfor %}
+  </p>
   {% endif %}
 </div>
 {% endif %}

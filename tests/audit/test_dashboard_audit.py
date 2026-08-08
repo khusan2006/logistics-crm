@@ -716,7 +716,11 @@ def test_yuk_holatlari_counts_trucks_per_hamkor_busiest_first(admin_client):
     rows = _dash(admin_client).context["status_rows"]
     assert len(rows) == 1                                   # all four in one holat
     assert rows[0]["total"] == 4
-    assert rows[0]["partners"] == [("Zomin", 2), ("Alfa", 1), ("Bahor", 1)]
+    assert [(p["name"], p["count"]) for p in rows[0]["partners"]] == [
+        ("Zomin", 2), ("Alfa", 1), ("Bahor", 1)]
+    # and each hamkor opens into what those trucks carry
+    assert [p["brands"] for p in rows[0]["partners"]] == [
+        [("LLDPE", 2)], [("LLDPE", 1)], [("LLDPE", 1)]]
 
 
 def test_yuklar_qarzi_counts_only_kelishuvlar_that_are_behind_their_plan(admin_client):
@@ -739,24 +743,67 @@ def test_yuklar_qarzi_counts_only_kelishuvlar_that_are_behind_their_plan(admin_c
     assert rows == [("Alfa", 3), ("Zomin", 3)]      # tie broken by name, not by pk
 
 
-def test_the_progress_chart_shows_the_kelishuvlar_that_have_actually_moved(admin_client):
-    """crm/views.py:87-96 caps the chart at 8 and sorts by shipped kg so a run of
-    fresh kelishuvlar cannot push the shipping ones off it."""
-    moving = []
-    for kg in ("300", "100", "200"):
-        contract = make_contract(kg="9000", price="1.00")
-        make_shipment(contract=contract, kg=kg, sent=date(2026, 7, 1))
-        moving.append(contract)
-    idle = [make_contract(kg="9000", price="1.00") for _ in range(7)]
+def test_the_progress_chart_ranks_by_mashina_still_owed_and_caps_at_eight(admin_client):
+    """The chart answers "what is still in flight": it caps at 8 and leads with the
+    kelishuv owing the most mashina, so a nearly-finished one cannot sit above a
+    kelishuv with four trucks still to load."""
+    behind, close = [], []
+    for planned, bucket in ((5, behind), (2, close)):
+        for _ in range(4):
+            contract = make_contract(kg="9000", price="1.00", planned_trucks=planned)
+            make_shipment(contract=contract, kg="100", sent=date(2026, 7, 1))
+            bucket.append(contract)
 
     ctx = _dash(admin_client).context
-    assert ctx["contracts_total"] == len(moving) + len(idle) == 10
+    assert ctx["contracts_total"] == len(behind) + len(close) == 8
     assert ctx["contracts_shown"] == 8                       # CHART_LIMIT
     shown = list(ctx["contracts"])
-    assert [c.pk for c in shown[:3]] == [moving[0].pk, moving[2].pk, moving[1].pk]
-    assert all(c.shipped_kg == 0 for c in shown[3:])         # the idle ones fill up
-    assert [c.shipped_kg for c in shown[:3]] == [
-        Decimal("300.000"), Decimal("200.000"), Decimal("100.000")]
+    # the four owing 4 mashina come first; within a tie the kelishuvlar keep the
+    # list's own order (newest first), which is what the sort is stable for
+    assert {r["contract"].pk for r in shown[:4]} == {c.pk for c in behind}
+    assert [r["trucks_left"] for r in shown] == [4, 4, 4, 4, 1, 1, 1, 1]
+
+    # a ninth kelishuv, further behind than any of them, pushes the last one off
+    make_contract(kg="9000", price="1.00", planned_trucks=9)
+    ctx = _dash(admin_client).context
+    assert (ctx["contracts_total"], ctx["contracts_shown"]) == (9, 8)
+    assert ctx["contracts"][0]["trucks_left"] == 9
+
+
+def test_the_progress_chart_drops_a_kelishuv_once_it_is_yopilgan(admin_client):
+    """Same Yopilgan test the Kelishuvlar list uses (Contract.is_settled): every kg
+    out AND nothing left to pay. Either one outstanding keeps it on the chart."""
+    def _contract(shipped, paid):
+        contract = make_contract(kg="1000", price="1.00", planned_trucks=1)
+        make_shipment(contract=contract, kg=shipped, sent=date(2026, 7, 1))
+        if paid:
+            SupplierPayment.objects.create(contract=contract, date=date(2026, 7, 2),
+                                           amount=Decimal(paid))
+        return contract
+
+    settled = _contract("1000", "1000")
+    owes_goods = _contract("400", "1000")
+    owes_money = _contract("1000", "400")
+
+    shown = {r["contract"].pk for r in _dash(admin_client).context["contracts"]}
+    assert shown == {owes_goods.pk, owes_money.pk}
+    assert settled.pk not in shown
+
+
+def test_the_progress_chart_reads_the_tolov_bar_in_the_kelishuvs_own_currency(admin_client):
+    """A so'm kelishuv is paid in so'm. Filling the bar from the dollar twin would
+    move it every time the kurs does — the same reason is_settled reads _own."""
+    contract = make_contract(kg="1000", price="1.00", price_uzs="12000",
+                             currency=Currency.UZS, planned_trucks=2)
+    make_shipment(contract=contract, kg="500", sent=date(2026, 7, 1))
+    SupplierPayment.objects.create(contract=contract, date=date(2026, 7, 2),
+                                   amount=Decimal("250"), amount_uzs=Decimal("3000000"),
+                                   currency=Currency.UZS)
+
+    row = _dash(admin_client).context["contracts"][0]
+    assert (row["paid"], row["due"]) == (Decimal("3000000"), Decimal("12000000"))
+    assert row["pay_pct"] == 25
+    assert row["kg_pct"] == 50                               # yuk axis is unaffected
 
 
 # --- (d) Oylik hisobot: the value columns ----------------------------------

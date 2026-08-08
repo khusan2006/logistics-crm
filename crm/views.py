@@ -23,13 +23,15 @@ from .forms import (
     CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
+    CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
     ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
+    AuditLog, CustomsAgent, CustomsPayment,
+    Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
@@ -38,10 +40,10 @@ from .models import (
     convert_pair,
     customer_paid_by_currency, customer_sales_by_currency,
     draw_down_bron, release_bron,
-    logist_positions, payable_by_currency, supplier_paid_by_currency,
+    customs_positions, logist_positions, payable_by_currency, supplier_paid_by_currency,
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
-    kassa_cash_by_currency, partner_positions, partner_positions_by_currency,
+    kassa_cash_by_currency, own_side, partner_positions, partner_positions_by_currency,
     reconcile_customer_allocations, stock_value, transit_value,
     transit_value_by_currency, trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
@@ -49,11 +51,27 @@ from .models import (
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
 
+def _bar_pct(part, whole):
+    """Fill percentage for a progress bar, clamped to the track.
+
+    A kelishuv overshoots in both directions — a truck loaded over the agreed kg, an
+    avans paid before a single load moves — and a fill wider than its track spills
+    out of the card instead of reading as "done"."""
+    if not whole:
+        return 0
+    return min(100, max(0, int(Decimal(part) * 100 / Decimal(whole))))
+
+
 def dashboard(request):
     if not request.user.is_admin_role:
         return redirect("shipment_list")
-    shipments = Shipment.objects.select_related("contract__partner", "status")
-    contracts = Contract.objects.select_related("partner")
+    shipments = (Shipment.objects.select_related("contract__partner", "status")
+                 .prefetch_related("lines__contract_line"))
+    # Prefetched here rather than per figure below: the chart reads every kelishuv's
+    # lines, payments and yuklar, which is three queries per row without this.
+    contracts = (Contract.objects.select_related("partner")
+                 .prefetch_related("shipments", "lines__shipment_lines",
+                                   "supplier_payments"))
     total_kg = ContractLine.objects.aggregate(s=Sum("kg"))["s"] or 0
     shipped_kg = ShipmentLine.objects.aggregate(s=Sum("kg"))["s"] or 0
     arrived_kg = ShipmentLine.objects.filter(
@@ -65,23 +83,35 @@ def dashboard(request):
     # Across every kelishuv, not only the goods already sent: this is the whole
     # remaining obligation to hamkorlar. Kassa keeps its own narrower figure for
     # what is due right now — that one is captioned as such.
-    debt_split = payable_by_currency(
-        contracts.prefetch_related("lines__shipment_lines", "supplier_payments"))
+    debt_split = payable_by_currency(contracts)
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
     # Each holat with how many trucks each hamkor has sitting in it. Listing the
     # loads themselves repeated the same kelishuv kod once per truck; the question
     # being asked is "whose trucks are on the road", which is a count per hamkor.
+    #
+    # Each hamkor then opens into WHAT is in those trucks — a marka and a count —
+    # because "sobir 6 ta" says a great deal less than "sobir 6 ta: 2102 4 ta,
+    # 7000 2 ta". A truck carrying two markalar is counted under both, so the marka
+    # figures can add up past the hamkor's own: they answer what is moving, not how
+    # the trucks divide.
     by_status = {}
     for shipment in shipments:
         row = by_status.setdefault(shipment.status_id, {"total": 0, "partners": {}})
         row["total"] += 1
         name = shipment.contract.partner.name
-        row["partners"][name] = row["partners"].get(name, 0) + 1
+        partner = row["partners"].setdefault(name, {"count": 0, "brands": {}})
+        partner["count"] += 1
+        for brand in {line.brand for line in shipment.lines.all()}:
+            partner["brands"][brand] = partner["brands"].get(brand, 0) + 1
     status_rows = [
         {"status": st, "total": by_status[st.pk]["total"],
-         # busiest hamkor first, ties by name
-         "partners": sorted(by_status[st.pk]["partners"].items(), key=lambda kv: (-kv[1], kv[0]))}
+         # busiest hamkor first, ties by name; the markalar under each read the same
+         "partners": [
+             {"name": name, "count": p["count"],
+              "brands": sorted(p["brands"].items(), key=lambda kv: (-kv[1], kv[0]))}
+             for name, p in sorted(by_status[st.pk]["partners"].items(),
+                                   key=lambda kv: (-kv[1]["count"], kv[0]))]}
         for st in ShipmentStatus.objects.all() if st.pk in by_status
     ]
 
@@ -96,14 +126,35 @@ def dashboard(request):
             owed[name] = owed.get(name, 0) + (planned - sent)
     truck_plan_rows = sorted(owed.items(), key=lambda kv: (-kv[1], kv[0]))
 
-    # The progress chart used to take the 8 newest kelishuvlar, so a run of fresh
-    # agreements filled it with empty bars while the ones actually shipping sat
-    # just below the cut — the dashboard read as "nothing is moving" next to a Yuk
-    # holatlari card listing nine loads. Show what has moved, most shipped first.
+    # The progress chart is about business still in flight, so a Yopilgan kelishuv
+    # drops off it: showing every kelishuv filled the card with finished
+    # 120 000 / 120 000 bars and buried the one that was actually mid-delivery.
+    #
+    # Three figures per row, because a kelishuv is only done when all three are:
+    # mashina (the headline — 2/4 trucks gone), yuk (kg delivered) and to'lov (paid
+    # against what the kelishuv will really cost). The to'lov side is read in the
+    # kelishuv's own currency — see Contract.is_settled for why the converted twin
+    # would never agree with it.
     CHART_LIMIT = 8
-    chart_contracts = sorted(
-        contracts, key=lambda c: (c.shipped_kg > 0, c.shipped_kg), reverse=True)
+    chart_contracts = []
+    for contract in contracts:
+        if contract.is_settled:
+            continue
+        sent, planned = contract.truck_progress
+        chart_contracts.append({
+            "contract": contract,
+            "sent": sent, "planned": planned,
+            # `planned` is None on a kelishuv that never set a target, so it has no
+            # trucks-left to sort on and lands at the bottom with a count and no total.
+            "trucks_left": planned - sent if planned else 0,
+            "shipped_kg": contract.shipped_kg, "kg": contract.kg,
+            "kg_pct": _bar_pct(contract.shipped_kg, contract.kg),
+            "paid": contract.paid_total_own, "due": contract.expected_value_own,
+            "pay_pct": _bar_pct(contract.paid_total_own, contract.expected_value_own),
+        })
     contracts_total = len(chart_contracts)
+    # Most trucks still to send first — the same reading as Yuboriladigan mashinalar.
+    chart_contracts.sort(key=lambda r: (r["trucks_left"], r["sent"]), reverse=True)
     chart_contracts = chart_contracts[:CHART_LIMIT]
 
     arrived_lots = shipments.filter(arrived__isnull=False)
@@ -2310,11 +2361,13 @@ def kassa(request):
     cash_total = (_in(CustomerPayment.objects.all())
                   - _out(SupplierPayment.objects.all())
                   - _out(ShipmentExpense.objects.all())
-                  - _out(LogistPayment.objects.all()))
+                  - _out(LogistPayment.objects.all())
+                  - _out(CustomsPayment.objects.all()))
     cash_total_uzs = (_in_uzs(CustomerPayment.objects.all())
                       - _out_uzs(SupplierPayment.objects.all())
                       - _out_uzs(ShipmentExpense.objects.all())
-                      - _out_uzs(LogistPayment.objects.all()))
+                      - _out_uzs(LogistPayment.objects.all())
+                      - _out_uzs(CustomsPayment.objects.all()))
 
     # Not all of the till is ours. Money a mijoz has handed over that sits on no
     # sotuv is held, not earned — cancel the order and it goes back out.
@@ -2332,6 +2385,7 @@ def kassa(request):
     receivable, debtors = customer_receivable_by_currency()
     hamkor = partner_positions_by_currency()
     logist_held, logist_held_uzs, logist_owed, logist_owed_uzs = logist_positions()
+    customs_held, customs_owed = customs_positions()
     stock, stock_uzs, stock_kg = stock_value()
     transit, transit_kg, transit_loads = transit_value_by_currency()
     # A board of current facts, not a balance sheet. Each tile is one place money
@@ -2372,6 +2426,13 @@ def kassa(request):
          "amount": logist_held, "amount_uzs": logist_held_uzs,
          "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
          "tone": "in", "meta": "", "url": reverse("logist_list")},
+        # A split rather than the converted pair the logist tile above uses. A
+        # logist's hisob is one heap restated; bojxona money genuinely moves in both
+        # currencies, so it is two — the same reason Kassada and the hamkor tiles
+        # carry one.
+        {"label": "Bojxonada", "split": customs_held,
+         "note": "yuklarni rasmiylashtirish uchun oldindan yuborilgan",
+         "tone": "in", "meta": "", "url": reverse("customs_list")},
         {"label": "Hamkorlarga qarzimiz", "split": hamkor["owed"], "tone": "out",
          "note": "kelgan yuk uchun hali to'lamaganimiz",
          "meta": f"{hamkor['partners']} ta hamkorga" if hamkor["partners"] else "",
@@ -2389,6 +2450,14 @@ def kassa(request):
             "amount_uzs": -logist_owed_uzs, "tone": "out", "meta": "",
             "note": "o'z pulidan haydovchiga bergani",
             "url": reverse("logist_list") + "?state=owed"})
+    # Same rule for the bojxonachi who cleared a truck out of his own pocket because
+    # what we sent ran short — usually zero, so it appears only when it is not.
+    if customs_owed:
+        tiles.append({
+            "label": "Bojxonaga qarzimiz",
+            "split": [(currency, -amount) for currency, amount in customs_owed],
+            "tone": "out", "meta": "", "note": "o'z pulidan yukni rasmiylashtirgani",
+            "url": reverse("customs_list") + "?state=owed"})
 
     # The Kirim ledger asks each row what it settled and whether its kurs was chosen,
     # and both answers are read off the allocations — without the prefetch that is a
@@ -2396,8 +2465,10 @@ def kassa(request):
     cust_pays = _range(CustomerPayment.objects.select_related("customer")
                        .prefetch_related("allocations__sale"))
     sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
-    expenses = _range(ShipmentExpense.objects.select_related("shipment__contract", "logist"))
+    expenses = _range(ShipmentExpense.objects.select_related(
+        "shipment__contract", "logist", "customs_agent"))
     logist_pays = _range(LogistPayment.objects.select_related("logist"))
+    customs_pays = _range(CustomsPayment.objects.select_related("agent", "shipment"))
 
     balances = {}
     net_in = net_out = Decimal("0")
@@ -2406,11 +2477,13 @@ def kassa(request):
         m_in = _in(cust_pays.filter(method=value))
         m_out = (_out(sup_pays.filter(method=value))
                  + _out(expenses.filter(method=value))
-                 + _out(logist_pays.filter(method=value)))
+                 + _out(logist_pays.filter(method=value))
+                 + _out(customs_pays.filter(method=value)))
         m_in_uzs = _in_uzs(cust_pays.filter(method=value))
         m_out_uzs = (_out_uzs(sup_pays.filter(method=value))
                      + _out_uzs(expenses.filter(method=value))
-                     + _out_uzs(logist_pays.filter(method=value)))
+                     + _out_uzs(logist_pays.filter(method=value))
+                     + _out_uzs(customs_pays.filter(method=value)))
         balances[value] = {"label": label, "in": m_in, "out": m_out,
                            "balance": m_in - m_out, "in_uzs": m_in_uzs,
                            "out_uzs": m_out_uzs, "balance_uzs": m_in_uzs - m_out_uzs}
@@ -2480,9 +2553,31 @@ def kassa(request):
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
         })
-    # Logist-funded expenses are deliberately absent from this ledger: the cash they
-    # cost left as the LogistPayment above, and listing them here would show the
-    # same money going out twice.
+    for p in customs_pays:
+        target = f" · yuk #{p.shipment_id}" if p.shipment_id else ""
+        outflow_rows.append({
+            "kind": "customs", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Bojxona · {p.agent.name}ga{target}"
+                     + (f" · {p.note}" if p.note else ""),
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.amount_uzs, "amount": p.amount,
+        })
+    for p in customs_pays:
+        if not p.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_customs", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Perechisleniya foizi ({p.fee_percent}%) · bojxona {p.agent.name}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
+        })
+    # Expenses a holder funded — a logist or a bojxonachi — are deliberately absent
+    # from this ledger: the cash they cost left as the top-up above, and listing them
+    # here would show the same money going out twice.
     for e in expenses:
         if not e.from_kassa:
             continue
@@ -2537,7 +2632,8 @@ def kassa(request):
         prior = (CustomerPayment.objects.filter(date__lt=date_from),
                  SupplierPayment.objects.filter(date__lt=date_from),
                  ShipmentExpense.objects.filter(date__lt=date_from),
-                 LogistPayment.objects.filter(date__lt=date_from))
+                 LogistPayment.objects.filter(date__lt=date_from),
+                 CustomsPayment.objects.filter(date__lt=date_from))
         opening = _in(prior[0]) - sum((_out(q) for q in prior[1:]), Decimal("0"))
         opening_uzs = _in_uzs(prior[0]) - sum((_out_uzs(q) for q in prior[1:]),
                                               Decimal("0"))
@@ -2551,16 +2647,22 @@ def kassa(request):
     # Outgoing foiz only. A mijoz's perechisleniya foiz never reached the kassa —
     # `net_in` is already net of it — so billing it again here would take the same
     # money out twice and the waterfall would stop landing on the ledger total.
-    outgoing = list(sup_pays) + list(expenses) + list(logist_pays)
+    outgoing = list(sup_pays) + list(expenses) + list(logist_pays) + list(customs_pays)
     fees = sum((r.fee_amount for r in outgoing), Decimal("0"))
     fees_uzs = sum((r.fee_amount_uzs for r in outgoing), Decimal("0"))
 
     logist_amount = sum((p.amount for p in logist_pays), Decimal("0"))
     logist_amount_uzs = sum((p.amount_uzs for p in logist_pays), Decimal("0"))
+    # Its own bar rather than folded into the Bojxona expense group below: that group
+    # is what clearing COST, this is what we sent ahead of knowing — and the whole
+    # point of the feature is that the two are not the same figure.
+    customs_amount = sum((p.amount for p in customs_pays), Decimal("0"))
+    customs_amount_uzs = sum((p.amount_uzs for p in customs_pays), Decimal("0"))
     steps = [("Mijozlardan", net_in, net_in_uzs),
              ("Hamkorlarga", -sup_amount, -sup_amount_uzs),
              ("Vositachi ustamasi", -commission, -commission_uzs),
-             ("Logistlarga", -logist_amount, -logist_amount_uzs)]
+             ("Logistlarga", -logist_amount, -logist_amount_uzs),
+             ("Bojxonaga oldindan", -customs_amount, -customs_amount_uzs)]
     grouped = Decimal("0")
     grouped_uzs = Decimal("0")
     kassa_expenses = [e for e in expenses if e.from_kassa]
@@ -2869,6 +2971,58 @@ def export_debts(request):
     return xlsx_response("qarzdorlar.xlsx", headers, _rows())
 
 
+def holder_loads(expenses, payments=()):
+    """Which yuklar an outside party's money actually went to, newest first.
+
+    The hisob varaqasi below it answers "what moved, and when". This answers "on
+    WHAT" — and a row of it is a load, so it carries the facts a load is recognised
+    by rather than the ones a transaction is: the kelishuv it belongs to, the marka
+    on the truck, the kg, where it has got to. The same leading columns as Yuklar,
+    for the same reason that page leads with them.
+
+    `payments` is only ever non-empty for a bojxonachi: a CustomsPayment names the
+    yuk it was sent for, so their table can set what went out for a truck against
+    what clearing it cost. A LogistPayment names none — a logist's funding is a lump
+    against no load — so theirs shows what they paid and nothing to set it against.
+    """
+    loads = {}
+
+    def row_for(shipment):
+        return loads.setdefault(
+            shipment.pk, {"shipment": shipment, "paid": [], "sent": []})
+
+    for expense in expenses:
+        row_for(expense.shipment)["paid"].append(
+            (expense.currency, own_side(expense, expense.amount, expense.amount_uzs)))
+    for payment in payments:
+        if payment.shipment_id is None:
+            continue
+        row_for(payment.shipment)["sent"].append(
+            (payment.currency,
+             own_side(payment, payment.net_amount, payment.net_amount_uzs)))
+
+    rows = []
+    for row in loads.values():
+        shipment = row["shipment"]
+        paid, sent = _by_currency(row["paid"]), _by_currency(row["sent"])
+        rows.append({
+            "shipment": shipment, "paid": paid, "sent": sent,
+            "diff": _by_currency([*sent, *((c, -a) for c, a in paid)]),
+            # How far the load has actually got: arrived if it is in, otherwise the
+            # day it left. One date rather than three — this table is read to find a
+            # load, not to chase its schedule, which the yuk's own page carries.
+            "date": shipment.arrived or shipment.sent,
+        })
+    # Newest first, ON THE DATE THE ROW SHOWS. Sorting by `sent` while the column
+    # printed `arrived` put 19.07 above 22.07 above 16.07 — three descending numbers
+    # that are not descending, which reads as a table with no order at all.
+    #
+    # A load with neither date has not left yet, so it sorts to the top: it is the
+    # one still to happen, not the oldest thing on the list.
+    rows.sort(key=lambda r: (r["date"] or _date.max, r["shipment"].pk), reverse=True)
+    return rows
+
+
 # ── Logistlar ────────────────────────────────────────────────────────────────────
 #
 # A logist holds our money: we send them a lump, they hand each driver an advance
@@ -2907,7 +3061,11 @@ def logist_detail(request, pk):
     """One logist's account: every top-up in, every driver advance out, newest
     first, with the running balance the list page shows."""
     logist = get_object_or_404(
-        Logist.objects.prefetch_related("payments", "driver_advances__shipment"), pk=pk)
+        Logist.objects.prefetch_related(
+            "payments",
+            "driver_advances__shipment__contract__partner",
+            "driver_advances__shipment__lines",
+            "driver_advances__shipment__status"), pk=pk)
     rows = []
     for payment in logist.payments.all():
         rows.append({"kind": "in", "date": payment.date, "obj": payment,
@@ -2924,7 +3082,10 @@ def logist_detail(request, pk):
                      "method_code": advance.method})
     rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
     page = Paginator(rows, 30).get_page(request.GET.get("page"))
-    return render(request, "crm/logist_detail.html", {"logist": logist, "page": page})
+    return render(request, "crm/logist_detail.html", {
+        "logist": logist, "page": page,
+        "loads": holder_loads(logist.driver_advances.all()),
+    })
 
 
 @role_required(User.Role.ADMIN)
@@ -3028,3 +3189,270 @@ def logist_payment_delete(request, pk):
         request, "To'lovni o'chirish",
         f"“{payment.amount}$ · {payment.logist.name}” to'lovi o'chiriladi.",
         "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="logist_list")
+
+
+# ── Bojxona ──────────────────────────────────────────────────────────────────────
+#
+# A bojxonachi holds our money the same way a logist does, with one difference that
+# shapes every screen here: the money goes out per load as an ESTIMATE. We send
+# ~40 mln so a truck clears and only afterwards learn it cost 37, or 39, or 40. So
+# there are two questions, not one — how much is sitting with them (the list), and
+# which load has money still unaccounted for (the reconciliation) — and each gets
+# its own page rather than one page trying to answer both.
+
+
+def _payment_label(payment):
+    """A bojxona to'lov named the way it was made — "40 000 000 so'm · Bahrom aka".
+
+    Its OWN side, never the stored twin: printing the so'm column of a $4 000 to'lov
+    would put a figure in the audit trail that nobody typed, at a kurs the reader
+    has no way to see."""
+    return (f"{_money_line([(payment.currency, own_side(payment, payment.amount, payment.amount_uzs))])}"
+            f" · {payment.agent.name}")
+
+
+@role_required(User.Role.ADMIN)
+def customs_list(request):
+    q = request.GET.get("q", "").strip()
+    state = request.GET.get("state", "").strip()
+    agents = CustomsAgent.objects.prefetch_related("payments", "expenses__shipment")
+    if q:
+        agents = agents.filter(Q(name__icontains=q) | Q(phone__icontains=q))
+
+    rows = list(agents)
+    # Asked of the heaps, not of one converted figure: somebody holding leftover
+    # so'm while a dollar clearing ran short is both a holder and a creditor, and
+    # they belong in both lists rather than in whichever one the netted number fell
+    # on. "Settled" is the genuinely empty case — every heap at zero.
+    for agent in rows:
+        agent.held = agent.held_by_currency()
+        agent.owed = agent.owed_by_currency()
+    if state == "holding":
+        rows = [x for x in rows if x.held]
+    elif state == "owed":
+        rows = [x for x in rows if x.owed]
+    elif state == "settled":
+        rows = [x for x in rows if not x.held and not x.owed]
+
+    held, owed = customs_positions()
+    open_diff, open_loads = customs_open_position()
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    return render(request, "crm/customs_list.html", {
+        "page": page, "q": q, "state": state,
+        "held": held, "owed": owed,
+        "open_diff": open_diff, "open_loads": open_loads,
+        "has_filters": bool(state),
+    })
+
+
+def customs_reconciliation(state=""):
+    """(rows, totals) for the per-load bojxona ledger: sent, spent, and the gap.
+
+    Only loads that money actually touched — a yuk nobody sent clearing money for is
+    not a settled load, it is simply not part of this ledger, and listing every
+    shipment with three zeros would bury the handful that need chasing."""
+    shipments = (Shipment.objects.select_related("contract__partner")
+                 .prefetch_related("customs_payments__agent", "expenses")
+                 .filter(Q(customs_payments__isnull=False)
+                         | Q(expenses__customs_agent__isnull=False))
+                 .distinct().order_by("-sent", "-created_at"))
+    rows = []
+    for shipment in shipments:
+        diff = shipment.customs_diff_by_currency()
+        # Whoever the money went through, for the column that names them. More than
+        # one is possible and vanishingly rare, so they are simply listed.
+        agents = {p.agent.name for p in shipment.customs_payments.all()}
+        agents |= {e.customs_agent.name for e in shipment.expenses.all()
+                   if e.customs_agent_id}
+        rows.append({
+            "shipment": shipment, "agents": ", ".join(sorted(agents)),
+            "sent": shipment.customs_sent_by_currency(),
+            "spent": shipment.customs_spent_by_currency(),
+            "diff": diff,
+            # Which way the gap points, for the filter and the badge. A load short
+            # in one currency and over in another gets both flags rather than a
+            # verdict picked by whichever heap happened to be bigger.
+            "left": [(c, a) for c, a in diff if a > 0],
+            "over": [(c, a) for c, a in diff if a < 0],
+        })
+    if state in ("left", "over"):
+        rows = [r for r in rows if r[state]]
+    elif state == "settled":
+        rows = [r for r in rows if not r["diff"]]
+    totals = {
+        "sent": _by_currency(pair for r in rows for pair in r["sent"]),
+        "spent": _by_currency(pair for r in rows for pair in r["spent"]),
+        "diff": _by_currency(pair for r in rows for pair in r["diff"]),
+    }
+    return rows, totals
+
+
+def customs_open_position():
+    """([(currency, farq)] still unaccounted for, how many loads) — the headline the
+    list page opens with, and the reason the reconciliation page exists.
+
+    Both directions, not the positive ones only: a load we overfunded and one that
+    ran short are both money nobody has squared. And the count travels with the
+    figure because a net that nearly cancels across two open loads is not the same
+    as nothing to do — it is two loads to chase."""
+    rows, _totals = customs_reconciliation()
+    open_rows = [r for r in rows if r["diff"]]
+    return (_by_currency(pair for r in open_rows for pair in r["diff"]),
+            len(open_rows))
+
+
+@role_required(User.Role.ADMIN)
+def customs_loads(request):
+    """Yuklar bo'yicha hisob: what was sent for each load against what clearing it
+    actually cost. THE screen this feature was asked for."""
+    state = request.GET.get("state", "").strip()
+    rows, totals = customs_reconciliation(state)
+    page = Paginator(rows, 25).get_page(request.GET.get("page"))
+    return render(request, "crm/customs_loads.html", {
+        "page": page, "state": state, "totals": totals,
+        "has_filters": bool(state),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def customs_detail(request, pk):
+    """One bojxonachi's account: every top-up in, every clearing paid out, newest
+    first — plus the per-load gaps that money is sitting behind."""
+    agent = get_object_or_404(
+        CustomsAgent.objects.prefetch_related(
+            "payments__shipment__contract__partner",
+            "payments__shipment__lines",
+            "payments__shipment__status",
+            "expenses__shipment__contract__partner",
+            "expenses__shipment__lines",
+            "expenses__shipment__status"), pk=pk)
+    rows = []
+    for payment in agent.payments.all():
+        target = (f"Yuk #{payment.shipment_id} uchun" if payment.shipment_id
+                  else "Umumiy to'ldirish")
+        rows.append({"kind": "in", "date": payment.date, "obj": payment,
+                     "title": f"{target}" + (f" · {payment.note}" if payment.note else ""),
+                     "amount": payment.net_amount, "amount_uzs": payment.net_amount_uzs,
+                     "currency": payment.currency, "method": payment.get_method_display(),
+                     "method_code": payment.method})
+    for expense in agent.expenses.all():
+        rows.append({"kind": "out", "date": expense.date, "obj": expense,
+                     "title": f"Yuk #{expense.shipment_id} · {expense.get_category_display()}"
+                              + (f" · {expense.note}" if expense.note else ""),
+                     "amount": expense.amount, "amount_uzs": expense.amount_uzs,
+                     "currency": expense.currency, "method": expense.get_method_display(),
+                     "method_code": expense.method})
+    rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
+    page = Paginator(rows, 30).get_page(request.GET.get("page"))
+    return render(request, "crm/customs_detail.html", {
+        "agent": agent, "page": page,
+        "loads": holder_loads(agent.expenses.all(), agent.payments.all()),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def customs_create(request):
+    form = CustomsAgentForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            agent = form.save()
+            AuditLog.record(request.user, AuditLog.Action.CREATE, "Bojxonachi",
+                            agent.pk, f"Yangi bojxonachi: {agent.name}")
+            messages.success(request, "Bojxonachi qo'shildi")
+            return form_success(request, reverse("customs_list"))
+        return form_response(request, form, "Yangi bojxonachi", invalid=True)
+    return form_response(request, form, "Yangi bojxonachi")
+
+
+@role_required(User.Role.ADMIN)
+def customs_edit(request, pk):
+    agent = get_object_or_404(CustomsAgent, pk=pk)
+    form = CustomsAgentForm(request.POST or None, instance=agent)
+    title = "Bojxonachini tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(request.user, AuditLog.Action.UPDATE, "Bojxonachi",
+                            agent.pk, f"Bojxonachi tahrirlandi: {agent.name}")
+            messages.success(request, "Bojxonachi yangilandi")
+            return form_reload(request, reverse("customs_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def customs_delete(request, pk):
+    agent = get_object_or_404(CustomsAgent, pk=pk)
+    if request.method == "POST":
+        try:
+            agent.delete()
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Bojxonachi", pk,
+                            f"Bojxonachi o'chirildi: {agent.name}")
+            messages.success(request, "Bojxonachi o'chirildi")
+        except ProtectedError:
+            # PROTECT on both sides, same as a logist: somebody with money behind
+            # them is a piece of the ledger, not a contact card to tidy away.
+            messages.error(request, "Bojxonachiga to'lov yoki xarajat biriktirilgan")
+        return form_reload(request, reverse("customs_list"))
+    return render_confirm(
+        request, "Bojxonachini o'chirish", f"“{agent.name}” o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="customs_list")
+
+
+@role_required(User.Role.ADMIN)
+def customs_payment_create(request):
+    initial = {}
+    # Prefilled from either side: from the bojxonachi's page (who), or from a yuk
+    # (what for) — the two ways this form is actually reached.
+    agent_id = request.GET.get("agent")
+    if agent_id and agent_id.isdigit():
+        initial["agent"] = int(agent_id)
+    shipment_id = request.GET.get("shipment")
+    if shipment_id and shipment_id.isdigit():
+        initial["shipment"] = int(shipment_id)
+    form = CustomsPaymentForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            payment = form.save(commit=False)
+            payment.created_by = request.user
+            payment.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.PAYMENT, "Bojxonaga to'lov", payment.pk,
+                f"Bojxonaga to'lov: {_payment_label(payment)}")
+            messages.success(request, "Bojxonaga to'lov qo'shildi")
+            return form_success(request, reverse("customs_list"))
+        return form_response(request, form, "Bojxonaga pul yuborish", invalid=True)
+    return form_response(request, form, "Bojxonaga pul yuborish")
+
+
+@role_required(User.Role.ADMIN)
+def customs_payment_edit(request, pk):
+    payment = get_object_or_404(CustomsPayment, pk=pk)
+    form = CustomsPaymentForm(request.POST or None, instance=payment)
+    title = "To'lovni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Bojxonaga to'lov", payment.pk,
+                f"Bojxonaga to'lov tahrirlandi: {_payment_label(payment)}")
+            messages.success(request, "To'lov yangilandi")
+            return form_reload(request, reverse("customs_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def customs_payment_delete(request, pk):
+    payment = get_object_or_404(CustomsPayment, pk=pk)
+    if request.method == "POST":
+        label = _payment_label(payment)
+        payment.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Bojxonaga to'lov", pk,
+                        f"Bojxonaga to'lov o'chirildi: {label}")
+        messages.success(request, "To'lov o'chirildi")
+        return form_reload(request, reverse("customs_list"))
+    return render_confirm(
+        request, "To'lovni o'chirish",
+        f"“{_payment_label(payment)}” to'lovi o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="customs_list")
