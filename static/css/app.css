@@ -697,10 +697,14 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   border-radius: 999px;
   white-space: nowrap;
 }
-.hist--sotuv { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.hist--sotuv,
+.hist--kelishuv { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 .hist--tolov { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
 .hist--qaytarish { color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); }
 .hist--bron { color: var(--violet); background: color-mix(in srgb, var(--violet) 16%, transparent); }
+/* A yuk carries goods rather than money, and its row prints no figure — so it is
+   the one kind drawn without a colour of its own. */
+.hist--yuk { color: var(--text-muted); background: var(--surface-2); }
 
 /* Debt deadline "days left / overdue" chip */
 .daybadge {
@@ -756,6 +760,24 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   overflow-x: auto;
   background: var(--table-bg);
 }
+/* Grab-and-drag on a table that is wider than its box. On a laptop with no
+   horizontal wheel the only way sideways was to hunt for the scrollbar at the
+   bottom of a long table; this is the gesture people already expect from a map.
+   The class is added by the JS only when there is somewhere to go — a grab cursor
+   on a table that fits is an offer the page cannot keep. */
+.table-wrap.is-draggable { cursor: grab; }
+/* Controls keep their own cursor: the hand is about the table, not about the
+   link you happen to be over. */
+.table-wrap.is-draggable a[href],
+.table-wrap.is-draggable button { cursor: pointer; }
+.table-wrap.is-draggable input,
+.table-wrap.is-draggable select,
+.table-wrap.is-draggable textarea { cursor: auto; }
+/* Mid-drag the closed hand is right everywhere, including over those controls —
+   hence the override, which lasts only while the pointer is held down. */
+.table-wrap.is-dragging,
+.table-wrap.is-dragging * { cursor: grabbing !important; }
+.table-wrap.is-dragging { user-select: none; }
 table { width: 100%; border-collapse: collapse; }
 .table-wrap table { border: none; }
 

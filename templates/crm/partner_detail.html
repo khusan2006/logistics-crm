@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}{{ partner.name }} · Hamkor · GranulaLog{% endblock %}
+{% block topbar_title %}{{ partner.name }}{% endblock %}
+{% block content %}
+
+<p>
+  {% for currency, amount in payable %}
+  <span class="badge badge-warning">qolgan to'lov {% money_in amount currency %}</span>
+  {% empty %}<span class="badge badge-ok">Qarzsiz</span>{% endfor %}
+  {% if partner.phone %}<span class="muted"> · {{ partner.phone }}</span>{% endif %}
+  {% if partner.city %}<span class="muted"> · {{ partner.city }}</span>{% endif %}
+</p>
+
+{% comment %}
+Hamkor tarixi — kelishuv, to'lov va yuk bitta vaqt chizig'ida. Har qator o'zi
+harakatlangan valyutada yoziladi; yuk pul olib yurmaydi, shuning uchun uning
+o'rnida kg turadi.
+{% endcomment %}
+<div class="card">
+  <div class="card-head">
+    <h2>Hamkor tarixi</h2>
+    <span class="field-hint">Kelishuvlar, to'lovlar va yuklar — eng yangisi yuqorida</span>
+  </div>
+  {% if history %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Sana</th>
+      <th>Voqea</th>
+      <th>Tafsilot</th>
+      <th>Summa</th>
+    </tr>
+    {% for e in history %}
+    <tr>
+      <td class="sticky-col">{{ e.date|date:"d.m.Y" }}</td>
+      <td><span class="hist hist--{{ e.kind }}">{{ e.label }}</span></td>
+      <td>{{ e.detail }}</td>
+      <td>
+        {% if e.total == None %}<span class="muted">—</span>
+        {% elif e.kind == "tolov" %}<span class="late">{% money e.total e.total_uzs e.currency %}</span>
+        {% else %}{% money e.total e.total_uzs e.currency %}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Bu hamkor bilan hali hech qanday amaliyot bo'lmagan.</p>
+  {% endif %}
+</div>
+{% endblock %}

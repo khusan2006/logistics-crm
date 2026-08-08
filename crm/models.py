@@ -1441,6 +1441,11 @@ class Reservation(MoneyEntry):
     class Status(models.TextChoices):
         ACTIVE = "active", "Faol"
         CONVERTED = "converted", "Sotuvga aylandi"
+        # Served in part and closed by agreement: the mijoz took what they took and
+        # does not want the rest. Distinct from CANCELLED, which is a bron that
+        # never happened — the difference matters when reading back why a promise
+        # ended, and CONVERTED would claim the whole of it turned into a sotuv.
+        CLOSED = "closed", "Tugatildi"
         CANCELLED = "cancelled", "Bekor qilindi"
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
@@ -1477,6 +1482,17 @@ class Reservation(MoneyEntry):
     @property
     def is_open(self):
         return self.status == self.Status.ACTIVE and self.remaining_kg > 0
+
+    @property
+    def price_own(self):
+        """The agreed narx in the currency it was agreed in — what the sotuv form
+        has to be handed when this bron is served, because the narx box there is
+        read as whichever currency the Valyuta picker says.
+
+        None while the narx is still open, same as `total`."""
+        if self.price is None:
+            return None
+        return own_side(self, self.price, self.price_uzs)
 
     @property
     def total(self):

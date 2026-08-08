@@ -5,6 +5,7 @@ Money leaves the kassa when we fund a logist; what they later hand a driver pric
 that yuk but must NOT appear in the kassa again.
 """
 
+from datetime import date as _date
 from decimal import Decimal
 
 from crm.models import (
@@ -196,14 +197,35 @@ class TestLogistScreens:
         assert names("/logists/?state=holding") == ["Ushlab turgan"]
         assert names("/logists/?state=owed") == ["Qarzdor"]
 
-    def test_detail_lists_both_directions_newest_first(self, admin_client, db):
+    def test_detail_lists_money_and_yuklar_newest_first(self, admin_client, db):
+        """One timeline: what we sent, what they handed a driver, and the loads they
+        arranged. An advance three days after a truck was given to them only reads
+        as one story when the two sit next to each other."""
         logist = _logist()
-        shipment = _shipment(logist)
-        _send(logist, "10000", date="2026-07-01")
-        _advance(shipment, logist, "500", date="2026-07-03")
+        shipment = _shipment(logist)                       # jo'natilgan 2026-07-05
+        _send(logist, "10000", date="2026-07-01")          # avval pul yubordik
+        _advance(shipment, logist, "500", date="2026-07-08")   # keyin haydovchiga berdi
         rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
-        assert [r["kind"] for r in rows] == ["out", "in"]
+        assert [r["kind"] for r in rows] == ["out", "yuk", "in"]
+        assert [r["date"] for r in rows] == [
+            _date(2026, 7, 8), _date(2026, 7, 5), _date(2026, 7, 1)]
         assert rows[0]["amount"] == Decimal("500.00")
+
+    def test_a_yuk_row_carries_no_money_of_its_own(self, admin_client, db):
+        """The driver's advance is its own row; the load itself moves nothing, so a
+        zero in Kirim or Chiqim would read as a payment of nothing."""
+        logist = _logist()
+        _shipment(logist)
+        rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
+        assert [r["kind"] for r in rows] == ["yuk"]
+        assert "amount" not in rows[0]
+        assert "method_code" not in rows[0]
+
+    def test_a_logist_with_no_loads_still_shows_only_their_money(self, admin_client, db):
+        logist = _logist()
+        _send(logist, "10000", date="2026-07-01")
+        rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
+        assert [r["kind"] for r in rows] == ["in"]
 
     def test_kassa_carries_a_logistlarda_tile(self, admin_client, db):
         logist = _logist()

@@ -71,10 +71,28 @@ def _edit(client, reservation, **overrides):
 
 
 def _convert(client, reservation, price=None, kg=None):
-    body = {} if price is None else {"price": price}
-    if kg is not None:
-        body["kg"] = kg
-    return client.post(f"/reservations/{reservation.pk}/convert/", body)
+    """Hand kg over from a bron, through the ordinary sotuv form with Brondan
+    ushlansin ticked — the one-click Berish it used to post to is gone. The bron's
+    currency, kurs and agreed narx ride along, as that button used to carry them."""
+    from crm.models import brand_on_hand_kg
+
+    reservation.refresh_from_db()
+    give = kg if kg is not None else min(reservation.remaining_kg,
+                                         brand_on_hand_kg(reservation.brand))
+    if price is not None:
+        narx = price
+    elif reservation.is_som:
+        narx = reservation.price_uzs
+    else:
+        narx = reservation.price
+    return client.post("/sales/new/", {
+        "customer": reservation.customer_id, "brand": reservation.brand,
+        "kg": str(give), "currency": reservation.currency,
+        "price": "" if narx is None else str(narx),
+        "exchange_rate": str(reservation.exchange_rate),
+        "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "draw_from_bron_asked": "1", "draw_from_bron": "on",
+    })
 
 
 def _money(reservation):
@@ -386,14 +404,31 @@ def test_a_kurs_zero_bron_reports_instead_of_crashing_on_handover(admin_client, 
     assert not Sale.objects.exists()
 
 
-def test_an_agreed_narx_wins_over_one_typed_at_handover(admin_client, db):
-    """The convert form only offers a narx box when the bron has none. A stray POST
-    must not be able to re-price an already-agreed bron."""
+def test_the_agreed_narx_is_carried_onto_the_handover_form(admin_client, db):
+    """Serving a bron goes through the ordinary sotuv form now, so the agreed narx
+    has to travel with the link — retyping it from memory is how an agreed price
+    quietly becomes a different one. The valyuta rides along for the same reason:
+    the narx box is read as whichever currency the picker says."""
     _arrived_lot(kg="5000")
-    _reserve(admin_client, "LLDPE", _customer(), kg="5000",
+    customer = _customer()
+    _reserve(admin_client, "LLDPE", customer, kg="5000",
              price="18000", currency="uzs", exchange_rate="12650")
     bron = Reservation.objects.get()
-    _convert(admin_client, bron, price="99999")
+    assert bron.price_own == Decimal("18000.00")
+
+    # the link the Bronlar row renders
+    html = admin_client.get("/reservations/").content.decode()
+    assert f"price={bron.price_own}" in html
+    assert "currency=uzs" in html
+
+    # and opening it puts the agreed figures in the boxes
+    form = admin_client.get(
+        f"/sales/new/?customer={customer.pk}&brand=LLDPE"
+        f"&currency=uzs&price={bron.price_own}").context["form"]
+    assert form.initial["price"] == Decimal("18000.00")
+    assert form.initial["currency"] == "uzs"
+
+    _convert(admin_client, bron)
     sale = Sale.objects.get()
     assert sale.price_uzs == Decimal("18000.00")
     assert sale.price == Decimal("1.4229")
@@ -505,16 +540,22 @@ def test_double_conversion_does_not_sell_the_same_kg_twice(admin_client, db):
     assert bron.status == "converted"
 
 
-def test_a_cancelled_bron_cannot_be_converted(admin_client, db):
+def test_a_cancelled_bron_is_never_drawn_down_again(admin_client, db):
+    """A cancelled bron is out of the queue, so a later sotuv to that same mijoz is
+    an ordinary one — it goes through, and the dead promise stays at zero rather
+    than quietly recording kg against a booking that was called off."""
     _arrived_lot(kg="5000")
-    _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="2.00")
+    customer = _customer()
+    _reserve(admin_client, "LLDPE", customer, kg="5000", price="2.00")
     bron = Reservation.objects.get()
     admin_client.post(f"/reservations/{bron.pk}/cancel/", {})
+
     _convert(admin_client, bron)
     bron.refresh_from_db()
-    assert not Sale.objects.exists()
     assert bron.status == "cancelled"
     assert bron.fulfilled_kg == Decimal("0")
+    sale = Sale.objects.get()
+    assert sale.reservation_id is None
 
 
 def test_converting_after_the_stock_went_elsewhere_is_refused(admin_client, db):

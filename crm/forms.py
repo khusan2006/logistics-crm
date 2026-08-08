@@ -1,3 +1,4 @@
+import json
 import re
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -269,6 +270,86 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
     uzs_field = "price_uzs"
     usd_places = "0.0001"
     positive_error = "Narx musbat bo'lishi kerak"
+
+
+class CustomerBronSelect(forms.Select):
+    """A mijoz <select> whose options carry the markalar that mijoz still has an
+    open bron for, so the form's JS can ask the question only when there is one.
+
+    Same idea as ContractChoiceSelect: the answer travels on the option, because
+    which mijoz is buying is not known until they pick one and a round trip per
+    change would be a request per keystroke on a searchable list."""
+
+    #: {customer_id: [brand, ...]}, set by the form.
+    bron_brands = {}
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        pk = getattr(value, "value", value)
+        brands = self.bron_brands.get(pk if isinstance(pk, int) else None)
+        if brands is None and str(pk).isdigit():
+            brands = self.bron_brands.get(int(pk))
+        option["attrs"]["data-bron-brands"] = json.dumps(sorted(brands or []))
+        return option
+
+
+class BronDrawFormMixin:
+    """The "Brondan ushlansin" question, on the forms that create a sotuv.
+
+    Serving a mijoz who holds a bron for this marka normally makes their promise
+    smaller — otherwise the bron goes on blocking the shelf for granula they have
+    already taken. But not every sotuv to a bron holder is against the bron: they
+    may be buying something extra and still expect their booking to stand. Only the
+    operator knows which, so the form asks instead of always drawing.
+
+    The hidden twin is what makes the question safe to add. An unticked checkbox
+    posts NOTHING, which is byte-for-byte the same as a POST that never carried the
+    field — and those two must not mean the same thing. An operator clearing the box
+    means "leave the bron alone"; a caller that does not know the box exists must
+    keep the behaviour it has always had. The twin is always submitted, so its
+    presence is what says the question was actually put.
+
+    Added in __init__ rather than declared: Django's form metaclass only collects
+    fields from bases that already carry `declared_fields`, so a Field sitting on a
+    plain mixin is silently ignored — the box never renders and the answer is always
+    absent."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["draw_from_bron"] = forms.BooleanField(
+            label="Brondan ushlansin", required=False, initial=True,
+            help_text="Sotilgan kg shu mijozning broniidan ayiriladi. "
+                      "Belgilanmasa, bron to'liq holicha qoladi.")
+        # Which markalar each mijoz still has an open bron for, so the question is
+        # only put when there IS one — asking a mijoz with no bron whether to draw
+        # from it is noise on every ordinary sotuv. One query, walked in Python
+        # because `is_open` reads remaining_kg, which is not a column.
+        brons = {}
+        for bron in Reservation.objects.filter(status=Reservation.Status.ACTIVE):
+            if bron.remaining_kg > 0:
+                brons.setdefault(bron.customer_id, set()).add(bron.brand)
+        picker = self.fields["customer"]
+        widget = CustomerBronSelect(attrs=dict(picker.widget.attrs))
+        widget.choices = picker.widget.choices     # keeps the field's queryset
+        widget.bron_brands = brons
+        picker.widget = widget
+        # Which marka is being sold: a select on the by-brand form, a fixed one on
+        # the per-lot form, where the lot already decided it.
+        if "brand" in self.fields:
+            self.fields["brand"].widget.attrs["data-bron-brand"] = ""
+        self.fields["draw_from_bron"].widget.attrs["data-bron-draw"] = ""
+        self.fields["draw_from_bron_asked"] = forms.CharField(
+            required=False, initial="1", widget=forms.HiddenInput())
+        # Straight under the kg, because that is what the question is about. Appended
+        # (which is what adding a field in __init__ does) it landed below Izoh, three
+        # screens from the number it governs.
+        self.order_fields([name for name in ("customer", "lot", "brand", "kg",
+                                             "draw_from_bron")
+                           if name in self.fields])
+
+    def clean_draw_from_bron(self):
+        ticked = self.cleaned_data.get("draw_from_bron", False)
+        return ticked if self.data.get("draw_from_bron_asked") else True
 
 
 class InheritedRateMixin:
@@ -1080,7 +1161,8 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         return cleaned
 
 
-class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
+class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin,
+                     PriceEntryFormMixin, forms.ModelForm):
     """New sales are entered by BRAND, not lot: the view consumes the oldest
     arrived lots first (FIFO), splitting the kg across lots — one Sale row per
     lot slice, each snapshotting its own lot's landed cost."""
@@ -1135,7 +1217,8 @@ class SaleCreateForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
         return cleaned
 
 
-class SaleLotForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
+class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
+                  PriceEntryFormMixin, forms.ModelForm):
     """Sale from ONE chosen lot, entered from inside a marka in the ombor. The same
     granula can sit in several lots at different landed costs, so picking the lot
     has to beat FIFO here — otherwise you could never sell the dearer one. The lot
@@ -1159,6 +1242,12 @@ class SaleLotForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["lot"].queryset = arrived_lots()
+        # No marka picker here — the lot decided it — so the Brondan ushlansin box
+        # carries the brand itself for the JS that shows or hides it.
+        lot = self.initial.get("lot") or self.data.get("lot")
+        chosen = arrived_lots().filter(pk=lot).first() if lot else None
+        if chosen is not None:
+            self.fields["draw_from_bron"].widget.attrs["data-bron-fixed-brand"] = chosen.brand
 
     def clean(self):
         cleaned = super().clean()

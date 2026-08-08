@@ -241,6 +241,65 @@ def partner_list(request):
     return render(request, "crm/partner_list.html", {"page": page, "q": q})
 
 
+def _partner_history(partner):
+    """Everything that has passed between us and one hamkor, newest first.
+
+    The three things that actually happen with a hamkor, on one timeline: a
+    kelishuv is struck, money goes out against it, and goods come the other way.
+    Read separately they never line up — the yuk that a to'lov paid for is on
+    another screen — and lining them up is the whole point of the page.
+
+    Each row is drawn in the currency that row moved in; a yuk carries no money of
+    its own, so it reports kg and the template prints no figure for it."""
+    events = []
+    contracts = partner.contracts.prefetch_related("lines__shipment_lines",
+                                                   "supplier_payments").all()
+    for contract in contracts:
+        events.append({
+            "date": contract.created, "kind": "kelishuv", "label": "Kelishuv",
+            "detail": f"{contract.code} · {contract.brand_summary}",
+            "total": contract.total_value, "total_uzs": contract.total_value_uzs,
+            "currency": contract.currency})
+        for payment in contract.supplier_payments.all():
+            # What the HAMKOR received, not what left the kassa. This page is about
+            # our standing with them, so its rows have to reconcile with the qolgan
+            # to'lov printed above: kelishuv value less these figures IS that number.
+            # The vositachi cut and the bank's foiz ride on top and are money spent
+            # on the transfer rather than paid to the hamkor, so they are named in
+            # the detail instead of quietly inflating the column.
+            extra = payment.total_out - payment.amount
+            events.append({
+                "date": payment.date, "kind": "tolov", "label": "To'lov",
+                "detail": f"{contract.code} · {payment.get_method_display()}"
+                          + (f" · ustiga {usd(extra)} xarajat" if extra else ""),
+                "total": payment.amount, "total_uzs": payment.amount_uzs,
+                "currency": payment.currency})
+    for shipment in (Shipment.objects.filter(contract__partner=partner)
+                     .select_related("contract").prefetch_related("lines")):
+        # Sent is the date the hamkor acted on; a load still being loaded has none
+        # yet, so it falls back to when the row was created rather than dropping off
+        # the timeline entirely.
+        events.append({
+            "date": shipment.sent or shipment.created_at.date(),
+            "kind": "yuk", "label": "Yuk",
+            "detail": f"#{shipment.pk} · {shipment.contract.code} · "
+                      f"{shipment.brand_summary} · {_kg(shipment.kg)} kg",
+            "total": None, "total_uzs": None, "currency": shipment.contract.currency})
+    events.sort(key=lambda e: (e["date"], e["label"]), reverse=True)
+    return events
+
+
+@role_required(User.Role.ADMIN)
+def partner_detail(request, pk):
+    """One hamkor's page: what we still owe them, and everything that has passed
+    between us."""
+    partner = get_object_or_404(Partner, pk=pk)
+    return render(request, "crm/partner_detail.html", {
+        "partner": partner,
+        "payable": payable_by_currency(partner.contracts.all()),
+        "history": _partner_history(partner)})
+
+
 @role_required(User.Role.ADMIN)
 def partner_create(request):
     form = PartnerForm(request.POST or None)
@@ -1632,6 +1691,18 @@ def sale_create(request):
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
+    # Serving a bron from Bronlar or Ombor: the narx and the valyuta were agreed
+    # when the bron was struck and must not have to be retyped from memory —
+    # retyping is how an agreed price quietly becomes a different one.
+    currency = (request.GET.get("currency") or "").strip()
+    if currency in dict(Currency.choices):
+        initial["currency"] = currency
+    price = (request.GET.get("price") or "").strip()
+    if price:
+        try:
+            initial["price"] = Decimal(price)
+        except (ArithmeticError, ValueError):
+            pass
     form = SaleCreateForm(request.POST or None, initial=initial)
     if request.method == "POST":
         if form.is_valid():
@@ -1653,10 +1724,12 @@ def sale_create(request):
                     )
                     slices.append(sale)
                     remaining -= take
-                    # Serving this mijoz makes their own promise smaller, whichever
-                    # lot the granula came off. Per slice and in order, so the bron
-                    # is drawn down by exactly what was sold.
-                    draw_down_bron(sale)
+                    # Serving this mijoz normally makes their own promise smaller,
+                    # whichever lot the granula came off — per slice and in order, so
+                    # the bron falls by exactly what was sold. Unticked, the sotuv is
+                    # something else they bought and the booking stands untouched.
+                    if data.get("draw_from_bron"):
+                        draw_down_bron(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
                 f"Yangi sotuv (FIFO): {data['kg']} kg {data['brand']} · "
@@ -1700,7 +1773,8 @@ def sale_create_lot(request, lot_id):
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
             )
-            draw_down_bron(sale)
+            if data.get("draw_from_bron"):
+                draw_down_bron(sale)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
                 f"Yangi sotuv (lot #{sale.line_id}): {sale.kg} kg "
@@ -1725,12 +1799,17 @@ def sale_edit(request, pk):
             # (or move to another mijoz). Put them back before the edit lands, then
             # draw again from whatever the sotuv now is — releasing afterwards would
             # give back the NEW kg, which is not what was taken.
-            release_bron(sale)
+            # Whether this sotuv came out of a bron is decided when it is created and
+            # must survive an edit. Re-drawing unconditionally would quietly convert a
+            # sotuv booked alongside a bron into one taken from it, the first time
+            # anybody corrected a kg.
+            was_from_bron = release_bron(sale) > 0
             sale = form.save()
             if sale.reservation_id:
                 sale.reservation = None
                 sale.save(update_fields=["reservation"])
-            draw_down_bron(sale)
+            if was_from_bron:
+                draw_down_bron(sale)
             moved = sale.customer_id != previous_customer_id
             if moved:
                 # The allocations are slices of the PREVIOUS mijoz's to'lovlar. They
@@ -1795,7 +1874,7 @@ def sale_detail(request, pk):
 #: bron is the only kind there is anything left to do about.
 RESERVATION_STATUS_LABELS = [
     ("active", "Faol"), ("converted", "Sotuvga aylandi"),
-    ("cancelled", "Bekor qilindi"), ("", "Hammasi"),
+    ("closed", "Tugatildi"), ("cancelled", "Bekor qilindi"), ("", "Hammasi"),
 ]
 
 # Sorted in Python: jami is kg × narx and lot state reads through two relations,
@@ -1983,113 +2062,39 @@ def reservation_cancel(request, pk):
     )
 
 
-@require_POST
 @role_required(User.Role.ADMIN)
-def reservation_convert(request, pk):
-    """Hand over part or all of a bron from whatever of its marka is on the shelf,
-    oldest lot first.
+def reservation_close(request, pk):
+    """Close a bron the mijoz is done with: they took what they took, and the rest
+    is released.
 
-    The booking order is not enforced here: a bron behind another can be served,
-    because the two are settled between the operator and the mijoz, not by the
-    screen. The only ceilings are real ones — what is still owed on this bron, and
-    what has actually landed.
-
-    How much of that to give is the operator's call. POST `kg` hands over less than
-    the ceiling (the mijoz wanted 5 000 of their 20 000 today); no `kg` gives
-    everything available. Either way the bron stays open for the rest, because loads
-    arrive in pieces and a mijoz may collect in pieces too."""
+    Not the same act as cancelling. A cancelled bron never happened; a closed one
+    was served in part and ended by agreement, and reading back months later which
+    of the two it was is the whole reason for the second status. Nothing is undone
+    either way — the sotuvlar already drawn from it stand, and only the kg still
+    promised go back on the shelf, which happens by itself because `is_open` and
+    `brand_reserved_kg` both stop counting a bron that is no longer ACTIVE."""
     reservation = get_object_or_404(Reservation, pk=pk)
     if not reservation.is_open:
-        messages.error(request, "Bu bron ochiq emas")
+        messages.error(request, "Bu bron allaqachon yopilgan")
         return form_reload(request, reverse("reservation_list"))
-
-    on_shelf = brand_on_hand_kg(reservation.brand)
-    servable = min(reservation.remaining_kg, on_shelf)
-    if servable <= 0:
-        messages.error(request, f"{reservation.brand} omborda yo'q — yuk kutilmoqda")
+    if request.method == "POST":
+        freed = reservation.remaining_kg
+        reservation.status = Reservation.Status.CLOSED
+        reservation.save(update_fields=["status"])
+        AuditLog.record(
+            request.user, AuditLog.Action.STATUS, "Bron", reservation.pk,
+            f"Bron tugatildi: {_kg(freed)} kg qaytdi · {reservation.customer.name}")
+        messages.success(request, f"Bron tugatildi — {_kg(freed)} kg omborga qaytdi")
         return form_reload(request, reverse("reservation_list"))
-
-    take_total = servable
-    raw_kg = (request.POST.get("kg") or "").strip()
-    if raw_kg:
-        typed_kg = _typed_decimal(raw_kg)
-        if typed_kg is None or typed_kg <= 0:
-            messages.error(request, "Berilayotgan kg musbat son bo'lishi kerak")
-            return form_reload(request, reverse("reservation_list"))
-        if typed_kg > servable:
-            # Which ceiling was hit changes what the operator should do next — wait
-            # for a truck, or edit the bron — so the message says which one it was.
-            reason = ("bron bo'yicha shuncha qolgan"
-                      if reservation.remaining_kg <= on_shelf else "omborda shuncha bor")
-            messages.error(
-                request,
-                f"Ko'pi bilan {_kg(servable)} kg berish mumkin — {reason}")
-            return form_reload(request, reverse("reservation_list"))
-        take_total = typed_kg
-
-    # The bron's own money shape carries over whole — currency, kurs and both
-    # values. A bron struck in so'm must not become a dollar sotuv re-rated at
-    # today's kurs, which would quietly change the price the mijoz agreed to.
-    price, price_uzs = reservation.price, reservation.price_uzs
-    if price is None:
-        raw_price = request.POST.get("price")
-        try:
-            typed = Decimal(raw_price) if raw_price else None
-        except (ValueError, ArithmeticError):
-            typed = None
-        if typed is not None and typed > 0:
-            # An unpriced bron is settled now, in the currency the bron was taken in.
-            price, price_uzs = convert_pair(
-                typed, reservation.currency, reservation.exchange_rate, "0.0001")
-    if price is None:
-        messages.error(request, "Narx ko'rsatilishi kerak")
-        return form_reload(request, reverse("reservation_list"))
-    if price_uzs is None:
-        # Reservation.price_uzs is nullable (an unpriced bron), Sale.price_uzs is
-        # not — a bron carrying a narx but no so'm twin still has to become a
-        # complete sotuv, so derive the missing side at the bron's own kurs.
-        _, price_uzs = convert_pair(price, Currency.USD, reservation.exchange_rate, "0.0001")
-
-    remaining = take_total
-    slices = []
-    with transaction.atomic():
-        # One Sale per lot slice, exactly as a by-brand sotuv does: each slice keeps
-        # its own lot's landed cost, which differs per truck.
-        for lot in fifo_lots(reservation.brand):
-            if remaining <= 0:
-                break
-            take = min(lot.available_kg, remaining)
-            if take <= 0:
-                continue
-            slices.append(Sale.objects.create(
-                customer=reservation.customer, line=lot, kg=take,
-                price=price, price_uzs=price_uzs, currency=reservation.currency,
-                exchange_rate=reservation.exchange_rate, date=timezone.localdate(),
-                reservation=reservation, created_by=request.user,
-            ))
-            remaining -= take
-        reservation.fulfilled_kg += take_total - remaining
-        if reservation.remaining_kg <= 0:
-            reservation.status = Reservation.Status.CONVERTED
-        reservation.save(update_fields=["fulfilled_kg", "status"])
-
-    left = reservation.remaining_kg
-    AuditLog.record(
-        request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
-        f"Brondan sotuv: {_kg(take_total - remaining)} kg {reservation.brand} · "
-        f"{reservation.customer.name}"
-        + (f" · {_kg(left)} kg bronda qoldi" if left > 0 else " · bron yopildi"),
+    return render_confirm(
+        request,
+        "Bronni tugatish",
+        f"“{reservation.customer.name}” broni tugatiladi. Berilgan "
+        f"{_kg(reservation.fulfilled_kg)} kg o'z holicha qoladi, qolgan "
+        f"{_kg(reservation.remaining_kg)} kg omborga qaytadi.",
+        "Ha, tugatish",
+        cancel_url_name="reservation_list",
     )
-    for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
-        apply_customer_advance(sale)
-    if left > 0:
-        messages.success(
-            request,
-            f"{_kg(take_total - remaining)} kg sotuvga aylandi — "
-            f"{_kg(left)} kg bronda qoldi")
-    else:
-        messages.success(request, "Bron to'liq sotuvga aylantirildi")
-    return form_reload(request, reverse("reservation_list"))
 
 
 @role_required(User.Role.ADMIN)
@@ -3058,8 +3063,14 @@ def logist_list(request):
 
 @role_required(User.Role.ADMIN)
 def logist_detail(request, pk):
-    """One logist's account: every top-up in, every driver advance out, newest
-    first, with the running balance the list page shows."""
+    """One logist's history: every top-up in, every driver advance out, and every
+    yuk they arranged, newest first, with the running balance the list page shows.
+
+    The loads sit on the same timeline as the money rather than in a table of their
+    own, because the question the page answers is "what has this logist been doing
+    for us" — and an advance paid out three days after a truck was handed to them
+    only reads as one story when the two are next to each other. A yuk moves no
+    money of ours on its own, so its Kirim and Chiqim cells stay empty."""
     logist = get_object_or_404(
         Logist.objects.prefetch_related(
             "payments",
@@ -3067,6 +3078,18 @@ def logist_detail(request, pk):
             "driver_advances__shipment__lines",
             "driver_advances__shipment__status"), pk=pk)
     rows = []
+    for shipment in (logist.shipments.select_related("contract")
+                     .prefetch_related("lines")):
+        rows.append({
+            "kind": "yuk",
+            # Sent is the date they acted on; a load still being put together has
+            # none yet, so it falls back to when the row was made rather than
+            # dropping off the timeline.
+            "date": shipment.sent or shipment.created_at.date(),
+            "obj": shipment,
+            "title": f"Yuk #{shipment.pk} · {shipment.contract.code} · "
+                     f"{shipment.brand_summary} · {_kg(shipment.kg)} kg",
+        })
     for payment in logist.payments.all():
         rows.append({"kind": "in", "date": payment.date, "obj": payment,
                      "title": payment.note or "Bizdan olindi",

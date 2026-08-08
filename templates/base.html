@@ -359,8 +359,27 @@
         });
     }
 
+    // A [data-modal] FORM is not an opener — it is a form that SUBMITS through the
+    // modal machinery: fetch, 204 + X-Redirect, errors rendered back into the
+    // dialog. The Berish button on Bronlar and Ombor is one. bindForm only ever
+    // reached the form inside the dialog, so a page-level one was never bound at
+    // all and fell through to the click handler below, which read its (missing)
+    // href and navigated to /reservations/null.
+    function bindPageForms(root) {
+      (root || document).querySelectorAll('form[data-modal]').forEach(function (form) {
+        if (form.dataset.modalBound) { return; }
+        form.dataset.modalBound = '1';
+        bindForm(form);
+      });
+    }
+    if (document.readyState !== 'loading') { bindPageForms(); }
+    else { document.addEventListener('DOMContentLoaded', function () { bindPageForms(); }); }
+    document.addEventListener('modal:loaded', function (e) { bindPageForms(e.detail || document); });
+
     document.addEventListener('click', function (e) {
-      var opener = e.target.closest('[data-modal]');
+      // Links only. Matching bare [data-modal] swept up those forms as well, and
+      // an opener with no href is not an opener.
+      var opener = e.target.closest('[data-modal][href]');
       if (opener) {
         e.preventDefault();
         openModal(opener.getAttribute('href'));
@@ -1952,6 +1971,118 @@
     if (document.readyState !== 'loading') { enhanceComboboxes(); }
     else { document.addEventListener('DOMContentLoaded', function () { enhanceComboboxes(); }); }
     document.addEventListener('modal:loaded', function (e) { enhanceComboboxes(e.detail || document); });
+  })();
+
+  // "Brondan ushlansin" is only a real question when the chosen mijoz actually
+  // holds an open bron for the chosen marka. Put on every other sotuv it is noise,
+  // and noise on a money form is how a box ends up ticked without being read. Each
+  // mijoz <option> carries the markalar they have booked (CustomerBronSelect), so
+  // the answer needs no round trip.
+  (function () {
+    function brandOf(form) {
+      var picker = form.querySelector('[data-bron-brand]');
+      if (picker) { return picker.value || ''; }
+      // The per-lot form has no marka picker — the lot already decided it.
+      var box = form.querySelector('[data-bron-draw]');
+      return box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+    }
+    function update(form) {
+      var box = form.querySelector('[data-bron-draw]');
+      var customer = form.querySelector('select[name=customer]');
+      if (!box || !customer) { return; }
+      var option = customer.options[customer.selectedIndex];
+      var brands = [];
+      try {
+        brands = JSON.parse((option && option.getAttribute('data-bron-brands')) || '[]');
+      } catch (err) { brands = []; }
+      var asks = brands.indexOf(brandOf(form)) !== -1;
+      (box.closest('p') || box.closest('label') || box).hidden = !asks;
+      // Ticked whenever it comes back: serving a bron holder normally draws the
+      // bron down, and a box that reappeared unticked would change that silently.
+      if (asks) { box.checked = true; }
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('form').forEach(function (form) {
+        if (form.querySelector('[data-bron-draw]')) { update(form); }
+      });
+    }
+    document.addEventListener('change', function (e) {
+      if (!e.target.closest) { return; }
+      var form = e.target.closest('form');
+      if (!form || !form.querySelector('[data-bron-draw]')) { return; }
+      if (e.target.matches('select[name=customer], [data-bron-brand]')) { update(form); }
+    });
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+  })();
+
+  // Grab-and-drag a table that is wider than its box. On a laptop with no
+  // horizontal wheel the only way sideways was the scrollbar at the bottom of a
+  // long table, which means scrolling down to reach it and losing the rows you
+  // were reading. Mouse events rather than pointer ones on purpose: touch already
+  // scrolls these natively, and a second handler would fight it.
+  (function () {
+    // Below this a press is still a click. Without it, the tiny movement between
+    // pressing and releasing on a link would swallow the click.
+    var DRAG_THRESHOLD = 4;
+    var active = null;
+
+    function refresh(root) {
+      (root || document).querySelectorAll('.table-wrap').forEach(function (wrap) {
+        // +1 for sub-pixel widths, which otherwise report a scrollable pixel on a
+        // table that visibly fits.
+        wrap.classList.toggle('is-draggable',
+                              wrap.scrollWidth > wrap.clientWidth + 1);
+      });
+    }
+
+    document.addEventListener('mousedown', function (e) {
+      if (e.button !== 0 || !e.target.closest) { return; }
+      var wrap = e.target.closest('.table-wrap.is-draggable');
+      if (!wrap) { return; }
+      // Selecting text in a field beats dragging the table under it.
+      if (e.target.closest('input, textarea, select, [contenteditable]')) { return; }
+      active = { wrap: wrap, x: e.clientX, left: wrap.scrollLeft, moved: false };
+    });
+
+    document.addEventListener('mousemove', function (e) {
+      if (!active) { return; }
+      var dx = e.clientX - active.x;
+      if (!active.moved && Math.abs(dx) < DRAG_THRESHOLD) { return; }
+      active.moved = true;
+      active.wrap.classList.add('is-dragging');
+      active.wrap.scrollLeft = active.left - dx;
+      e.preventDefault();          // or the browser starts selecting rows instead
+    });
+
+    document.addEventListener('mouseup', function () {
+      if (!active) { return; }
+      active.wrap.classList.remove('is-dragging');
+      // A drag that happens to end on a link must not also open it. click fires
+      // after mouseup, so the flag is read there and dropped on the next tick.
+      if (active.moved) {
+        var wrap = active.wrap;
+        wrap.dataset.justDragged = '1';
+        setTimeout(function () { delete wrap.dataset.justDragged; }, 0);
+      }
+      active = null;
+    });
+
+    // Capture phase, so it runs before the [data-modal] opener bound on document.
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest) { return; }
+      var wrap = e.target.closest('.table-wrap');
+      if (wrap && wrap.dataset.justDragged) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
+    window.addEventListener('resize', function () { refresh(); });
+    document.addEventListener('modal:loaded', function (e) { refresh(e.detail || document); });
+    if (document.readyState !== 'loading') { refresh(); }
+    else { document.addEventListener('DOMContentLoaded', function () { refresh(); }); }
   })();
 </script>
 </body>
