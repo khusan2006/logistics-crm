@@ -706,7 +706,7 @@ class TestClosingABron:
     cancelling, which is a bron that never happened."""
 
     def test_closing_frees_the_rest_of_the_shelf(self, admin_client, db):
-        from crm.models import brand_free_kg, brand_reserved_kg
+        from crm.models import brand_on_hand_kg, brand_reserved_kg
 
         _arrived_lot(kg="10000", brand="LLDPE")
         customer = _customer()
@@ -724,7 +724,12 @@ class TestClosingABron:
         assert bron.is_open is False
         # and the 4 000 it was holding is on the shelf for anybody
         assert brand_reserved_kg("LLDPE") == Decimal("0")
-        assert brand_free_kg("LLDPE") == Decimal("8000.000")
+        # Asked of what is physically there, because that IS the shelf now. The
+        # figure this line used to read — brand_free_kg, on-hand minus bronned —
+        # was retired along with the rule behind it: a bron no longer holds kg back
+        # from another mijoz (see brand_on_hand_kg), so "free" and "on hand" became
+        # the same number and only one of them was worth keeping.
+        assert brand_on_hand_kg("LLDPE") == Decimal("8000.000")
 
     def test_closed_is_its_own_status_not_cancelled(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
