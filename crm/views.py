@@ -1389,7 +1389,22 @@ def shipment_edit(request, pk):
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
             with transaction.atomic():
-                form.save()
+                shipment = form.save(commit=False)
+                # The holat decides WHETHER a yuk has arrived; the date field only
+                # says WHEN. Same rule shipment_set_status follows, and this screen
+                # did not follow it at all: setting the holat to arrival here left
+                # `arrived` empty, so the load claimed to have landed and never
+                # appeared in the ombor — `arrived_lots` filters on the date, not the
+                # status. Moving away from arrival left the date behind, which kept a
+                # load on the shelf after it went back on the road.
+                #
+                # `or` and not a plain assignment: a date the operator just typed is
+                # the whole point of the field, so it wins over today's date.
+                if shipment.status.is_arrival:
+                    shipment.arrived = shipment.arrived or timezone.localdate()
+                else:
+                    shipment.arrived = None
+                shipment.save()
                 _save_lines(lines, shipment)
                 form.sync_driver_advance(shipment, request.user)
             AuditLog.record(

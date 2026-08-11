@@ -40,6 +40,44 @@ def test_translator_reaches_the_finished_loads(translator_client, db):
     assert translator_client.get(resp.url).status_code == 200
 
 
+def test_a_tarjimon_is_offered_no_create_button(translator_client, db):
+    """Both create FABs were guarded by an `{% if %}` wrapped AROUND their
+    `{% block fab %}`, which does nothing — a block is resolved by inheritance before
+    any condition surrounding it runs. So the buttons rendered for a tarjimon and
+    403'd on click. Neither create view was ever reachable; this pins the screen
+    saying so."""
+    for url, label in (("/shipments/", "Yuk qo&#x27;shish"),
+                       ("/contracts/", "Yangi kelishuv")):
+        html = translator_client.get(url).content.decode()
+        assert label not in html, url
+        assert 'class="fab"' not in html, url
+
+
+def test_no_template_guards_a_block_from_outside_it(db):
+    """The same mistake anywhere else would be just as silent. An `{% if %}` on the
+    line before a `{% block %}` never gates it — the guard has to go inside."""
+    import glob
+    import re
+
+    offenders = []
+    for path in sorted(glob.glob("templates/**/*.html", recursive=True)):
+        lines = open(path).read().splitlines()
+        for i, line in enumerate(lines[1:], start=1):
+            if not re.search(r"{%\s*block\s", line):
+                continue
+            # An `{% if %}` that is opened AND closed on the previous line encloses
+            # nothing below it — which is exactly the correct fixed form, where the
+            # guard lives inside a one-line block. Only a still-open one is the bug.
+            prev = lines[i - 1]
+            hanging = (len(re.findall(r"{%\s*if\s", prev))
+                       - len(re.findall(r"{%\s*endif\s*%}", prev)))
+            if hanging > 0:
+                offenders.append(f"{path}:{i + 1}")
+    assert not offenders, (
+        "{% if %} wrapped around {% block %} does not gate it — move the condition "
+        "inside the block: " + ", ".join(offenders))
+
+
 def test_the_sidebar_offers_a_tarjimon_only_their_two_screens(translator_client, db):
     """A link that 403s is worse than no link: it reads as a broken app rather than
     as a boundary. Logistlar sat outside the admin guard and did exactly that."""

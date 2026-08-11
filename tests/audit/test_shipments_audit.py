@@ -621,13 +621,12 @@ def test_the_status_button_marks_a_yuk_arrived_and_back(admin_client):
     assert yuk.arrived is None and not yuk.is_lot
 
 
-@pytest.mark.xfail(reason="BUG: shipment_edit (crm/views.py:1074) never syncs "
-                          "`arrived` with the chosen status, unlike shipment_create "
-                          "(:1055) and shipment_set_status (:1208). Picking "
-                          "'Omborga yetib keldi' in the edit modal leaves arrived "
-                          "NULL, so the load reads as arrived on Yuklar but never "
-                          "becomes a lot in Ombor and its kg are invisible to stock.",
-                   strict=False)
+# CLAIM UPHELD AND NOW CLOSED. `shipment_edit` never synced `arrived` with the chosen
+# status, unlike `shipment_create` and `shipment_set_status`, so picking the arrival
+# status in the edit modal left `arrived` NULL: the load read as arrived on Yuklar and
+# never became a lot in the Ombor. It now follows the same rule as the other two —
+# entering arrival stamps a date, leaving it clears one — which is what the Yetib
+# kelgan sana field on that modal rests on.
 def test_choosing_the_arrival_status_in_the_edit_modal_makes_it_a_lot(admin_client):
     contract = _contract()
     yuk = _one_line_yuk(admin_client, contract)

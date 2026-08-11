@@ -786,12 +786,14 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent", "eta", "logist", "responsible",
-                  "driver_name", "driver_phone", "transport", "container", "note"]
+        fields = ["contract", "status", "sent", "eta", "arrived", "logist",
+                  "responsible", "driver_name", "driver_phone", "transport",
+                  "container", "note"]
         widgets = {
             "contract": forms.Select(attrs={"data-contract-source": ""}),
             "sent": date_widget(),
             "eta": date_widget(),
+            "arrived": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             # Plain text on purpose. It used to carry a UZ/IR country picker that
             # uppercased and re-spaced what was typed, which read as "only these two
@@ -814,7 +816,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     # advance at the bottom of the form — three fields about the logist, six fields
     # away from the logist picker. The generic template renders `form` in order, so
     # the order is set here rather than by hand-writing a template.
-    field_order = ["contract", "status", "sent", "eta",
+    field_order = ["contract", "status", "sent", "eta", "arrived",
                    "logist", "driver_advance",
                    "responsible", "driver_name", "driver_phone",
                    "transport", "container", "note"]
@@ -893,6 +895,18 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
         self.fields["logist"].empty_label = "Logistsiz"
+        # Yetib kelgan sana is offered only once the yuk HAS arrived — a date beside
+        # a load still on the road is an invitation to type one, and a yuk carrying an
+        # arrival date while its holat says otherwise would sit in the ombor
+        # (arrived_lots filters on `arrived`, nothing else) with its tannarx already
+        # in stock valuation. Whether a load has arrived stays the holat's answer;
+        # this field only corrects WHEN. It is the date auto-stamped as "today" by the
+        # status change, which is wrong every time a truck is marked in a day late.
+        # Required-ness is decided in `_clean_arrived` against the SUBMITTED holat,
+        # not here: a yuk being moved back onto the road must not be blocked by a date
+        # that is about to be cleared.
+        if not (self.instance.pk and self.instance.arrived):
+            self.fields.pop("arrived")
         _group_thousands(self.fields["driver_advance"])
         # Editing a yuk shows the advance already recorded — otherwise saving an
         # untouched form would wipe it.
@@ -923,7 +937,32 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # comes off the logist's own funding.
         if cleaned.get("driver_advance") and not cleaned.get("logist"):
             self.add_error("logist", "Avansni kim berdi? Logistni tanlang")
+        self._clean_arrived(cleaned)
         return cleaned
+
+    def _clean_arrived(self, cleaned):
+        """Guard the arrival date, which is not a label on this screen: `arrived_lots`
+        filters on it and nothing else, so it decides what is on the shelf, what a
+        lot's kg count under in a month, and the FIFO order sotuvlar draw from.
+
+        Required only while the holat says arrived. Otherwise moving a yuk back onto
+        the road would be blocked by a date field that is about to be cleared anyway —
+        the view clears it, since the holat is what decides WHETHER a yuk landed."""
+        if "arrived" not in self.fields:
+            return
+        arrived, status = cleaned.get("arrived"), cleaned.get("status")
+        if status is not None and status.is_arrival and not arrived:
+            self.add_error("arrived", "Yetib kelgan sanani kiriting.")
+            return
+        if not arrived:
+            return
+        if arrived > timezone.localdate():
+            self.add_error("arrived", "Yetib kelgan sana kelajakda bo'la olmaydi")
+        sent = cleaned.get("sent")
+        if sent and arrived < sent:
+            self.add_error(
+                "arrived",
+                f"Yetib kelgan sana jo'natish sanasidan ({sent}) oldin bo'la olmaydi")
 
 
 class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):

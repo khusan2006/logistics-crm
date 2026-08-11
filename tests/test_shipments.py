@@ -620,3 +620,137 @@ def test_an_old_yuk_without_a_sana_still_opens_for_editing(admin_client, db):
     s = make_shipment(contract=c, kg="100")            # sanasiz, to'g'ridan-to'g'ri
     assert s.sent is None
     assert admin_client.get(f"/shipments/{s.pk}/edit/").status_code == 200
+
+
+class TestArrivalDateIsEditable:
+    """Yetib kelgan sana is stamped as `today` by the status change, which is wrong
+    every time a truck is marked in a day or two late — and until now there was no way
+    to correct it: `arrived` was on no form at all.
+
+    It is not a cosmetic date. `arrived_lots()` filters on it and nothing else, so it
+    decides what is in the ombor, what a lot's kg count under in a month, and the FIFO
+    order sales draw from."""
+
+    def _arrived(self, admin_client):
+        contract = _contract()
+        _post_shipment(admin_client, contract)
+        shipment = Shipment.objects.get()
+        admin_client.post(f"/shipments/{shipment.pk}/status/",
+                          {"status": ShipmentStatus.arrival().pk})
+        shipment.refresh_from_db()
+        assert shipment.arrived == date.today()      # stamped as today
+        return shipment
+
+    def _edit(self, admin_client, shipment, **extra):
+        line = shipment.lines.first()
+        data = {"contract": shipment.contract_id, "status": shipment.status_id,
+                "sent": "2026-07-05", "eta": "2026-07-20", "transport": "01A111AA",
+                "container": "MSCU-1", "note": "",
+                **line_data({"id": line.pk, "contract_line": line.contract_line_id,
+                             "kg": "400"}, initial=1)}
+        data.update(extra)
+        return admin_client.post(f"/shipments/{shipment.pk}/edit/", data)
+
+    def test_the_field_appears_only_once_the_yuk_has_arrived(self, admin_client, db):
+        """A date box beside a load still on the road is an invitation to type one,
+        and a yuk carrying an arrival date while its holat says otherwise would sit in
+        the ombor with its tannarx already counted."""
+        contract = _contract()
+        _post_shipment(admin_client, contract)
+        shipment = Shipment.objects.get()
+        html = admin_client.get(f"/shipments/{shipment.pk}/edit/").content.decode()
+        assert 'name="arrived"' not in html
+
+        admin_client.post(f"/shipments/{shipment.pk}/status/",
+                          {"status": ShipmentStatus.arrival().pk})
+        html = admin_client.get(f"/shipments/{shipment.pk}/edit/").content.decode()
+        assert 'name="arrived"' in html
+
+    def test_editing_it_moves_the_real_arrival_date(self, admin_client, db):
+        shipment = self._arrived(admin_client)
+        real = date.today() - timedelta(days=3)          # marked in three days late
+        assert self._edit(admin_client, shipment,
+                          arrived=real.isoformat()).status_code == 302
+        shipment.refresh_from_db()
+        assert shipment.arrived == real
+        assert shipment.eta == date(2026, 7, 20)         # the plan is untouched
+
+    def test_the_lot_stays_in_the_ombor_at_its_corrected_date(self, admin_client, db):
+        """The date is what `arrived_lots` filters on, so a correction must not drop
+        the lot off the shelf on its way through."""
+        from crm.models import arrived_lots
+        shipment = self._arrived(admin_client)
+        real = date.today() - timedelta(days=3)
+        self._edit(admin_client, shipment, arrived=real.isoformat())
+        assert arrived_lots().filter(shipment=shipment).exists()
+
+    def test_a_future_arrival_is_refused(self, admin_client, db):
+        shipment = self._arrived(admin_client)
+        was = shipment.arrived
+        resp = self._edit(admin_client, shipment,
+                          arrived=(date.today() + timedelta(days=1)).isoformat())
+        assert resp.status_code == 200                   # re-rendered with the error
+        shipment.refresh_from_db()
+        assert shipment.arrived == was
+
+    def test_arriving_before_departing_is_refused(self, admin_client, db):
+        shipment = self._arrived(admin_client)
+        was = shipment.arrived
+        resp = self._edit(admin_client, shipment, sent="2026-07-05",
+                          arrived="2026-07-01")
+        assert resp.status_code == 200
+        shipment.refresh_from_db()
+        assert shipment.arrived == was
+
+    def test_clearing_it_is_refused_while_the_holat_says_arrived(self, admin_client, db):
+        shipment = self._arrived(admin_client)
+        was = shipment.arrived
+        assert self._edit(admin_client, shipment, arrived="").status_code == 200
+        shipment.refresh_from_db()
+        assert shipment.arrived == was
+
+
+class TestEditKeepsHolatAndArrivalTogether:
+    """The holat decides WHETHER a yuk has arrived, the date says WHEN — and the edit
+    screen used to sync neither, so the two could disagree. `arrived_lots()` reads the
+    date alone, which is what made the disagreement expensive."""
+
+    def _payload(self, shipment, **extra):
+        line = shipment.lines.first()
+        data = {"contract": shipment.contract_id, "status": shipment.status_id,
+                "sent": "2026-07-05", "eta": "2026-07-20", "transport": "", 
+                "container": "", "note": "",
+                **line_data({"id": line.pk, "contract_line": line.contract_line_id,
+                             "kg": "400"}, initial=1)}
+        data.update(extra)
+        return data
+
+    def test_setting_the_holat_to_arrival_stamps_a_date(self, admin_client, db):
+        """Without this the load claimed to have landed and never reached the ombor."""
+        from crm.models import arrived_lots
+        contract = _contract()
+        _post_shipment(admin_client, contract)
+        shipment = Shipment.objects.get()
+
+        admin_client.post(f"/shipments/{shipment.pk}/edit/",
+                          self._payload(shipment, status=ShipmentStatus.arrival().pk))
+        shipment.refresh_from_db()
+        assert shipment.arrived == date.today()
+        assert arrived_lots().filter(shipment=shipment).exists()
+
+    def test_moving_off_arrival_clears_the_date(self, admin_client, db):
+        """And without this the lot stayed on the shelf after going back on the road."""
+        from crm.models import arrived_lots
+        contract = _contract()
+        _post_shipment(admin_client, contract)
+        shipment = Shipment.objects.get()
+        admin_client.post(f"/shipments/{shipment.pk}/status/",
+                          {"status": ShipmentStatus.arrival().pk})
+        shipment.refresh_from_db()
+
+        on_road = ShipmentStatus.objects.exclude(is_arrival=True).first()
+        admin_client.post(f"/shipments/{shipment.pk}/edit/",
+                          self._payload(shipment, status=on_road.pk))
+        shipment.refresh_from_db()
+        assert shipment.arrived is None
+        assert not arrived_lots().filter(shipment=shipment).exists()

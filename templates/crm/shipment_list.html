@@ -2,9 +2,14 @@
 {% load crm_extras %}
 {% block title %}Yuklar · GranulaLog{% endblock %}
 {% block topbar_title %}Yuklar{% endblock %}
-{% if user.is_admin_role %}
-{% block fab %}<a class="fab" href="{% url 'shipment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yuk qo'shish</a>{% endblock %}
-{% endif %}
+{% comment %}
+The guard sits INSIDE the block. Wrapping `{% block %}` in `{% if %}` does nothing:
+blocks are resolved by template inheritance before any condition around them runs, so
+the old outer `{% if %}` was inert and a tarjimon saw "Yuk qo'shish" — a button that
+403s on click. shipment_create has always been admin-only; this is what makes the
+screen say so.
+{% endcomment %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'shipment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yuk qo'shish</a>{% endif %}{% endblock %}
 {% block content %}
 
 {% comment %}
