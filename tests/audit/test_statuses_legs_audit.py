@@ -288,24 +288,23 @@ def test_a_status_round_trip_does_not_reprice_the_next_sotuv(admin_client):
     assert queue[0].landed_cost_per_kg == Decimal("1.0000")
 
 
-@pytest.mark.xfail(reason="BUG: shipment_set_status (crm/views.py:1204) gates only the "
-                          "way IN — `if status.is_arrival and not "
-                          "request.user.is_admin_role: raise PermissionDenied`. The way "
-                          "OUT is ungated, so a translator (who by design sees no money "
-                          "at all — see tests/test_delays.py::"
-                          "test_translator_detail_has_no_money) can pick any other status "
-                          "on an arrived load and thereby delete its arrival date, pull "
-                          "the lot out of the ombor and remove its tan narx from stock "
-                          "valuation. Marking a load arrived is admin-only; un-marking it "
-                          "must be too.",
-                   strict=False)
+# CLAIM UPHELD AND NOW CLOSED. The guard used to read `if status.is_arrival and not
+# request.user.is_admin_role`, which gated only the way IN: a tarjimon could pick any
+# other status on an arrived load and thereby delete its arrival date, pull the lot out
+# of the ombor and remove its tan narx from stock valuation. `shipment_set_status` is
+# admin-only outright now — the holat is not a tarjimon's field in either direction —
+# so the asymmetry that made this reachable is gone.
+#
+# The underlying un-arrive hole is NOT fixed by that and is still open for an admin:
+# see the xfail directly below, which de-arrives a lot that has sotuvlar booked
+# against it. This test only pins the role boundary.
 def test_a_translator_cannot_pull_an_arrived_lot_back_out_of_the_ombor(admin_client,
                                                                        translator_client):
     shipment = make_shipment()
     _set_status(admin_client, shipment, ShipmentStatus.arrival())
     assert arrived_lots().filter(shipment=shipment).exists()
 
-    _set_status(translator_client, shipment, _named("Yo'lda"))
+    assert _set_status(translator_client, shipment, _named("Yo'lda")).status_code == 403
     shipment.refresh_from_db()
     assert shipment.arrived is not None
     assert arrived_lots().filter(shipment=shipment).exists()

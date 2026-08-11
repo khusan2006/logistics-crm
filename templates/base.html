@@ -47,24 +47,32 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
           <span>Hamkorlar</span>
         </a>
-        <a class="nav-item {% if 'contract' in url_name %}active{% endif %}" href="{% url 'contract_list' %}">
-          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
-          <span>Kelishuvlar</span>
-        </a>
         <a class="nav-item {% if 'supplier_payment' in url_name %}active{% endif %}" href="{% url 'supplier_payment_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
           <span>To'lovlar (hamkor)</span>
         </a>
         {% endif %}
+        {% comment %}
+        The tarjimon's whole app: Kelishuvlar to read, Yuklar to read and to keep the
+        haydovchi and konteyner current. Nothing else in this group is theirs.
+        {% endcomment %}
+        <a class="nav-item {% if 'contract' in url_name %}active{% endif %}" href="{% url 'contract_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
+          <span>Kelishuvlar</span>
+        </a>
         <a class="nav-item {% if 'shipment' in url_name %}active{% endif %}" href="{% url 'shipment_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>
           <span>Yuklar</span>
         </a>
+        {% if user.is_admin_role %}
+        {% comment %}
+        Logistlar was outside the admin guard: the link showed to a tarjimon and then
+        403'd, since logist_list has always been admin-only.
+        {% endcomment %}
         <a class="nav-item {% if 'logist' in url_name %}active{% endif %}" href="{% url 'logist_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></span>
           <span>Logistlar</span>
         </a>
-        {% if user.is_admin_role %}
         <a class="nav-item {% if 'customs' in url_name %}active{% endif %}" href="{% url 'customs_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/></svg></span>
           <span>Bojxona</span>

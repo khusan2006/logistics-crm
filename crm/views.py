@@ -26,7 +26,7 @@ from .forms import (
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
-    ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
+    ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
@@ -532,12 +532,20 @@ def _contract_code_filter(q):
     return Q()
 
 
-@role_required(User.Role.ADMIN)
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def contract_list(request):
     """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
     Hamkor narrows in SQL; the rest read computed properties (debt, remaining_kg),
     so they run in Python over prefetched rows — the loads and the payments come in
-    one query each instead of two per kelishuv."""
+    one query each instead of two per kelishuv.
+
+    A tarjimon reads this page and can do nothing else on it: `contract_create`,
+    `contract_edit` and `contract_delete` are all admin-only and each says so itself,
+    so the template hiding those buttons is the courtesy, not the lock. The money
+    columns are hidden from them too — the same rule the yuklar list already follows
+    (tests/test_shipments.py::test_translator_sees_no_price_on_loads). What is left is
+    the kelishuv as a logistics document: which marka, how many kg agreed, how many
+    still to come."""
     q = request.GET.get("q", "").strip()
     pay = request.GET.get("pay", "").strip()
     partner_id = request.GET.get("partner", "").strip()
@@ -1401,10 +1409,44 @@ def shipment_detail(request, pk):
     return render(request, "crm/shipment_detail.html", {"shipment": shipment})
 
 
-# --- Route legs (Yo'nalish bosqichlari) — physical movement, no money, so both
-#     admins and translators manage them (translators coordinate the drivers). ---
-
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_driver_edit(request, pk):
+    """Haydovchi va konteyner — the one edit a tarjimon may make to a yuk.
+
+    A view of its own rather than a mode of `shipment_edit`, because the limit is
+    ShipmentDriverForm's field list and nothing else. A tarjimon can post whatever
+    they like to this URL; only the four fields the form declares are bound, so the
+    contract, the status, the dates and the logist are unreachable from here no matter
+    what the request body says. Admins get the same screen as a quick way to correct a
+    plate without opening the full dispatch modal.
+
+    Everything else about a yuk — its kelishuv, its mahsulotlar, its holat, its
+    muddat, its bosqichlar, its xarajatlari — is admin-only, and each of those views
+    enforces that itself."""
+    shipment = get_object_or_404(Shipment, pk=pk)
+    form = ShipmentDriverForm(request.POST or None, instance=shipment)
+    title = f"Yuk #{shipment.pk} — haydovchi va konteyner"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                f"Haydovchi/konteyner yangilandi: "
+                f"{shipment.driver_name or '—'} · {shipment.transport or '—'} · "
+                f"{shipment.container or '—'}",
+            )
+            messages.success(request, "Haydovchi va konteyner yangilandi")
+            # Reload in place: this modal opens from the list AND from the detail
+            # page, and a redirect to the list would throw away wherever they were.
+            return form_reload(request, reverse("shipment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+# --- Route legs (Yo'nalish bosqichlari). Admin-only: a leg rewrites the route and
+#     the current transport, which is more of a yuk than a tarjimon may change. ---
+
+@role_required(User.Role.ADMIN)
 def leg_create(request):
     shipment = get_object_or_404(Shipment, pk=request.GET.get("shipment") or request.POST.get("shipment"))
     form = ShipmentLegForm(request.POST or None)
@@ -1422,7 +1464,7 @@ def leg_create(request):
     return form_response(request, form, "Yangi bosqich", invalid=request.method == "POST")
 
 
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+@role_required(User.Role.ADMIN)
 def leg_edit(request, pk):
     leg = get_object_or_404(ShipmentLeg, pk=pk)
     form = ShipmentLegForm(request.POST or None, instance=leg)
@@ -1435,7 +1477,7 @@ def leg_edit(request, pk):
     return form_response(request, form, "Bosqichni tahrirlash", invalid=request.method == "POST")
 
 
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+@role_required(User.Role.ADMIN)
 def leg_delete(request, pk):
     leg = get_object_or_404(ShipmentLeg, pk=pk)
     shipment_id = leg.shipment_id
@@ -1453,7 +1495,7 @@ def leg_delete(request, pk):
 
 
 @require_POST
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+@role_required(User.Role.ADMIN)
 def leg_move(request, pk):
     """Reorder a leg up/down — this is how an unplanned stop gets slotted between
     existing legs."""
@@ -1471,7 +1513,7 @@ def leg_move(request, pk):
     return redirect(request.POST.get("next") or reverse("shipment_detail", args=[leg.shipment_id]))
 
 
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+@role_required(User.Role.ADMIN)
 def shipment_extend(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
     form = ShipmentExtendForm(request.POST or None)
@@ -1499,12 +1541,13 @@ def shipment_extend(request, pk):
 
 
 @require_POST
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+@role_required(User.Role.ADMIN)
 def shipment_set_status(request, pk):
+    # Admin-only outright. A tarjimon used to move a yuk between non-arrival statuses;
+    # the holat drives the whole board — what counts as in transit, what is overdue,
+    # when a bron becomes sellable — which is more than driver detail.
     shipment = get_object_or_404(Shipment.objects.select_related("status"), pk=pk)
     status = get_object_or_404(ShipmentStatus, pk=request.POST.get("status"))
-    if status.is_arrival and not request.user.is_admin_role:
-        raise PermissionDenied
     old_name = shipment.status.name
     shipment.status = status
     shipment.arrived = (shipment.arrived or timezone.localdate()) if status.is_arrival else None

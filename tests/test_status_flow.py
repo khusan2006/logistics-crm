@@ -30,19 +30,23 @@ def _set_ajax(client, shipment, status):
                        HTTP_X_REQUESTED_WITH="XMLHttpRequest")
 
 
-def test_translator_moves_nonfinal(translator_client, shipment):
+def test_admin_moves_nonfinal(admin_client, shipment):
     target = ShipmentStatus.objects.get(name="Bojxona")
-    assert _set(translator_client, shipment, target).status_code == 302
+    assert _set(admin_client, shipment, target).status_code == 302
     shipment.refresh_from_db()
     assert shipment.status == target
     assert AuditLog.objects.filter(action="status", target_id=shipment.pk).exists()
 
 
-def test_translator_cannot_finish(translator_client, shipment):
-    resp = _set(translator_client, shipment, ShipmentStatus.arrival())
-    assert resp.status_code == 403
-    shipment.refresh_from_db()
-    assert not shipment.status.is_arrival
+def test_a_tarjimon_cannot_move_the_holat_at_all(translator_client, shipment):
+    """A tarjimon used to move a load between non-arrival statuses. The holat drives
+    the whole board — what counts as in transit, what is overdue, when a bron becomes
+    sellable — so it is admin-only now, arrival or not."""
+    before = shipment.status
+    for target in (ShipmentStatus.objects.get(name="Bojxona"), ShipmentStatus.arrival()):
+        assert _set(translator_client, shipment, target).status_code == 403
+        shipment.refresh_from_db()
+        assert shipment.status == before
 
 
 def test_admin_finish_stamps_arrival(admin_client, shipment):

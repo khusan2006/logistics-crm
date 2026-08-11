@@ -7,7 +7,13 @@
 <div class="card">
   <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
     <a class="btn btn-ghost" href="{% url 'shipment_list' %}">&larr; Yuklar ro'yxatiga</a>
-    <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
+    <span class="row-actions">
+      {# The tarjimon's one write on a yuk; muddat is admin-only beside it. #}
+      <a class="btn btn-ghost" href="{% url 'shipment_driver_edit' shipment.pk %}" data-modal>Haydovchi va konteyner</a>
+      {% if user.is_admin_role %}
+      <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
+      {% endif %}
+    </span>
   </div>
 
   <div class="stat-grid">
@@ -107,7 +113,13 @@
 <div class="card">
   <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
     <h3 style="margin: 0;">Yo'nalish bosqichlari</h3>
+    {% comment %}
+    Legs rewrite the route and the current transport, so they are admin-only. A
+    tarjimon reads them.
+    {% endcomment %}
+    {% if user.is_admin_role %}
     <a class="btn" href="{% url 'leg_create' %}?shipment={{ shipment.pk }}" data-modal>+ Bosqich</a>
+    {% endif %}
   </div>
   {% if shipment.legs.all %}
   <div class="table-wrap">
@@ -118,7 +130,7 @@
       <th>Haydovchi / transport</th>
       <th>Jo'natilgan &rarr; Yetib kelgan</th>
       <th>Izoh</th>
-      <th></th>
+      {% if user.is_admin_role %}<th></th>{% endif %}
     </tr>
     {% for leg in shipment.legs.all %}
     <tr{% if leg.is_current %} class="leg-current"{% endif %}>
@@ -128,18 +140,21 @@
       <td>{{ leg.transport|default:"—" }}{% if leg.container %}<div class="muted" style="font-size: 12px;">{{ leg.container }}</div>{% endif %}</td>
       <td>{{ leg.departed|default:"—" }} &rarr; {{ leg.arrived|default:"—" }}</td>
       <td>{{ leg.note|default:"—" }}</td>
+      {% if user.is_admin_role %}
       <td class="row-actions">
         <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="up"><button type="submit" class="lc-arrow" title="Yuqoriga">↑</button></form>
         <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="down"><button type="submit" class="lc-arrow" title="Pastga">↓</button></form>
         <a class="btn btn-ghost btn-sm" href="{% url 'leg_edit' leg.pk %}" data-modal>Tahrirlash</a>
         <a class="btn btn-ghost btn-sm" href="{% url 'leg_delete' leg.pk %}" data-modal>O'chirish</a>
       </td>
+      {% endif %}
     </tr>
     {% endfor %}
   </table>
   </div>
   {% else %}
-  <p class="muted">Hali bosqich qo'shilmagan. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing (va &uarr;&darr; bilan joylashtiring).</p>
+  {# The empty state told the reader to add a bosqich; only an admin can. #}
+  <p class="muted">Hali bosqich qo'shilmagan. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi{% if user.is_admin_role %}; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing (va &uarr;&darr; bilan joylashtiring){% endif %}.</p>
   {% endif %}
 </div>
 
@@ -159,7 +174,7 @@
       <th>Usul</th>
       <th>Kim to'ladi</th>
       <th>Izoh</th>
-      <th></th>
+      {% if user.is_admin_role %}<th></th>{% endif %}
     </tr>
     {% for e in shipment.expenses.all %}
     <tr>

@@ -102,18 +102,25 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
       <div class="muted load-sub">{{ s.lines.all|length }} mahsulot</div>
     </td>
     {% endif %}
+    {% comment %}
+    Holat is admin-only now, so a tarjimon gets the name as text. Not a disabled
+    select: a greyed-out dropdown invites a click and then does nothing, while a
+    plain word simply is not a control.
+    {% endcomment %}
     <td>
+      {% if user.is_admin_role %}
       <form method="post" action="{% url 'shipment_set_status' s.pk %}" class="status-cell-form">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}">
         <select name="status" class="status-select">
           {% for st in statuses %}
-            {% if not st.is_arrival or user.is_admin_role %}
             <option value="{{ st.pk }}" {% if st.pk == s.status_id %}selected{% endif %}>{{ st.name }}</option>
-            {% endif %}
           {% endfor %}
         </select>
       </form>
+      {% else %}
+      <span class="badge">{{ s.status.name }}</span>
+      {% endif %}
     </td>
     <td>
       <div>{{ s.current_transport|default:"—" }}</div>
@@ -139,10 +146,17 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
       {% include "crm/_load_date_cell.html" with s=s %}
     </td>
     <td class="row-actions">
+      {% comment %}
+      The tarjimon's one write on a yuk. Admins get it too — a plate corrected without
+      opening the whole dispatch modal.
+      {% endcomment %}
+      <a class="icon-action act-edit" href="{% url 'shipment_driver_edit' s.pk %}" data-modal title="Haydovchi va konteyner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M17 11l2 2 4-4"/></svg>
+      </a>
+      {% if user.is_admin_role %}
       <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </a>
-      {% if user.is_admin_role %}
       <a class="icon-action" href="{% url 'expense_create' %}?shipment={{ s.pk }}" data-modal title="Xarajat qo'shish">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
       </a>
@@ -232,30 +246,39 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
         {# ── Bosqichlar va xarajatlar yonma-yon ── #}
         <div class="load-panel-cols">
           <div>
+            {% comment %}
+            Legs rewrite the route and the current transport, so they are admin-only.
+            A tarjimon reads them.
+            {% endcomment %}
             <div class="legs-inline-head">
               <strong>Yo'nalish bosqichlari</strong>
+              {% if user.is_admin_role %}
               <a class="btn btn-sm" href="{% url 'leg_create' %}?shipment={{ s.pk }}" data-modal>+ Bosqich</a>
+              {% endif %}
             </div>
             {% if s.legs.all %}
             <table class="legs-inline-table">
-              <tr><th>#</th><th>Yo'nalish</th><th>Haydovchi</th><th>Sana</th><th></th></tr>
+              <tr><th>#</th><th>Yo'nalish</th><th>Haydovchi</th><th>Sana</th>{% if user.is_admin_role %}<th></th>{% endif %}</tr>
               {% for leg in s.legs.all %}
               <tr{% if leg.is_current %} class="leg-current"{% endif %}>
                 <td>{{ forloop.counter }}</td>
                 <td>{{ leg.from_location }} <span class="route-arrow">&rarr;</span> {{ leg.to_location }}{% if leg.is_current %} <span class="daybadge soon">hozirgi</span>{% endif %}{% if leg.note %}<div class="muted load-sub">{{ leg.note }}</div>{% endif %}</td>
                 <td>{{ leg.transport|default:"—" }}</td>
                 <td class="muted">{{ leg.departed|default:"—" }} &rarr; {{ leg.arrived|default:"—" }}</td>
+                {% if user.is_admin_role %}
                 <td class="row-actions">
                   <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="up"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Yuqoriga">↑</button></form>
                   <form method="post" action="{% url 'leg_move' leg.pk %}" class="lc-move-form">{% csrf_token %}<input type="hidden" name="dir" value="down"><input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="lc-arrow" title="Pastga">↓</button></form>
                   <a class="icon-action act-edit" href="{% url 'leg_edit' leg.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></a>
                   <a class="icon-action act-delete" href="{% url 'leg_delete' leg.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
                 </td>
+                {% endif %}
               </tr>
               {% endfor %}
             </table>
             {% else %}
-            <p class="muted" style="margin: 6px 0 0;">Bosqich yo'q. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing.</p>
+            {# The empty state told the reader to add a bosqich; only an admin can. #}
+            <p class="muted" style="margin: 6px 0 0;">Bosqich yo'q. Har bir bosqich — bitta haydovchi olib o'tadigan yo'l qismi{% if user.is_admin_role %}; haydovchi almashsa yoki kutilmagan to'xtash bo'lsa, yangi bosqich qo'shing{% endif %}.</p>
             {% endif %}
           </div>
           {% if user.is_admin_role %}

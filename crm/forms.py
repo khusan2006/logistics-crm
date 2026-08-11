@@ -1035,6 +1035,41 @@ class ShipmentExtendForm(forms.Form):
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
 
 
+class ShipmentDriverForm(forms.ModelForm):
+    """Who is driving this yuk and what it is riding in — the ONLY part of a load a
+    tarjimon may change.
+
+    A separate form rather than a subset of ShipmentForm because the restriction has
+    to live in the field list itself. A ModelForm only ever writes the fields it
+    declares, so a tarjimon who posts `contract=7&status=3` alongside the four fields
+    here changes nothing: the extra keys are not bound and never reach the instance.
+    Reusing ShipmentForm and hiding the other inputs in the template would leave
+    exactly that hole open, since the template does not decide what a form saves.
+
+    Not `logist`: an outside party who holds our money is a financial relationship,
+    not driver detail, and the same rule keeps every money field off this form."""
+
+    class Meta:
+        model = Shipment
+        fields = ["driver_name", "driver_phone", "transport", "container"]
+        widgets = {
+            # The same widgets ShipmentForm gives these four, so the two forms cannot
+            # disagree about what a valid raqam looks like — see the note there on why
+            # nothing here reformats or rejects what is copied off a waybill.
+            "driver_name": forms.TextInput(attrs={
+                "autocomplete": "off", "placeholder": "Masalan: Akmal aka"}),
+            "driver_phone": phone_intl_widget(),
+            "transport": forms.TextInput(attrs={
+                "autocomplete": "off", "placeholder": "01 777 AAA · 34 ABC 123 · …"}),
+            "container": forms.TextInput(attrs={
+                "data-container-iso": "", "autocomplete": "off",
+                "placeholder": "MSKU 123456 7"}),
+        }
+
+    def clean_container(self):
+        return normalize_container(self.cleaned_data.get("container"))
+
+
 class ShipmentLegForm(forms.ModelForm):
     class Meta:
         model = ShipmentLeg
