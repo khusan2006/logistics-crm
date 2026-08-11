@@ -26,15 +26,16 @@ def test_add_leg_appends_with_order(admin_client, db):
     assert leg.shipment_id == s.pk and leg.order == 1 and leg.from_location == "Tehron"
 
 
-def test_translator_can_manage_legs(translator_client, db):
-    """Legs are physical movement (no money) — translators coordinate drivers, so
-    they can add/manage legs (unlike the admin-only money features)."""
+def test_a_tarjimon_cannot_manage_legs(translator_client, db):
+    """A leg rewrites the route and, through `current_transport`, which driver the
+    load is said to be with — more of a yuk than a tarjimon may change. They read
+    the bosqichlar; only an admin edits them."""
     s = _shipment()
     resp = translator_client.post(f"/legs/new/?shipment={s.pk}", {
         "from_location": "A", "to_location": "B", "transport": "01 777 AAA",
         "container": "", "departed": "", "arrived": "", "note": ""})
-    assert resp.status_code == 302
-    assert ShipmentLeg.objects.filter(shipment=s).exists()
+    assert resp.status_code == 403
+    assert not ShipmentLeg.objects.filter(shipment=s).exists()
 
 
 def test_current_transport_is_the_active_leg(db):

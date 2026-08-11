@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Bojxona · GranulaLog{% endblock %}
+{% block topbar_title %}Bojxona{% endblock %}
+{% block fab %}
+<a class="fab" href="{% url 'customs_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Pul yuborish</a>
+<a class="fab fab--muted" href="{% url 'customs_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi bojxonachi</a>
+{% endblock %}
+{% block content %}
+
+{% comment %}
+Three current-state figures. The first two are the same pair the logist page opens
+with — how much of our money is out there, and how much of theirs is in our loads.
+The third is the one this feature exists for: money sent for a truck that nobody has
+squared against what clearing it actually cost, and it links straight to the screen
+where that is settled load by load.
+
+Each is one full-size line PER CURRENCY, the shape the kassa board and the hamkor
+totals use, and the lines are never added. Bojxona money goes out in so'm and
+sometimes in dollars; a single figure would be part real and part conversion at a
+kurs nobody chose, and it would drift against the rows below that claim to make it up.
+{% endcomment %}
+<div class="ktiles">
+  <a class="ktile ktile--in" href="?state=holding">
+    <div class="ktile-label">Bojxonachida turgan pulimiz</div>
+    {% for currency, amount in held %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
+    <div class="ktile-note">yuborilgan, hali sarflanmagan</div>
+  </a>
+  <a class="ktile ktile--out" href="?state=owed">
+    <div class="ktile-label">Bojxonachiga qarzimiz</div>
+    {% for currency, amount in owed %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
+    <div class="ktile-note">o'z pulidan yukni rasmiylashtirgani</div>
+  </a>
+  <a class="ktile ktile--cash" href="{% url 'customs_loads' %}?state=">
+    <div class="ktile-label">Hisoblanmagan farq</div>
+    {% for currency, amount in open_diff %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
+    <div class="ktile-note">
+      {% if open_loads %}{{ open_loads }} ta yukda yuborilgan va sarflangan pul teng emas
+      {% else %}hamma yuk bo'yicha hisob teng{% endif %}
+    </div>
+  </a>
+</div>
+
+<p class="ktiles-foot">
+  Har bir yuk uchun taxminiy summa oldindan yuboriladi — haqiqiy xarajat keyin
+  ma'lum bo'ladi. Qaysi yukda qancha ortib yoki kamayib qolgani
+  <a href="{% url 'customs_loads' %}">Yuklar bo'yicha hisob</a> sahifasida.
+</p>
+
+<form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Ism yoki telefon bo'yicha qidirish…" autocomplete="off" aria-label="Bojxonachi qidirish">
+    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+  <label>Holat
+    <select name="state">
+      <option value=""{% if not state %} selected{% endif %}>Hammasi</option>
+      <option value="holding"{% if state == "holding" %} selected{% endif %}>Pulimiz turibdi</option>
+      <option value="owed"{% if state == "owed" %} selected{% endif %}>Bizning qarzimiz</option>
+      <option value="settled"{% if state == "settled" %} selected{% endif %}>Hisob teng</option>
+    </select>
+  </label>
+  <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
+  {% if has_filters or q %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
+</form>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Bojxonachi</th>
+    <th>Telefon</th>
+    <th class="num" title="Biz yuborgan pul — bank foizi ayirilgan holda">Yuborilgan</th>
+    <th class="num" title="Bojxonada haqiqatda sarflangani — yuklarning tannarxiga kirgan">Sarflangan</th>
+    <th class="num">Qoldiq</th>
+    <th class="num">Yuklar</th>
+    <th></th>
+  </tr>
+  {% for a in page %}
+  <tr>
+    <td class="sticky-col"><a href="{% url 'customs_detail' a.pk %}">{{ a.name }}</a></td>
+    <td class="muted">{{ a.phone|default:"—" }}</td>
+    <td class="num">{% for currency, amount in a.received_by_currency %}
+      <div>{% money_in amount currency %}</div>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+    <td class="num">{% for currency, amount in a.spent_by_currency %}
+      <div>{% money_in amount currency %}</div>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+    {% comment %}
+    Held = our money still with them, waiting on the next truck; owed = they covered
+    a clearing themselves. Both are normal here — an estimate that came in under and
+    one that came in over — so both get a colour rather than one being an error, and
+    both can be on screen at once when the two heaps went different ways.
+    {% endcomment %}
+    <td class="num">
+      {% for currency, amount in a.held %}
+      <div><span class="badge badge-ok">{% money_in amount currency %}</span></div>
+      {% endfor %}
+      {% for currency, amount in a.owed %}
+      <div><span class="badge badge-warning">−{% money_in amount currency %}</span></div>
+      {% endfor %}
+      {% if not a.held and not a.owed %}<span class="muted">teng</span>{% endif %}
+    </td>
+    <td class="num muted">{{ a.expenses.count }}</td>
+    <td class="row-actions">
+      <a class="btn btn-ghost btn-sm" href="{% url 'customs_payment_create' %}?agent={{ a.pk }}" data-modal>Pul yuborish</a>
+      <a class="icon-action act-edit" href="{% url 'customs_edit' a.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'customs_delete' a.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% include "crm/_pagination.html" with label="bojxonachi" %}
+{% else %}
+<p class="muted">Bojxonachilar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtr bo'yicha{% endif %}.</p>
+{% endif %}
+
+{% endblock %}

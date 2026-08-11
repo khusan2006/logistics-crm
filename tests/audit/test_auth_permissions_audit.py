@@ -9,7 +9,7 @@ symptom has exactly two shapes:
 
 So the probes here are (1) an exhaustive sweep of every write URL in
 config/urls.py against a translator client, GET and POST; (2) the money impact of
-the one write a translator IS trusted with (shipment status); (3) audit-trail
+the one write a translator IS trusted with (haydovchi va konteyner); (3) audit-trail
 integrity — actor, amount, no row on an invalid submission, append-only; and (4)
 the four standing probe families — round-trip conversion, no drift on re-save,
 currency stickiness, aggregate consistency — applied to this area.
@@ -123,7 +123,7 @@ ADMIN_ONLY_WRITE_ROUTES = [
 ADMIN_ONLY_READ_ROUTES = [
     ("audit_list", None), ("kassa", None), ("reports", None), ("ombor", None),
     ("debt_list", None), ("debt_customer", "customer"), ("partner_list", None),
-    ("customer_list", None), ("contract_list", None), ("supplier_payment_list", None),
+    ("customer_list", None), ("supplier_payment_list", None),
     ("customer_payment_list", None), ("sale_list", None), ("sale_detail", "sale"),
     ("reservation_list", None), ("status_list", None), ("logist_list", None),
     ("logist_detail", "logist"), ("user_list", None),
@@ -261,31 +261,55 @@ def test_money_writes_require_a_csrf_token(world, admin_user):
 
 
 # ---------------------------------------------------------------------------
-# (2) the write a translator IS trusted with — shipment status
+# (2) the write a translator IS trusted with — haydovchi va konteyner
 # ---------------------------------------------------------------------------
 
-def test_translator_may_move_a_non_arrival_status_and_no_money_moves(
-        translator_client, world):
-    """Status/ETA/legs are the translator's job and carry no money (see the
-    ShipmentLeg docstring). Confirm the trusted writes really are inert."""
+def test_the_tarjimons_one_write_moves_no_money(translator_client, world):
+    """Haydovchi va konteyner is the whole of it. Four text fields on the load, none
+    of them priced, so the ledger cannot move — confirmed against the full snapshot
+    rather than by reading the form."""
     shipment = make_shipment(kg="200", price="1.00")
     before = _money_snapshot()
-    target = ShipmentStatus.objects.exclude(is_arrival=True).exclude(
-        pk=shipment.status_id).first()
-    resp = translator_client.post(reverse("shipment_set_status", args=[shipment.pk]),
-                                  {"status": target.pk})
+    resp = translator_client.post(
+        reverse("shipment_driver_edit", args=[shipment.pk]),
+        {"driver_name": "Akmal aka", "driver_phone": "+998901112233",
+         "transport": "01 777 AAA", "container": "MSKU1234567"})
     assert resp.status_code == 302
-    translator_client.post(reverse("leg_create"), {
-        "shipment": shipment.pk, "from_location": "A", "to_location": "B"})
+    shipment.refresh_from_db()
+    assert shipment.driver_name == "Akmal aka" and shipment.transport == "01 777 AAA"
     assert _money_snapshot() == before
 
 
-def test_translator_cannot_flip_a_load_to_arrived(translator_client, world):
-    """Arrival is the moment goods become sellable stock, so it is admin-only."""
+def test_the_tarjimons_write_cannot_be_widened_by_the_request_body(
+        translator_client, world):
+    """The lock is ShipmentDriverForm's field list, not the template. Extra keys in
+    the body are never bound, so the kelishuv, the holat and the sanalar are out of
+    reach from this endpoint however the request is hand-crafted."""
     shipment = make_shipment(kg="200", price="1.00")
-    resp = translator_client.post(reverse("shipment_set_status", args=[shipment.pk]),
-                                  {"status": ShipmentStatus.arrival().pk})
-    assert resp.status_code == 403
+    before = (shipment.contract_id, shipment.status_id, shipment.eta, shipment.sent)
+    other = ShipmentStatus.objects.exclude(pk=shipment.status_id).first()
+    translator_client.post(
+        reverse("shipment_driver_edit", args=[shipment.pk]),
+        {"driver_name": "Akmal aka", "driver_phone": "", "transport": "", "container": "",
+         "status": other.pk, "eta": "2030-01-01", "sent": "2030-01-01"})
+    shipment.refresh_from_db()
+    assert (shipment.contract_id, shipment.status_id, shipment.eta,
+            shipment.sent) == before
+
+
+def test_translator_cannot_touch_the_holat_at_all(translator_client, world):
+    """Status used to be the tarjimon's job, arrival excepted. It is admin-only
+    outright now: the holat decides what counts as in transit, what is overdue, and
+    when a bron becomes sellable stock."""
+    shipment = make_shipment(kg="200", price="1.00")
+    for target in (ShipmentStatus.objects.exclude(is_arrival=True)
+                   .exclude(pk=shipment.status_id).first(),
+                   ShipmentStatus.arrival()):
+        resp = translator_client.post(
+            reverse("shipment_set_status", args=[shipment.pk]), {"status": target.pk})
+        assert resp.status_code == 403
+    shipment.refresh_from_db()
+    assert not shipment.status.is_arrival
 
 
 # CLAIM WITHDRAWN. The original tester asserted 403 and called the asymmetric guard
@@ -298,14 +322,14 @@ def test_translator_cannot_flip_a_load_to_arrived(translator_client, world):
 # leaving the ombor is the documented consequence of `leaving clears it`.
 # What IS a hole is narrower and is tested on its own below: the move-back is allowed
 # even when the lot already has sotuvlar booked against it.
-def test_translator_may_move_an_arrived_load_back_to_a_non_arrival_status(
-        translator_client, world):
-    """Documented rule: any non-arrival status is the translator's to set, including
-    on a load that has already arrived. Leaving arrival clears `arrived`, so the lot
-    leaves the ombor and its goods go back to being in transit."""
+def test_an_admin_may_move_an_arrived_load_back_to_a_non_arrival_status(
+        admin_client, world):
+    """Leaving arrival clears `arrived`, so the lot leaves the ombor and its goods go
+    back to being in transit. A tarjimon can no longer reach this at all — the actor
+    here is an admin, which is what makes the hole below still live."""
     shipment = world["shipment"]
     back = ShipmentStatus.objects.exclude(is_arrival=True).first()
-    resp = translator_client.post(
+    resp = admin_client.post(
         reverse("shipment_set_status", args=[shipment.pk]), {"status": back.pk})
     assert resp.status_code == 302
     shipment.refresh_from_db()
@@ -378,7 +402,7 @@ def test_status_round_trip_does_not_reorder_fifo(admin_client, world):
                           "fixture ombor 410.75$/310 kg -> 0, yo'lda 0 -> 480.00$/400 kg.",
                    strict=False)
 def test_de_arriving_a_lot_that_has_sales_does_not_double_count_the_sold_kg(
-        translator_client, world):
+        admin_client, world):
     """Aggregate invariant, stated so it holds whichever way the hole is closed
     (refuse the move-back, or exclude sold kg from transit): every kg on the truck is
     either still on the road, or on the shelf, or already owned by a mijoz — never two
@@ -389,8 +413,8 @@ def test_de_arriving_a_lot_that_has_sales_does_not_double_count_the_sold_kg(
     assert transit_value()[2] + stock_value()[2] + sold_net == total_kg
 
     back = ShipmentStatus.objects.exclude(is_arrival=True).first()
-    translator_client.post(reverse("shipment_set_status", args=[shipment.pk]),
-                           {"status": back.pk})
+    admin_client.post(reverse("shipment_set_status", args=[shipment.pk]),
+                      {"status": back.pk})
 
     assert Sale.objects.filter(pk=sale.pk).exists(), "the sotuv survives the move-back"
     assert transit_value()[2] + stock_value()[2] + sold_net == total_kg, (
@@ -415,14 +439,16 @@ def test_audit_records_the_actor_and_the_amount_of_a_dollar_payment(admin_client
     assert "234.56" in row.summary
 
 
-def test_audit_records_the_translator_who_moved_a_status(translator_client, translator_user):
+def test_audit_records_the_tarjimon_who_changed_a_driver(translator_client, translator_user):
+    """The tarjimon's only write still names its actor and what was typed — a change
+    nobody can be asked about is the other shape of the reported symptom."""
     shipment = make_shipment(kg="200", price="1.00")
-    target = ShipmentStatus.objects.exclude(is_arrival=True).exclude(
-        pk=shipment.status_id).first()
-    translator_client.post(reverse("shipment_set_status", args=[shipment.pk]),
-                           {"status": target.pk})
+    translator_client.post(reverse("shipment_driver_edit", args=[shipment.pk]),
+                           {"driver_name": "Akmal aka", "driver_phone": "",
+                            "transport": "01 777 AAA", "container": ""})
     row = AuditLog.objects.filter(target_type="Yuk", target_id=shipment.pk).latest("created_at")
-    assert row.user == translator_user and row.action == AuditLog.Action.STATUS
+    assert row.user == translator_user and row.action == AuditLog.Action.UPDATE
+    assert "Akmal aka" in row.summary and "01 777 AAA" in row.summary
 
 
 # CLAIM WITHDRAWN. The original tester demanded the typed so'm figure in the audit
@@ -896,9 +922,9 @@ def test_a_translator_cannot_promote_themselves(translator_client, translator_us
     assert not translator_user.is_staff and not translator_user.is_superuser
 
 
-def test_a_bogus_status_pk_from_a_translator_is_a_404_not_a_500(translator_client, world):
-    """The one field a translator controls on the one write they are trusted with."""
-    resp = translator_client.post(
+def test_a_bogus_status_pk_is_a_404_not_a_500(admin_client, world):
+    """The one field the status endpoint takes from the request body."""
+    resp = admin_client.post(
         reverse("shipment_set_status", args=[world["shipment"].pk]), {"status": "999999"})
     assert resp.status_code == 404
     world["shipment"].refresh_from_db()
@@ -906,14 +932,14 @@ def test_a_bogus_status_pk_from_a_translator_is_a_404_not_a_500(translator_clien
 
 
 def test_the_status_endpoint_redirects_to_the_page_it_was_posted_from(
-        translator_client, world):
+        admin_client, world):
     """`next` comes from `{{ request.get_full_path }}` in shipment_list.html, i.e.
     always a path on this site. Pinned so the field cannot quietly start carrying a
     full URL, which `redirect()` would follow off-site without checking."""
     shipment = make_shipment(kg="200", price="1.00")
     target = ShipmentStatus.objects.exclude(is_arrival=True).exclude(
         pk=shipment.status_id).first()
-    resp = translator_client.post(reverse("shipment_set_status", args=[shipment.pk]),
-                                  {"status": target.pk, "next": "/shipments/?status=2"})
+    resp = admin_client.post(reverse("shipment_set_status", args=[shipment.pk]),
+                             {"status": target.pk, "next": "/shipments/?status=2"})
     assert resp.status_code == 302
     assert resp["Location"].startswith("/") and "//" not in resp["Location"]

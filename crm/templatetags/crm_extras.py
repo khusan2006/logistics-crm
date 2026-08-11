@@ -138,6 +138,19 @@ def money_in(value, currency):
 
 
 @register.simple_tag
+def money_progress_in(part, total, currency):
+    """"So far, of the whole" in one currency — the caption beside a progress bar.
+
+    The so'm unit is written once, at the end: "312 500 000 / 625 000 000 so'm".
+    Spelled on both sides it runs to two nine-digit figures plus the word twice,
+    which squeezed the bar it captions down to a stub. The dollar sign stays on both
+    — it is one character and reads as part of the figure rather than beside it."""
+    if not _is_som(currency):
+        return f"{usd(part)} / {usd(total)}"
+    return "{:,.0f} / {}".format(Decimal(part or 0), som(total)).replace(",", NBSP)
+
+
+@register.simple_tag
 def rate(usd_value, som_value=None, currency=None):
     """A row's per-kg narx in the currency that row was booked in.
 

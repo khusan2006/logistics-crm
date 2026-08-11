@@ -77,6 +77,23 @@ own xarajatlar.
       figure for this turkum that the box does not carry.
       {% endcomment %}
       {% if cell.others %}<small class="xcell-note">yana {{ cell.others|length }} ta yozuv — jadvaldan tahrirlanadi</small>{% endif %}
+      {% comment %}
+      Only Bojxona and Transport carry this (ExpenseGridForm.PAYER_CATEGORIES) —
+      those are the two a bojxonachi or a logist ever pays out of money we already
+      sent them, and everything else comes from the kassa on the day.
+
+      Full width under the figure rather than in the 86px satellite column beside
+      it: those hold "Valyuta" and "Usul", words that fit, and a person's name does
+      not. Its own row also lets it sit next to the figure it decides the payer of,
+      which is the whole reason it moved off the top of the form.
+      {% endcomment %}
+      {% if cell.payer %}
+      <label class="xcell-payer">
+        <span class="xcell-payer-label">{{ cell.payer.label }}</span>
+        {{ cell.payer }}
+      </label>
+      {{ cell.payer.errors }}
+      {% endif %}
       <label class="xcell-fee" data-cell-fee hidden>
         <span class="xcell-fee-label">Perechisleniya foizi (%)</span>
         {{ cell.fee }}

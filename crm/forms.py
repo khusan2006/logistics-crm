@@ -7,11 +7,12 @@ from django.urls import reverse_lazy
 from django.utils import timezone
 
 from .models import (
-    LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment, Logist,
+    LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
+    CustomsAgent, CustomsPayment, Logist,
     LogistPayment, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_free_kg, brand_stock_costed, bron_brands, convert_pair,
+    arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate,
 )
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
@@ -785,15 +786,22 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent", "eta", "logist", "responsible",
-                  "driver_name", "driver_phone", "transport", "container", "note"]
+        fields = ["contract", "status", "sent", "eta", "arrived", "logist",
+                  "responsible", "driver_name", "driver_phone", "transport",
+                  "container", "note"]
         widgets = {
             "contract": forms.Select(attrs={"data-contract-source": ""}),
             "sent": date_widget(),
             "eta": date_widget(),
+            "arrived": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
+            # Plain text on purpose. It used to carry a UZ/IR country picker that
+            # uppercased and re-spaced what was typed, which read as "only these two
+            # countries" — an operator holding a Turkish waybill had nowhere to put
+            # it. A raqam is copied off the waybill, whichever country issued it, so
+            # nothing here reformats or rejects it.
             "transport": forms.TextInput(attrs={
-                "data-plate-intl": "", "autocomplete": "off", "placeholder": "01 777 AAA"}),
+                "autocomplete": "off", "placeholder": "01 777 AAA · 34 ABC 123 · …"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
             "responsible": forms.TextInput(attrs={
@@ -808,7 +816,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     # advance at the bottom of the form — three fields about the logist, six fields
     # away from the logist picker. The generic template renders `form` in order, so
     # the order is set here rather than by hand-writing a template.
-    field_order = ["contract", "status", "sent", "eta",
+    field_order = ["contract", "status", "sent", "eta", "arrived",
                    "logist", "driver_advance",
                    "responsible", "driver_name", "driver_phone",
                    "transport", "container", "note"]
@@ -887,6 +895,18 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
         self.fields["logist"].empty_label = "Logistsiz"
+        # Yetib kelgan sana is offered only once the yuk HAS arrived — a date beside
+        # a load still on the road is an invitation to type one, and a yuk carrying an
+        # arrival date while its holat says otherwise would sit in the ombor
+        # (arrived_lots filters on `arrived`, nothing else) with its tannarx already
+        # in stock valuation. Whether a load has arrived stays the holat's answer;
+        # this field only corrects WHEN. It is the date auto-stamped as "today" by the
+        # status change, which is wrong every time a truck is marked in a day late.
+        # Required-ness is decided in `_clean_arrived` against the SUBMITTED holat,
+        # not here: a yuk being moved back onto the road must not be blocked by a date
+        # that is about to be cleared.
+        if not (self.instance.pk and self.instance.arrived):
+            self.fields.pop("arrived")
         _group_thousands(self.fields["driver_advance"])
         # Editing a yuk shows the advance already recorded — otherwise saving an
         # untouched form would wipe it.
@@ -895,11 +915,10 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             if advance:
                 self.initial.setdefault("driver_advance", advance.amount)
 
-    def clean_transport(self):
-        """Free text. There used to be a plate-shaped regex here, which rejected
-        anything that was not 5–12 alphanumerics with a digit — no help to an
-        operator holding a waybill that says something else."""
-        return (self.cleaned_data.get("transport") or "").strip()
+    # No clean_transport: the raqam is free text, and Django's CharField already
+    # trims the spaces around it. There used to be a plate-shaped regex here, which
+    # rejected anything that was not 5–12 alphanumerics with a digit — no help to an
+    # operator holding a waybill that says something else.
 
     def clean_container(self):
         """Tidied, never rejected: uppercased and grouped when it looks like ISO
@@ -918,7 +937,32 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # comes off the logist's own funding.
         if cleaned.get("driver_advance") and not cleaned.get("logist"):
             self.add_error("logist", "Avansni kim berdi? Logistni tanlang")
+        self._clean_arrived(cleaned)
         return cleaned
+
+    def _clean_arrived(self, cleaned):
+        """Guard the arrival date, which is not a label on this screen: `arrived_lots`
+        filters on it and nothing else, so it decides what is on the shelf, what a
+        lot's kg count under in a month, and the FIFO order sotuvlar draw from.
+
+        Required only while the holat says arrived. Otherwise moving a yuk back onto
+        the road would be blocked by a date field that is about to be cleared anyway —
+        the view clears it, since the holat is what decides WHETHER a yuk landed."""
+        if "arrived" not in self.fields:
+            return
+        arrived, status = cleaned.get("arrived"), cleaned.get("status")
+        if status is not None and status.is_arrival and not arrived:
+            self.add_error("arrived", "Yetib kelgan sanani kiriting.")
+            return
+        if not arrived:
+            return
+        if arrived > timezone.localdate():
+            self.add_error("arrived", "Yetib kelgan sana kelajakda bo'la olmaydi")
+        sent = cleaned.get("sent")
+        if sent and arrived < sent:
+            self.add_error(
+                "arrived",
+                f"Yetib kelgan sana jo'natish sanasidan ({sent}) oldin bo'la olmaydi")
 
 
 class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
@@ -1030,6 +1074,41 @@ class ShipmentExtendForm(forms.Form):
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
 
 
+class ShipmentDriverForm(forms.ModelForm):
+    """Who is driving this yuk and what it is riding in — the ONLY part of a load a
+    tarjimon may change.
+
+    A separate form rather than a subset of ShipmentForm because the restriction has
+    to live in the field list itself. A ModelForm only ever writes the fields it
+    declares, so a tarjimon who posts `contract=7&status=3` alongside the four fields
+    here changes nothing: the extra keys are not bound and never reach the instance.
+    Reusing ShipmentForm and hiding the other inputs in the template would leave
+    exactly that hole open, since the template does not decide what a form saves.
+
+    Not `logist`: an outside party who holds our money is a financial relationship,
+    not driver detail, and the same rule keeps every money field off this form."""
+
+    class Meta:
+        model = Shipment
+        fields = ["driver_name", "driver_phone", "transport", "container"]
+        widgets = {
+            # The same widgets ShipmentForm gives these four, so the two forms cannot
+            # disagree about what a valid raqam looks like — see the note there on why
+            # nothing here reformats or rejects what is copied off a waybill.
+            "driver_name": forms.TextInput(attrs={
+                "autocomplete": "off", "placeholder": "Masalan: Akmal aka"}),
+            "driver_phone": phone_intl_widget(),
+            "transport": forms.TextInput(attrs={
+                "autocomplete": "off", "placeholder": "01 777 AAA · 34 ABC 123 · …"}),
+            "container": forms.TextInput(attrs={
+                "data-container-iso": "", "autocomplete": "off",
+                "placeholder": "MSKU 123456 7"}),
+        }
+
+    def clean_container(self):
+        return normalize_container(self.cleaned_data.get("container"))
+
+
 class ShipmentLegForm(forms.ModelForm):
     class Meta:
         model = ShipmentLeg
@@ -1040,9 +1119,10 @@ class ShipmentLegForm(forms.ModelForm):
             "arrived": date_widget(),
             "from_location": forms.TextInput(attrs={"placeholder": "Masalan: Tehron"}),
             "to_location": forms.TextInput(attrs={"placeholder": "Masalan: Chegara"}),
+            # Free text, same as the yuk's own raqam — see ShipmentForm.
             "transport": forms.TextInput(attrs={
-                "data-plate-intl": "", "autocomplete": "off",
-                "placeholder": "Haydovchi ismi yoki 01 777 AAA"}),
+                "autocomplete": "off",
+                "placeholder": "Haydovchi ismi yoki mashina raqami"}),
             "container": forms.TextInput(attrs={
                 "data-container-iso": "", "autocomplete": "off", "placeholder": "MSKU 123456 7"}),
         }
@@ -1180,36 +1260,30 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin,
         # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
         # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
         # readable ("24000", not Decimal.normalize()'s "2.4E+4").
-        # FREE kg, not on-hand: bronned granula is promised to somebody and must
-        # not be sellable over the counter. The option says both figures, so the
-        # operator can see where the difference went rather than wondering why the
-        # shelf will not sell.
+        # The kg offered is what is physically on the shelf. Anything bronned is
+        # named after it as a warning, not deducted: the granula may be sold to
+        # whoever is in front of the operator, bron or no bron.
         costed = brand_stock_costed()
-        self.stock = {row["brand"]: row["free"] for row in costed}
-        # A bronned marka stays on the list even with nothing free: its own bron
-        # holder is allowed to buy it, and dropping it left them unable to pick the
-        # granula that was reserved FOR them. Which mijoz is buying is not known
-        # until clean(), so the ceiling is checked there, per customer.
         self.fields["brand"].choices = [
             (row["brand"],
              f"{row['brand']} · {', '.join(row['codes'])} · "
-             f"{_clean_number(row['free'])} kg bo'sh"
+             f"{_clean_number(row['on_hand'])} kg omborda"
              + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
              + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for row in costed if row["free"] > 0 or row["reserved"] > 0
+            for row in costed if row["on_hand"] > 0
         ]
 
     def clean(self):
         cleaned = super().clean()
         brand, kg = cleaned.get("brand"), cleaned.get("kg")
-        customer = cleaned.get("customer")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
         if brand and kg is not None and kg > 0:
-            # Per BUYER: this mijoz's own bron does not block them, somebody else's
-            # does. Falls back to the shelf-wide figure while the mijoz is missing,
-            # so an incomplete form still cannot oversell.
-            available = brand_free_kg(brand, customer)
+            # The shelf is the only ceiling. A bron is a promise between the operator
+            # and a mijoz, and the operator is the one who decides whether to keep it
+            # today — granula that was refused to a buyer standing at the counter is
+            # a sale lost to a rule that was never the mijoz's.
+            available = brand_on_hand_kg(brand)
             if kg > available:
                 self.add_error(
                     "kg", f"Ombor qoldig'idan oshmasligi kerak "
@@ -1252,23 +1326,14 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
     def clean(self):
         cleaned = super().clean()
         lot, kg = cleaned.get("lot"), cleaned.get("kg")
-        customer = cleaned.get("customer")
         if kg is not None and kg <= 0:
             self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if lot and kg is not None and kg > 0:
-            # Two ceilings, both real: this lot's own physical kg, and what is left
-            # of the marka once OTHER mijozlar's brons have their share. Selling one
-            # lot dry is still overselling if the granula was promised to somebody
-            # else — but the buyer's own bron is not somebody else.
-            if kg > lot.available_kg:
-                self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
-                                     f"({_clean_number(lot.available_kg)} kg)")
-            else:
-                free = brand_free_kg(lot.brand, customer)
-                if kg > free:
-                    self.add_error(
-                        "kg", f"Bu markadan {_clean_number(free)} kg sotish mumkin — "
-                              "qolgani bronlangan")
+        if lot and kg is not None and kg > 0 and kg > lot.available_kg:
+            # One ceiling, and it is a physical one: this lot's own kg. A bron on the
+            # marka used to be a second ceiling here and is not any more — it names
+            # who is waiting, it does not refuse the sotuv.
+            self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
+                                 f"({_clean_number(lot.available_kg)} kg)")
         return cleaned
 
 
@@ -1562,6 +1627,67 @@ CustomerPaymentFormSet = forms.modelformset_factory(
     extra=1, can_delete=True)
 
 
+def payer_choices(category):
+    """Who could have paid a xarajat of THIS turkum out of money we already sent
+    them — bojxonachilar for a bojxona, logistlar for a transport.
+
+    One list per box rather than everybody under two headings. The two roles do not
+    overlap in practice: a bojxonachi clears loads and a logist pays drivers, and
+    offering both in both boxes turns a two-item pick into a scan of every outside
+    party in the books for a choice that only ever had one right answer.
+
+    The kassa is first and is what the box rests on. It is not a placeholder — it is
+    the answer for most xarajatlar, and the one this form gave for its whole life
+    before the picker existed."""
+    if category == ShipmentExpense.Category.CUSTOMS:
+        rows = CustomsAgent.objects.all()
+        prefix = "customs"
+    elif category == ShipmentExpense.Category.TRANSPORT:
+        rows = Logist.objects.all()
+        prefix = "logist"
+    else:
+        rows, prefix = (), ""
+    return [("", "Kassadan to'landi"),
+            *((f"{prefix}:{row.pk}", row.name) for row in rows)]
+
+
+def resolve_payer(value):
+    """A `payer_choices` value as the two FK columns it sets — always BOTH, so
+    choosing a bojxonachi clears any logist rather than leaving a row claiming two
+    payers (ShipmentExpense.clean refuses that pair)."""
+    kind, _sep, pk = (value or "").partition(":")
+    if kind == "logist" and pk.isdigit():
+        return {"logist_id": int(pk), "customs_agent_id": None}
+    if kind == "customs" and pk.isdigit():
+        return {"logist_id": None, "customs_agent_id": int(pk)}
+    return {"logist_id": None, "customs_agent_id": None}
+
+
+def payer_value(row):
+    """A stored xarajat as the picker value that stands for it — the inverse of
+    `resolve_payer`, so a box opens showing what its row actually says."""
+    if row.logist_id:
+        return f"logist:{row.logist_id}"
+    if row.customs_agent_id:
+        return f"customs:{row.customs_agent_id}"
+    return ""
+
+
+def default_payer(shipment):
+    """The bojxonachi this load's clearing money was already sent to, or the kassa.
+
+    Deliberately NOT the yuk's logist, even though the single-xarajat form does
+    default to them. Every load in the books predates this box, and on all of them
+    the grid wrote kassa rows; steering it to the logist now would start moving a
+    gruzchi onto somebody's balance on loads whose entry never changed. Having been
+    SENT customs money is the one signal that cannot be true of an older load, so it
+    is the only one allowed to move the default off the kassa."""
+    if shipment is None or not getattr(shipment, "pk", None):
+        return ""
+    funded = shipment.customs_payments.first()
+    return f"customs:{funded.agent_id}" if funded else ""
+
+
 class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
     """Every xarajat turkum as its own small box, filled in one pass.
 
@@ -1606,6 +1732,18 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                   "kiritsa, o'shanisi ustun")
     note = forms.CharField(label="Izoh", max_length=255, required=False,
                            widget=forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}))
+    #: The only turkumlar somebody else's balance ever pays: a bojxonachi clears the
+    #: yuk, a logist covers the haydovchi. The gruzchi, the sertifikat and the yo'l
+    #: xarajati come out of the kassa on the day, so those boxes do not ask.
+    #:
+    #: Per box rather than once above the grid, for the same reason valyuta and usul
+    #: have per-box overrides: one control over seven boxes cannot say that the
+    #: bojxonachi paid the bojxona while the logist paid the transport, which is the
+    #: ordinary case on a load that has both. Shared, it also put the 65 gruzchi
+    #: typed beside a 37 mln bojxona onto the bojxonachi's balance — money he never
+    #: handled, and a qoldiq nobody could explain afterwards.
+    PAYER_CATEGORIES = frozenset({
+        ShipmentExpense.Category.CUSTOMS, ShipmentExpense.Category.TRANSPORT})
 
     def __init__(self, *args, shipment=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1660,10 +1798,35 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
             # blank here for the innocent reason that it did not exist yet.
             self.fields[self.row_name(value)] = forms.IntegerField(
                 required=False, widget=forms.HiddenInput)
+            # Only on the two turkumlar somebody's balance ever pays. It sits full
+            # width under the figure rather than beside it in the 86px satellite
+            # column, because a person's name does not fit in 86px and a truncated
+            # one is worse than no picker at all.
+            #
+            # Choices built per instance, not at import: a bojxonachi added this
+            # morning has to be pickable this afternoon without a restart.
+            if value in self.PAYER_CATEGORIES:
+                self.fields[self.payer_name(value)] = forms.ChoiceField(
+                    label="Kim to'laydi", required=False, initial="",
+                    choices=self.payer_options(value),
+                    widget=forms.Select(attrs={"class": "xpayer"}))
         # Only the unbound case: a bound form renders what was posted, and re-filling
         # it from the database would undo the operator's own edit on a failed submit.
         if not self.is_bound:
             self.prefill()
+            # An empty Bojxona box on a load whose clearing money has already gone
+            # out opens naming the bojxonachi it went to: entering that figure as a
+            # kassa row is the double-count this picker exists to stop, and it is
+            # the one default that cannot be wrong about a load from before the
+            # picker existed (nothing was ever sent for those).
+            #
+            # Transport is deliberately left on the kassa even when the yuk names a
+            # logist. Every load in the books predates this box and the grid wrote
+            # kassa rows on all of them; steering it now would start moving money
+            # onto a balance on loads whose entry never changed.
+            box = self.payer_name(ShipmentExpense.Category.CUSTOMS)
+            if not self.initial.get(box):
+                self.initial[box] = default_payer(shipment)
 
     @staticmethod
     def load_rows(shipment):
@@ -1742,6 +1905,12 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                 self.initial[self.method_name(category)] = row.method
             if row.fee_percent != shared["fee_percent"]:
                 self.initial[self.fee_name(category)] = row.fee_percent
+            # Its OWN payer, unlike the three above, which fall back to a shared
+            # picker. There is no shared payer to fall back to — the whole point of
+            # this box being per turkum is that a bojxonachi and a logist can be on
+            # the same yuk — so the box shows exactly what the row says.
+            if category in self.PAYER_CATEGORIES:
+                self.initial[self.payer_name(category)] = payer_value(row)
 
     @staticmethod
     def field_name(category):
@@ -1763,6 +1932,35 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
     def row_name(category):
         return f"row_{category}"
 
+    @staticmethod
+    def payer_name(category):
+        return f"payer_{category}"
+
+    def payer_options(self, category):
+        """This box's list, plus whoever its recorded row actually names if that
+        person is no longer offered here.
+
+        A logist DID once pay a bojxona — ShipmentExpense allows it and the single
+        xarajat form still offers it — and this box now lists bojxonachilar only.
+        Dropped from the choices, such a row would open showing nobody and be
+        refused on submit as an invalid choice, so correcting the figure beside it
+        would be impossible without first reassigning money the operator never
+        touched. Kept pickable, the box tells the truth and a save is a no-op."""
+        choices = payer_choices(category)
+        row = self.recorded.get(category)
+        current = payer_value(row) if row is not None else ""
+        if current and current not in {value for value, _label in choices}:
+            choices.append((current, f"{row.paid_by.name} (avvalgi)"))
+        return choices
+
+    def row_payer(self, category):
+        """The two payer columns this box is asking for, or {} for a turkum that
+        never asks — which the caller must treat as "leave the row alone" rather
+        than as "the kassa paid it"."""
+        if category not in self.PAYER_CATEGORIES:
+            return {}
+        return resolve_payer(self.cleaned_data.get(self.payer_name(category)))
+
     def amount_fields(self):
         """One box per turkum, for a template that lays the grid out itself rather
         than trusting field order. `recorded` is the row this box stands in for (so
@@ -1774,7 +1972,11 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                  "fee": self[self.fee_name(value)],
                  "row": self[self.row_name(value)],
                  "recorded": self.recorded.get(value),
-                 "others": self.others.get(value, [])}
+                 "others": self.others.get(value, []),
+                 # None on the turkumlar the kassa always pays, so the template asks
+                 # `{% if cell.payer %}` rather than repeating PAYER_CATEGORIES.
+                 "payer": (self[self.payer_name(value)]
+                           if value in self.PAYER_CATEGORIES else None)}
                 for value, _ in self.CATEGORIES]
 
     def row_fee(self, category):
@@ -1836,9 +2038,9 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         A rewrite touches only the money: summa, valyuta, usul, foiz and the kurs
         behind them. The row keeps its own sana — a xarajat entered last week does
         not move to today because the figure beside it was corrected — along with its
-        izoh (the shared one names what is being ADDED) and its `logist`, which this
-        form never asks for: rewriting that would move money between the kassa and
-        somebody's balance behind the operator's back.
+        izoh (the shared one names what is being ADDED). The Kim to'laydi box IS
+        rewritten, because it is per turkum and opens showing that row's own payer —
+        see the comparison below.
 
         A box that comes back exactly as it was drawn is not written at all. That
         matters most for the kurs: it is one field above seven boxes, so a yuk whose
@@ -1866,22 +2068,32 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                     deleted.append(row)
                 continue
             money = self.row_money(category, typed, rate)
+            payer = self.row_payer(category)
             if row is None:
                 created.append(ShipmentExpense.objects.create(
                     shipment=shipment, category=category, created_by=user,
-                    date=self.cleaned_data["date"], note=note, **money))
+                    date=self.cleaned_data["date"], note=note, **payer, **money))
                 continue
             # As drawn: the same figure in the same valyuta, paid the same way, at
-            # the same foiz. Compared against what the BOX showed rather than field
-            # by field against the row, so the shared kurs — which no box can show
-            # per row — cannot make an untouched submission look like an edit.
+            # the same foiz, by the same person. Compared against what the BOX showed
+            # rather than field by field against the row, so the shared kurs — which
+            # no box can show per row — cannot make an untouched submission look like
+            # an edit.
+            #
+            # The payer IS rewritten here, unlike when this was one control above the
+            # grid. A per-turkum box opens showing that row's own payer, so changing
+            # it is a deliberate, visible edit rather than one shared answer being
+            # applied to rows it was never asked about.
             if (typed == self.typed_amount(row) and money["currency"] == row.currency
                     and money["method"] == row.method
-                    and money["fee_percent"] == row.fee_percent):
+                    and money["fee_percent"] == row.fee_percent
+                    and all(getattr(row, name) == value
+                            for name, value in payer.items())):
                 continue
-            for name, value in money.items():
+            fields = {**money, **payer}
+            for name, value in fields.items():
                 setattr(row, name, value)
-            row.save(update_fields=list(money))
+            row.save(update_fields=list(fields))
             updated.append(row)
         return created, updated, deleted
 
@@ -1889,23 +2101,49 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
 class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     class Meta:
         model = ShipmentExpense
-        fields = ["shipment", "date", "category", "logist", "currency", "amount",
-                  "exchange_rate", "method", "fee_percent", "note"]
+        fields = ["shipment", "date", "category", "logist", "customs_agent",
+                  "currency", "amount", "exchange_rate", "method", "fee_percent",
+                  "note"]
         widgets = {"date": date_widget(),
                    "shipment": forms.HiddenInput()}
-        help_texts = {"logist": "Bo'sh qoldirilsa — kassadan to'langan"}
+        help_texts = {"logist": "Bo'sh qoldirilsa — kassadan to'langan",
+                      "customs_agent": "Biz oldindan yuborgan puldan to'langan bo'lsa"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["logist"].empty_label = "Kassadan to'landi"
-        # Default to the yuk's own logist: if a load is being run by somebody, an
-        # expense on it was almost certainly paid out of that person's balance, and
-        # picking the wrong one silently moves money between two people's accounts.
+        self.fields["customs_agent"].empty_label = "Kassadan to'landi"
+        self.fields["customs_agent"].label_from_instance = customs_agent_option_label
+        # Default to whoever is already carrying money for this load: the logist who
+        # runs it, or the bojxonachi we sent its clearing money to. Picking the wrong
+        # one silently moves money between two people's accounts, and leaving it
+        # blank bills the kassa for cash that already left.
+        #
+        # ONE of them, never both — a load can have a logist AND a funded bojxonachi,
+        # and pre-filling the pair would open the form already holding the one
+        # combination clean() refuses. The logist keeps precedence because that is
+        # the default this form has always opened with.
         shipment = self.initial.get("shipment") or getattr(self.instance, "shipment_id", None)
         if shipment and not self.instance.pk:
-            match = Shipment.objects.filter(pk=getattr(shipment, "pk", shipment)).first()
+            match = (Shipment.objects.filter(pk=getattr(shipment, "pk", shipment))
+                     .prefetch_related("customs_payments").first())
             if match and match.logist_id:
                 self.initial.setdefault("logist", match.logist_id)
+            elif match:
+                funded = match.customs_payments.all()
+                if funded:
+                    self.initial.setdefault("customs_agent", funded[0].agent_id)
+
+    def clean(self):
+        cleaned = super().clean()
+        # The model refuses this too (ShipmentExpense.clean), but a ModelForm never
+        # calls full_clean's model hook for fields it did not render — and here it
+        # renders both, so the operator gets the answer on the field rather than a
+        # 500 from the database later.
+        if cleaned.get("logist") and cleaned.get("customs_agent"):
+            self.add_error("customs_agent",
+                           "Bittasini tanlang — yo logist, yo bojxonachi to'lagan")
+        return cleaned
 
     def save(self, commit=True):
         obj = super().save(commit=False)
@@ -1982,3 +2220,107 @@ def logist_option_label(logist):
     else:
         state = "qoldiq yo'q"
     return f"{logist.name} · {state}"
+
+
+class CustomsAgentForm(forms.ModelForm):
+    class Meta:
+        model = CustomsAgent
+        fields = ["name", "phone", "note"]
+        widgets = {
+            "phone": phone_intl_widget(),
+            "note": forms.Textarea(attrs={"rows": 2}),
+            "name": forms.TextInput(attrs={"autocomplete": "off",
+                                           "placeholder": "Masalan: Bahrom aka"}),
+        }
+
+    def clean_phone(self):
+        return validate_intl_phone(self.cleaned_data.get("phone"))
+
+
+class CustomsPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """Money we send a bojxonachi. No ceiling and no attempt to hold it to an
+    estimate: the whole point is that nobody knows the real figure yet, so ~40 mln
+    goes out for a truck and the difference settles later against what was spent.
+
+    No kurs is asked, in EITHER direction — the same rule the hamkor and mijoz forms
+    follow, taken to its end. Those ask only when the money crosses into the other
+    currency, because that is the one case the rate decides how much of the thing is
+    settled. A bojxonachi holds two heaps rather than one float (see CustomsAgent),
+    so a so'm to'lov lands in the so'm heap and a dollar one in the dollar heap, and
+    nothing ever crosses. The row still gets a rate — both money columns have to
+    hold something for the kassa's converted total — but it is inherited, exactly as
+    a kelishuv paid in its own currency inherits one."""
+
+    fee_counterparty = "Bojxonachidan ushlansin"
+
+    class Meta:
+        model = CustomsPayment
+        fields = ["agent", "shipment", "date", "currency", "amount", "exchange_rate",
+                  "method", "fee_percent", "fee_bearer", "note"]
+        widgets = {"date": date_widget()}
+        labels = {"amount": "Yuboriladigan summa"}
+        help_texts = {
+            "shipment": "Bo'sh qoldirilsa — umumiy to'ldirish, yukka bog'lanmaydi",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["agent"].label_from_instance = customs_agent_option_label
+        self.fields["shipment"].label_from_instance = customs_shipment_option_label
+        self.fields["shipment"].empty_label = "Yukka bog'lanmagan"
+        self.fields["shipment"].queryset = (
+            Shipment.objects.select_related("contract__partner")
+            .prefetch_related("customs_payments", "expenses"))
+        # An EMPTY settlement currency, which the base.html toggle reads as "this
+        # money crosses nothing, ever" and keeps the kurs box hidden in both
+        # directions. Hidden rather than removed, the same way a hamkor to'lov
+        # hides it: a rate the operator does supply still stands.
+        self.fields["currency"].widget.attrs["data-settled-against"] = ""
+        # The column's default is dollars, which is right for every other row in the
+        # app and wrong for this one — bojxona is overwhelmingly paid in so'm. Only
+        # a NEW row is steered; an existing one opens in the currency it was sent in.
+        if not self.instance.pk:
+            self.initial.setdefault("currency", Currency.UZS)
+
+    def clean(self):
+        # Seeded before the money mixin converts, and unconditionally: nothing this
+        # form takes ever crosses a currency, so there is no case left where a rate
+        # has to be demanded. A rate the operator DID supply always stands, and an
+        # edit keeps the rate the to'lov was booked at rather than re-rating a figure
+        # already on the books.
+        if (self.cleaned_data.get("exchange_rate") or Decimal("0")) <= 0:
+            self.cleaned_data["exchange_rate"] = (
+                self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
+        return super().clean()
+
+
+def customs_agent_option_label(agent):
+    """Bojxonachi <option>: the name and what they are holding — the fact you need
+    when deciding how much to send for the next truck.
+
+    Per currency, because that is what they are actually holding. A dollar heap and
+    a so'm heap read as two states side by side rather than as one figure that is
+    half conversion; somebody carrying both, in opposite directions, says so."""
+    parts = [f"{_unit(currency, amount)} qoldiq"
+             for currency, amount in agent.held_by_currency()]
+    parts += [f"{_unit(currency, amount)} bizning qarzimiz"
+              for currency, amount in agent.owed_by_currency()]
+    return f"{agent.name} · {' · '.join(parts) or 'qoldiq yo\'q'}"
+
+
+def _unit(currency, amount):
+    """A figure with its unit, short enough to sit inside an <option>. The same
+    shape logist_option_label uses, with the so'm side spelled out."""
+    return f"{_clean_number(amount)} {'so\'m' if currency == Currency.UZS else '$'}"
+
+
+def customs_shipment_option_label(shipment):
+    """Yuk <option>: the code and what is already on it for bojxona.
+
+    A load that has had money sent for it once is the one case picking from this
+    list goes wrong — a second 40 mln against the same truck reads as a 40 mln
+    overspend later — so the figure is on the option rather than a screen away."""
+    label = f"#{shipment.pk} · {shipment.contract.code}"
+    sent = " · ".join(_unit(currency, amount)
+                      for currency, amount in shipment.customs_sent_by_currency())
+    return f"{label} · {sent} yuborilgan" if sent else label

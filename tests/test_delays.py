@@ -20,18 +20,31 @@ def late_shipment(db):
     return _ship_obj
 
 
-def test_extend_requires_reason(translator_client, late_shipment):
+def test_extend_requires_reason(admin_client, late_shipment):
     new_eta = (date.today() + timedelta(days=5)).isoformat()
-    resp = translator_client.post(f"/shipments/{late_shipment.pk}/extend/",
-                                  {"new_eta": new_eta, "reason": ""})
+    resp = admin_client.post(f"/shipments/{late_shipment.pk}/extend/",
+                             {"new_eta": new_eta, "reason": ""})
     assert resp.status_code == 200 and not ShipmentDelay.objects.exists()
 
 
-def test_extend_saves_history_and_updates_eta(translator_client, late_shipment):
+def test_a_tarjimon_cannot_move_the_muddat(translator_client, late_shipment):
+    """Extending an ETA writes a delay reason onto the load's record and moves what
+    counts as overdue. A tarjimon may keep the haydovchi and konteyner current and
+    nothing else."""
+    new_eta = (date.today() + timedelta(days=5)).isoformat()
+    resp = translator_client.post(f"/shipments/{late_shipment.pk}/extend/",
+                                  {"new_eta": new_eta, "reason": "Chegarada navbat"})
+    assert resp.status_code == 403
+    assert not ShipmentDelay.objects.exists()
+    late_shipment.refresh_from_db()
+    assert late_shipment.is_overdue
+
+
+def test_extend_saves_history_and_updates_eta(admin_client, late_shipment):
     old_eta = late_shipment.eta
     new_eta = date.today() + timedelta(days=5)
-    resp = translator_client.post(f"/shipments/{late_shipment.pk}/extend/",
-                                  {"new_eta": new_eta.isoformat(), "reason": "Chegarada navbat"})
+    resp = admin_client.post(f"/shipments/{late_shipment.pk}/extend/",
+                             {"new_eta": new_eta.isoformat(), "reason": "Chegarada navbat"})
     assert resp.status_code == 302
     late_shipment.refresh_from_db()
     assert late_shipment.eta == new_eta and not late_shipment.is_overdue

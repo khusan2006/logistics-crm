@@ -2,7 +2,15 @@
 {% load crm_extras %}
 {% block title %}Kelishuvlar · GranulaLog{% endblock %}
 {% block topbar_title %}Kelishuvlar{% endblock %}
-{% block fab %}<a class="fab" href="{% url 'contract_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi kelishuv</a>{% endblock %}
+{% comment %}
+Read-only for a tarjimon: no create, no edit, no delete, no to'lov — and no money
+columns either, the same rule the yuklar list follows. What is left is the kelishuv as
+a logistics document: which marka, how many kg agreed, how many still to come. Every
+hidden control is admin-only in the view as well; hiding it here is the courtesy, not
+the lock.
+{% endcomment %}
+{# The guard goes INSIDE the block — see the note in shipment_list.html. #}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'contract_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi kelishuv</a>{% endif %}{% endblock %}
 {% block content %}
 
 {% comment %}
@@ -59,11 +67,15 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     <th>Sana</th>
     <th>Marka</th>
     <th>Kelishilgan kg</th>
+    {% if user.is_admin_role %}
     <th>Narx</th>
     <th>Jami</th>
+    {% endif %}
     <th title="Har bir marka bo'yicha yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
+    {% if user.is_admin_role %}
     <th title="Kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th></th>
+    {% endif %}
   </tr>
   {% comment %}
   A flat list: one row per kelishuv, in whatever order Saralash asked for. No
@@ -73,8 +85,13 @@ under Tugallangan, where a kelishuv is fully paid by definition.
   {% endcomment %}
   {% for c in page %}
   <tr>
+    {% comment %}
+    The kod opens the edit modal, so for a tarjimon it is plain text: the link would
+    403, and a dead link reads as a broken page rather than as a limit.
+    {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
+      {% if user.is_admin_role %}<a href="{% url 'contract_edit' c.pk %}" data-modal>{{ c.code }}</a>
+      {% else %}{{ c.code }}{% endif %}
     </td>
     <td>{{ c.created }}</td>
     {% comment %}
@@ -87,8 +104,10 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     {% endcomment %}
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.brand }}</div>{% endfor %}</td>
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    {% if user.is_admin_role %}
     <td>{% for ln in c.lines.all %}<div class="cell-line">{% money ln.price ln.price_uzs ln.currency %}</div>{% endfor %}</td>
     <td>{% money c.total_value c.total_value_uzs c.currency %}</td>
+    {% endif %}
     <td>
       {% for ln in c.lines.all %}
       <div class="cell-line">
@@ -101,6 +120,7 @@ under Tugallangan, where a kelishuv is fully paid by definition.
     derived at a different day's kurs than the to'lovlar, so it never reaches zero on
     a kelishuv that has in fact been settled.
     {% endcomment %}
+    {% if user.is_admin_role %}
     <td><span class="badge {% if c.payable_left_own > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money c.payable_left c.payable_left_uzs c.currency %}</span></td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">
@@ -113,6 +133,7 @@ under Tugallangan, where a kelishuv is fully paid by definition.
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
       </a>
     </td>
+    {% endif %}
   </tr>
   {% endfor %}
 </table>

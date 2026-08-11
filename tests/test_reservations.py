@@ -2,7 +2,6 @@ from decimal import Decimal
 
 from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
-    brand_free_kg,
 )
 
 
@@ -274,12 +273,13 @@ class TestPartOfABronCanBeHandedOver:
         assert not Sale.objects.exists()
 
 
-class TestBronsBlockOrdinarySales:
-    """A bron holds the granula for the mijoz who booked it. Somebody else walking
-    in cannot be sold out from under them — the shelf is not the ceiling, the FREE
-    part of it is."""
+class TestBronsDoNotBlockOrdinarySales:
+    """A bron names who is waiting; it does not hold the granula. A mijoz turns up
+    with cash for kg promised to somebody who is not collecting, and that sotuv has
+    to go through — the operator settles the promise, the screen does not."""
 
-    def test_bronned_kg_cannot_be_sold_to_somebody_else(self, admin_client, db):
+    def test_bronned_kg_can_still_be_sold_to_somebody_else(self, admin_client, db):
+        """The whole shelf, every kg of it promised to another mijoz."""
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         resp = admin_client.post("/sales/new/", {
@@ -287,20 +287,37 @@ class TestBronsBlockOrdinarySales:
             "currency": "usd", "price": "2.00", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
         })
-        assert resp.status_code == 200          # re-rendered, invalid
-        assert not Sale.objects.exists()
+        assert resp.status_code == 302
+        assert Sale.objects.get().kg == Decimal("24000.000")
 
-    def test_the_free_part_of_the_shelf_still_sells(self, admin_client, db):
-        """4 000 of the 24 000 is unpromised, and that much goes through."""
+    def test_the_bron_it_walked_over_stays_open(self, admin_client, db):
+        """Selling to somebody else does not settle the promise — it is still owed,
+        and now the ombor says the marka is short."""
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
+        admin_client.post("/sales/new/", {
+            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "24000",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+        })
+        bron = Reservation.objects.get()
+        assert bron.remaining_kg == Decimal("20000.000")
+        assert bron.status == Reservation.Status.ACTIVE
+        g = next(x for x in admin_client.get("/ombor/").context["page"]
+                 if x["brand"] == "LLDPE")
+        assert g["short"] == Decimal("20000.000")
+
+    def test_a_bronned_marka_can_be_sold_from_one_lot(self, admin_client, db):
+        """The per-lot sotuv had the same bron ceiling on top of the lot's own kg."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="10000")
         resp = admin_client.post("/sales/new/", {
-            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "4000",
+            "lot": lot.pk, "customer": _customer("Kelgan mijoz").pk, "kg": "10000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
         })
         assert resp.status_code == 302
-        assert Sale.objects.get().kg == Decimal("4000.000")
+        assert Sale.objects.get().kg == Decimal("10000.000")
 
     def test_the_bron_holder_may_buy_their_own_bronned_granula(self, admin_client, db):
         """Their promise does not stand between them and what it promises them."""
@@ -520,10 +537,9 @@ class TestReservationTotal:
 
 class TestAnOrdinarySotuvDrawsTheBronDown:
     """The bug: fulfilled_kg was only ever written by the Brondan sotuv button, so
-    an ordinary sotuv to the bron's OWN holder left the promise at its full kg. And
-    since a bron blocks the shelf, bron #1 in the real book (74 400 kg of 2102
-    campaund against 41 640 kg on hand) froze the marka for everybody while its
-    holder bought 24 000 kg of it over the counter."""
+    an ordinary sotuv to the bron's OWN holder left the promise at its full kg —
+    bron #1 in the real book (74 400 kg of 2102 campaund) still read as fully owed
+    while its holder bought 24 000 kg of it over the counter."""
 
     def _bron(self, customer, brand="LLDPE", kg="6000"):
         return Reservation.objects.create(
@@ -574,25 +590,26 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         assert bron.fulfilled_kg == Decimal("0.000")
 
     def test_the_holders_own_bron_does_not_block_them(self, admin_client, db):
-        """The freeze. On-hand 4 000, bronned 6 000 for this mijoz — shelf-wide free
-        is 0, so the marka used to be unsellable even to the person it was being
-        held for."""
+        """The freeze. On-hand 4 000, bronned 6 000 for this mijoz — the marka used
+        to be unsellable even to the person it was being held for."""
         lot = _arrived_lot(kg="4000")
         customer = _customer()
         self._bron(customer, kg="6000")
 
-        assert brand_free_kg(lot.brand) == Decimal("0")
-        assert brand_free_kg(lot.brand, customer) == Decimal("4000.000")
         self._sell(admin_client, customer, lot.brand, "4000")
         assert Sale.objects.count() == 1
 
-    def test_a_walk_in_is_still_blocked_by_that_bron(self, admin_client, db):
+    def test_a_walk_in_is_not_blocked_by_that_bron_either(self, admin_client, db):
+        """Nor is anybody else. The bron stays open and unsettled — it was promised
+        to the holder, and selling elsewhere does not pretend otherwise."""
         lot = _arrived_lot(kg="4000")
         holder, walk_in = _customer("Bron egasi"), _customer("Boshqa mijoz")
-        self._bron(holder, kg="6000")
+        bron = self._bron(holder, kg="6000")
 
         self._sell(admin_client, walk_in, lot.brand, "4000")
-        assert Sale.objects.count() == 0                  # rejected, all of it promised
+        assert Sale.objects.count() == 1
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
 
     def test_deleting_the_sotuv_gives_the_kg_back(self, admin_client, db):
         lot = _arrived_lot(kg="10000")
@@ -689,7 +706,7 @@ class TestClosingABron:
     cancelling, which is a bron that never happened."""
 
     def test_closing_frees_the_rest_of_the_shelf(self, admin_client, db):
-        from crm.models import brand_free_kg, brand_reserved_kg
+        from crm.models import brand_on_hand_kg, brand_reserved_kg
 
         _arrived_lot(kg="10000", brand="LLDPE")
         customer = _customer()
@@ -707,7 +724,12 @@ class TestClosingABron:
         assert bron.is_open is False
         # and the 4 000 it was holding is on the shelf for anybody
         assert brand_reserved_kg("LLDPE") == Decimal("0")
-        assert brand_free_kg("LLDPE") == Decimal("8000.000")
+        # Asked of what is physically there, because that IS the shelf now. The
+        # figure this line used to read — brand_free_kg, on-hand minus bronned —
+        # was retired along with the rule behind it: a bron no longer holds kg back
+        # from another mijoz (see brand_on_hand_kg), so "free" and "on hand" became
+        # the same number and only one of them was worth keeping.
+        assert brand_on_hand_kg("LLDPE") == Decimal("8000.000")
 
     def test_closed_is_its_own_status_not_cancelled(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")

@@ -1,6 +1,7 @@
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import DecimalField, Max, Sum
 from django.utils import timezone
@@ -258,6 +259,50 @@ class Partner(models.Model):
         return self.name
 
 
+class HeldFloat:
+    """The money arithmetic shared by every top-up we send somebody who then spends
+    it on our behalf — a logist funding drivers, a bojxonachi clearing loads.
+
+    One rule in one place, because it is the rule that is easy to get wrong: the
+    bank's foiz has to come off exactly ONE side. When we carry it the other party
+    is funded the whole figure and the kassa is out that much more; when they carry
+    it, it comes out of the same money and they are funded by that much less.
+    Written twice, the two halves drifted and charged the same fee to both sides.
+
+    Concrete classes are CashEntry subclasses (they supply `amount`, `amount_uzs`,
+    `method` and the foiz) and name the currency their holder's balance is kept in."""
+
+    #: The currency the holder's balance is kept in — what a top-up has to cross to
+    #: land in it, and therefore the one case a kurs was really chosen.
+    float_currency = Currency.USD
+
+    @property
+    def net_amount(self):
+        """What actually reached them — what becomes theirs to spend, so what their
+        balance grows by."""
+        return self.amount if self.fee_on_company else self.amount - self.fee_amount
+
+    @property
+    def net_amount_uzs(self):
+        return uzs_slice(self, self.net_amount)
+
+    @property
+    def total_out(self):
+        """What the kassa loses: their money, plus the bank's cut when we carry it."""
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def total_out_uzs(self):
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+    @property
+    def crosses_currency(self):
+        """True when the money sent is not the money the balance is kept in — the
+        one case the kurs on this row did real work."""
+        return self.currency != self.float_currency
+
+
 class Logist(models.Model):
     """Logist: the person who arranges transport and pays the drivers for us.
 
@@ -323,6 +368,89 @@ class Logist(models.Model):
     @property
     def balance_uzs(self):
         return self.received_total_uzs - self.paid_total_uzs
+
+    def __str__(self):
+        return self.name
+
+
+class CustomsAgent(models.Model):
+    """Bojxonachi: the person at customs we send money to so a yuk clears legally.
+
+    The same shape as a Logist — an outside party carrying our money, allowed to go
+    negative when they cover a load out of their own pocket — with the one
+    difference that is why it is its own model: the money goes out PER LOAD, as an
+    estimate, before anyone knows what clearing will actually cost. We send ~40 mln
+    for a truck and it comes back 37, or 39, or exactly 40. Nobody finds out until
+    afterwards, which is the fact this whole feature exists to record.
+
+    What was not spent stays with them and funds the next load, so the balance is a
+    running float exactly like a logist's; what is extra is that the gap is readable
+    per load (Shipment.customs_diff_by_currency) instead of only in aggregate.
+
+    Where it parts company with a logist is the currency. A logist's hisob is one
+    heap: every driver advance is booked in dollars, so its so'm figure is that same
+    money restated. Bojxona money is not — it goes out in so'm and sometimes in
+    dollars, and a clearing is paid in whichever was sent. So it is TWO heaps, and
+    read the way every other two-sided figure in the app is: bucketed by the
+    currency each row actually moved in, never added across.
+
+    Summing them is the specific mistake this is written to avoid. Adding each row's
+    so'm column would take a $4 000 to'lov's derived twin — 50 mln at that day's
+    kurs — and pile it on top of real so'm, so a bojxonachi holding 3 mln would read
+    as holding 53 mln. That is the same defect kassa_cash_by_currency exists to
+    undo."""
+
+    name = models.CharField("Ismi", max_length=200)
+    phone = models.CharField("Telefon", max_length=30, blank=True)
+    note = models.TextField("Izoh", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Bojxonachi"
+        verbose_name_plural = "Bojxonachilar"
+
+    def received_by_currency(self):
+        """[(currency, yuborilgan)] — what we have sent them, per heap.
+
+        `net_amount` rather than `amount`, for the same reason a logist's is: a bank
+        foiz never reached them, so it never became theirs to spend."""
+        if not hasattr(self, "payments"):
+            return []
+        return _by_currency(
+            (p.currency, own_side(p, p.net_amount, p.net_amount_uzs))
+            for p in self.payments.all())
+
+    def spent_by_currency(self):
+        """[(currency, sarflangan)] — what they have actually paid out at bojxona on
+        our loads, in the currency each clearing was paid in."""
+        if not hasattr(self, "expenses"):
+            return []
+        return _by_currency(
+            (e.currency, own_side(e, e.amount, e.amount_uzs))
+            for e in self.expenses.all())
+
+    def balance_by_currency(self):
+        """[(currency, qoldiq)] — positive = our money still in their hands,
+        negative = they covered a load themselves and we owe them.
+
+        Both signs can be on screen at once, and that is a real state rather than a
+        contradiction: money left over from a so'm truck while a dollar clearing ran
+        short is two facts, and netting them needs a kurs neither was moved at."""
+        entries = [(currency, amount)
+                   for currency, amount in self.received_by_currency()]
+        entries += [(currency, -amount)
+                    for currency, amount in self.spent_by_currency()]
+        return _by_currency(entries)
+
+    def held_by_currency(self):
+        """Only the heaps that are ours to get back."""
+        return [(c, a) for c, a in self.balance_by_currency() if a > 0]
+
+    def owed_by_currency(self):
+        """Only the heaps we owe them, positive so they read as an amount rather
+        than as a deficit."""
+        return [(c, -a) for c, a in self.balance_by_currency() if a < 0]
 
     def __str__(self):
         return self.name
@@ -840,13 +968,20 @@ class SupplierPayment(CashEntry):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
 
 
-class LogistPayment(CashEntry):
+class LogistPayment(HeldFloat, CashEntry):
     """Money we send a logist so they can pay drivers.
 
     THIS is the kassa outflow, not the driver advance that follows it. The cash
     leaves us here; what the logist later hands a driver moves their balance and
     prices the yuk, but spending it again in the kassa would bill us twice for the
-    same money."""
+    same money.
+
+    A logist's hisob is kept in dollars whatever they hand a driver, so a so'm
+    top-up is the crossing and the kurs on it was really chosen."""
+
+    #: See HeldFloat.float_currency — every driver advance is booked in dollars
+    #: (ShipmentForm.sync_driver_advance), so the balance is a dollar figure.
+    float_currency = Currency.USD
 
     logist = models.ForeignKey(Logist, on_delete=models.PROTECT,
                                related_name="payments", verbose_name="Logist")
@@ -867,43 +1002,65 @@ class LogistPayment(CashEntry):
         verbose_name = "Logistga to'lov"
         verbose_name_plural = "Logistga to'lovlar"
 
-    @property
-    def net_amount(self):
-        """What actually reached the logist — what becomes theirs to spend, so what
-        their balance grows by.
+    def __str__(self):
+        return f"{self.logist_id} · {self.amount}$ ({self.date})"
 
-        The whole `amount` when we carry the bank's cut, which is how a top-up has
-        always been sent. Carried by the logist instead, the cut comes out of the
-        same money, so they are funded by that much less.
 
-        (Before the bearer was a choice this read `amount - fee` while `total_out`
-        read `amount + fee`, which charged the fee twice — once to us and once to
-        them. The two now come off the same decision.)"""
-        return self.amount if self.fee_on_company else self.amount - self.fee_amount
+class CustomsPayment(HeldFloat, CashEntry):
+    """Money we send a bojxonachi so a load can be cleared.
 
-    @property
-    def net_amount_uzs(self):
-        return uzs_slice(self, self.net_amount)
+    THIS is the kassa outflow, the same rule the logist pair follows: the cash
+    leaves us here, and what they later hand over at bojxona prices the yuk without
+    leaving the kassa a second time.
 
-    @property
-    def total_out(self):
-        """What the kassa loses: the logist's money, plus the bank's cut when we are
-        the ones carrying it."""
-        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+    `shipment` is what a LogistPayment has no use for and this one turns on. Customs
+    money is sent FOR a truck — 40 mln so THIS one clears — so the row remembers
+    which, and what was sent for a load can be set against what clearing it actually
+    cost. Left blank it is a plain top-up: money added to the float with no load
+    named yet, which is how a round figure sent ahead of the week gets recorded."""
 
-    @property
-    def total_out_uzs(self):
-        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
-        return self.amount_uzs + fee
+    agent = models.ForeignKey(CustomsAgent, on_delete=models.PROTECT,
+                              related_name="payments", verbose_name="Bojxonachi")
+    # PROTECT rather than CASCADE: deleting a yuk must not silently swallow money
+    # that really left the kassa for it.
+    shipment = models.ForeignKey("Shipment", on_delete=models.PROTECT, null=True,
+                                 blank=True, related_name="customs_payments",
+                                 verbose_name="Qaysi yuk uchun")
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="customs_payments",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Bojxonaga to'lov"
+        verbose_name_plural = "Bojxonaga to'lovlar"
 
     @property
     def crosses_currency(self):
-        """A logist's hisob is kept in dollars whatever they hand a driver, so a
-        so'm top-up is the crossing and the kurs on it was really chosen."""
-        return self.currency != Currency.USD
+        """Never — and that is what makes this different from a logist top-up.
+
+        A logist's hisob is one dollar heap, so a so'm top-up has to be converted
+        INTO it and the kurs decides how much they end up holding. A bojxonachi
+        holds two heaps (see CustomsAgent), so a so'm to'lov lands in the so'm heap
+        and a dollar one in the dollar heap. Nothing is converted, so no kurs was
+        chosen and there is none worth printing beside the row.
+
+        The stored so'm twin still exists — every money row carries both columns —
+        but it is a restatement for the kassa's converted total, not a figure this
+        to'lov was settled at."""
+        return False
 
     def __str__(self):
-        return f"{self.logist_id} · {self.amount}$ ({self.date})"
+        own = self.amount_uzs if self.is_som else self.amount
+        return f"{self.agent_id} · {own} {self.currency} ({self.date})"
 
 
 def logist_positions():
@@ -923,6 +1080,23 @@ def logist_positions():
             owed -= balance
             owed_uzs -= balance_uzs
     return held, held_uzs, owed, owed_uzs
+
+
+def customs_positions():
+    """(held, owed) across bojxonachilar — each a [(currency, amount)] with both
+    sides positive.
+
+    Two separations, for two different reasons. Held is kept apart from owed for the
+    same reason the hamkor and logist pairs are: money left over from an
+    overestimated load and money a bojxonachi fronted himself are different facts,
+    and one net number hides both. And each side is per-currency because bojxona
+    money moves in two of them, and a so'm heap plus a dollar heap restated in so'm
+    is not a total of anything."""
+    held, owed = [], []
+    for agent in CustomsAgent.objects.prefetch_related("payments", "expenses"):
+        held += agent.held_by_currency()
+        owed += agent.owed_by_currency()
+    return _by_currency(held), _by_currency(owed)
 
 
 def commission_total(payments):
@@ -1034,6 +1208,62 @@ class Shipment(models.Model):
         riding together carry the same share of the freight."""
         total_kg = self.kg
         return self.expenses_total / total_kg if total_kg else Decimal("0")
+
+    # ── Bojxona: what was sent for this load against what it really cost ──────────
+    #
+    # The estimate goes out first — ~40 mln so this truck clears — and the true
+    # figure only lands afterwards. These three read that gap off the rows already
+    # being stored: the to'lovlar naming this yuk, against the xarajatlar the
+    # bojxonachi paid on it. Nothing new is entered to make the comparison work,
+    # which is what keeps it true rather than a second set of numbers to maintain.
+
+    def customs_sent_by_currency(self):
+        """[(currency, yuborilgan)] to a bojxonachi FOR THIS LOAD.
+
+        `net_amount`, not `amount`: a bank foiz never reached them, so it was never
+        money that could clear anything. Bucketed by the currency each to'lov was
+        made in, the same rule every other total in the app follows — 40 mln so'm
+        and $500 sent for one truck are two figures, and the kurs that would join
+        them is not one either side agreed to."""
+        return _by_currency(
+            (p.currency, own_side(p, p.net_amount, p.net_amount_uzs))
+            for p in self.customs_payments.all())
+
+    def customs_spent_by_currency(self):
+        """[(currency, sarflangan)] — what clearing it actually cost out of that
+        money.
+
+        Only the rows a bojxonachi paid. A bojxona xarajat settled straight from the
+        kassa is a real cost of the yuk, but it is not money out of this float, and
+        counting it here would read as an overspend that never happened."""
+        return _by_currency(
+            (e.currency, own_side(e, e.amount, e.amount_uzs))
+            for e in self.expenses.all() if e.customs_agent_id)
+
+    def customs_diff_by_currency(self):
+        """[(currency, farq)] — positive: sent for this load and not spent on it,
+        still with the bojxonachi and funding the next truck. Negative: clearing
+        cost more than we sent and they covered the rest.
+
+        THE figure this feature exists for. Per currency because that is the only
+        way it can be checked against anything: an operator asking "we sent 40, what
+        came back?" is holding a so'm number, and an answer part-derived from a
+        dollar row at some day's kurs is not one they can verify."""
+        entries = list(self.customs_sent_by_currency())
+        entries += [(currency, -amount)
+                    for currency, amount in self.customs_spent_by_currency()]
+        return _by_currency(entries)
+
+    @property
+    def customs_is_open(self):
+        """Still unaccounted for: money was involved and some heap does not balance.
+
+        A yuk nobody has sent customs money for is not "settled", it is simply not
+        part of this ledger — so it answers False rather than True and stays off the
+        reconciliation screen entirely."""
+        if not self.customs_sent_by_currency() and not self.customs_spent_by_currency():
+            return False
+        return bool(self.customs_diff_by_currency())
 
     @property
     def is_lot(self):
@@ -1378,7 +1608,7 @@ def kassa_cash_by_currency():
         entries.append((payment.currency,
                         own_side(payment, payment.net_amount, payment.net_amount_uzs)))
     for rows in (SupplierPayment.objects.all(), ShipmentExpense.objects.all(),
-                 LogistPayment.objects.all()):
+                 LogistPayment.objects.all(), CustomsPayment.objects.all()):
         for row in rows:
             entries.append((row.currency,
                             -own_side(row, row.total_out, row.total_out_uzs)))
@@ -1602,40 +1832,28 @@ def bron_queue(brand=None):
     return [r for r in qs if r.remaining_kg > 0]
 
 
-def brand_reserved_kg(brand, exclude_customer=None):
+def brand_reserved_kg(brand):
     """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
-    a bron half filled from an earlier truck only blocks the half still owed.
+    a bron half filled from an earlier truck only reports the half still owed.
 
-    `exclude_customer` leaves that mijoz's OWN brons out. Their promise does not
-    stand between them and the granula it promises them: counting it did, and a
-    bron holder could not buy their own bronned marka over the counter at all —
-    which in turn meant an ordinary sotuv could never draw the bron down."""
-    keep = (r for r in bron_queue(brand)
-            if exclude_customer is None or r.customer_id != exclude_customer.pk)
-    return sum((r.remaining_kg for r in keep), Decimal("0"))
+    Reported, never enforced: this figure tells the operator who is waiting on the
+    granula, and nothing more. It is not subtracted from what a sotuv may take —
+    see `brand_on_hand_kg`."""
+    return sum((r.remaining_kg for r in bron_queue(brand)), Decimal("0"))
 
 
 def brand_on_hand_kg(brand):
     """Physical kg of this marka in the ombor — what arrived, minus what has been
     sold, plus what came back. This is the only ceiling a sotuv has: bronned kg are
-    still sellable to whoever walks in."""
+    still sellable to whoever walks in.
+
+    A bron used to come off this figure, so a marka promised to one mijoz could not
+    be sold to another at all. Real trade does not work that way — a mijoz turns up
+    with cash for granula that was promised to somebody who is not collecting, and
+    that sotuv has to be enterable. Who gets the kg is settled between the operator
+    and the mijozlar; the screen reports the promise and lets it be overridden."""
     return sum((lot.kg - lot.sold_kg + lot.returned_kg
                 for lot in arrived_lots().filter(contract_line__brand=brand)),
-               Decimal("0"))
-
-
-def brand_free_kg(brand, customer=None):
-    """What an ordinary sotuv may take: on the shelf, minus what is bronned for
-    SOMEBODY ELSE.
-
-    Pass the buyer and their own bron stops counting against them — see
-    `brand_reserved_kg`. Without a buyer this is the shelf-wide figure the ombor
-    screens show, which still nets off every bron.
-
-    Never negative — brons can be taken against goods that have not landed yet, so
-    promised can legitimately exceed on-hand, and reporting that as a negative
-    shelf figure would be nonsense rather than information."""
-    return max(brand_on_hand_kg(brand) - brand_reserved_kg(brand, customer),
                Decimal("0"))
 
 
@@ -1728,16 +1946,12 @@ def release_bron(sale):
 
 def brand_stock_costed():
     """Per marka in the ombor: what is on the shelf, how much of it somebody has
-    bronned, what is therefore free to sell over the counter, the blended landed
-    cost, and which kelishuvlar it came from.
+    bronned, the blended landed cost, and which kelishuvlar it came from.
 
-    `free` is on-hand less bronned, and never below zero — a bron can be taken
-    against granula that has not landed, so promised may legitimately exceed the
-    shelf. It is carried BESIDE on_hand rather than replacing it because the two
-    answer different questions: on_hand is what is physically there, free is what
-    an ordinary sotuv may take. A brand's lots can carry different landed costs and
-    come from different kelishuvlar, so the cost is kg-weighted and the codes are
-    the full set."""
+    `reserved` rides beside `on_hand` rather than being taken off it: what is
+    physically there is what may be sold, and the promise is a note next to it. A
+    brand's lots can carry different landed costs and come from different
+    kelishuvlar, so the cost is kg-weighted and the codes are the full set."""
     on_hand, cost, codes = {}, {}, {}
     for lot in arrived_lots():
         a = lot.available_kg
@@ -1753,7 +1967,6 @@ def brand_stock_costed():
             "brand": b,
             "on_hand": on_hand[b],
             "reserved": reserved,
-            "free": max(on_hand[b] - reserved, Decimal("0")),
             "cost": (cost[b] / on_hand[b]).quantize(Decimal("0.0001")),
             "codes": sorted(codes[b]),
         })
@@ -2442,6 +2655,13 @@ class ShipmentExpense(CashEntry):
     logist = models.ForeignKey("Logist", on_delete=models.PROTECT, null=True,
                                blank=True, related_name="driver_advances",
                                verbose_name="Logist to'ladi")
+    # The same arrangement one desk over: set when the bojxonachi paid this out of
+    # money we already sent them for the load. This is the row that answers "we sent
+    # 40 — what did it really cost?", so it is what customs_spent_by_currency adds
+    # up. Mutually exclusive with `logist`: one payment has one payer (see clean()).
+    customs_agent = models.ForeignKey("CustomsAgent", on_delete=models.PROTECT,
+                                      null=True, blank=True, related_name="expenses",
+                                      verbose_name="Bojxonachi to'ladi")
     # The advance the logist hands the driver as the truck leaves. Flagged rather
     # than inferred from `logist` alone, because a logist may pay a yuk's bojxona
     # too — and this is the one row the yuk form owns and rewrites on edit.
@@ -2456,16 +2676,44 @@ class ShipmentExpense(CashEntry):
         ordering = ["-date", "-created_at"]
         verbose_name = "Yuk xarajati"
         verbose_name_plural = "Yuk xarajatlari"
+        constraints = [
+            # clean() says this too, but clean() is only reached through a form. The
+            # prototype importer, the seeders and a shell one-liner all build rows
+            # directly, and a row claiming two payers would quietly debit two
+            # people's balances for one payment — the kind of thing that is found
+            # months later by a balance nobody can explain.
+            models.CheckConstraint(
+                condition=models.Q(logist__isnull=True)
+                | models.Q(customs_agent__isnull=True),
+                name="expense_has_one_payer"),
+        ]
+
+    def clean(self):
+        """One payment has one payer. Both set would count the same money out of two
+        people's balances, and the kassa — which only asks whether ANY holder paid —
+        would look right while both accounts drifted."""
+        super().clean()
+        if self.logist_id and self.customs_agent_id:
+            raise ValidationError(
+                "Xarajatni logist yoki bojxonachi to'laydi — ikkalasi emas")
 
     @property
     def from_kassa(self):
-        """False when a logist funded it from the balance we already sent them."""
-        return self.logist_id is None
+        """False when somebody who already holds our money funded it — a logist out
+        of their float, a bojxonachi out of what we sent for this load."""
+        return self.logist_id is None and self.customs_agent_id is None
+
+    @property
+    def paid_by(self):
+        """The holder whose balance this came out of, or None for the kassa. One
+        accessor rather than two `{% if %}`s on every screen that prints the payer."""
+        return self.logist or self.customs_agent
 
     @property
     def total_out(self):
         """What the kassa loses: the expense plus any bank foiz — and nothing at all
-        when a logist paid it, because that money already left as a LogistPayment.
+        when a holder paid it, because that money already left as the LogistPayment
+        or CustomsPayment that funded them.
 
         The landed cost deliberately keeps using `amount` either way: a transfer fee
         is the cost of moving money, not of the goods, and who handed the cash over

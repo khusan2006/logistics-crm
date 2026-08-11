@@ -398,3 +398,15 @@ def test_a_narx_is_not_padded_out_to_four_decimals(db):
     assert _trim(Decimal("0.8140")) == "0.814"
     assert _trim(Decimal("1.0000")) == "1"
     assert _trim(Decimal("1.1700")) == "1.17"
+
+
+def test_a_progress_caption_writes_the_som_unit_once(db):
+    """Chiziq yonidagi "shuncha / shundan" — so'm so'zi oxirida bir marta, aks holda
+    ikkita to'qqiz xonali raqam chiziqni siqib qo'yadi. Dollarda esa $ ikkalasida
+    ham qoladi: u bir belgi va raqamning o'zi bilan o'qiladi."""
+    from crm.templatetags.crm_extras import money_progress_in
+    assert money_progress_in(Decimal("312500000"), Decimal("625000000"), "uzs") == (
+        f"312{NBSP}500{NBSP}000 / 625{NBSP}000{NBSP}000 so'm")
+    assert money_progress_in(Decimal("60000"), Decimal("296400"), "usd") == (
+        f"$60{NBSP}000 / $296{NBSP}400")
+    assert money_progress_in(None, Decimal("24000"), "usd") == f"$0 / $24{NBSP}000"
