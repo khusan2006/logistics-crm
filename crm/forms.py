@@ -786,7 +786,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent", "eta", "arrived", "logist",
+        fields = ["contract", "status", "sent", "eta", "arrived", "qr_date", "logist",
                   "responsible", "driver_name", "driver_phone", "transport",
                   "container", "note"]
         widgets = {
@@ -794,6 +794,9 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             "sent": date_widget(),
             "eta": date_widget(),
             "arrived": date_widget(),
+            # Only the PLANNED day. Whether the kod was actually handed over is the
+            # QR button's to say, not this form's — see crm.views.shipment_set_qr.
+            "qr_date": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             # Plain text on purpose. It used to carry a UZ/IR country picker that
             # uppercased and re-spaced what was typed, which read as "only these two
@@ -816,7 +819,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     # advance at the bottom of the form — three fields about the logist, six fields
     # away from the logist picker. The generic template renders `form` in order, so
     # the order is set here rather than by hand-writing a template.
-    field_order = ["contract", "status", "sent", "eta", "arrived",
+    field_order = ["contract", "status", "sent", "eta", "arrived", "qr_date",
                    "logist", "driver_advance",
                    "responsible", "driver_name", "driver_phone",
                    "transport", "container", "note"]

@@ -1602,6 +1602,37 @@ def shipment_set_status(request, pk):
     return redirect(request.POST.get("next") or "shipment_list")
 
 
+@require_POST
+@role_required(User.Role.ADMIN)
+def shipment_set_qr(request, pk):
+    """Mark this load's QR kod handed over — or take the mark back.
+
+    A toggle, because the only way to correct a mis-click on a row of near-identical
+    trucks is to press the same button again; there is no "unmark" screen and a QR
+    marked on the wrong yuk would otherwise need a full edit to undo.
+
+    Today's date and not `qr_date`: that field is the plan, and a kod handed over
+    early or late should say when it really happened. The button is what makes it
+    true, so pressing it on the day is the whole workflow."""
+    shipment = get_object_or_404(Shipment, pk=pk)
+    given = shipment.qr_given is None       # pressing it flips whichever way it sits
+    shipment.qr_given = timezone.localdate() if given else None
+    shipment.save(update_fields=["qr_given"])
+    AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                    f"QR kod {'berildi' if given else 'bekor qilindi'}"
+                    + (f": {shipment.qr_given}" if given else ""))
+
+    if is_ajax(request):
+        # The list flips the row's indicator in place — a reload here would collapse
+        # whichever load panel is open and throw away the active holat tab.
+        return JsonResponse({
+            "has_qr": given,
+            "qr_given": shipment.qr_given.isoformat() if given else None,
+        })
+    messages.success(request, "QR kod berildi" if given else "QR kod belgisi olindi")
+    return redirect(request.POST.get("next") or "shipment_list")
+
+
 @role_required(User.Role.ADMIN)
 def shipment_delete(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
@@ -2981,11 +3012,11 @@ def export_shipments(request):
     shipments = _report_querysets(request)["shipments"]
     headers = [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
-        "Yetib kelgan", "Transport", "Konteyner",
+        "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
     ]
     rows = (
         [s.pk, s.contract.code, s.contract.partner.name, ln.brand, ln.kg, s.status.name,
-         s.sent, s.eta, s.arrived, s.transport, s.container]
+         s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container]
         for s in shipments.prefetch_related("lines__contract_line")
         for ln in s.lines.all()
     )

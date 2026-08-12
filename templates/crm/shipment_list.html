@@ -91,8 +91,15 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
   {% for s in g.shipments %}
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
       data-contract="{{ g.contract.pk }}"
-      class="load-row{% if s.is_overdue %} is-overdue{% endif %}">
-    <td class="sticky-col load-toggle" data-load="{{ s.pk }}" title="Bosqichlar va xarajatlarni ochish">
+      class="load-row{% if s.is_overdue %} is-overdue{% endif %}{% if s.has_qr %} has-qr{% endif %}">
+    {% comment %}
+    The row's left bar is the QR marker: green once the kod is given, yellow while
+    it is not. A kechikkan load keeps its red there too — the bar splits in half and
+    carries both, since "late AND no QR" is exactly the truck worth finding, and
+    letting one colour replace the other would hide it.
+    {% endcomment %}
+    <td class="sticky-col load-toggle" data-load="{{ s.pk }}"
+        title="{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }}{% else %}QR kod berilmagan{% if s.qr_date %} · reja: {{ s.qr_date }}{% endif %}{% endif %} · bosqichlar va xarajatlarni ochish">
       <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
     </td>
@@ -152,13 +159,31 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
     </td>
     <td class="row-actions">
       {% comment %}
-      The tarjimon's one write on a yuk. Admins get it too — a plate corrected without
-      opening the whole dispatch modal.
+      The tarjimon's one write on a yuk — and only theirs. An admin already edits the
+      haydovchi in the full dispatch modal beside it, so the icon was a second door
+      to four fields they can reach anyway, crowding a row that already carries five
+      actions. The view still allows both roles; this is the row saying whose job it
+      is.
       {% endcomment %}
+      {% if not user.is_admin_role %}
       <a class="icon-action act-edit" href="{% url 'shipment_driver_edit' s.pk %}" data-modal title="Haydovchi va konteyner">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M17 11l2 2 4-4"/></svg>
       </a>
+      {% endif %}
       {% if user.is_admin_role %}
+      {% comment %}
+      QR berildi/bekor qilish. A form and not a link: it writes, and one press is the
+      whole action — a modal to confirm "yes, the driver took the kod" would double
+      the clicks on the one thing done to every truck that leaves.
+      {% endcomment %}
+      <form method="post" action="{% url 'shipment_set_qr' s.pk %}" class="row-inline-form qr-cell-form" data-qr-form="{{ s.pk }}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <button type="submit" class="icon-action act-qr{% if s.has_qr %} is-on{% endif %}"
+                title="{% if s.has_qr %}QR kod berilgan — belgini olish{% else %}QR kod berildi deb belgilash{% endif %}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M21 14v3"/><path d="M17 21h4"/><path d="M14 21h0"/></svg>
+        </button>
+      </form>
       <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </a>
@@ -215,6 +240,11 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
             <span class="lf-label">Transport</span>
             <span class="lf-value">{{ s.current_transport|default:"—" }}</span>
             {% if s.container %}<span class="lf-sub">Konteyner: {{ s.container }}</span>{% endif %}
+          </div>
+          <div class="lf">
+            <span class="lf-label">QR kod</span>
+            <span class="lf-value qr-fact" data-load="{{ s.pk }}">{% if s.has_qr %}Berilgan · {{ s.qr_given }}{% else %}Berilmagan{% endif %}</span>
+            {% if s.qr_date %}<span class="lf-sub">Beriladigan kun: {{ s.qr_date }}</span>{% endif %}
           </div>
           {% if s.responsible %}
           <div class="lf">
@@ -480,6 +510,44 @@ page here is "these N kelishuv and all of their yuklar".
     bar.setAttribute('data-yuk', data.shipment_id);
     host.insertBefore(bar, host.firstChild);
   }
+
+  // QR toggle: same in-place rule as the status dropdown. Reloading would collapse
+  // any open load panel and drop back to the default tab, which is a lot of state
+  // to lose for a one-bit change.
+  document.querySelectorAll('.qr-cell-form').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = form.querySelector('button');
+      var row = form.closest('tr');
+      var cell = row.querySelector('.load-toggle');
+      fetch(form.getAttribute('action'), {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      }).then(function (r) {
+        if (!r.ok) { throw new Error(); }
+        return r.json();
+      }).then(function (data) {
+        row.classList.toggle('has-qr', data.has_qr);
+        btn.classList.toggle('is-on', data.has_qr);
+        btn.title = data.has_qr ? 'QR kod berilgan — belgini olish'
+                                : 'QR kod berildi deb belgilash';
+        if (cell) {
+          cell.title = (data.has_qr ? 'QR kod berilgan: ' + data.qr_given
+                                    : 'QR kod berilmagan')
+                     + ' · bosqichlar va xarajatlarni ochish';
+        }
+        // The open panel below the row states it too — keep the two in step.
+        var loadId = form.getAttribute('data-qr-form');
+        var fact = document.querySelector('.qr-fact[data-load="' + loadId + '"]');
+        if (fact) {
+          fact.textContent = data.has_qr ? 'Berilgan · ' + data.qr_given : 'Berilmagan';
+        }
+      }).catch(function () {
+        alert("QR belgisini saqlab bo'lmadi. Qayta urinib ko'ring.");
+      });
+    });
+  });
 
   // Status dropdown: save via fetch and update the row IN PLACE — no page
   // reload, so what you see is always the saved state. If the load reached

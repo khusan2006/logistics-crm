@@ -25,7 +25,7 @@ EXPORT_URLS = {
     ],
     "/reports/export/shipments.xlsx": [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
-        "Yetib kelgan", "Transport", "Konteyner",
+        "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
     ],
     "/reports/export/sales.xlsx": [
         "Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Valyuta", "Kurs", "Tan narx ($)",

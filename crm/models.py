@@ -1116,6 +1116,17 @@ class Shipment(models.Model):
     sent = models.DateField("Jo'natilgan sana", null=True, blank=True)
     eta = models.DateField("Taxminiy kelish", null=True, blank=True)
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
+    # A QR kod is handed to SOME drivers as they leave Eron; the ones carrying it
+    # clear the road faster and land earlier, so which trucks have one is worth
+    # seeing at a glance. Two dates, not a date and a flag: `qr_date` is the day it
+    # is meant to be handed over (known at dispatch, a plan), `qr_given` the day it
+    # actually was. The date is what says it happened — the same rule `arrived`
+    # follows, and it keeps "planned for Friday" from reading as "done".
+    qr_date = models.DateField(
+        "QR kod beriladigan kun", null=True, blank=True,
+        help_text="QR kod olgan haydovchi tezroq yetib keladi. Bu yukka berilmasa — "
+                  "bo'sh qoldiring.")
+    qr_given = models.DateField("QR kod berilgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
     # Who on our side owns this load — free text rather than a user FK, since the
@@ -1148,6 +1159,13 @@ class Shipment(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Yuk"
         verbose_name_plural = "Yuklar"
+
+    @property
+    def has_qr(self):
+        """Whether this load's driver is carrying a QR kod. Green in the yuklar
+        table; every load without one is yellow, since "no QR" is itself the fact
+        worth reading — that truck takes the slow road."""
+        return self.qr_given is not None
 
     @property
     def is_overdue(self):

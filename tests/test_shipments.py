@@ -754,3 +754,125 @@ class TestEditKeepsHolatAndArrivalTogether:
         shipment.refresh_from_db()
         assert shipment.arrived is None
         assert not arrived_lots().filter(shipment=shipment).exists()
+
+
+class TestQrKod:
+    """A QR kod is handed to SOME drivers as they leave Eron; those trucks land
+    earlier. The yuklar table has to say which at a glance, so every row carries a
+    marker: green once the kod is given, yellow while it is not."""
+
+    def _shipment(self):
+        contract = _contract()
+        return make_shipment(contract=contract, kg="100")
+
+    def test_qr_day_is_saved_from_the_yuk_form(self, admin_client, db):
+        """The planned day is entered when the load is dispatched — it is known then,
+        and nobody comes back to a saved yuk to add it."""
+        contract = _contract()
+        assert _post_shipment(admin_client, contract, qr_date="2026-07-08").status_code == 302
+        assert Shipment.objects.get().qr_date == date(2026, 7, 8)
+
+    def test_qr_day_is_optional(self, admin_client, db):
+        """Most loads never get one, so leaving it blank has to be an ordinary save."""
+        contract = _contract()
+        assert _post_shipment(admin_client, contract).status_code == 302
+        shipment = Shipment.objects.get()
+        assert shipment.qr_date is None and shipment.has_qr is False
+
+    def test_the_button_marks_it_given_and_stamps_today(self, admin_client, db):
+        """Today's date and not `qr_date`: that field is the plan, and a kod handed
+        over early or late should record when it really happened."""
+        shipment = self._shipment()
+        shipment.qr_date = date(2026, 1, 1)
+        shipment.save(update_fields=["qr_date"])
+
+        admin_client.post(f"/shipments/{shipment.pk}/qr/")
+        shipment.refresh_from_db()
+        assert shipment.qr_given == date.today()
+        assert shipment.has_qr is True
+
+    def test_pressing_it_again_takes_the_mark_back(self, admin_client, db):
+        """The only way to fix a mis-click on a row of near-identical trucks."""
+        shipment = self._shipment()
+        admin_client.post(f"/shipments/{shipment.pk}/qr/")
+        admin_client.post(f"/shipments/{shipment.pk}/qr/")
+        shipment.refresh_from_db()
+        assert shipment.qr_given is None and shipment.has_qr is False
+
+    def test_ajax_returns_json_for_the_in_place_flip(self, admin_client, db):
+        """The list flips the indicator without reloading — a reload would collapse
+        any open load panel and drop back to the default holat tab."""
+        shipment = self._shipment()
+        resp = admin_client.post(f"/shipments/{shipment.pk}/qr/",
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["has_qr"] is True and data["qr_given"] == date.today().isoformat()
+
+        data = admin_client.post(f"/shipments/{shipment.pk}/qr/",
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest").json()
+        assert data["has_qr"] is False and data["qr_given"] is None
+
+    def _row(self, client, shipment):
+        """The opening <tr> of that load's row — where the marker classes live."""
+        html = client.get("/shipments/?all=1").content.decode()
+        return html.split(f'data-load="{shipment.pk}"', 1)[0].rsplit("<tr", 1)[1]
+
+    def test_the_row_stays_yellow_until_the_kod_is_given(self, admin_client, db):
+        """`has-qr` is what turns the left bar green; without it the CSS leaves it
+        yellow, which is the ordinary case rather than a warning."""
+        shipment = self._shipment()
+        assert "load-row" in self._row(admin_client, shipment)
+        assert "has-qr" not in self._row(admin_client, shipment)
+
+        admin_client.post(f"/shipments/{shipment.pk}/qr/")
+        assert "has-qr" in self._row(admin_client, shipment)
+
+    def test_a_late_load_carries_both_marks_at_once(self, admin_client, db):
+        """Late AND no QR is exactly the truck worth finding, so one colour must not
+        replace the other — the bar splits and shows both."""
+        shipment = self._shipment()
+        shipment.eta = date.today() - timedelta(days=3)
+        shipment.save(update_fields=["eta"])
+        row = self._row(admin_client, shipment)
+        assert "is-overdue" in row and "has-qr" not in row
+
+        admin_client.post(f"/shipments/{shipment.pk}/qr/")
+        row = self._row(admin_client, shipment)
+        assert "is-overdue" in row and "has-qr" in row
+
+    def test_a_translator_cannot_mark_a_qr(self, translator_client, db):
+        """They read the marker; changing it is admin work, like holat beside it."""
+        shipment = self._shipment()
+        resp = translator_client.post(f"/shipments/{shipment.pk}/qr/")
+        assert resp.status_code in (302, 403)
+        shipment.refresh_from_db()
+        assert shipment.qr_given is None
+
+    def test_a_translator_sees_no_qr_button_but_still_reads_the_marker(
+            self, translator_client, db):
+        """A button that 403s on click is worse than no button. The bar is CSS on the
+        row, so a tarjimon still sees which trucks carry a kod — they just cannot
+        change it."""
+        shipment = self._shipment()
+        html = translator_client.get("/shipments/?all=1").content.decode()
+        assert "act-qr" not in html
+        assert "load-toggle" in html
+
+        shipment.qr_given = date.today()
+        shipment.save(update_fields=["qr_given"])
+        assert "has-qr" in self._row(translator_client, shipment)
+
+
+def test_only_a_tarjimon_gets_the_haydovchi_button(admin_client, translator_client, db):
+    """The full dispatch modal already carries those four fields for an admin, so a
+    second door to them only crowded a row that has five other actions. The view
+    still serves both roles — this is the row saying whose job it is."""
+    shipment = make_shipment(contract=_contract(), kg="100")
+    href = f"/shipments/{shipment.pk}/driver/"
+    assert href in translator_client.get("/shipments/").content.decode()
+    assert href not in admin_client.get("/shipments/").content.decode()
+
+    detail = f"/shipments/{shipment.pk}/"
+    assert href in translator_client.get(detail).content.decode()
+    assert href not in admin_client.get(detail).content.decode()

@@ -40,6 +40,14 @@
   --violet: #6d3bd4;
   --violet-soft: #ece3fb;
 
+  /* Row flags — solid fills for the yuklar table's left bar, NOT the semantic
+     tokens above. Those are tuned to stay legible as TEXT on a light surface, which
+     is why --warning is a dark mustard; as a 3px bar read from across the room it
+     just looks brown. These are picked to be seen, not read. */
+  --flag-late: #F0343C;
+  --flag-noqr: #FFC400;
+  --flag-qr: #12C56B;
+
   --topbar-bg: rgba(255, 255, 255, 0.9);
 
   /* Radius */
@@ -90,6 +98,10 @@ html[data-theme="dark"] {
   --danger-soft: #321B1A;
   --violet: #b191f7;
   --violet-soft: #2b2440;
+
+  --flag-late: #FF5A57;
+  --flag-noqr: #FFCE2E;
+  --flag-qr: #25D67F;
 
   --topbar-bg: rgba(28, 28, 28, 0.9);
 
@@ -2008,7 +2020,42 @@ ul.errorlist li::before { content: "⚠ "; }
 .status-tab--danger.is-active { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 .loads-table td { vertical-align: middle; }
-.load-row.is-overdue td.sticky-col { box-shadow: inset 3px 0 0 var(--danger); }
+
+/* The load's left edge carries TWO facts, and a row can be both at once: kechikkan
+   (red) and whether its driver has a QR kod — green when they do and will land
+   early, yellow when they do not, which is the ordinary case rather than a warning.
+   A late load with no QR is exactly the truck worth finding, so the bar splits into
+   two stripes side by side and shows both, rather than being two rules where the
+   cascade quietly picks a winner and the other fact vanishes.
+
+   The bar is 3px either way — one colour across it, or two stripes sharing it when
+   a load is both. Same 3px the kelishuv header row uses just above it, so the whole
+   left gutter of the table stays one width.
+
+   A pseudo-element and not the `inset 3px` box-shadow this used to be: an inset
+   shadow is one flat colour and cannot be split. No `position: relative` on the cell
+   either — it is already `position: sticky` (frozen column), which is itself a
+   containing block for absolutes; forcing relative would unfreeze the Yuk column on
+   horizontal scroll. */
+.loads-table td.load-toggle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--flag-noqr);
+}
+.load-row.has-qr td.load-toggle::before { background: var(--flag-qr); }
+.load-row.is-overdue td.load-toggle::before {
+  background: linear-gradient(to right, var(--flag-late) 50%, var(--flag-noqr) 50%);
+}
+.load-row.is-overdue.has-qr td.load-toggle::before {
+  background: linear-gradient(to right, var(--flag-late) 50%, var(--flag-qr) 50%);
+}
+
+.loads-table .icon-action.act-qr.is-on { color: var(--success); opacity: 1; }
+.icon-action.act-qr.is-on:hover { background: var(--success-soft); }
 .load-id { font-weight: 700; }
 .load-partner { font-weight: 600; color: var(--text); }
 .load-sub { font-size: 12px; margin-top: 1px; }
@@ -2078,7 +2125,11 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-toggle { cursor: pointer; }
 .load-toggle:hover .leg-expand { background: var(--surface-hover); }
 .load-row.is-expanded td, .stock-row.is-expanded td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
-.load-row.is-expanded td.sticky-col, .stock-row.is-expanded td.sticky-col { box-shadow: inset 3px 0 0 var(--accent); }
+/* Only the ombor table gets the accent bar on its left edge. A yuk's edge belongs
+   to kechikkan + QR kod, and the pseudo-element bar draws over an inset shadow —
+   so the same rule here would be a dead one. The open row is marked by its tinted
+   background instead. */
+.stock-row.is-expanded td.sticky-col { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* Expandable route-legs row on the Yuklar table */
 .leg-expand { width: 24px; height: 24px; padding: 0; margin-right: 7px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent); font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transition: transform .15s ease, background .15s ease, color .15s ease; }

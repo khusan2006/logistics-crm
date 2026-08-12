@@ -8,9 +8,24 @@
   <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
     <a class="btn btn-ghost" href="{% url 'shipment_list' %}">&larr; Yuklar ro'yxatiga</a>
     <span class="row-actions">
-      {# The tarjimon's one write on a yuk; muddat is admin-only beside it. #}
+      {% comment %}
+      The tarjimon's one write on a yuk, and only theirs — an admin edits the same
+      four fields inside the full dispatch modal, so a second button for them here
+      was just another way in. Muddat and QR are admin-only beside it.
+      {% endcomment %}
+      {% if not user.is_admin_role %}
       <a class="btn btn-ghost" href="{% url 'shipment_driver_edit' shipment.pk %}" data-modal>Haydovchi va konteyner</a>
+      {% endif %}
       {% if user.is_admin_role %}
+      {# One press, no modal — the same toggle the yuklar table carries as an icon. #}
+      {# .row-inline-form: a bare <form> is block-level and would break this row. #}
+      <form method="post" action="{% url 'shipment_set_qr' shipment.pk %}" class="row-inline-form">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <button type="submit" class="btn{% if not shipment.has_qr %} btn-ghost{% endif %}">
+          {% if shipment.has_qr %}QR kod berilgan ✓{% else %}QR kod berildi{% endif %}
+        </button>
+      </form>
       <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
       {% endif %}
     </span>
@@ -76,6 +91,18 @@
     <div class="stat">
       <div class="muted">Yetib kelgan</div>
       <div>{{ shipment.arrived|default:"—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">QR kod</div>
+      <div>
+        {% if shipment.has_qr %}<span class="daybadge arrived">Berilgan</span>
+        {% else %}<span class="daybadge today">Berilmagan</span>{% endif %}
+        <div class="muted">
+          {% if shipment.has_qr %}{{ shipment.qr_given }}
+          {% elif shipment.qr_date %}Beriladigan kun: {{ shipment.qr_date }}
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
 </div>
