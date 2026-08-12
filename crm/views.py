@@ -26,7 +26,7 @@ from .forms import (
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, LogistForm, LogistPaymentForm,
-    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
+    SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
     ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
 )
@@ -1816,20 +1816,31 @@ def sale_list(request):
     return render(request, "crm/sale_list.html", {"page": page, "q": q})
 
 
+def _sale_form_response(request, form, lines, title, invalid=False):
+    return form_response(request, form, title, invalid=invalid,
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+
+
 @role_required(User.Role.ADMIN)
 def sale_create(request):
-    """Sale by brand: the entered kg is consumed from the oldest arrived lots
-    first (FIFO), one Sale row per lot slice so each slice keeps its own lot's
-    landed cost. `?lot=` (opening one lot from inside a marka in the ombor) sells
-    from THAT lot instead — see sale_create_lot."""
+    """Sale by brand, and by SEVERAL brands at once: one trip to the counter is one
+    sotuv, however many markalar the mijoz took, rather than one modal per product.
+
+    Each Mahsulot row's kg is consumed from the oldest arrived lots of that marka
+    first (FIFO), one Sale row per lot slice so each slice keeps its own lot's landed
+    cost. A row therefore becomes as many Sale objects as it takes lots to fill, and
+    the whole submission becomes the sum of those.
+
+    `?lot=` (opening one lot from inside a marka in the ombor) sells from THAT lot
+    instead, and stays single-product — see sale_create_lot."""
     lot_id = request.GET.get("lot") or request.POST.get("lot")
     if lot_id and str(lot_id).isdigit():
         return sale_create_lot(request, int(lot_id))
 
-    initial = {}
+    initial, row = {}, {}
     brand = (request.GET.get("brand") or "").strip()   # marka row's Sotish shortcut
     if brand:
-        initial["brand"] = brand
+        row["brand"] = brand
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
@@ -1842,49 +1853,70 @@ def sale_create(request):
     price = (request.GET.get("price") or "").strip()
     if price:
         try:
-            initial["price"] = Decimal(price)
+            row["price"] = Decimal(price)
         except (ArithmeticError, ValueError):
             pass
     form = SaleCreateForm(request.POST or None, initial=initial)
+    # The marka and its narx are a ROW now, so a shortcut that named one prefills the
+    # first row rather than the header.
+    lines = SaleLineFormSet(request.POST or None, prefix="lines",
+                            initial=[row] if row else None)
     if request.method == "POST":
-        if form.is_valid():
+        if form.is_valid() and lines.is_valid():
             data = form.cleaned_data
-            remaining = data["kg"]
-            slices = []
+            # One deal, one currency, one kurs — held on the header and applied to
+            # every row, so a sotuv can never end up half in dollars.
+            currency, rate = data["currency"], data["exchange_rate"]
+            slices, sold = [], []
             with transaction.atomic():
-                for lot in fifo_lots(data["brand"]):
-                    if remaining <= 0:
-                        break
-                    take = min(lot.available_kg, remaining)
-                    sale = Sale.objects.create(
-                        customer=data["customer"], line=lot, kg=take,
-                        # every FIFO slice inherits the one narx that was agreed,
-                        # in the currency it was agreed in
-                        **form.money_kwargs(),
-                        date=data["date"], debt_deadline=data["debt_deadline"],
-                        note=data["note"], created_by=request.user,
-                    )
-                    slices.append(sale)
-                    remaining -= take
-                    # Serving this mijoz normally makes their own promise smaller,
-                    # whichever lot the granula came off — per slice and in order, so
-                    # the bron falls by exactly what was sold. Unticked, the sotuv is
-                    # something else they bought and the booking stands untouched.
-                    if data.get("draw_from_bron"):
-                        draw_down_bron(sale)
+                for line in lines.rows():
+                    take_from = line.cleaned_data
+                    # The same conversion PriceEntryFormMixin does, at the header's
+                    # kurs. Four decimals: rounding a $/kg to cents would move a
+                    # 24-tonne lot by dollars.
+                    usd, uzs = convert_pair(take_from["price"], currency, rate, "0.0001")
+                    remaining = take_from["kg"]
+                    for lot in fifo_lots(take_from["brand"]):
+                        if remaining <= 0:
+                            break
+                        take = min(lot.available_kg, remaining)
+                        sale = Sale.objects.create(
+                            customer=data["customer"], line=lot, kg=take,
+                            # every FIFO slice inherits the one narx agreed for that
+                            # marka, in the currency the sotuv was agreed in
+                            price=usd, price_uzs=uzs,
+                            currency=currency, exchange_rate=rate,
+                            date=data["date"], debt_deadline=data["debt_deadline"],
+                            note=data["note"], created_by=request.user,
+                        )
+                        slices.append(sale)
+                        remaining -= take
+                        # Serving this mijoz normally makes their own promise smaller,
+                        # whichever lot the granula came off — per slice and in order,
+                        # so the bron falls by exactly what was sold. Unticked, the
+                        # sotuv is something else they bought and the booking stands.
+                        if data.get("draw_from_bron"):
+                            draw_down_bron(sale)
+                    sold.append(f"{take_from['kg']} kg {take_from['brand']}")
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
-                f"Yangi sotuv (FIFO): {data['kg']} kg {data['brand']} · "
+                f"Yangi sotuv (FIFO): {', '.join(sold)} · "
                 f"{data['customer'].name} · {len(slices)} lot",
             )
             for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
                 apply_customer_advance(sale)
-            messages.success(
-                request,
-                f"Sotuv qo'shildi ({len(slices)} lotdan)" if len(slices) > 1 else "Sotuv qo'shildi")
+            # Says what actually happened: several markalar, or one split across
+            # lots, or the ordinary single row.
+            if len(sold) > 1:
+                note = f"Sotuv qo'shildi ({len(sold)} mahsulot, {len(slices)} lotdan)"
+            elif len(slices) > 1:
+                note = f"Sotuv qo'shildi ({len(slices)} lotdan)"
+            else:
+                note = "Sotuv qo'shildi"
+            messages.success(request, note)
             return form_success(request, reverse("sale_list"))
-        return form_response(request, form, "Yangi sotuv", invalid=True)
-    return form_response(request, form, "Yangi sotuv")
+        return _sale_form_response(request, form, lines, "Yangi sotuv", invalid=True)
+    return _sale_form_response(request, form, lines, "Yangi sotuv")
 
 
 def sale_create_lot(request, lot_id):

@@ -11,6 +11,8 @@ from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 
+from conftest import line_data
+
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, PaymentAllocation,
     Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -55,9 +57,11 @@ def _lot(brand="LLDPE", kg="10000", contract_price="1.00", expense=None,
 def _sale_post(customer, brand, kg, price, currency="usd", rate="12000",
                date="2026-07-18", deadline="", note=""):
     return {
-        "customer": customer.pk, "brand": brand, "kg": str(kg),
-        "currency": currency, "price": str(price), "exchange_rate": str(rate),
+        "customer": customer.pk,
+        "currency": currency, "exchange_rate": str(rate),
         "date": date, "debt_deadline": deadline, "note": note,
+        # The marka and its narx are a Mahsulot ROW: one sotuv may carry several.
+        **line_data({"brand": brand, "kg": str(kg), "price": str(price)}),
     }
 
 

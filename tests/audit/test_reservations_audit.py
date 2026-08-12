@@ -15,6 +15,8 @@ from decimal import Decimal
 
 import pytest
 
+from conftest import line_data
+
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus, brand_on_hand_kg,
@@ -86,12 +88,14 @@ def _convert(client, reservation, price=None, kg=None):
     else:
         narx = reservation.price
     return client.post("/sales/new/", {
-        "customer": reservation.customer_id, "brand": reservation.brand,
-        "kg": str(give), "currency": reservation.currency,
-        "price": "" if narx is None else str(narx),
+        "customer": reservation.customer_id,
+        "currency": reservation.currency,
         "exchange_rate": str(reservation.exchange_rate),
         "date": "2026-07-20", "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
+        # The marka and its narx are a Mahsulot ROW now.
+        **line_data({"brand": reservation.brand, "kg": str(give),
+                     "price": "" if narx is None else str(narx)}),
     })
 
 
@@ -422,11 +426,14 @@ def test_the_agreed_narx_is_carried_onto_the_handover_form(admin_client, db):
     assert "currency=uzs" in html
 
     # and opening it puts the agreed figures in the boxes
-    form = admin_client.get(
+    resp = admin_client.get(
         f"/sales/new/?customer={customer.pk}&brand=LLDPE"
-        f"&currency=uzs&price={bron.price_own}").context["form"]
-    assert form.initial["price"] == Decimal("18000.00")
-    assert form.initial["currency"] == "uzs"
+        f"&currency=uzs&price={bron.price_own}")
+    assert resp.context["form"].initial["currency"] == "uzs"
+    # The marka and its agreed narx prefill the first Mahsulot row.
+    row = resp.context["lines"].forms[0].initial
+    assert row["brand"] == "LLDPE"
+    assert row["price"] == Decimal("18000.00")
 
     _convert(admin_client, bron)
     sale = Sale.objects.get()

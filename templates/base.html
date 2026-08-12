@@ -1987,12 +1987,19 @@
   // mijoz <option> carries the markalar they have booked (CustomerBronSelect), so
   // the answer needs no round trip.
   (function () {
-    function brandOf(form) {
-      var picker = form.querySelector('[data-bron-brand]');
-      if (picker) { return picker.value || ''; }
+    // Every marka the form is selling. A sotuv carries a Mahsulot row per marka now,
+    // so this is a list: reading only the first picker asked the bron question about
+    // row 1 and stayed silent when the bron was for row 2.
+    function brandsOf(form) {
+      var pickers = form.querySelectorAll('[data-bron-brand]');
+      if (pickers.length) {
+        return Array.prototype.map.call(pickers, function (p) { return p.value || ''; })
+                    .filter(function (v) { return v; });
+      }
       // The per-lot form has no marka picker — the lot already decided it.
       var box = form.querySelector('[data-bron-draw]');
-      return box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+      var fixed = box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+      return fixed ? [fixed] : [];
     }
     function update(form) {
       var box = form.querySelector('[data-bron-draw]');
@@ -2003,7 +2010,10 @@
       try {
         brands = JSON.parse((option && option.getAttribute('data-bron-brands')) || '[]');
       } catch (err) { brands = []; }
-      var asks = brands.indexOf(brandOf(form)) !== -1;
+      // Asked as soon as ANY row is a marka this mijoz holds a bron for. The
+      // drawdown itself is per slice and marka-matched, so the other rows are
+      // untouched by answering yes.
+      var asks = brandsOf(form).some(function (b) { return brands.indexOf(b) !== -1; });
       (box.closest('p') || box.closest('label') || box).hidden = !asks;
       // Ticked whenever it comes back: serving a bron holder normally draws the
       // bron down, and a box that reappeared unticked would change that silently.

@@ -82,7 +82,7 @@ def _pick(page, customer=None, brand=None):
     if customer is not None:
         page.select_option("[name=customer]", label=customer)
     if brand is not None:
-        page.select_option("[name=brand]", value=brand)
+        page.select_option("[name=lines-0-brand]", value=brand)
     page.wait_for_timeout(250)
 
 
@@ -126,8 +126,8 @@ def test_a_hidden_box_does_not_stop_an_ordinary_sotuv(page, live_server, world):
 
     _open(page, live_server)
     _pick(page, customer="Oddiy mijoz", brand="LLDPE")
-    page.fill("[name=kg]", "1000")
-    page.fill("[name=price]", "2.00")
+    page.fill("[name=lines-0-kg]", "1000")
+    page.fill("[name=lines-0-price]", "2.00")
     # Scoped to the sotuv's own form: the sidebar's logout is a submit button too,
     # and it comes first in the DOM — a bare button[type=submit] logs you out.
     page.locator("[name=customer]").locator(
