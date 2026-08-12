@@ -1077,6 +1077,24 @@ class ShipmentExtendForm(forms.Form):
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
 
 
+class ShipmentQrForm(forms.Form):
+    """When the kod actually reached the driver.
+
+    Asked rather than assumed to be today: the mark is often entered a day or two
+    after the fact, and a kod recorded on the day someone got round to clicking is
+    a date that says nothing. `qr_date` is not the default either — that field is
+    the plan, and the whole reason this one exists is that the two differ.
+
+    Optional on purpose: submitting it empty is how the mark comes back off. The
+    press used to be a toggle, and a QR marked on the wrong yuk out of a row of
+    near-identical trucks still needs a way back that is not a full edit."""
+
+    qr_given = forms.DateField(
+        label="QR kod berilgan sana", required=False, widget=date_widget(),
+        help_text="Kod haqiqatda qo'lga tegan kun. "
+                  "Belgini olish uchun — bo'sh qoldiring.")
+
+
 class ShipmentDriverForm(forms.ModelForm):
     """Who is driving this yuk and what it is riding in — the ONLY part of a load a
     tarjimon may change.

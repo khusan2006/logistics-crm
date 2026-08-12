@@ -25,16 +25,45 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
   are looking at — the toggle beside it is what moves you between them.
   {% endcomment %}
   {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+  {# Same reason as `all`: searching must not silently drop the QR filter. #}
+  {% if qr %}<input type="hidden" name="qr" value="{{ qr }}">{% endif %}
   <div class="toolbar-search{% if q %} is-active{% endif %}">
     <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     <input type="search" name="q" value="{{ q }}" placeholder="{% if show_all %}Barcha yuklar orasidan qidirish…{% else %}Transport, konteyner, marka yoki hamkor bo'yicha qidirish…{% endif %}" autocomplete="off" aria-label="Yuk qidirish">
-    {% if q %}<a href="?{% if show_all %}all=1{% endif %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    {# Clears the search term only — the Hammasi and QR toggles stay where they are. #}
+    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
+  {% comment %}
+  {% querystring %} rebuilds the URL from whatever is already on it, so each of these
+  toggles keeps the other filters and the search term instead of the hand-built
+  "?q=…&all=1" this used to be — which knew about exactly two params and would have
+  dropped `qr` on the floor. Passing None removes a param, which is how a toggle
+  turns itself off. page=None sends the pager back to page 1: page 3 of the old set
+  means nothing once the set changes under it.
+  {% endcomment %}
   <a class="btn{% if not show_all %} btn-ghost{% endif %}"
-     href="?{% if q %}q={{ q|urlencode }}{% if not show_all %}&{% endif %}{% endif %}{% if not show_all %}all=1{% endif %}"
+     href="{% if show_all %}{% querystring all=None page=None %}{% else %}{% querystring all=1 page=None %}{% endif %}"
      title="{% if show_all %}Faqat yo'ldagi yuklar{% else %}Yakunlangan yuklar bilan birga hammasi{% endif %}">
     {% if show_all %}Faol yuklar{% else %}Hammasi{% endif %}
   </a>
+  {% comment %}
+  QR bor / QR yo'q — two toggles, each clearing itself when pressed while active.
+  That is deliberately how "show every truck again" is reached: there is no third
+  Barchasi pill, so if these did not clear themselves the page would have no way back
+  to the unfiltered fleet. Neither active is the state the page opens in.
+
+  The dot on each pill is the colour that load's row bar will be, which is what says
+  these buttons and those stripes are about the same thing.
+
+  The count on QR yo'q is loads whose planned QR day has come and gone with no kod —
+  the ones actually worth chasing, and the reason to press it at all.
+  {% endcomment %}
+  <a class="btn qr-filter{% if qr != 'bor' %} btn-ghost{% endif %}"
+     href="{% if qr == 'bor' %}{% querystring qr=None page=None %}{% else %}{% querystring qr='bor' page=None %}{% endif %}"
+     title="{% if qr == 'bor' %}Saralashni bekor qilish{% else %}Faqat QR kod berilgan yuklar{% endif %}">QR bor</a>
+  <a class="btn qr-filter qr-filter--no{% if qr != 'yoq' %} btn-ghost{% endif %}"
+     href="{% if qr == 'yoq' %}{% querystring qr=None page=None %}{% else %}{% querystring qr='yoq' page=None %}{% endif %}"
+     title="{% if qr == 'yoq' %}Saralashni bekor qilish{% else %}Faqat QR kod berilmagan yuklar{% endif %}">QR yo'q{% if qr_waiting_count %}<span class="qr-waiting" title="{{ qr_waiting_count }} ta yukning QR kuni o'tib ketgan, kod hali berilmagan">{{ qr_waiting_count }}</span>{% endif %}</a>
 </form>
 
 {% if shipments %}
@@ -91,15 +120,20 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
   {% for s in g.shipments %}
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
       data-contract="{{ g.contract.pk }}"
-      class="load-row{% if s.is_overdue %} is-overdue{% endif %}{% if s.has_qr %} has-qr{% endif %}">
+      class="load-row{% if s.is_overdue %} is-overdue{% endif %}{% if s.has_qr %} has-qr{% elif s.qr_overdue %} qr-late{% endif %}">
     {% comment %}
     The row's left bar is the QR marker: green once the kod is given, yellow while
     it is not. A kechikkan load keeps its red there too — the bar splits in half and
     carries both, since "late AND no QR" is exactly the truck worth finding, and
     letting one colour replace the other would hide it.
+
+    A load whose planned QR day has passed pulses that yellow. It is still "no kod",
+    so the colour does not change to something that would read as a third state —
+    but a plan that has come and gone is not the same as a truck never meant to get
+    one, and the bar is where that difference is already being read.
     {% endcomment %}
     <td class="sticky-col load-toggle" data-load="{{ s.pk }}"
-        title="{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }}{% else %}QR kod berilmagan{% if s.qr_date %} · reja: {{ s.qr_date }}{% endif %}{% endif %} · bosqichlar va xarajatlarni ochish">
+        title="{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }}{% else %}QR kod berilmagan{% if s.qr_date %} · reja: {{ s.qr_date }}{% if s.qr_overdue %} · {{ s.qr_days_late }} kun kechikdi{% endif %}{% endif %}{% endif %} · bosqichlar va xarajatlarni ochish">
       <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
     </td>
@@ -172,18 +206,17 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
       {% endif %}
       {% if user.is_admin_role %}
       {% comment %}
-      QR berildi/bekor qilish. A form and not a link: it writes, and one press is the
-      whole action — a modal to confirm "yes, the driver took the kod" would double
-      the clicks on the one thing done to every truck that leaves.
+      QR berildi/bekor qilish. A modal and no longer a one-press form: the press wrote
+      today, and the mark is routinely entered a day or two after the driver actually
+      took the kod, so the date it recorded was often not the date it happened. The
+      extra click buys a `qr_given` that can be trusted — and the modal is still the
+      way back, since submitting it empty clears the mark.
       {% endcomment %}
-      <form method="post" action="{% url 'shipment_set_qr' s.pk %}" class="row-inline-form qr-cell-form" data-qr-form="{{ s.pk }}">
-        {% csrf_token %}
-        <input type="hidden" name="next" value="{{ request.get_full_path }}">
-        <button type="submit" class="icon-action act-qr{% if s.has_qr %} is-on{% endif %}"
-                title="{% if s.has_qr %}QR kod berilgan — belgini olish{% else %}QR kod berildi deb belgilash{% endif %}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M21 14v3"/><path d="M17 21h4"/><path d="M14 21h0"/></svg>
-        </button>
-      </form>
+      <a class="icon-action act-qr{% if s.has_qr %} is-on{% elif s.qr_overdue %} is-late{% endif %}"
+         href="{% url 'shipment_set_qr' s.pk %}" data-modal
+         title="{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }} — sanani o'zgartirish yoki belgini olish{% elif s.qr_overdue %}QR kod {{ s.qr_date }} ga rejalashtirilgan, {{ s.qr_days_late }} kun berilmagan{% else %}QR kod berildi deb belgilash{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M21 14v3"/><path d="M17 21h4"/><path d="M14 21h0"/></svg>
+      </a>
       <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </a>
@@ -243,8 +276,13 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
           </div>
           <div class="lf">
             <span class="lf-label">QR kod</span>
-            <span class="lf-value qr-fact" data-load="{{ s.pk }}">{% if s.has_qr %}Berilgan · {{ s.qr_given }}{% else %}Berilmagan{% endif %}</span>
-            {% if s.qr_date %}<span class="lf-sub">Beriladigan kun: {{ s.qr_date }}</span>{% endif %}
+            <span class="lf-value qr-fact">{% if s.has_qr %}Berilgan · {{ s.qr_given }}{% else %}Berilmagan{% endif %}</span>
+            {% comment %}
+            The panel is the one place with room to say the plan and the miss in
+            words. Everywhere else this fact is a colour or a badge; here it names
+            the day that was promised and how long it has been.
+            {% endcomment %}
+            {% if s.qr_date %}<span class="lf-sub{% if s.qr_overdue %} lf-sub--warn{% endif %}">Beriladigan kun: {{ s.qr_date }}{% if s.qr_overdue %} · {{ s.qr_days_late }} kun kechikdi, hali berilmagan{% endif %}</span>{% endif %}
           </div>
           {% if s.responsible %}
           <div class="lf">
@@ -358,7 +396,12 @@ page here is "these N kelishuv and all of their yuklar".
 {% endcomment %}
 {% include "crm/_pagination.html" with label="kelishuv" %}
 {% else %}
-<p class="muted">{% if show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+{% comment %}
+The empty state names every filter that is on. Without the QR part it read "Faol
+yuklar yo'q" on a screen where fourteen loads were one click away — the filter, not
+the data, was the reason nothing showed.
+{% endcomment %}
+<p class="muted">{% if show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if qr == 'bor' %} — QR kod berilganlari orasida{% elif qr == 'yoq' %} — QR kod berilmaganlari orasida{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
 
 <script>
@@ -511,43 +554,17 @@ page here is "these N kelishuv and all of their yuklar".
     host.insertBefore(bar, host.firstChild);
   }
 
-  // QR toggle: same in-place rule as the status dropdown. Reloading would collapse
-  // any open load panel and drop back to the default tab, which is a lot of state
-  // to lose for a one-bit change.
-  document.querySelectorAll('.qr-cell-form').forEach(function (form) {
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      var btn = form.querySelector('button');
-      var row = form.closest('tr');
-      var cell = row.querySelector('.load-toggle');
-      fetch(form.getAttribute('action'), {
-        method: 'POST',
-        body: new FormData(form),
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-      }).then(function (r) {
-        if (!r.ok) { throw new Error(); }
-        return r.json();
-      }).then(function (data) {
-        row.classList.toggle('has-qr', data.has_qr);
-        btn.classList.toggle('is-on', data.has_qr);
-        btn.title = data.has_qr ? 'QR kod berilgan — belgini olish'
-                                : 'QR kod berildi deb belgilash';
-        if (cell) {
-          cell.title = (data.has_qr ? 'QR kod berilgan: ' + data.qr_given
-                                    : 'QR kod berilmagan')
-                     + ' · bosqichlar va xarajatlarni ochish';
-        }
-        // The open panel below the row states it too — keep the two in step.
-        var loadId = form.getAttribute('data-qr-form');
-        var fact = document.querySelector('.qr-fact[data-load="' + loadId + '"]');
-        if (fact) {
-          fact.textContent = data.has_qr ? 'Berilgan · ' + data.qr_given : 'Berilmagan';
-        }
-      }).catch(function () {
-        alert("QR belgisini saqlab bo'lmadi. Qayta urinib ko'ring.");
-      });
-    });
-  });
+  {% comment %}
+  No QR handler here on purpose. The icon is a `data-modal` link now, so the modal
+  machinery in base.html opens it and navigates on save, exactly like the other
+  modals in that row. The in-place fetch this used to be belonged to a one-press
+  toggle with nothing to fill in; a modal carrying a date has a form to submit, and a
+  second handler here would only fight it.
+
+  A template comment and not a `//` one: this sits inside <script>, so a JS comment
+  is shipped to the browser, and the words in it are page text as far as anything
+  scanning the response is concerned.
+  {% endcomment %}
 
   // Status dropdown: save via fetch and update the row IN PLACE — no page
   // reload, so what you see is always the saved state. If the load reached

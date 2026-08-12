@@ -1168,6 +1168,24 @@ class Shipment(models.Model):
         return self.qr_given is not None
 
     @property
+    def qr_overdue(self):
+        """The day the kod was meant to be handed over has passed and it still has
+        not been.
+
+        `qr_date` is a plan and nothing enforces it, so this is the gap between what
+        was promised for a load and what happened to it. Worth saying out loud
+        because the row is otherwise indistinguishable from a truck that was never
+        meant to get a kod at all: both are simply "berilmagan", while only this one
+        means someone expected a kod today and the driver is still waiting on the
+        slow road. Loads with no `qr_date` are not late — nothing was planned."""
+        return (self.qr_given is None and self.qr_date is not None
+                and self.qr_date < timezone.localdate())
+
+    @property
+    def qr_days_late(self):
+        return (timezone.localdate() - self.qr_date).days if self.qr_overdue else 0
+
+    @property
     def is_overdue(self):
         return self.arrived is None and self.eta is not None and self.eta < timezone.localdate()
 

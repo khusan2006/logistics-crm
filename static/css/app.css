@@ -731,6 +731,14 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .daybadge.today { color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); }
 .daybadge.soon { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
 .daybadge.arrived { color: var(--success); background: color-mix(in srgb, var(--success) 22%, transparent); }
+/* The QR plan overrunning. Carries the no-QR yellow rather than the danger red the
+   badge above it uses: a missing kod costs the load days on the road, which is not
+   the same order of problem as the truck itself being late, and two red badges in
+   one cell would flatten that difference. */
+.daybadge.qr-late { color: var(--flag-noqr); background: color-mix(in srgb, var(--flag-noqr) 18%, transparent); }
+/* Sits under the arrival badge, not beside it — the cell is narrow and wrapping
+   mid-phrase reads worse than a second line. */
+.load-qr-late { margin-top: 3px; }
 
 /* Sale form: multi-product line items */
 .items-block { margin: 6px 0 4px; }
@@ -2054,8 +2062,63 @@ ul.errorlist li::before { content: "⚠ "; }
   background: linear-gradient(to right, var(--flag-late) 50%, var(--flag-qr) 50%);
 }
 
+/* A load whose planned QR day has passed keeps the yellow "no kod" bar — it IS
+   still no kod — but pulses it. A third colour would read as a third state and
+   compete with the red kechikkan half beside it; motion says "overdue" without
+   claiming a slot in a scheme that is already carrying two facts in 3px. */
+.load-row.qr-late td.load-toggle::before { animation: qr-late-pulse 2s ease-in-out infinite; }
+@keyframes qr-late-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Falls back to a dashed bar: the fact has to survive without the motion. */
+  .load-row.qr-late td.load-toggle::before {
+    animation: none;
+    background: repeating-linear-gradient(
+      to bottom, var(--flag-noqr) 0 4px, transparent 4px 7px);
+  }
+}
+
 .loads-table .icon-action.act-qr.is-on { color: var(--success); opacity: 1; }
 .icon-action.act-qr.is-on:hover { background: var(--success-soft); }
+/* The row action for a load still waiting past its planned day. Full opacity is
+   most of the work — the icon row is dimmed by default, so simply not being dim
+   is what makes this one findable while scanning. */
+.loads-table .icon-action.act-qr.is-late { color: var(--flag-noqr); opacity: 1; }
+
+/* QR bor / QR yo'q filter pills. The dot is the exact colour the matching rows'
+   left bar will be, so the button and the stripe it selects for are visibly the
+   same fact — a pill labelled only in words would leave the reader to work out
+   which colour "yo'q" meant. */
+.qr-filter { display: inline-flex; align-items: center; gap: 7px; }
+.qr-filter::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--flag-qr);
+}
+.qr-filter--no::before { background: var(--flag-noqr); }
+
+/* How many loads are past their planned QR day, sitting on the pill that leads to
+   them — the reason to press QR yo'q at all. It stays legible on the ghost pill as
+   well as the active one, hence its own background rather than the button's. */
+.qr-waiting {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 9px;
+  background: var(--flag-noqr);
+  color: #3d2f00;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
 .load-id { font-weight: 700; }
 .load-partner { font-weight: 600; color: var(--text); }
 .load-sub { font-size: 12px; margin-top: 1px; }
@@ -2152,6 +2215,9 @@ ul.errorlist li::before { content: "⚠ "; }
 .lf-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); margin-bottom: 2px; }
 .lf-value { display: block; font-size: 13px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
 .lf-sub { display: block; font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+/* Lifts one sub-line out of muted when it stops being background detail — a QR
+   plan that has run out is the reason someone opened this panel. */
+.lf-sub--warn { color: var(--flag-noqr); font-weight: 600; }
 .lf-sub .daybadge { font-size: 11px; padding: 1px 8px; }
 .lf--accent { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .lf--wide { grid-column: 1 / -1; }

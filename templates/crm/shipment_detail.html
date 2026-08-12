@@ -17,15 +17,17 @@
       <a class="btn btn-ghost" href="{% url 'shipment_driver_edit' shipment.pk %}" data-modal>Haydovchi va konteyner</a>
       {% endif %}
       {% if user.is_admin_role %}
-      {# One press, no modal — the same toggle the yuklar table carries as an icon. #}
-      {# .row-inline-form: a bare <form> is block-level and would break this row. #}
-      <form method="post" action="{% url 'shipment_set_qr' shipment.pk %}" class="row-inline-form">
-        {% csrf_token %}
-        <input type="hidden" name="next" value="{{ request.get_full_path }}">
-        <button type="submit" class="btn{% if not shipment.has_qr %} btn-ghost{% endif %}">
-          {% if shipment.has_qr %}QR kod berilgan ✓{% else %}QR kod berildi{% endif %}
-        </button>
-      </form>
+      {% comment %}
+      Opens the modal that asks WHEN the kod reached the driver — the same one the
+      yuklar table opens from its QR icon. It was a bare POST button that wrote
+      today's date blind; left that way against the current view it posted an empty
+      form, and an empty date is how the mark comes OFF, so the button cleared the
+      thing it claimed to set.
+      {% endcomment %}
+      <a class="btn{% if not shipment.has_qr %} btn-ghost{% endif %}"
+         href="{% url 'shipment_set_qr' shipment.pk %}" data-modal>
+        {% if shipment.has_qr %}QR kod berilgan ✓{% else %}QR kod berildi{% endif %}
+      </a>
       <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
       {% endif %}
     </span>
@@ -95,11 +97,18 @@
     <div class="stat">
       <div class="muted">QR kod</div>
       <div>
+        {% comment %}
+        A load past its planned day gets its own badge rather than the plain
+        "Berilmagan" — this page is where someone lands to find out what happened to
+        one truck, and "not given" alone answers that with the least useful half of
+        the fact.
+        {% endcomment %}
         {% if shipment.has_qr %}<span class="daybadge arrived">Berilgan</span>
+        {% elif shipment.qr_overdue %}<span class="daybadge qr-late">{{ shipment.qr_days_late }} kun kechikdi</span>
         {% else %}<span class="daybadge today">Berilmagan</span>{% endif %}
         <div class="muted">
           {% if shipment.has_qr %}{{ shipment.qr_given }}
-          {% elif shipment.qr_date %}Beriladigan kun: {{ shipment.qr_date }}
+          {% elif shipment.qr_date %}Beriladigan kun: {{ shipment.qr_date }}{% if shipment.qr_overdue %} — hali berilmagan{% endif %}
           {% endif %}
         </div>
       </div>

@@ -1,12 +1,13 @@
 from datetime import date as _date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from urllib.parse import urlparse
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
-from django.http import JsonResponse
+from django.http import JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -27,7 +28,7 @@ from .forms import (
     ExpenseGridForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
     ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
-    ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
+    ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
     AuditLog, CustomsAgent, CustomsPayment,
@@ -1214,9 +1215,26 @@ def shipment_list(request):
     the view. Tabs filter client-side; each row carries its status + overdue flag.
 
     Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
-    adds the arrived ones and paginates, since that set only grows."""
+    adds the arrived ones and paginates, since that set only grows.
+
+    `?qr=bor|yoq` narrows to the loads whose driver carries a QR kod, or the ones
+    whose driver does not. Server-side rather than a third client-side tab: it has to
+    combine with the holat tabs instead of replacing whichever one is active, it has
+    to reach past the Hammasi pager (a client filter only ever sees the rows on this
+    page), and narrowing the queryset is what makes the tab counts beside it say how
+    many of THOSE loads sit in each holat.
+
+    The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
+    the loads whose planned QR day has come and gone with no kod, counted on the QR
+    yo'q pill, so the ones worth chasing announce themselves without the list having
+    to hide anything to say so."""
     q = request.GET.get("q", "").strip()
     show_all = request.GET.get("all") == "1"
+    # Anything else in the URL means no QR filter at all — a typo should show every
+    # yuk, not silently drop half of them.
+    qr = request.GET.get("qr", "")
+    if qr not in ("bor", "yoq"):
+        qr = ""
     shipments = (Shipment.objects
                  .select_related("contract__partner", "status")
                  .prefetch_related("delays", "legs", "expenses"))
@@ -1227,6 +1245,15 @@ def shipment_list(request):
             Q(transport__icontains=q) | Q(container__icontains=q)
             | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q)
             | Q(driver_name__icontains=q) | Q(responsible__icontains=q)).distinct()
+    # Counted before the QR filter narrows anything, so the number on the pill keeps
+    # meaning "waiting, among the yuklar you are looking at" — standing on QR bor
+    # must not zero out the count of the loads you are not looking at.
+    qr_waiting_count = shipments.filter(
+        qr_given__isnull=True, qr_date__isnull=False,
+        qr_date__lt=timezone.localdate()).count()
+    if qr:
+        # The date is what says the kod was handed over, so its absence is "yo'q".
+        shipments = shipments.filter(qr_given__isnull=qr == "yoq")
     shipments = list(shipments)
 
     counts = {}
@@ -1277,7 +1304,8 @@ def shipment_list(request):
     return render(request, "crm/shipment_list.html", {
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
-        "q": q, "default_tab": default_tab, "show_all": show_all, "page": page,
+        "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count,
+        "default_tab": default_tab, "show_all": show_all, "page": page,
     })
 
 
@@ -1602,35 +1630,60 @@ def shipment_set_status(request, pk):
     return redirect(request.POST.get("next") or "shipment_list")
 
 
-@require_POST
+def _qr_side_url(request, qr):
+    """The yuklar list the load has just moved to, keeping whatever else was on the
+    screen it was marked from.
+
+    Rebuilt from the referring URL rather than hard-coded, so marking a kod while
+    searching for a plate, or while standing in Hammasi, does not silently throw
+    that away and land the operator somewhere they did not ask to be. `page` is
+    dropped: page 3 of the old side means nothing on the new one."""
+    params = QueryDict(urlparse(request.META.get("HTTP_REFERER") or "").query,
+                       mutable=True)
+    params["qr"] = qr
+    params.pop("page", None)
+    return f"{reverse('shipment_list')}?{params.urlencode()}"
+
+
 @role_required(User.Role.ADMIN)
 def shipment_set_qr(request, pk):
     """Mark this load's QR kod handed over — or take the mark back.
 
-    A toggle, because the only way to correct a mis-click on a row of near-identical
-    trucks is to press the same button again; there is no "unmark" screen and a QR
-    marked on the wrong yuk would otherwise need a full edit to undo.
+    A modal asking for the date, not the one-press toggle this used to be. The press
+    wrote today, which is only right when the mark is entered on the day; entered on
+    Monday for a kod handed over on Friday it recorded a date that was simply wrong,
+    and `qr_given` is read as the fact of when it happened. Nothing else knows the
+    real date, so it has to be asked.
 
-    Today's date and not `qr_date`: that field is the plan, and a kod handed over
-    early or late should say when it really happened. The button is what makes it
-    true, so pressing it on the day is the whole workflow."""
+    Still the same button and still reversible: submitting the date empty clears the
+    mark, which is what a mis-click on a row of near-identical trucks needs. The
+    field starts on whatever is already stored, or today for a load being marked for
+    the first time — the common case is still "this happened today"."""
     shipment = get_object_or_404(Shipment, pk=pk)
-    given = shipment.qr_given is None       # pressing it flips whichever way it sits
-    shipment.qr_given = timezone.localdate() if given else None
-    shipment.save(update_fields=["qr_given"])
-    AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
-                    f"QR kod {'berildi' if given else 'bekor qilindi'}"
-                    + (f": {shipment.qr_given}" if given else ""))
-
-    if is_ajax(request):
-        # The list flips the row's indicator in place — a reload here would collapse
-        # whichever load panel is open and throw away the active holat tab.
-        return JsonResponse({
-            "has_qr": given,
-            "qr_given": shipment.qr_given.isoformat() if given else None,
-        })
-    messages.success(request, "QR kod berildi" if given else "QR kod belgisi olindi")
-    return redirect(request.POST.get("next") or "shipment_list")
+    title = f"Yuk #{shipment.pk} — QR kod"
+    initial = {"qr_given": shipment.qr_given or timezone.localdate()}
+    form = ShipmentQrForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            given = form.cleaned_data["qr_given"]
+            shipment.qr_given = given
+            shipment.save(update_fields=["qr_given"])
+            AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                            f"QR kod berildi: {given}" if given else "QR kod bekor qilindi")
+            messages.success(request, "QR kod berildi" if given else "QR kod belgisi olindi")
+            # Marked from the list, the load follows its mark: the page swaps to the
+            # side it now belongs to. Without this it simply vanished from under the
+            # cursor — the list opens on QR bor, so a load marked from QR yo'q left
+            # that set on reload with nothing to say where it went.
+            #
+            # Marked from a yuk's own page there is no side to move to, so that one
+            # reloads in place instead of throwing the operator out to the list.
+            referer = urlparse(request.META.get("HTTP_REFERER") or "").path
+            if referer == reverse("shipment_list"):
+                return form_success(request, _qr_side_url(request, "bor" if given else "yoq"))
+            return form_reload(request, reverse("shipment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
 
 
 @role_required(User.Role.ADMIN)
