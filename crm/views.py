@@ -2484,6 +2484,17 @@ WATERFALL_EXPENSE_GROUPS = [
 ]
 WATERFALL_EXPENSE_OTHER = "Boshqa xarajatlar"
 
+#: The Hozirgi holat groups, in reading order, keyed by each tile's `group`. Ten
+#: tiles of equal size ranked nothing: Kassada — the figure somebody checks every
+#: morning — sat the same size as Bojxonaga qarzimiz, which is usually zero. The
+#: kassa figure is the hero now and the rest answer one question each: where the mol
+#: is, what is coming back to us, what we owe.
+TILE_GROUPS = [
+    ("mol", "Mol — tannarxda"),
+    ("back", "Bizga qaytadigan pul"),
+    ("owed", "Qarzlarimiz"),
+]
+
 
 def _typed_decimal(raw):
     """A number as the operator's field hands it over, or None if it is not one.
@@ -2660,11 +2671,14 @@ def kassa(request):
     # are the ones whose figure is a COST: a kg has one landed cost even though the
     # mol was bought in dollars and the transport paid in so'm, which is the one
     # place currencies are deliberately blended (tests/test_cost_blends_currencies.py).
+    #
+    # `group` is which of the TILE_GROUPS headings a tile reads under; the Kassada
+    # tile carries none because it is the hero above them.
     tiles = [
         # Two different "not all of this is what it looks like" facts, so both are
         # named when both apply: an avans is money we are holding for somebody else,
         # kapital is money that was put in rather than earned.
-        {"label": "Kassada", "split": cash_split,
+        {"label": "Kassada", "split": cash_split, "group": None,
          "note": "hozir qo'lda va hisobda turgan pul", "tone": "cash",
          "meta": " · ".join(
              part for part in (
@@ -2674,22 +2688,23 @@ def kassa(request):
                   if kapital_split else ""))
              if part),
          "url": reverse("customer_payment_list")},
-        {"label": "Mijozlar qarzi", "split": receivable,
+        {"label": "Mijozlar qarzi", "split": receivable, "group": "back",
          "note": "mol berilgan, puli hali olinmagan", "tone": "in",
          "meta": f"{debtors} ta mijozda" if debtors else "",
          "url": reverse("debt_list")},
         {"label": "Omborda", "split": None, "amount": stock, "amount_uzs": stock_uzs,
          "note": "kelgan, hali sotilmagan mol — tannarxda", "tone": "in",
+         "group": "mol",
          "meta": f"{_kg(stock_kg)} kg", "url": reverse("ombor")},
-        {"label": "Yo'lda", "split": transit,
+        {"label": "Yo'lda", "split": transit, "group": "mol",
          "note": "jo'natilgan, hali yetib kelmagan mol", "tone": "in",
          "meta": f"{_kg(transit_kg)} kg · {transit_loads} ta yuk",
          "url": reverse("shipment_list")},
         {"label": "Hamkorlarda avansimiz", "split": hamkor["prepaid"], "tone": "in",
-         "note": "yuk kelishidan oldin to'lab qo'yganimiz",
+         "note": "yuk kelishidan oldin to'lab qo'yganimiz", "group": "back",
          "meta": f"{hamkor['contracts']} ta kelishuvda" if hamkor["contracts"] else "",
          "url": reverse("contract_list")},
-        {"label": "Logistlarda", "split": None,
+        {"label": "Logistlarda", "split": None, "group": "back",
          "amount": logist_held, "amount_uzs": logist_held_uzs,
          "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
          "tone": "in", "meta": "", "url": reverse("logist_list")},
@@ -2697,11 +2712,11 @@ def kassa(request):
         # logist's hisob is one heap restated; bojxona money genuinely moves in both
         # currencies, so it is two — the same reason Kassada and the hamkor tiles
         # carry one.
-        {"label": "Bojxonada", "split": customs_held,
+        {"label": "Bojxonada", "split": customs_held, "group": "back",
          "note": "yuklarni rasmiylashtirish uchun oldindan yuborilgan",
          "tone": "in", "meta": "", "url": reverse("customs_list")},
         {"label": "Hamkorlarga qarzimiz", "split": hamkor["owed"], "tone": "out",
-         "note": "kelgan yuk uchun hali to'lamaganimiz",
+         "note": "kelgan yuk uchun hali to'lamaganimiz", "group": "owed",
          "meta": f"{hamkor['partners']} ta hamkorga" if hamkor["partners"] else "",
          "url": reverse("supplier_payment_list")},
     ]
@@ -2715,15 +2730,24 @@ def kassa(request):
         tiles.append({
             "label": "Logistlarga qarzimiz", "split": None, "amount": logist_owed,
             "amount_uzs": logist_owed_uzs, "tone": "out", "meta": "",
-            "note": "o'z pulidan haydovchiga bergani",
+            "note": "o'z pulidan haydovchiga bergani", "group": "owed",
             "url": reverse("logist_list") + "?state=owed"})
     # Same rule for the bojxonachi who cleared a truck out of his own pocket because
     # what we sent ran short — usually zero, so it appears only when it is not.
     if customs_owed:
         tiles.append({
-            "label": "Bojxonaga qarzimiz", "split": customs_owed,
+            "label": "Bojxonaga qarzimiz", "split": customs_owed, "group": "owed",
             "tone": "out", "meta": "", "note": "o'z pulidan yukni rasmiylashtirgani",
             "url": reverse("customs_list") + "?state=owed"})
+
+    # The flat `tiles` list stays exactly as it was — it is what every kassa test
+    # reads and what says which facts the board holds. `hero`/`tile_groups` are the
+    # same dicts arranged for the page.
+    hero = tiles[0]
+    tile_groups = [{"title": title,
+                    "tiles": [t for t in tiles if t["group"] == key]}
+                   for key, title in TILE_GROUPS]
+    tile_groups = [g for g in tile_groups if g["tiles"]]
 
     # The Kirim ledger asks each row what it settled and whether its kurs was chosen,
     # and both answers are read off the allocations — without the prefetch that is a
@@ -2920,6 +2944,20 @@ def kassa(request):
         })
     outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 
+    # The ledger headline in the currency each row was booked in, not a dollar figure
+    # with its so'm twin beneath: restating a so'm to'lov in dollars prints a number
+    # nobody ever handed over, and at this scale the kurs it was restated at is not
+    # the kurs of any single row. `net_in`/`net_in_uzs` stay in the context — the Oqim
+    # waterfall and the audit tests close on them — but the page shows the heaps.
+    def _ledger_split(rows):
+        return _by_currency(
+            (r["currency"],
+             r["amount_uzs"] if r["currency"] == Currency.UZS else r["amount"])
+            for r in rows)
+
+    income_split = _ledger_split(income_rows)
+    outflow_split = _ledger_split(outflow_rows)
+
     # Each ledger pages independently (?ipage / ?opage) so scrolling one doesn't
     # reset the other. The +/- totals above are the whole-period figures, not the
     # page's, so they stay computed from the full lists.
@@ -3014,7 +3052,8 @@ def kassa(request):
         "cash_total": cash_total, "cash_total_uzs": cash_total_uzs,
         "advance": advance, "advance_uzs": advance_uzs,
         "own_cash": own_cash, "own_cash_uzs": own_cash_uzs,
-        "tiles": tiles,
+        "tiles": tiles, "hero": hero, "tile_groups": tile_groups,
+        "income_split": income_split, "outflow_split": outflow_split,
         "waterfall": waterfall, "zero_line": zero_line,
         "balances": balances, "net_in": net_in, "net_out": net_out,
         "net_total": net_in - net_out,

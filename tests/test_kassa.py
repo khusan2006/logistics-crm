@@ -363,15 +363,41 @@ class TestCurrentStateTiles:
         assert owed[Currency.USD] == Decimal("500.00")
         assert owed[Currency.UZS] == Decimal("6250000.00")
 
-    def test_a_cost_tile_keeps_its_converted_pair(self, admin_client, db):
-        """Omborda is the deliberate exception. A kg has ONE landed cost even though
-        the mol was bought in dollars and the transport paid in so'm, so this tile
-        stays a dollar figure with its so'm twin — no split to draw."""
+    def test_a_cost_tile_shows_its_dollar_figure_alone(self, admin_client, db):
+        """Omborda is a blended COST — a kg has ONE landed price even though the mol
+        was bought in dollars and the transport paid in so'm — so it is kept in
+        dollars and has no split to draw.
+
+        It used to print the so'm twin beneath the dollar figure. Nobody ever handed
+        that so'm over: it is the same money restated at a kurs no single lot agreed,
+        and beside the real so'm heaps on this page it read as a second pile. The
+        pair is still ON the tile (the reports need it); the page does not show it."""
+        from crm.templatetags.crm_extras import som
         _arrived_shipment(_contract())
         ombor = self._tiles(admin_client)["Omborda"]
         assert ombor["split"] is None
         assert ombor["amount"] > 0
         assert ombor["amount_uzs"] > 0
+        body = admin_client.get("/kassa/").content.decode()
+        assert som(ombor["amount"]) not in body
+        assert som(ombor["amount_uzs"]) not in body
+
+    def test_the_till_is_the_hero_and_the_rest_read_under_a_heading(self, admin_client, db):
+        """Ten equal tiles ranked nothing — a debt that is usually zero pulled as hard
+        as the money on hand. Kassada is the hero; every other tile sits in a group."""
+        contract = _contract()
+        _arrived_shipment(contract)
+        ctx = admin_client.get("/kassa/").context
+        assert ctx["hero"]["label"] == "Kassada"
+        assert ctx["hero"]["group"] is None
+        # A set, not a list: the groups deliberately reorder — Mol comes first on the
+        # page while the flat list still leads with Mijozlar qarzi. What matters is
+        # that nothing falls between the groups and nothing is drawn twice.
+        grouped = [t["label"] for g in ctx["tile_groups"] for t in g["tiles"]]
+        assert len(grouped) == len(set(grouped))
+        assert set(grouped) == {t["label"] for t in ctx["tiles"]} - {"Kassada"}
+        assert [g["title"] for g in ctx["tile_groups"]] == [
+            "Mol — tannarxda", "Bizga qaytadigan pul", "Qarzlarimiz"]
 
 
 def resp_cash(admin_client):
@@ -489,6 +515,29 @@ class TestLedgerColumns:
         from crm.models import Sale
         return Sale.objects.create(customer=customer, line=lot, kg=Decimal(kg),
                                    price=Decimal(price), date="2026-07-17", **kwargs)
+
+    def test_the_ledger_headline_is_one_heap_per_currency(self, admin_client, db):
+        """The Kirim/Chiqim totals used to be a dollar figure with a so'm twin, and the
+        dollar figure counted the so'm rows too — restated at whatever kurs each one
+        carried. A so'm to'lov is not dollars that arrived, so each currency is summed
+        in itself and printed on its own line."""
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("100.00"),
+                                       amount_uzs=Decimal("1200000"),
+                                       exchange_rate=Decimal("12000"),
+                                       currency=Currency.USD, method="cash")
+        CustomerPayment.objects.create(customer=customer, date="2026-07-11",
+                                       amount=Decimal("200.00"),
+                                       amount_uzs=Decimal("2400000"),
+                                       exchange_rate=Decimal("12000"),
+                                       currency=Currency.UZS, method="cash")
+        ctx = admin_client.get("/kassa/").context
+        assert ctx["income_split"] == [(Currency.USD, Decimal("100.00")),
+                                       (Currency.UZS, Decimal("2400000.00"))]
+        # The converted pair still exists for the Oqim waterfall — it just is not what
+        # the headline says any more.
+        assert ctx["net_in"] == Decimal("300.00")
 
     def test_kurs_is_shown_only_where_it_was_chosen(self, admin_client, db):
         """Rule 4 on screen. A to'lov in the sotuv's own currency needs no kurs —

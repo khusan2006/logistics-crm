@@ -483,6 +483,48 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .ktile-som { margin-top: 2px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .ktile-note { margin-top: 10px; font-size: 12.5px; color: var(--text-muted); line-height: 1.45; }
 .ktile-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); font-weight: 650; }
+/* ── Kassa hozirgi holat: one hero + grouped rows ───────────────────────────
+   The till is the figure of the morning, so it gets a card of its own and type
+   nobody has to hunt for. Everything else is a row: still one fact with its own
+   number and link, but ranked below the money actually on hand. */
+.khero {
+  display: block; padding: 17px 19px; margin-bottom: 12px; color: inherit; text-decoration: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+  transition: border-color 0.12s, background 0.12s;
+}
+.khero:hover { border-color: var(--border-strong); background: var(--surface-hover); }
+.khero:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+/* Side by side rather than stacked: the two heaps are peers, and on the widest
+   figure on the page a stack pushes the note out of the first screen. */
+.khero-nums { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px 28px; }
+.khero-num { font-size: 30px; font-weight: 750; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+
+.kgroups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.kgroup {
+  padding: 13px 15px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.kgroup-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-weight: 700; color: var(--text-faint); margin-bottom: 4px;
+}
+.krow {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 8px 0; color: inherit; text-decoration: none;
+  border-bottom: 1px solid var(--border);
+}
+.kgroup .krow:last-child { border-bottom: none; padding-bottom: 0; }
+.krow:hover .krow-label { color: var(--text); }
+.krow-label { font-size: 13px; color: var(--text-muted); min-width: 0; }
+/* The kg / mijoz count belongs to the label, not to the figure: it says WHAT the
+   number counts, and on its own line it stops the row wrapping mid-figure. */
+.krow-meta { display: block; font-size: 11px; color: var(--text-faint); }
+.krow-nums { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; }
+.krow-num { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.krow--in .krow-num { color: var(--success); }
+.krow--out .krow-num { color: var(--danger); }
+@media (max-width: 1000px) { .kgroups { grid-template-columns: 1fr; } }
+
 .ktiles-foot { margin: 0 0 14px; font-size: 12px; line-height: 1.55; color: var(--text-faint); max-width: 96ch; }
 .ktiles-foot b { color: var(--text-muted); font-weight: 650; }
 @media (max-width: 1000px) { .ktiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -612,7 +654,12 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .grid-2 > *, .stat-grid > * { min-width: 0; }
 
 /* Kassa kirim/chiqim ledgers — two scrollable transaction lists side by side */
-.kassa-ledger .ledger-total { font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Two currencies in a ledger headline are two heaps: stacked, not run together on
+   one line, and both at the same size — neither is the other's footnote. */
+.kassa-ledger .ledger-total {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 .txn-list { max-height: 460px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 .txn-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .txn-item:last-child { border-bottom: none; }

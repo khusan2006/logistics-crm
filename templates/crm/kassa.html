@@ -10,52 +10,68 @@
 {% block content %}
 
 {% comment %}
-Hozirgi holat as a board of facts, not a balance sheet. Six tiles, each one place
-money or goods is sitting right now, each with the second fact that makes it
-actionable — kg, mijoz count, yuk count — and each linking to the screen where you
-act on it. Nothing is summed across them on purpose: adding cash to granula to
-somebody else's unpaid invoice gives a number that describes no actual thing.
+Hozirgi holat as a board of facts, not a balance sheet: each line is one place money
+or goods is sitting right now, carries the second fact that makes it actionable — kg,
+mijoz count, yuk count — and links to the screen where you act on it. Nothing is
+summed across them on purpose: adding cash to granula to somebody else's unpaid
+invoice gives a number that describes no actual thing.
 
-A tile reads one of two ways, and the difference is deliberate.
+Kassada is the hero because it is the figure somebody checks every morning; the rest
+read as rows under the one question each answers. As ten equal tiles it ranked
+nothing — a debt that is usually zero drew the eye as hard as the till.
 
-A tile with a `split` prints one full-size figure PER CURRENCY, because that is how
-many facts it holds: the till keeps a dollar heap and a so'm heap, and a hamkor owed
-on a dollar kelishuv and a so'm one is owed two separate debts. Neither side is the
-subordinate of the other, so neither is set in the smaller type.
-
-A tile without one keeps the older stacked pair — the dollar figure with its so'm
-twin beneath — because its figure is a COST, and a cost blends on purpose: a kg has
-one landed price even though the mol was bought in dollars and the transport paid in
-so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
+EVERY figure is printed in its own currency and never converted. A `split` holds one
+line per currency because that is how many facts it is: the till keeps a dollar heap
+and a so'm heap, and a hamkor owed on a dollar kelishuv and a so'm one is owed two
+separate debts. A tile without a split is a blended COST kept in dollars (Omborda, a
+logist's hisob) — it prints the dollar figure alone. It used to print the so'm twin
+beneath it, which read as a second, separate pile; a so'm number that nobody handed
+over is not a fact this board states.
 {% endcomment %}
-<div class="ktiles">
-  {% for t in tiles %}
-  <a class="ktile ktile--{{ t.tone }}" href="{{ t.url }}">
-    <div class="ktile-label">{{ t.label }}</div>
-    {% if t.split %}
-    {% for currency, amount in t.split %}
-    <div class="ktile-num">{% money_in amount currency %}</div>
+<a class="khero khero--{{ hero.tone }}" href="{{ hero.url }}">
+  <div class="ktile-label">{{ hero.label }}</div>
+  <div class="khero-nums">
+    {% for currency, amount in hero.split %}
+    <div class="khero-num">{% money_in amount currency %}</div>
+    {% empty %}
+    {% comment %}An empty split is a real answer — nothing held.{% endcomment %}
+    <div class="khero-num">{% money_in 0 "usd" %}</div>
     {% endfor %}
-    {% elif t.split is not None %}
-    {% comment %}An empty split is a real answer — nothing owed, nothing held.{% endcomment %}
-    <div class="ktile-num">{% money_in 0 "usd" %}</div>
-    {% else %}
-    <div class="ktile-num">{{ t.amount|usd }}</div>
-    <div class="ktile-som">{{ t.amount_uzs|som }}</div>
-    {% endif %}
-    <div class="ktile-note">{{ t.note }}</div>
-    {% if t.meta %}<div class="ktile-meta">{{ t.meta }}</div>{% endif %}
-  </a>
+  </div>
+  <div class="ktile-note">{{ hero.note }}</div>
+  {% if hero.meta %}<div class="ktile-meta">{{ hero.meta }}</div>{% endif %}
+</a>
+
+<div class="kgroups">
+  {% for g in tile_groups %}
+  <div class="kgroup">
+    <div class="kgroup-title">{{ g.title }}</div>
+    {% for t in g.tiles %}
+    <a class="krow krow--{{ t.tone }}" href="{{ t.url }}" title="{{ t.note }}">
+      <span class="krow-label">{{ t.label }}{% if t.meta %}<span class="krow-meta">{{ t.meta }}</span>{% endif %}</span>
+      <span class="krow-nums">
+        {% if t.split is None %}
+        <span class="krow-num">{{ t.amount|usd }}</span>
+        {% else %}
+        {% for currency, amount in t.split %}
+        <span class="krow-num">{% money_in amount currency %}</span>
+        {% empty %}
+        <span class="krow-num">{% money_in 0 "usd" %}</span>
+        {% endfor %}
+        {% endif %}
+      </span>
+    </a>
+    {% endfor %}
+  </div>
   {% endfor %}
 </div>
 <p class="ktiles-foot">
   Hammasi <b>bugungi holat</b> — pastdagi sana filtri bu raqamlarga ta'sir qilmaydi.
   Kassadagi raqam tizim boshlangandan beri bo'lgan kirim va chiqim ayirmasi —
   ta'sischi kiritgan <b>kapital</b> ham shu kirimlar ichida.
-  <b>Dollar va so'm alohida</b> ko'rsatiladi va hech qachon qo'shilmaydi — pul ham,
-  qarz ham o'z valyutasida turadi. <b>Omborda</b> va <b>Logistlarda</b> esa tannarx
-  raqami: 1 kg narxi bitta bo'lishi kerak, shuning uchun u yerda dollar figurasi
-  ostida uning so'mdagi qiymati turadi.
+  Har bir raqam <b>o'z valyutasida</b> turadi: dollar dollarda, so'm so'mda —
+  hech qayeri kursga o'girilib ko'rsatilmaydi va hech qachon qo'shilmaydi.
+  Ikki qator turgan joyda ular <b>ikki alohida pul</b> degani.
 </p>
 
 <form method="get" class="kassa-filter">
@@ -82,7 +98,11 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Kirim</h2>
-      <span class="ledger-total amt-in">+{% money_both net_in net_in_uzs %}</span>
+      {% comment %}
+      One line per currency, same rule as the board above: a so'm to'lov restated in
+      dollars is a figure nobody handed over.
+      {% endcomment %}
+      <span class="ledger-total amt-in">{% for currency, amount in income_split %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "usd" %}</span>{% endfor %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Mijoz to'lovlari va ta'sischi kapitali — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -132,7 +152,7 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Chiqim</h2>
-      <span class="ledger-total amt-out">−{% money_both net_out net_out_uzs %}</span>
+      <span class="ledger-total amt-out">{% for currency, amount in outflow_split %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "usd" %}</span>{% endfor %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Hamkor to'lovlari va yuk xarajatlari — eng yangisi yuqorida.</p>
     <div class="table-wrap">

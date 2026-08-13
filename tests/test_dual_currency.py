@@ -315,18 +315,22 @@ def test_a_row_is_never_reconverted_beside_itself(admin_client, db):
     assert f"12{NBSP}500{NBSP}000 so&#x27;m" not in html
 
 
-def test_a_total_is_printed_in_both_currencies(admin_client, db):
-    """A total spans rows of both currencies, so it cannot pick a side: a mijoz's
-    qarz can be a so'm sotuv settled by a dollar to'lov. Both are printed, each row
-    having been converted at its own entry-day kurs on the way in."""
+def test_a_kassa_total_never_restates_a_row_in_the_other_currency(admin_client, db):
+    """A total on the kassa spans rows of both currencies, and it prints ONE LINE PER
+    CURRENCY rather than picking a side or blending them.
+
+    It used to publish a dollar figure that counted the so'm rows too, each restated
+    at its own entry-day kurs, with the so'm total beneath it. That dollar figure is
+    money nobody ever handed over — so a lone so'm to'lov now shows up in so'm and
+    nowhere else, and no figure on this page carries a converted twin."""
     CustomerPayment.objects.create(
         customer=_customer(), date="2026-07-20", amount=Decimal("1000"),
         amount_uzs=Decimal("12500000"), exchange_rate=Decimal("12500"),
         currency=Currency.UZS, method="cash")
     html = admin_client.get("/kassa/").content.decode()
-    assert f"$1{NBSP}000" in html                      # Kassadagi pul, dollar side
-    assert f"12{NBSP}500{NBSP}000 so&#x27;m" in html   # ...and its so'm twin
-    assert 'class="money-alt"' in html
+    assert f"12{NBSP}500{NBSP}000 so&#x27;m" in html   # the heap it arrived in
+    assert f"$1{NBSP}000" not in html                  # never its dollar restatement
+    assert 'class="money-alt"' not in html
 
 
 def test_the_display_switch_is_gone(admin_client, db):
