@@ -3052,14 +3052,10 @@ def kassa(request):
     steps = [s for s in steps if s[1]]
     waterfall, zero_line = _waterfall(opening, opening_uzs, steps)
 
-    # Quick period presets for the filter bar.
-    today = timezone.localdate()
-    presets = [
-        ("Bugun", today.isoformat(), today.isoformat()),
-        ("7 kun", (today - timedelta(days=6)).isoformat(), today.isoformat()),
-        ("30 kun", (today - timedelta(days=29)).isoformat(), today.isoformat()),
-        ("Hammasi", "", ""),
-    ]
+    # The period control: one compact ‹ date › bar that opens a calendar, rather than
+    # a row of preset tabs beside two bare date inputs. The presets did not disappear
+    # — they moved inside the popover, next to the month they change.
+    daterange = _daterange_bar(date_from, date_to)
 
     return render(request, "crm/kassa.html", {
         "cash_total": cash_total, "cash_total_uzs": cash_total_uzs,
@@ -3075,7 +3071,7 @@ def kassa(request):
         "income_page": income_page, "outflow_page": outflow_page,
         "partner_debts": partner_debts, "payable_total": payable_total,
         "payable_total_uzs": payable_total_uzs,
-        "date_from": date_from, "date_to": date_to, "presets": presets,
+        "date_from": date_from, "date_to": date_to, "daterange": daterange,
     })
 
 
@@ -3093,6 +3089,52 @@ def _date_param(request, key):
         return _date.fromisoformat(raw).isoformat()
     except ValueError:
         return ""
+
+
+def _daterange_bar(date_from, date_to):
+    """What the compact ‹ date › control needs: how to NAME the chosen period, and
+    where its arrows step to.
+
+    The arrows step by the length of the period itself — a week back from a week, a
+    day back from a day — because "the previous one of these" is what somebody
+    comparing periods means. With no filter at all there is no previous anything, so
+    `is_all` is true and the template leaves the arrows off.
+
+    Dates are handed over as date objects too: the label is written in the template so
+    the month names stay with Django's l10n rather than being spelled here."""
+    today = timezone.localdate()
+    if not date_from and not date_to:
+        return {"today": today.isoformat(), "is_all": True}
+    # One end alone is a real filter ("everything from August"), so the other is
+    # filled from what we have rather than treated as missing.
+    start = _date.fromisoformat(date_from) if date_from else _date.fromisoformat(date_to)
+    end = _date.fromisoformat(date_to) if date_to else start
+    if end < start:
+        start, end = end, start
+    span = timedelta(days=(end - start).days + 1)
+    month_end = (start.replace(day=1) + timedelta(days=31)).replace(day=1) - timedelta(days=1)
+    # A whole month, or the part of this month that has happened — both read as
+    # "Avgust" to the person looking at the bar.
+    is_month = start.day == 1 and end in (month_end, today) and start.month == end.month
+    if is_month:
+        # Stepped in whole months, not in 31-day hops: from Iyul the arrow has to
+        # reach Iyun, and a fixed span lands on 31-May–30-Iyun instead.
+        prev_from = (start - timedelta(days=1)).replace(day=1)
+        prev_to = start - timedelta(days=1)
+        next_from = month_end + timedelta(days=1)
+        next_to = (next_from + timedelta(days=31)).replace(day=1) - timedelta(days=1)
+    else:
+        prev_from, prev_to = start - span, end - span
+        next_from, next_to = start + span, end + span
+    return {
+        "today": today.isoformat(), "is_all": False,
+        "from_date": start, "to_date": end,
+        "is_today": start == end == today,
+        "is_single": start == end,
+        "is_month": is_month,
+        "prev_from": prev_from.isoformat(), "prev_to": prev_to.isoformat(),
+        "next_from": next_from.isoformat(), "next_to": next_to.isoformat(),
+    }
 
 
 def _report_filters(request):

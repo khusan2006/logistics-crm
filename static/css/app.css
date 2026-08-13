@@ -543,17 +543,7 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .ksm-flow { margin-top: 4px; display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .kassa-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 14px; }
-/* No `margin-right: auto` to push the dates right: in a WRAPPING flex row an auto
-   margin absorbs every pixel of free space, so the date pair and the button were
-   forced onto lines of their own even though all three fit across easily. */
-.kassa-filter .status-tabs { margin: 0; }
-.kassa-filter label { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
-/* The presets are the common path and the date pair is the escape hatch, so the
-   pair shrinks first — a date input at its intrinsic width pushed the submit
-   button onto a line of its own. */
-.kassa-filter input[type="date"] { width: 122px; min-width: 0; padding: 5px 8px; font-size: 12.5px; }
-.kassa-range { gap: 8px; }
-.kassa-range span { color: var(--text-faint); }
+
 
 /* Flow and position side by side — they answer "what moved" and "what it means",
    and reading one without the other is what made the stacked version feel long. */
@@ -1424,6 +1414,9 @@ ul.errorlist li::before { content: "⚠ "; }
   transition: background 0.12s;
 }
 .daterange-trigger:hover { background: var(--surface-hover); }
+/* With no period chosen there are no arrows to sit between, so the trigger IS the
+   control and carries the whole radius. */
+.daterange--bare .daterange-trigger { border-left: 0; border-right: 0; border-radius: var(--r); }
 .daterange-trigger .daterange-text { white-space: nowrap; }
 .daterange-trigger .cal-ico { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; }
 .daterange.is-open .daterange-trigger .cal-ico { color: var(--accent); }
@@ -1443,7 +1436,9 @@ ul.errorlist li::before { content: "⚠ "; }
 .daterange-pop {
   position: absolute;
   top: calc(100% + 8px);
-  right: 0;
+  /* Left-aligned: the control sits at the start of the kassa's filter row, and a
+     popover anchored right hung off past it. */
+  left: 0;
   z-index: 60;
   width: 320px;
   padding: 16px;
@@ -1502,6 +1497,8 @@ ul.errorlist li::before { content: "⚠ "; }
   border: 1px solid var(--border); border-radius: var(--r-sm);
 }
 .cal-in:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+/* A field with something unreadable in it says so, rather than being ignored. */
+.cal-in.is-invalid { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 .cal-foot { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
 .cal-preset {
   font-size: 12px; font-weight: 600; color: var(--text-muted);
@@ -1513,6 +1510,7 @@ ul.errorlist li::before { content: "⚠ "; }
   display: flex; border-top: 1px solid var(--border); padding-top: 13px;
 }
 .cal-actions .btn { flex: 1; justify-content: center; }
+@media (max-width: 420px) { .daterange-pop { width: calc(100vw - 32px); } }
 .cal-sel-label { font-size: 13px; font-weight: 600; color: var(--text-muted); }
 
 /* Sales toolbar split + applied-filter chips + slide-in filter drawer */

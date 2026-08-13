@@ -617,195 +617,6 @@
     });
   })();
 
-  // Custom dark range calendar for the sales date control (compact ‹ date › bar)
-  (function () {
-    var root = document.querySelector('.daterange');
-    if (!root) { return; }
-    var trigger = root.querySelector('.daterange-trigger');
-    var pop = root.querySelector('.daterange-pop');
-    if (!trigger || !pop) { return; }
-
-    var MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
-    var WD = ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sha', 'Ya'];
-    var todayIso = root.getAttribute('data-today') || '';
-
-    function pad(n) { return (n < 10 ? '0' : '') + n; }
-    function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
-    function parseIso(s) {
-      var p = (s || '').split('-');
-      return p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]) : null;
-    }
-    function fmt(s) { var d = parseIso(s); return d ? d.getDate() + '-' + MONTHS[d.getMonth()] : ''; }
-    // ISO ⇄ hand-typed dd.mm.yyyy, for the manually editable Dan/Gacha fields.
-    function disp(s) { var d = parseIso(s); return d ? pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() : ''; }
-    function fromDisp(s) {
-      var m = (s || '').trim().match(/^(\d{1,2})[.,\/\-](\d{1,2})[.,\/\-](\d{4})$/);
-      if (!m) { return ''; }
-      var dd = +m[1], mm = +m[2], yy = +m[3];
-      var d = new Date(yy, mm - 1, dd);
-      // reject impossible dates (e.g. 31.02.2026 rolls over to March)
-      if (d.getFullYear() !== yy || d.getMonth() !== mm - 1 || d.getDate() !== dd) { return ''; }
-      return iso(d);
-    }
-    function selLabel() {
-      if (!selStart) { return 'Sana tanlang'; }
-      if (!selEnd || selEnd === selStart) { return fmt(selStart); }
-      return fmt(selStart) + ' – ' + fmt(selEnd);
-    }
-
-    var selStart = root.getAttribute('data-from') || todayIso;
-    var selEnd = root.getAttribute('data-to') || selStart;
-    var view = parseIso(selStart) || new Date();
-    view = new Date(view.getFullYear(), view.getMonth(), 1);
-
-    var CHEV_L = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
-    var CHEV_R = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
-
-    function daysHtml() {
-      var y = view.getFullYear(), m = view.getMonth();
-      var firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-first
-      var days = new Date(y, m + 1, 0).getDate();
-      var hasRange = selStart && selEnd && selEnd !== selStart;
-      var h = '';
-      for (var i = 0; i < firstWeekday; i++) { h += '<span></span>'; }
-      for (var d = 1; d <= days; d++) {
-        var ds = y + '-' + pad(m + 1) + '-' + pad(d);
-        var cls = 'cal-day';
-        if (hasRange && ds === selStart) { cls += ' is-sel is-start'; }
-        else if (hasRange && ds === selEnd) { cls += ' is-sel is-end'; }
-        else if (hasRange && ds > selStart && ds < selEnd) { cls += ' is-range'; }
-        else if (!hasRange && ds === selStart) { cls += ' is-sel'; }
-        if (ds === todayIso) { cls += ' is-today'; }
-        h += '<button type="button" class="' + cls + '" data-day="' + ds + '">' + d + '</button>';
-      }
-      return h;
-    }
-
-    function render() {
-      var h = '<div class="cal-top">'
-        + '<button type="button" class="cal-nav" data-nav="-1" aria-label="Oldingi oy">' + CHEV_L + '</button>'
-        + '<span class="cal-title">' + MONTHS[view.getMonth()] + ' ' + view.getFullYear() + '</span>'
-        + '<button type="button" class="cal-nav" data-nav="1" aria-label="Keyingi oy">' + CHEV_R + '</button>'
-        + '</div><div class="cal-inputs">'
-        + '<label class="cal-in-field">Dan<input type="text" inputmode="numeric" autocomplete="off" placeholder="kk.oo.yyyy" maxlength="10" class="cal-in" data-input="from" value="' + disp(selStart) + '"></label>'
-        + '<label class="cal-in-field">Gacha<input type="text" inputmode="numeric" autocomplete="off" placeholder="kk.oo.yyyy" maxlength="10" class="cal-in" data-input="to" value="' + disp(selEnd || selStart) + '"></label>'
-        + '</div><div class="cal-wd">';
-      for (var w = 0; w < 7; w++) { h += '<span>' + WD[w] + '</span>'; }
-      h += '</div><div class="cal-days">' + daysHtml() + '</div><div class="cal-foot">'
-        + '<button type="button" class="cal-preset" data-preset="today">Bugun</button>'
-        + '<button type="button" class="cal-preset" data-preset="7">7 kun</button>'
-        + '<button type="button" class="cal-preset" data-preset="30">30 kun</button>'
-        + '<button type="button" class="cal-preset" data-preset="month">Bu oy</button>'
-        + '</div><div class="cal-actions">'
-        + '<button type="button" class="btn btn-sm" data-apply>Tanlash</button>'
-        + '</div>';
-      pop.innerHTML = h;
-    }
-
-    // Repaint only the month title + day grid, leaving the Dan/Gacha inputs in the
-    // DOM. A full render() rebuilds those inputs, which fights the user mid-edit
-    // (a cleared field instantly refills, the native picker re-opens).
-    function paintGrid() {
-      var title = pop.querySelector('.cal-title');
-      var grid = pop.querySelector('.cal-days');
-      if (title) { title.textContent = MONTHS[view.getMonth()] + ' ' + view.getFullYear(); }
-      if (grid) { grid.innerHTML = daysHtml(); }
-    }
-
-    // Push the current selection back into the inputs (after a day click).
-    function syncInputs() {
-      var fromEl = pop.querySelector('[data-input="from"]');
-      var toEl = pop.querySelector('[data-input="to"]');
-      if (fromEl) { fromEl.value = disp(selStart); }
-      if (toEl) { toEl.value = disp(selEnd || selStart); }
-    }
-
-    function openPop() {
-      render();
-      pop.classList.remove('is-up');
-      pop.hidden = false;
-      root.classList.add('is-open');
-      trigger.setAttribute('aria-expanded', 'true');
-      if (pop.getBoundingClientRect().bottom > window.innerHeight - 8) { pop.classList.add('is-up'); }
-    }
-    function closePop() { pop.hidden = true; root.classList.remove('is-open'); trigger.setAttribute('aria-expanded', 'false'); }
-
-    function apply(from, to) {
-      if (!from) { return; }
-      if (!to) { to = from; }
-      if (to < from) { var t = from; from = to; to = t; }
-      var u = new URL(window.location.href);
-      u.searchParams.set('dan', from);
-      u.searchParams.set('gacha', to);
-      u.searchParams.delete('page');
-      window.location.assign(u.toString());
-    }
-
-    function applyPreset(kind) {
-      var t = parseIso(todayIso) || new Date();
-      if (kind === 'today') { apply(todayIso, todayIso); return; }
-      if (kind === 'month') { apply(iso(new Date(t.getFullYear(), t.getMonth(), 1)), todayIso); return; }
-      var n = parseInt(kind, 10);
-      var s = new Date(t); s.setDate(s.getDate() - (n - 1));
-      apply(iso(s), todayIso);
-    }
-
-    trigger.addEventListener('click', function (e) {
-      e.stopPropagation();
-      if (pop.hidden) { openPop(); } else { closePop(); }
-    });
-
-    pop.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var nav = e.target.closest('[data-nav]');
-      if (nav) { view.setMonth(view.getMonth() + parseInt(nav.getAttribute('data-nav'), 10)); paintGrid(); return; }
-      var day = e.target.closest('[data-day]');
-      if (day) {
-        var v = day.getAttribute('data-day');
-        if (selEnd) { selStart = v; selEnd = null; }        // both set → start a fresh range
-        else if (v < selStart) { selEnd = selStart; selStart = v; } // picked earlier → swap
-        else { selEnd = v; }                                 // complete the range
-        syncInputs();
-        paintGrid();
-        return;
-      }
-      var preset = e.target.closest('[data-preset]');
-      if (preset) { applyPreset(preset.getAttribute('data-preset')); return; }
-      if (e.target.closest('[data-apply]')) { apply(selStart, selEnd || selStart); }
-    });
-
-    // Manual entry: typing (or picking) in the Dan/Gacha fields updates the range
-    function syncFromInputs(focusEl) {
-      var fromEl = pop.querySelector('[data-input="from"]');
-      var toEl = pop.querySelector('[data-input="to"]');
-      if (!fromEl || !toEl) { return; }
-      var f = fromDisp(fromEl.value);
-      var t = fromDisp(toEl.value);
-      if (f && t && t < f) { var s = f; f = t; t = s; }
-      selStart = f || t || todayIso;
-      selEnd = t || null;
-      var focus = parseIso(fromDisp((focusEl && focusEl.value) || '') || selStart);
-      if (focus) { view = new Date(focus.getFullYear(), focus.getMonth(), 1); }
-      paintGrid();
-    }
-    pop.addEventListener('change', function (e) {
-      var el = e.target.closest('[data-input]');
-      if (el) { syncFromInputs(el); }
-    });
-    pop.addEventListener('keydown', function (e) {
-      if (e.key !== 'Enter') { return; }
-      var el = e.target.closest('[data-input]');
-      if (!el) { return; }
-      e.preventDefault();
-      var f = fromDisp(pop.querySelector('[data-input="from"]').value);
-      var t = fromDisp(pop.querySelector('[data-input="to"]').value) || f;
-      if (f) { apply(f, t); }
-    });
-
-    document.addEventListener('click', function () { if (!pop.hidden) { closePop(); } });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) { closePop(); } });
-  })();
-
   // Debt payment: show the bank commission + net-to-till live when paying by transfer
   (function () {
     function money(n) {
@@ -2118,6 +1929,254 @@
     if (document.readyState !== 'loading') { refresh(); }
     else { document.addEventListener('DOMContentLoaded', function () { refresh(); }); }
   })();
+  // Davr: the compact ‹ date › bar on the kassa. Ported from Paket CRM, which had
+  // already settled the fiddly parts — Monday-first weeks, a hand-typable dd.mm.yyyy
+  // pair that forgives every way people type a date, and a range built by clicking two
+  // days. Reads ?from / ?to, the params this app has always filtered on.
+  (function () {
+    var root = document.querySelector('.daterange');
+    if (!root) { return; }
+    var trigger = root.querySelector('.daterange-trigger');
+    var pop = root.querySelector('.daterange-pop');
+    if (!trigger || !pop) { return; }
+
+    var MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+    var WD = ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sha', 'Ya'];
+    var todayIso = root.getAttribute('data-today') || '';
+
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+    function parseIso(s) {
+      var p = (s || '').split('-');
+      return p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]) : null;
+    }
+    function fmt(s) { var d = parseIso(s); return d ? d.getDate() + '-' + MONTHS[d.getMonth()] : ''; }
+    // ISO ⇄ hand-typed dd.mm.yyyy, for the manually editable Dan/Gacha fields.
+    function disp(s) { var d = parseIso(s); return d ? pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear() : ''; }
+    // Forgiving about HOW the date was typed, strict about whether it exists.
+    // Accepts 05.08.2026, 5/8/2026, 5-8-26 and bare digits (05082026 / 050826) —
+    // people type all of these, and silently ignoring the ones we didn't anticipate
+    // is what made manual entry feel broken.
+    function fromDisp(s) {
+      var v = (s || '').trim();
+      var m = v.match(/^(\d{1,2})[.,\/\-\s](\d{1,2})[.,\/\-\s](\d{2}|\d{4})$/);
+      if (!m) {
+        var digits = v.replace(/\D/g, '');
+        if (digits.length === 8) { m = [v, digits.slice(0, 2), digits.slice(2, 4), digits.slice(4)]; }
+        else if (digits.length === 6) { m = [v, digits.slice(0, 2), digits.slice(2, 4), digits.slice(4)]; }
+        else { return ''; }
+      }
+      var dd = +m[1], mm = +m[2], yy = +m[3];
+      if (m[3].length === 2) { yy += 2000; }   // 26 → 2026
+      var d = new Date(yy, mm - 1, dd);
+      // reject impossible dates (e.g. 31.02.2026 rolls over to March)
+      if (d.getFullYear() !== yy || d.getMonth() !== mm - 1 || d.getDate() !== dd) { return ''; }
+      return iso(d);
+    }
+    function selLabel() {
+      if (!selStart) { return 'Sana tanlang'; }
+      if (!selEnd || selEnd === selStart) { return fmt(selStart); }
+      return fmt(selStart) + ' – ' + fmt(selEnd);
+    }
+
+    var selStart = root.getAttribute('data-from') || todayIso;
+    var selEnd = root.getAttribute('data-to') || selStart;
+    var view = parseIso(selStart) || new Date();
+    view = new Date(view.getFullYear(), view.getMonth(), 1);
+
+    var CHEV_L = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+    var CHEV_R = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+
+    function daysHtml() {
+      var y = view.getFullYear(), m = view.getMonth();
+      var firstWeekday = (new Date(y, m, 1).getDay() + 6) % 7; // Monday-first
+      var days = new Date(y, m + 1, 0).getDate();
+      var hasRange = selStart && selEnd && selEnd !== selStart;
+      var h = '';
+      for (var i = 0; i < firstWeekday; i++) { h += '<span></span>'; }
+      for (var d = 1; d <= days; d++) {
+        var ds = y + '-' + pad(m + 1) + '-' + pad(d);
+        var cls = 'cal-day';
+        if (hasRange && ds === selStart) { cls += ' is-sel is-start'; }
+        else if (hasRange && ds === selEnd) { cls += ' is-sel is-end'; }
+        else if (hasRange && ds > selStart && ds < selEnd) { cls += ' is-range'; }
+        else if (!hasRange && ds === selStart) { cls += ' is-sel'; }
+        if (ds === todayIso) { cls += ' is-today'; }
+        h += '<button type="button" class="' + cls + '" data-day="' + ds + '">' + d + '</button>';
+      }
+      return h;
+    }
+
+    function render() {
+      var h = '<div class="cal-top">'
+        + '<button type="button" class="cal-nav" data-nav="-1" aria-label="Oldingi oy">' + CHEV_L + '</button>'
+        + '<span class="cal-title">' + MONTHS[view.getMonth()] + ' ' + view.getFullYear() + '</span>'
+        + '<button type="button" class="cal-nav" data-nav="1" aria-label="Keyingi oy">' + CHEV_R + '</button>'
+        + '</div><div class="cal-inputs">'
+        + '<label class="cal-in-field">Dan<input type="text" inputmode="numeric" autocomplete="off" placeholder="kk.oo.yyyy" maxlength="10" class="cal-in" data-input="from" value="' + disp(selStart) + '"></label>'
+        + '<label class="cal-in-field">Gacha<input type="text" inputmode="numeric" autocomplete="off" placeholder="kk.oo.yyyy" maxlength="10" class="cal-in" data-input="to" value="' + disp(selEnd || selStart) + '"></label>'
+        + '</div><div class="cal-wd">';
+      for (var w = 0; w < 7; w++) { h += '<span>' + WD[w] + '</span>'; }
+      h += '</div><div class="cal-days">' + daysHtml() + '</div><div class="cal-foot">'
+        + '<button type="button" class="cal-preset" data-preset="today">Bugun</button>'
+        + '<button type="button" class="cal-preset" data-preset="7">7 kun</button>'
+        + '<button type="button" class="cal-preset" data-preset="30">30 kun</button>'
+        + '<button type="button" class="cal-preset" data-preset="month">Bu oy</button>'
+        + '<button type="button" class="cal-preset" data-preset="all">Hammasi</button>'
+        + '</div><div class="cal-actions">'
+        + '<button type="button" class="btn btn-sm" data-apply>Tanlash</button>'
+        + '</div>';
+      pop.innerHTML = h;
+    }
+
+    // Repaint only the month title + day grid, leaving the Dan/Gacha inputs in the
+    // DOM. A full render() rebuilds those inputs, which fights the user mid-edit
+    // (a cleared field instantly refills, the native picker re-opens).
+    function paintGrid() {
+      var title = pop.querySelector('.cal-title');
+      var grid = pop.querySelector('.cal-days');
+      if (title) { title.textContent = MONTHS[view.getMonth()] + ' ' + view.getFullYear(); }
+      if (grid) { grid.innerHTML = daysHtml(); }
+    }
+
+    // Push the current selection back into the inputs (after a day click).
+    function syncInputs() {
+      var fromEl = pop.querySelector('[data-input="from"]');
+      var toEl = pop.querySelector('[data-input="to"]');
+      if (fromEl) { fromEl.value = disp(selStart); }
+      if (toEl) { toEl.value = disp(selEnd || selStart); }
+    }
+
+    function openPop() {
+      render();
+      pop.classList.remove('is-up');
+      pop.hidden = false;
+      root.classList.add('is-open');
+      trigger.setAttribute('aria-expanded', 'true');
+      if (pop.getBoundingClientRect().bottom > window.innerHeight - 8) { pop.classList.add('is-up'); }
+    }
+    function closePop() { pop.hidden = true; root.classList.remove('is-open'); trigger.setAttribute('aria-expanded', 'false'); }
+
+    function apply(from, to) {
+      if (!from) { return; }
+      if (!to) { to = from; }
+      if (to < from) { var t = from; from = to; to = t; }
+      var u = new URL(window.location.href);
+      u.searchParams.set('from', from);
+      u.searchParams.set('to', to);
+      // Both ledgers page independently; a new period invalidates either page number.
+      u.searchParams.delete('ipage');
+      u.searchParams.delete('opage');
+      window.location.assign(u.toString());
+    }
+
+    // No period at all: the filter comes OFF rather than being set to some range that
+    // happens to cover everything so far.
+    function clearRange() {
+      var u = new URL(window.location.href);
+      u.searchParams.delete('from');
+      u.searchParams.delete('to');
+      u.searchParams.delete('ipage');
+      u.searchParams.delete('opage');
+      window.location.assign(u.toString());
+    }
+
+    function applyPreset(kind) {
+      var t = parseIso(todayIso) || new Date();
+      if (kind === 'all') { clearRange(); return; }
+      if (kind === 'today') { apply(todayIso, todayIso); return; }
+      if (kind === 'month') { apply(iso(new Date(t.getFullYear(), t.getMonth(), 1)), todayIso); return; }
+      var n = parseInt(kind, 10);
+      var s = new Date(t); s.setDate(s.getDate() - (n - 1));
+      apply(iso(s), todayIso);
+    }
+
+    trigger.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (pop.hidden) { openPop(); } else { closePop(); }
+    });
+
+    pop.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nav = e.target.closest('[data-nav]');
+      if (nav) { view.setMonth(view.getMonth() + parseInt(nav.getAttribute('data-nav'), 10)); paintGrid(); return; }
+      var day = e.target.closest('[data-day]');
+      if (day) {
+        var v = day.getAttribute('data-day');
+        if (selEnd) { selStart = v; selEnd = null; }        // both set → start a fresh range
+        else if (v < selStart) { selEnd = selStart; selStart = v; } // picked earlier → swap
+        else { selEnd = v; }                                 // complete the range
+        syncInputs();
+        paintGrid();
+        return;
+      }
+      var preset = e.target.closest('[data-preset]');
+      if (preset) { applyPreset(preset.getAttribute('data-preset')); return; }
+      if (e.target.closest('[data-apply]')) { applyTyped(); }
+    });
+
+    // Read the two fields RIGHT NOW rather than trusting that a `change` event has
+    // already synced them. Clicking "Tanlash" blurs the input, and relying on that
+    // blur firing first is exactly the kind of ordering that leaves a hand-typed
+    // date silently ignored.
+    function applyTyped() {
+      var fromEl = pop.querySelector('[data-input="from"]');
+      var toEl = pop.querySelector('[data-input="to"]');
+      var fRaw = fromEl ? fromEl.value.trim() : '';
+      var tRaw = toEl ? toEl.value.trim() : '';
+      var f = fromDisp(fRaw);
+      var t = fromDisp(tRaw);
+      // A field with something unreadable in it stops the apply and says so, instead
+      // of quietly falling back to a date the user never asked for.
+      var bad = false;
+      if (fromEl) { markInvalid(fromEl, fRaw && !f); bad = bad || (fRaw && !f); }
+      if (toEl) { markInvalid(toEl, tRaw && !t); bad = bad || (tRaw && !t); }
+      if (bad) { return; }
+      if (!f && !t) { f = selStart; t = selEnd; }
+      apply(f || t, t || f);
+    }
+
+    function markInvalid(el, isBad) {
+      el.classList.toggle('is-invalid', !!isBad);
+    }
+
+    // Manual entry: typing (or picking) in the Dan/Gacha fields updates the range
+    function syncFromInputs(focusEl) {
+      var fromEl = pop.querySelector('[data-input="from"]');
+      var toEl = pop.querySelector('[data-input="to"]');
+      if (!fromEl || !toEl) { return; }
+      var f = fromDisp(fromEl.value);
+      var t = fromDisp(toEl.value);
+      if (f && t && t < f) { var s = f; f = t; t = s; }
+      selStart = f || t || todayIso;
+      selEnd = t || null;
+      var focus = parseIso(fromDisp((focusEl && focusEl.value) || '') || selStart);
+      if (focus) { view = new Date(focus.getFullYear(), focus.getMonth(), 1); }
+      paintGrid();
+    }
+    pop.addEventListener('change', function (e) {
+      var el = e.target.closest('[data-input]');
+      if (el) { syncFromInputs(el); }
+    });
+    // Typing again clears the "unreadable" mark, and a date that already parses moves
+    // the calendar with it so the two never disagree on screen.
+    pop.addEventListener('input', function (e) {
+      var el = e.target.closest('[data-input]');
+      if (!el) { return; }
+      markInvalid(el, false);
+      if (fromDisp(el.value)) { syncFromInputs(el); }
+    });
+    pop.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') { return; }
+      if (!e.target.closest('[data-input]')) { return; }
+      e.preventDefault();
+      applyTyped();
+    });
+
+    document.addEventListener('click', function () { if (!pop.hidden) { closePop(); } });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) { closePop(); } });
+  })();
+
 </script>
 </body>
 </html>

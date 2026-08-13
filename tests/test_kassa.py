@@ -471,6 +471,63 @@ class TestCurrentStateTiles:
             "Mol — tannarxda", "Bizga qaytadigan pul", "Qarzlarimiz"]
 
 
+class TestDaterangeBar:
+    """The period control: one compact ‹ date › bar that opens a calendar, in place of
+    preset tabs beside two bare date inputs beside a submit button."""
+
+    def _bar(self, admin_client, qs=""):
+        return admin_client.get("/kassa/" + qs).context["daterange"]
+
+    def test_no_period_leaves_the_arrows_off(self, admin_client, db):
+        """There is no "previous" of everything, so the bar is the trigger alone."""
+        bar = self._bar(admin_client)
+        assert bar["is_all"] is True
+        assert "prev_from" not in bar
+        html = admin_client.get("/kassa/").content.decode()
+        assert "daterange--bare" in html
+        assert ">Hammasi<" in html
+
+    def test_the_arrows_step_by_the_length_of_the_period(self, admin_client, db):
+        """A five-day period steps five days: "the previous one of these" is what
+        somebody comparing periods means."""
+        bar = self._bar(admin_client, "?from=2026-08-05&to=2026-08-09")
+        assert (bar["prev_from"], bar["prev_to"]) == ("2026-07-31", "2026-08-04")
+        assert (bar["next_from"], bar["next_to"]) == ("2026-08-10", "2026-08-14")
+        assert bar["is_single"] is False and bar["is_month"] is False
+
+    def test_a_month_steps_in_whole_months(self, admin_client, db):
+        """From Iyul the arrow has to reach Iyun. Stepped by the span instead, a
+        31-day period lands on 31-May–30-Iyun, which is not a month anybody asked
+        for."""
+        bar = self._bar(admin_client, "?from=2026-07-01&to=2026-07-31")
+        assert bar["is_month"] is True
+        assert (bar["prev_from"], bar["prev_to"]) == ("2026-06-01", "2026-06-30")
+        assert (bar["next_from"], bar["next_to"]) == ("2026-08-01", "2026-08-31")
+
+    def test_the_part_of_this_month_so_far_is_still_that_month(self, admin_client, db):
+        from django.utils import timezone
+        today = timezone.localdate()
+        first = today.replace(day=1)
+        bar = self._bar(admin_client, f"?from={first}&to={today}")
+        assert bar["is_month"] is True
+
+    def test_one_end_alone_is_a_real_period(self, admin_client, db):
+        """?from with no ?to filters from that day on, so the bar names it rather than
+        falling back to "Hammasi"."""
+        bar = self._bar(admin_client, "?from=2026-08-07")
+        assert bar["is_all"] is False
+        assert bar["is_single"] is True
+        assert bar["from_date"].isoformat() == "2026-08-07"
+
+    def test_a_backwards_period_is_read_the_right_way_round(self, admin_client, db):
+        """A hand-edited querystring can arrive with the ends swapped; the bar must not
+        publish a negative span."""
+        bar = self._bar(admin_client, "?from=2026-08-09&to=2026-08-05")
+        assert bar["from_date"].isoformat() == "2026-08-05"
+        assert bar["to_date"].isoformat() == "2026-08-09"
+        assert bar["prev_from"] == "2026-07-31"
+
+
 def resp_cash(admin_client):
     return admin_client.get("/kassa/").context["cash_total"]
 
