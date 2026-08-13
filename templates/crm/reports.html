@@ -157,6 +157,7 @@
       <th>Marka</th>
       <th>Kg</th>
       <th>Holat</th>
+      <th>Transport</th>
       <th>Reja sana</th>
       <th>Kechikish</th>
     </tr>
@@ -167,6 +168,15 @@
       <td>{{ s.brand_summary }}</td>
       <td>{{ s.kg|floatformat:"0g" }}</td>
       <td>{{ s.status.name }}</td>
+      {% comment %}
+      Transport raqami with the konteyner beneath it — the same cell Yuklar and the
+      dashboard's kechikkan table print, so a load is identified the same way
+      wherever it is being chased from.
+      {% endcomment %}
+      <td>
+        <div>{{ s.current_transport|default:"—" }}</div>
+        <div class="muted load-sub">{{ s.container|default:"—" }}</div>
+      </td>
       <td>{{ s.eta }}</td>
       <td><span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span></td>
     </tr>

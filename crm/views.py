@@ -67,8 +67,10 @@ def _bar_pct(part, whole):
 def dashboard(request):
     if not request.user.is_admin_role:
         return redirect("shipment_list")
+    # `legs` for the kechikkan table: it names the transport carrying the load NOW,
+    # which is the active leg's, and reading that per row is a query per row.
     shipments = (Shipment.objects.select_related("contract__partner", "status")
-                 .prefetch_related("lines__contract_line"))
+                 .prefetch_related("lines__contract_line", "legs"))
     # Prefetched here rather than per figure below: the chart reads every kelishuv's
     # lines, payments and yuklar, which is three queries per row without this.
     contracts = (Contract.objects.select_related("partner")
@@ -3057,7 +3059,11 @@ def reports(request):
     # tannarx blends a dollar mol with a so'm transport bill by design.
     profit_total = sum((s.profit for s in sales), Decimal("0"))
     profit_total_uzs = sum((s.profit_uzs for s in sales), Decimal("0"))
-    late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False) if s.is_overdue]
+    # `legs` prefetched on this narrow slice only — the table names the transport on
+    # the load now, and the wider `shipments` above is walked by figures that never
+    # touch a leg.
+    late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
+                      .prefetch_related("legs") if s.is_overdue]
     kechikkan_soni = len(late_shipments)
 
     # Per-partner table

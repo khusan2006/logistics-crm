@@ -727,8 +727,8 @@ class TestBackfillingTheSotuvlarThatCameBefore:
 
 
 class TestTheOneRowView:
-    """`?view=bitta` — a sotuv is ONE row, its mahsulotlar stacked inside the columns
-    they belong to, the way Kelishuvlar already lists a kelishuv's markalar."""
+    """A sotuv is ONE row, its mahsulotlar stacked inside the columns they belong to,
+    the way Kelishuvlar already lists a kelishuv's markalar."""
 
     def _sotuv(self, client):
         _lot_at("LLDPE", "500", "1.00", "2026-07-10")
@@ -743,23 +743,23 @@ class TestTheOneRowView:
 
     def test_two_markas_land_on_one_row(self, admin_client, db):
         self._sotuv(admin_client)
-        html = admin_client.get("/sales/?view=bitta").content.decode()
+        assert Sale.objects.count() == 2
+        html = admin_client.get("/sales/").content.decode()
         assert html.count("<tr") == 2                 # the header row and the sotuv
         assert "LLDPE" in html and "HDPE" in html
-        assert "Birgalikda sotildi" not in html       # no band — the row IS the sotuv
 
     def test_jami_is_the_whole_sotuv(self, admin_client, db):
         """$150 + $150 printed once as $300, not twice as its halves."""
         self._sotuv(admin_client)
-        html = admin_client.get("/sales/?view=bitta").content.decode()
+        html = admin_client.get("/sales/").content.decode()
         assert "$300" in html and "$150" not in html
 
     def test_a_merged_sotuv_offers_its_page_not_a_guessed_row(self, admin_client, db):
-        """Tahrirlash acts on one lot's row, so a merged sotuv links to its page
+        """Tahrirlash acts on one lot's row, so a sotuv of several links to its page
         instead of silently picking the first of them."""
         self._sotuv(admin_client)
         first = Sale.objects.order_by("pk").first()
-        html = admin_client.get("/sales/?view=bitta").content.decode()
+        html = admin_client.get("/sales/").content.decode()
         assert f"/sales/{first.pk}/" in html
         assert f"/sales/{first.pk}/edit/" not in html
 
@@ -771,17 +771,18 @@ class TestTheOneRowView:
             "date": "2026-07-24", "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "100", "price": "1.50"})})
         sale = Sale.objects.get()
-        html = admin_client.get("/sales/?view=bitta").content.decode()
+        html = admin_client.get("/sales/").content.decode()
         assert f"/sales/{sale.pk}/edit/" in html and f"/sales/{sale.pk}/delete/" in html
 
-    def test_the_default_view_is_still_a_row_per_lot(self, admin_client, db):
+    def test_the_search_still_narrows_the_list(self, admin_client, db):
+        """Rows are folded after the filter, so a search that matches one marka of a
+        sotuv shows that sotuv — not every sotuv of that mijoz."""
         self._sotuv(admin_client)
-        html = admin_client.get("/sales/").content.decode()
-        assert "Birgalikda sotildi" in html
-        assert html.count("<tr") == 4                 # header + band + two lot rows
-
-    def test_the_toggle_carries_the_search_with_it(self, admin_client, db):
-        """Switching views must not silently widen what is on screen."""
-        self._sotuv(admin_client)
-        html = admin_client.get("/sales/?q=LLDPE").content.decode()
-        assert "?view=bitta&amp;q=LLDPE" in html
+        _lot_at("PVC", "500", "1.00", "2026-07-12")
+        other = Customer.objects.create(name="Boshqa mijoz")
+        admin_client.post("/sales/new/", {
+            "customer": other.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": "2026-07-24", "debt_deadline": "", "note": "",
+            **line_data({"brand": "PVC", "kg": "100", "price": "1.50"})})
+        html = admin_client.get("/sales/?q=PVC").content.decode()
+        assert "Boshqa mijoz" in html and "Ikki marka" not in html
