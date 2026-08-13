@@ -2654,7 +2654,7 @@ def kassa(request):
     # where it went. Current-state, so the date filter does not touch them.
     receivable, debtors = customer_receivable_by_currency()
     hamkor = partner_positions_by_currency()
-    logist_held, logist_held_uzs, logist_owed, logist_owed_uzs = logist_positions()
+    logist_held, logist_owed = logist_positions()
     customs_held, customs_owed = customs_positions()
     stock, stock_kg = stock_value_by_currency()
     transit, transit_kg, transit_loads = transit_value_by_currency()
@@ -2706,14 +2706,12 @@ def kassa(request):
          "note": "yuk kelishidan oldin to'lab qo'yganimiz", "group": "back",
          "meta": f"{hamkor['contracts']} ta kelishuvda" if hamkor["contracts"] else "",
          "url": reverse("contract_list")},
-        {"label": "Logistlarda", "split": None, "group": "back",
-         "amount": logist_held, "amount_uzs": logist_held_uzs,
+        # A split like every other holder now. It was a blended dollar figure while a
+        # logist's hisob was assumed to be dollars-only; they are funded in so'm too,
+        # and that assumption hid a so'm gap entirely (see Logist.balance_by_currency).
+        {"label": "Logistlarda", "split": logist_held, "group": "back",
          "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
          "tone": "in", "meta": "", "url": reverse("logist_list")},
-        # A split rather than the converted pair the logist tile above uses. A
-        # logist's hisob is one heap restated; bojxona money genuinely moves in both
-        # currencies, so it is two — the same reason Kassada and the hamkor tiles
-        # carry one.
         {"label": "Bojxonada", "split": customs_held, "group": "back",
          "note": "yuklarni rasmiylashtirish uchun oldindan yuborilgan",
          "tone": "in", "meta": "", "url": reverse("customs_list")},
@@ -2730,8 +2728,8 @@ def kassa(request):
     # a driver, so there is no per-currency split to draw yet.
     if logist_owed:
         tiles.append({
-            "label": "Logistlarga qarzimiz", "split": None, "amount": logist_owed,
-            "amount_uzs": logist_owed_uzs, "tone": "out", "meta": "",
+            "label": "Logistlarga qarzimiz", "split": logist_owed,
+            "tone": "out", "meta": "",
             "note": "o'z pulidan haydovchiga bergani", "group": "owed",
             "url": reverse("logist_list") + "?state=owed"})
     # Same rule for the bojxonachi who cleared a truck out of his own pocket because
@@ -2747,14 +2745,13 @@ def kassa(request):
     # sides that net to zero — it answers "which currencies does this hold at all",
     # and the reports and tests read it that way.
     #
-    # Only a tile that HAS a split gets one. A cost tile (Omborda, a logist's hisob)
-    # is kept in dollars and its so'm figure would be a conversion, not a zero:
-    # "0 so'm" there would say the mol cost no so'm, which is false.
+    # Every tile carries a split now. The last two that did not — the ombor and a
+    # logist's hisob — were blended dollar figures on the assumption that mol is
+    # bought and drivers are paid in dollars; both are done in so'm too.
     for tile in tiles:
-        if tile["split"] is not None:
-            totals = dict(tile["split"])
-            tile["split_full"] = [(currency, totals.get(currency, Decimal("0")))
-                                  for currency in (Currency.USD, Currency.UZS)]
+        totals = dict(tile["split"])
+        tile["split_full"] = [(currency, totals.get(currency, Decimal("0")))
+                              for currency in (Currency.USD, Currency.UZS)]
 
     # The flat `tiles` list stays exactly as it was — it is what every kassa test
     # reads and what says which facts the board holds. `hero`/`tile_groups` are the
@@ -3417,19 +3414,23 @@ def logist_list(request):
     if q:
         logists = logists.filter(Q(name__icontains=q) | Q(phone__icontains=q))
 
+    # Filtered on the HEAPS, not on the dollar balance: a logist holding so'm while
+    # square in dollars belongs under "Bizda turgan pul", and one short in so'm under
+    # "Bizning qarzimiz". On the dollar figure alone both read as settled — the same
+    # blind spot the kassa tiles had (see Logist.balance_by_currency).
     rows = list(logists)
     if state == "holding":
-        rows = [x for x in rows if x.balance > 0]
+        rows = [x for x in rows if x.held_by_currency()]
     elif state == "owed":
-        rows = [x for x in rows if x.balance < 0]
+        rows = [x for x in rows if x.owed_by_currency()]
     elif state == "settled":
-        rows = [x for x in rows if x.balance == 0]
+        rows = [x for x in rows if not x.balance_by_currency()]
 
-    held, held_uzs, owed, owed_uzs = logist_positions()
+    held, owed = logist_positions()
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/logist_list.html", {
         "page": page, "q": q, "state": state,
-        "held": held, "held_uzs": held_uzs, "owed": owed, "owed_uzs": owed_uzs,
+        "held": held, "owed": owed,
         "has_filters": bool(state),
     })
 

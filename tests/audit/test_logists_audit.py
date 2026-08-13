@@ -314,27 +314,33 @@ def test_the_balance_adds_up_over_top_ups_in_both_currencies_at_two_rates(
 
 
 def test_the_list_tiles_equal_the_sum_of_the_rows_on_the_list(admin_client, db):
+    """Per currency on both sides now: the tiles are the heaps the rows below hold,
+    and a dollar heap is never folded into a so'm one to make a single figure."""
+    from crm.models import Currency
     holder, ower = _logist("Ushlab turgan"), _logist("Qarzdor")
     _send(admin_client, holder, amount="5000", exchange_rate="12500")
     _dispatch(admin_client, ower, advance="800")
     ctx = admin_client.get("/logists/").context
     rows = list(ctx["page"])
-    assert ctx["held"] == sum(r.balance for r in rows if r.balance > 0)
-    assert ctx["owed"] == -sum(r.balance for r in rows if r.balance < 0)
-    assert ctx["held_uzs"] == Decimal("62500000.00")
-    assert ctx["owed_uzs"] == Decimal("9600000.00")
+    assert dict(ctx["held"]) == {Currency.USD: sum(
+        (r.balance for r in rows if r.balance > 0), Decimal("0"))}
+    assert dict(ctx["owed"]) == {Currency.USD: -sum(
+        (r.balance for r in rows if r.balance < 0), Decimal("0"))}
 
 
-@pytest.mark.xfail(reason="BUG: logist_positions() branches on the USD balance only, "
-                          "so a logist whose dollar account is square but whose "
-                          "so'm account is not drops out of BOTH tiles and the so'm "
-                          "gap disappears from the kassa entirely",
-                   strict=False)
-def test_a_som_gap_survives_when_the_dollar_balance_happens_to_be_square(
-        admin_client, db):
-    """Two top-ups at different kurs values and one advance that exactly cancels the
-    dollars. models.py:759 promises "(held, held_uzs, owed, owed_uzs) across
-    logistlar" — the so'm pair must not be silently gated on the dollar sign."""
+def test_a_dollar_only_logist_publishes_no_som_gap_at_all(admin_client, db):
+    """Two dollar top-ups at different kurs values and one dollar advance that exactly
+    cancels them. Not one so'm was ever handed to this logist.
+
+    The old blended hisob reported a 500 000 so'm hole here — 12 500 000 in against
+    13 000 000 out, purely because the advance was restated at the newer kurs. It was
+    filed as a bug that the figure vanished from the tiles when the dollar side hit
+    zero; the real problem was the figure existing. Per-currency, every row is a dollar
+    row, the dollar side is square, and the board says nothing about so'm.
+
+    `balance_uzs` still carries the restatement for the detail page's running column —
+    it is simply not a position any more."""
+    from crm.models import Currency
     logist = _logist()
     _send(admin_client, logist, amount="500", exchange_rate="12000")
     _send(admin_client, logist, amount="500", exchange_rate="13000",
@@ -342,11 +348,12 @@ def test_a_som_gap_survives_when_the_dollar_balance_happens_to_be_square(
     _dispatch(admin_client, logist, advance="1000")
     logist.refresh_from_db()
     assert logist.balance == Decimal("0.00")
-    assert logist.balance_uzs == Decimal("-500000.00")     # 12 500 000 − 13 000 000
+    assert logist.balance_uzs == Decimal("-500000.00")
 
-    held, held_uzs, owed, owed_uzs = logist_positions()
-    total_uzs = sum(x.balance_uzs for x in Logist.objects.all())
-    assert held_uzs - owed_uzs == total_uzs
+    assert logist.balance_by_currency() == []
+    held, owed = logist_positions()
+    assert (held, owed) == ([], [])
+    assert "500&nbsp;000 so&#x27;m" not in admin_client.get("/kassa/").content.decode()
 
 
 # ── the bank foiz on a top-up ────────────────────────────────────────────────────
@@ -441,8 +448,9 @@ def test_deleting_a_top_up_leaves_the_balance_and_the_kassa_consistent(
     assert logist.received_total == Decimal("5000.00")
     assert logist.received_total_uzs == Decimal("65000000.00")
     assert logist.balance == Decimal("4500.00")
-    held, held_uzs, owed, owed_uzs = logist_positions()
-    assert (held, owed) == (Decimal("4500.00"), Decimal("0"))
+    from crm.models import Currency
+    held, owed = logist_positions()
+    assert (held, owed) == ([(Currency.USD, Decimal("4500.00"))], [])
     assert admin_client.get("/kassa/").context["net_out"] == Decimal("5000.00")
 
 

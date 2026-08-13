@@ -362,12 +362,60 @@ class Logist(models.Model):
     @property
     def balance(self):
         """Positive = our money still in their hands. Negative = they fronted it and
-        we owe them."""
+        we owe them.
+
+        The blended figure, kept for `latest_rate` and the detail page's running
+        column. What is out there per heap is `balance_by_currency`."""
         return self.received_total - self.paid_total
 
     @property
     def balance_uzs(self):
         return self.received_total_uzs - self.paid_total_uzs
+
+    def received_by_currency(self):
+        """[(currency, yuborilgan)] — what we have sent them, per heap.
+
+        `net_amount` rather than `amount`: a bank foiz never reached the logist, so it
+        never became theirs to spend."""
+        if not hasattr(self, "payments"):
+            return []
+        return _by_currency((p.currency, own_side(p, p.net_amount, p.net_amount_uzs))
+                            for p in self.payments.all())
+
+    def paid_by_currency(self):
+        """[(currency, berilgan)] — what they have handed to drivers on our loads, in
+        the currency each advance was handed over in."""
+        if not hasattr(self, "driver_advances"):
+            return []
+        return _by_currency((e.currency, own_side(e, e.amount, e.amount_uzs))
+                            for e in self.driver_advances.all())
+
+    def balance_by_currency(self):
+        """[(currency, qoldiq)] — positive = our money still in their hands, negative =
+        they fronted it themselves.
+
+        Split the way a bojxonachi's hisob is. It used to be one dollar figure with a
+        so'm restatement, on the assumption that every driver advance is paid in
+        dollars — so money sent in so'm was converted into a dollar float. Now that
+        logistlar are funded in so'm too, that assumption prints a figure nobody
+        handed over, and it hid a real gap: a logist square in dollars but short in
+        so'm dropped out of both kassa tiles altogether.
+
+        Both signs can be on screen at once, and that is a real state rather than a
+        contradiction: so'm left over while a dollar advance ran short is two facts,
+        and netting them needs a kurs neither was moved at."""
+        entries = list(self.received_by_currency())
+        entries += [(currency, -amount) for currency, amount in self.paid_by_currency()]
+        return _by_currency(entries)
+
+    def held_by_currency(self):
+        """Only the heaps that are ours to get back."""
+        return [(c, a) for c, a in self.balance_by_currency() if a > 0]
+
+    def owed_by_currency(self):
+        """Only the heaps we owe them, positive so they read as an amount rather than
+        as a deficit."""
+        return [(c, -a) for c, a in self.balance_by_currency() if a < 0]
 
     def __str__(self):
         return self.name
@@ -1064,22 +1112,22 @@ class CustomsPayment(HeldFloat, CashEntry):
 
 
 def logist_positions():
-    """(held, held_uzs, owed, owed_uzs) across logistlar, both sides positive.
+    """(held, owed) across logistlar — each a [(currency, amount)] with both sides
+    positive.
 
-    Kept apart for the same reason the hamkor pair is: a logist we have overfunded
-    and one who fronted their own cash are two different facts, and netting them
-    into one number hides both."""
-    held = held_uzs = owed = owed_uzs = Decimal("0")
-    logists = Logist.objects.prefetch_related("payments", "driver_advances")
-    for logist in logists:
-        balance, balance_uzs = logist.balance, logist.balance_uzs
-        if balance > 0:
-            held += balance
-            held_uzs += balance_uzs
-        elif balance < 0:
-            owed -= balance
-            owed_uzs -= balance_uzs
-    return held, held_uzs, owed, owed_uzs
+    Two separations, exactly as `customs_positions` does them. Held is kept apart from
+    owed because a logist we have overfunded and one who fronted their own cash are
+    two different facts, and one net number hides both. And each side is per-currency
+    now that logistlar are funded in so'm as well as dollars: a so'm heap plus a
+    dollar heap restated in so'm is not a total of anything.
+
+    It used to branch on the dollar balance alone, which lost a whole heap — a logist
+    square in dollars but short in so'm appeared in neither tile."""
+    held, owed = [], []
+    for logist in Logist.objects.prefetch_related("payments", "driver_advances"):
+        held += logist.held_by_currency()
+        owed += logist.owed_by_currency()
+    return _by_currency(held), _by_currency(owed)
 
 
 def customs_positions():

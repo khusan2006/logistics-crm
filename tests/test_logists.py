@@ -79,13 +79,16 @@ class TestBalance:
         assert payment.total_out == Decimal("1000.00")
 
     def test_positions_keep_the_two_directions_apart(self, db):
+        """Per currency now, and both sides positive: what a logist still holds and
+        what one fronted himself are two facts, and so are a dollar heap and a so'm
+        heap."""
+        from crm.models import Currency
         holder, ower = _logist("Pulimiz turgan"), _logist("Qarzdormiz")
         _send(holder, "5000")
         _advance(_shipment(ower), ower, "800")
-        held, held_uzs, owed, owed_uzs = logist_positions()
-        assert held == Decimal("5000.00")
-        assert owed == Decimal("800.00")
-        assert held_uzs == Decimal("60000000.00")
+        held, owed = logist_positions()
+        assert held == [(Currency.USD, Decimal("5000.00"))]
+        assert owed == [(Currency.USD, Decimal("800.00"))]
 
 
 class TestKassaCountsTheMoneyOnce:
@@ -184,8 +187,9 @@ class TestLogistScreens:
         _advance(shipment, logist, "500")
         resp = admin_client.get("/logists/")
         assert resp.status_code == 200
-        assert resp.context["held"] == Decimal("9500.00")
-        assert resp.context["owed"] == Decimal("0")
+        from crm.models import Currency
+        assert resp.context["held"] == [(Currency.USD, Decimal("9500.00"))]
+        assert resp.context["owed"] == []
         html = resp.content.decode()
         assert "Sardor aka" in html and "Logistlarda turgan pulimiz" in html
 
@@ -231,7 +235,8 @@ class TestLogistScreens:
         logist = _logist()
         _send(logist, "10000")
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
-        assert tiles["Logistlarda"]["amount"] == Decimal("10000.00")
+        from crm.models import Currency
+        assert tiles["Logistlarda"]["split"] == [(Currency.USD, Decimal("10000.00"))]
         assert tiles["Logistlarda"]["url"] == "/logists/"
 
     def test_a_logist_with_money_behind_them_cannot_be_deleted(self, admin_client, db):
@@ -261,7 +266,8 @@ class TestOwedLogistIsVisibleOnTheKassa:
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
         # Positive, like every other qarzimiz tile: the "out" tone is what says the
         # money is leaving, not a minus sign on one tile out of three.
-        assert tiles["Logistlarga qarzimiz"]["amount"] == Decimal("800.00")
+        from crm.models import Currency
+        assert tiles["Logistlarga qarzimiz"]["split"] == [(Currency.USD, Decimal("800.00"))]
         assert tiles["Logistlarga qarzimiz"]["url"].endswith("?state=owed")
 
     def test_no_empty_tile_when_nobody_is_owed(self, admin_client, db):

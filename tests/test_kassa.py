@@ -392,32 +392,55 @@ class TestCurrentStateTiles:
         # not what the board publishes. Its dollar side counts BOTH lots.
         assert stock_value()[0] == Decimal("1000.00")
 
-    def test_a_logist_hisob_shows_its_dollar_figure_alone(self, admin_client, db):
-        """The one figure left without a split. A logist's hisob is kept in dollars
-        whatever currency the driver was handed, so it prints the dollar figure alone —
-        and no so'm zero either: the so'm figure exists, it is just the conversion this
-        page refuses to print."""
-        from crm.templatetags.crm_extras import som
+    def test_every_tile_is_a_split_so_nothing_is_a_conversion(self, admin_client, db):
+        """The board holds no blended figure at all any more. The last two were the
+        ombor (mol is bought in so'm too) and a logist's hisob (logistlar are funded in
+        so'm too), and both were dollar figures with the other currency folded in at a
+        kurs nobody chose."""
         from crm.models import Logist, LogistPayment
+        _arrived_shipment(_contract())
         logist = Logist.objects.create(name="ABBOS", phone="1")
         LogistPayment.objects.create(logist=logist, date="2026-07-10",
                                      amount=Decimal("1000.00"),
                                      amount_uzs=Decimal("12000000"),
                                      exchange_rate=Decimal("12000"), method="cash")
-        tile = self._tiles(admin_client)["Logistlarda"]
-        assert tile["split"] is None
-        assert tile["amount"] == Decimal("1000.00")
-        assert "split_full" not in tile
-        body = admin_client.get("/kassa/").content.decode()
-        assert som(tile["amount_uzs"]) not in body
+        tiles = self._tiles(admin_client)
+        assert all(t["split"] is not None for t in tiles.values())
+        assert all("split_full" in t for t in tiles.values())
+        assert dict(tiles["Logistlarda"]["split"])[Currency.USD] == Decimal("1000.00")
+        assert "class=&quot;money-alt&quot;" not in admin_client.get("/kassa/").content.decode()
+
+    def test_a_logist_funded_in_som_keeps_a_som_heap(self, admin_client, db):
+        """A logist we send so'm to and who hands a driver dollars carries two heaps at
+        once, and both are real: the dollar side goes negative (they fronted it) while
+        the so'm side is still ours to get back. The old dollar-only hisob converted
+        the so'm in and reported one number — and if that number happened to land on
+        zero, both tiles dropped the logist entirely."""
+        from crm.models import Logist, LogistPayment, logist_positions
+        logist = Logist.objects.create(name="ABBOS", phone="1")
+        LogistPayment.objects.create(logist=logist, date="2026-07-10",
+                                     amount=Decimal("1000.00"),
+                                     amount_uzs=Decimal("12000000"),
+                                     exchange_rate=Decimal("12000"),
+                                     currency=Currency.UZS, method="cash")
+        shipment = Shipment.objects.create(
+            contract=_contract(), status=ShipmentStatus.objects.first(),
+            sent="2026-07-11", eta="2026-07-20")
+        ShipmentExpense.objects.create(shipment=shipment, logist=logist,
+                                       date="2026-07-12", category="transport",
+                                       amount=Decimal("400.00"),
+                                       amount_uzs=Decimal("4800000"),
+                                       exchange_rate=Decimal("12000"), method="cash")
+        held, owed = logist_positions()
+        assert held == [(Currency.UZS, Decimal("12000000.00"))]
+        assert owed == [(Currency.USD, Decimal("400.00"))]
+        tiles = self._tiles(admin_client)
+        assert dict(tiles["Logistlarda"]["split"]) == {Currency.UZS: Decimal("12000000.00")}
+        assert dict(tiles["Logistlarga qarzimiz"]["split"]) == {Currency.USD: Decimal("400.00")}
 
     def test_an_empty_currency_side_is_drawn_as_a_zero(self, admin_client, db):
         """A missing currency line read as missing DATA. Both sides are drawn now, and
-        a side that holds nothing says so: "0 so'm" beside a dollar figure.
-
-        A logist's hisob is the exception and gets no zero: it is kept in dollars and a
-        so'm figure does exist for it — that figure is a conversion this page does not
-        print, so a zero there would be a lie rather than an empty side."""
+        a side that holds nothing says so: "0 so'm" beside a dollar figure."""
         contract = _contract()                              # a dollar kelishuv
         _arrived_shipment(contract)
         CustomerPayment.objects.create(customer=_customer(), date="2026-07-10",
@@ -428,7 +451,6 @@ class TestCurrentStateTiles:
         assert tiles["Bojxonada"]["split_full"] == [
             (Currency.USD, Decimal("0")), (Currency.UZS, Decimal("0"))]
         assert dict(tiles["Kassada"]["split_full"])[Currency.UZS] == Decimal("0")
-        assert "split_full" not in tiles["Logistlarda"]
         assert "0 so&#x27;m" in admin_client.get("/kassa/").content.decode()
 
     def test_the_till_is_the_hero_and_the_rest_read_under_a_heading(self, admin_client, db):

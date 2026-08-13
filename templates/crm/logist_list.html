@@ -14,20 +14,25 @@ between the day we send it and the day a driver takes it, so "how much is out th
 is the question this page opens with — not how many logistlar there are.
 {% endcomment %}
 {% comment %}
-Dollar only, with no converted so'm line under it. A logist's hisob is kept in
-dollars — every driver advance is booked in dollars — so the so'm figure was this
-same money restated, not a second heap. A top-up sent in so'm converts into the
-float at the kurs recorded on that to'lov, which is what the figure already shows.
+One full-size line PER CURRENCY, the shape the kassa board and the bojxonachi page
+use. It was a single dollar figure while a logist's hisob was assumed to be
+dollars-only; logistlar are funded in so'm too, so a lone dollar figure would be part
+real and part conversion at a kurs nobody chose — and it hid a so'm gap completely
+(see Logist.balance_by_currency). The lines are never added.
 {% endcomment %}
 <div class="ktiles">
   <a class="ktile ktile--in" href="?state=holding">
     <div class="ktile-label">Logistlarda turgan pulimiz</div>
-    <div class="ktile-num">{{ held|usd }}</div>
+    {% for currency, amount in held %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "usd" %}</div>{% endfor %}
     <div class="ktile-note">yuborilgan, hali haydovchilarga berilmagan</div>
   </a>
   <a class="ktile ktile--out" href="?state=owed">
     <div class="ktile-label">Logistlarga qarzimiz</div>
-    <div class="ktile-num">{{ owed|usd }}</div>
+    {% for currency, amount in owed %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "usd" %}</div>{% endfor %}
     <div class="ktile-note">o'z pulidan haydovchiga bergani</div>
   </a>
 </div>
