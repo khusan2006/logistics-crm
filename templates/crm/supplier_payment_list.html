@@ -8,12 +8,20 @@
 {% comment %}
 Every filter is a select/input in one GET form; changing any of them auto-submits.
 The totals below count everything the filters left, not just this page.
+
+The period is the shared ‹ davr › bar (see crm/_daterange.html) rather than a pair of
+date inputs in the row: it sits outside the form and rides along as a hidden pair, so
+changing a select never drops the window the user picked.
 {% endcomment %}
+{% include "crm/_daterange.html" %}
 <form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
+  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
   <div class="toolbar-search{% if q %} is-active{% endif %}">
     <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     <input type="search" name="q" value="{{ q }}" placeholder="Kod, hamkor…" autocomplete="off" aria-label="To'lov qidirish">
-    {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    {# Clears the search term only — the chosen davr stays where it is. #}
+    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
   <label>Hamkor
     <select name="partner" data-combobox>
@@ -31,8 +39,6 @@ The totals below count everything the filters left, not just this page.
       {% endfor %}
     </select>
   </label>
-  <label>Boshlanish <input type="date" name="date_from" value="{{ date_from }}"></label>
-  <label>Tugash <input type="date" name="date_to" value="{{ date_to }}"></label>
   <label>Saralash
     <select name="sort">
       {% for key, label in sort_options %}

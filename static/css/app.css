@@ -542,7 +542,9 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .ksm-val { margin-top: 5px; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .ksm-flow { margin-top: 4px; display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.kassa-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 14px; }
+/* The shared ‹ davr › bar's own row (crm/_daterange.html). Was .kassa-filter, back
+   when the kassa was the only screen that had it. */
+.daterange-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 14px; }
 
 
 /* Flow and position side by side — they answer "what moved" and "what it means",
@@ -1014,6 +1016,12 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 
 .btn-violet { background: var(--violet); color: #fff; border-color: transparent; }
 .btn-violet:hover { background: color-mix(in srgb, var(--violet) 82%, #000); color: #fff; }
+
+/* Excel: a quiet button in the toolbar row, green enough to be found by eye without
+   competing with the page's own actions (crm/_excel_button.html). */
+.btn-excel { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.btn-excel:hover { background: var(--success); color: #fff; }
+.btn-excel svg { width: 15px; height: 15px; }
 
 .btn-sm { padding: 5px 11px; font-size: 13px; }
 

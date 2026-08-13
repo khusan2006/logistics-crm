@@ -2057,27 +2057,33 @@
     }
     function closePop() { pop.hidden = true; root.classList.remove('is-open'); trigger.setAttribute('aria-expanded', 'false'); }
 
+    // A new period renumbers the rows, so every page number in the URL is stale.
+    // `page` is what a list pages on; the kassa's two ledgers page independently and
+    // spell theirs `ipage`/`opage`. The legacy `date_from`/`date_to` pair goes too, or
+    // a screen still carrying one would filter on the old window (see `_date_window`).
+    function reset(u) {
+      ['page', 'ipage', 'opage', 'date_from', 'date_to'].forEach(function (k) {
+        u.searchParams.delete(k);
+      });
+      return u;
+    }
+
     function apply(from, to) {
       if (!from) { return; }
       if (!to) { to = from; }
       if (to < from) { var t = from; from = to; to = t; }
-      var u = new URL(window.location.href);
+      var u = reset(new URL(window.location.href));
       u.searchParams.set('from', from);
       u.searchParams.set('to', to);
-      // Both ledgers page independently; a new period invalidates either page number.
-      u.searchParams.delete('ipage');
-      u.searchParams.delete('opage');
       window.location.assign(u.toString());
     }
 
     // No period at all: the filter comes OFF rather than being set to some range that
     // happens to cover everything so far.
     function clearRange() {
-      var u = new URL(window.location.href);
+      var u = reset(new URL(window.location.href));
       u.searchParams.delete('from');
       u.searchParams.delete('to');
-      u.searchParams.delete('ipage');
-      u.searchParams.delete('opage');
       window.location.assign(u.toString());
     }
 

@@ -4,9 +4,16 @@
 {% block topbar_title %}Hisobotlar{% endblock %}
 {% block content %}
 
+{% comment %}
+The period is the shared ‹ davr › bar (crm/_daterange.html) — the same control the
+kassa and the ro'yxatlar carry. It stays outside the filter form and rides along in it
+as a hidden pair, so pressing Filtrlash keeps the window rather than clearing it. The
+xlsx links below pass `request.GET` straight through, so they export this same window.
+{% endcomment %}
+{% include "crm/_daterange.html" %}
 <form method="get" class="searchbar" style="margin-bottom: 16px;">
-  <label>Boshlanish <input type="date" name="from" value="{{ date_from }}"></label>
-  <label>Tugash <input type="date" name="to" value="{{ date_to }}"></label>
+  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
   <label>Hamkor
     <select name="partner">
       <option value="">Barchasi</option>

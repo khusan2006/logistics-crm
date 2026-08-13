@@ -536,11 +536,19 @@ def test_audit_log_is_not_writable_through_any_route(admin_client, world, admin_
     only view over it renders a read-only table."""
     assert AuditLog not in django_admin.site._registry
     names = {p.name for p in get_resolver().url_patterns if getattr(p, "name", None)}
-    assert not {n for n in names if n.startswith("audit_") and n != "audit_list"}
+    # `audit_list_export` is the Excel button: a GET that builds a file out of the same
+    # rows the page lists. It is named here rather than pattern-matched away, so a route
+    # that could WRITE the log still has to be added to this line on purpose.
+    read_only = {"audit_list", "audit_list_export"}
+    assert not {n for n in names if n.startswith("audit_") and n not in read_only}
     AuditLog.record(admin_user, AuditLog.Action.CREATE, "Hamkor", 1, "seed")
     resp = admin_client.get(reverse("audit_list"))
     assert resp.status_code == 200
     assert "<form" not in resp.content.decode().split("<main")[-1].lower()
+    # The export writes nothing either: downloading it leaves the log the size it was.
+    before = AuditLog.objects.count()
+    assert admin_client.get(reverse("audit_list_export")).status_code == 200
+    assert AuditLog.objects.count() == before
 
 
 @pytest.mark.xfail(reason="CLAIM UPHELD — crm/models.py:161-164. AuditLog.user is "

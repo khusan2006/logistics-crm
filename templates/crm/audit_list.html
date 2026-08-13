@@ -2,6 +2,8 @@
 {% block title %}Audit · GranulaLog{% endblock %}
 {% block topbar_title %}Audit jurnali{% endblock %}
 {% block content %}
+{# Narrowed by the day an entry was written — the shared ‹ davr › bar, as everywhere. #}
+{% include "crm/_daterange.html" %}
 <div class="table-wrap"><table>
   <tr><th>Vaqt</th><th>Kim</th><th>Amal</th><th>Obyekt</th><th>Tafsilot</th></tr>
   {% for row in page %}

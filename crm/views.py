@@ -8,6 +8,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
+from django.db.models.functions import Coalesce
 from django.http import JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
@@ -18,7 +19,7 @@ from django.views.decorators.http import require_POST
 from accounts.decorators import role_required
 from accounts.models import User
 
-from .exports import xlsx_response
+from .exports import KG, PERCENT, xlsx_book_response, xlsx_response
 from .templatetags.crm_extras import som, usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, TruckPlanForm,
@@ -227,10 +228,27 @@ def _monthly_rows(limit=12):
     return sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
 
 
+def _filter_audit(request):
+    """The audit jurnali's window — shared by the page and its Excel button."""
+    date_from, date_to = _date_window(request)
+    entries = AuditLog.objects.select_related("user")
+    # Filtered on the calendar day the entry was written, not on a timestamp: the bar
+    # hands over whole days, and `created_at__gte="2026-08-13"` would read as midnight
+    # and drop everything logged during that last day.
+    if date_from:
+        entries = entries.filter(created_at__date__gte=date_from)
+    if date_to:
+        entries = entries.filter(created_at__date__lte=date_to)
+    return entries, date_from, date_to
+
+
 @role_required(User.Role.ADMIN)
 def audit_list(request):
-    page = Paginator(AuditLog.objects.select_related("user"), 20).get_page(request.GET.get("page"))
-    return render(request, "crm/audit_list.html", {"page": page})
+    entries, date_from, date_to = _filter_audit(request)
+    page = Paginator(entries, 20).get_page(request.GET.get("page"))
+    return render(request, "crm/audit_list.html", {
+        "export_url": reverse("audit_list_export"),
+        "page": page, "daterange": _daterange_bar(request, date_from, date_to)})
 
 
 @role_required(User.Role.ADMIN)
@@ -539,20 +557,12 @@ def _contract_code_filter(q):
     return Q()
 
 
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def contract_list(request):
-    """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
-    Hamkor narrows in SQL; the rest read computed properties (debt, remaining_kg),
-    so they run in Python over prefetched rows — the loads and the payments come in
-    one query each instead of two per kelishuv.
+def _filter_contracts(request):
+    """The kelishuvlar list's own filters — search, hamkor, davr, holat, to'lov, sort —
+    in one place, so the page and its Excel button cannot drift apart.
 
-    A tarjimon reads this page and can do nothing else on it: `contract_create`,
-    `contract_edit` and `contract_delete` are all admin-only and each says so itself,
-    so the template hiding those buttons is the courtesy, not the lock. The money
-    columns are hidden from them too — the same rule the yuklar list already follows
-    (tests/test_shipments.py::test_translator_sees_no_price_on_loads). What is left is
-    the kelishuv as a logistics document: which marka, how many kg agreed, how many
-    still to come."""
+    Returns the rows already narrowed and sorted, plus what the page needs to draw
+    its own controls (the faceted to'lov counts among them)."""
     q = request.GET.get("q", "").strip()
     pay = request.GET.get("pay", "").strip()
     partner_id = request.GET.get("partner", "").strip()
@@ -575,6 +585,13 @@ def contract_list(request):
         contracts = contracts.filter(filters).distinct()
     if partner_id.isdigit():
         contracts = contracts.filter(partner_id=int(partner_id))
+    # The kelishuv sanasi — when the deal was struck. Its loads may arrive months
+    # later, and the yuklar list is where that question is asked.
+    date_from, date_to = _date_window(request)
+    if date_from:
+        contracts = contracts.filter(created__gte=date_from)
+    if date_to:
+        contracts = contracts.filter(created__lte=date_to)
 
     rows = list(contracts)
     # Tugallanmagan = still owed goods OR still owed money; a kelishuv shipped in
@@ -598,6 +615,29 @@ def contract_list(request):
 
     _, _, sort_key, sort_reverse = next(e for e in CONTRACT_SORTS if e[0] == sort)
     rows.sort(key=sort_key, reverse=sort_reverse)
+    return rows, {"q": q, "pay": pay, "partner_id": partner_id, "state": state,
+                  "sort": sort, "date_from": date_from, "date_to": date_to,
+                  "pay_tabs": pay_tabs, "pay_applies": pay_applies}
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def contract_list(request):
+    """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
+    Hamkor narrows in SQL; the rest read computed properties (debt, remaining_kg),
+    so they run in Python over prefetched rows — the loads and the payments come in
+    one query each instead of two per kelishuv.
+
+    A tarjimon reads this page and can do nothing else on it: `contract_create`,
+    `contract_edit` and `contract_delete` are all admin-only and each says so itself,
+    so the template hiding those buttons is the courtesy, not the lock. The money
+    columns are hidden from them too — the same rule the yuklar list already follows
+    (tests/test_shipments.py::test_translator_sees_no_price_on_loads). What is left is
+    the kelishuv as a logistics document: which marka, how many kg agreed, how many
+    still to come."""
+    rows, f = _filter_contracts(request)
+    q, pay, partner_id, state, sort = f["q"], f["pay"], f["partner_id"], f["state"], f["sort"]
+    date_from, date_to = f["date_from"], f["date_to"]
+    pay_tabs, pay_applies = f["pay_tabs"], f["pay_applies"]
 
     # One row per kelishuv, in the order the sort left them. Grouping them under a
     # hamkor heading put the hamkor's name on the screen twice — the kod already
@@ -606,11 +646,14 @@ def contract_list(request):
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     rows = list(page.object_list)
     return render(request, "crm/contract_list.html", {
+        "export_url": reverse("contract_list_export"),
         "page": page, "rows": rows,
         "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
         "sort": sort, "sort_options": [(key, label) for key, label, *_ in CONTRACT_SORTS],
         "partners": Partner.objects.all(),
+        "date_from": date_from, "date_to": date_to,
+        "daterange": _daterange_bar(request, date_from, date_to),
         "has_filters": bool((pay and pay_applies) or partner_id or state != "open"),
     })
 
@@ -722,13 +765,13 @@ SUPPLIER_PAYMENT_SORTS = [
 SUPPLIER_PAYMENT_SORT_DEFAULT = "-date"
 
 
-@role_required(User.Role.ADMIN)
-def supplier_payment_list(request):
+def _filter_supplier_payments(request):
+    """The hamkor to'lovlari list's own filters — shared by the page and its Excel
+    button, so the file is what the screen was showing."""
     q = request.GET.get("q", "").strip()
     partner_id = request.GET.get("partner", "").strip()
     method = request.GET.get("method", "").strip()
-    date_from = _date_param(request, "date_from")
-    date_to = _date_param(request, "date_to")
+    date_from, date_to = _date_window(request)
     sort = request.GET.get("sort", "").strip()
     if sort not in {key for key, *_ in SUPPLIER_PAYMENT_SORTS}:
         sort = SUPPLIER_PAYMENT_SORT_DEFAULT
@@ -752,7 +795,17 @@ def supplier_payment_list(request):
         payments = payments.filter(date__lte=date_to)
 
     ordering = next(e[2] for e in SUPPLIER_PAYMENT_SORTS if e[0] == sort)
-    payments = payments.order_by(*ordering)
+    return payments.order_by(*ordering), {
+        "q": q, "partner_id": partner_id, "method": method,
+        "date_from": date_from, "date_to": date_to, "sort": sort,
+    }
+
+
+@role_required(User.Role.ADMIN)
+def supplier_payment_list(request):
+    payments, f = _filter_supplier_payments(request)
+    q, partner_id, method = f["q"], f["partner_id"], f["method"]
+    date_from, date_to, sort = f["date_from"], f["date_to"], f["sort"]
 
     # Totals for what the filters left, not just this page — the reason to filter
     # is usually to add something up.
@@ -775,8 +828,10 @@ def supplier_payment_list(request):
 
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/supplier_payment_list.html", {
+        "export_url": reverse("supplier_payment_list_export"),
         "page": page, "q": q, "partner_id": partner_id, "method": method,
         "date_from": date_from, "date_to": date_to, "sort": sort,
+        "daterange": _daterange_bar(request, date_from, date_to),
         "sort_options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS],
         "methods": PayMethod.choices, "partners": Partner.objects.all(),
         "totals": totals,
@@ -922,13 +977,13 @@ CUSTOMER_PAYMENT_SORTS = [
 CUSTOMER_PAYMENT_SORT_DEFAULT = "-date"
 
 
-@role_required(User.Role.ADMIN)
-def customer_payment_list(request):
+def _filter_customer_payments(request):
+    """The mijoz to'lovlari list's own filters — shared by the page and its Excel
+    button, so the file is what the screen was showing."""
     q = request.GET.get("q", "").strip()
     customer_id = request.GET.get("customer", "").strip()
     method = request.GET.get("method", "").strip()
-    date_from = _date_param(request, "date_from")
-    date_to = _date_param(request, "date_to")
+    date_from, date_to = _date_window(request)
     sort = request.GET.get("sort", "").strip()
     if sort not in {key for key, *_ in CUSTOMER_PAYMENT_SORTS}:
         sort = CUSTOMER_PAYMENT_SORT_DEFAULT
@@ -946,15 +1001,27 @@ def customer_payment_list(request):
         payments = payments.filter(date__lte=date_to)
 
     ordering = next(e[2] for e in CUSTOMER_PAYMENT_SORTS if e[0] == sort)
-    payments = payments.order_by(*ordering)
+    return payments.order_by(*ordering), {
+        "q": q, "customer_id": customer_id, "method": method,
+        "date_from": date_from, "date_to": date_to, "sort": sort,
+    }
+
+
+@role_required(User.Role.ADMIN)
+def customer_payment_list(request):
+    payments, f = _filter_customer_payments(request)
+    q, customer_id, method = f["q"], f["customer_id"], f["method"]
+    date_from, date_to, sort = f["date_from"], f["date_to"], f["sort"]
 
     # No per-currency totals here, unlike the hamkor page: this screen is read to find
     # a to'lov, not to add a column up. The queryset goes to the Paginator unevaluated
     # so only the 20 rows on the page are fetched.
     page = Paginator(payments, 20).get_page(request.GET.get("page"))
     return render(request, "crm/customer_payment_list.html", {
+        "export_url": reverse("customer_payment_list_export"),
         "page": page, "q": q, "customer_id": customer_id, "method": method,
         "date_from": date_from, "date_to": date_to, "sort": sort,
+        "daterange": _daterange_bar(request, date_from, date_to),
         "sort_options": [(key, label) for key, label, *_ in CUSTOMER_PAYMENT_SORTS],
         "methods": PayMethod.choices, "customers": Customer.objects.all(),
         "has_filters": bool(q or customer_id or method or date_from or date_to),
@@ -1215,25 +1282,9 @@ def status_move(request, pk):
     return redirect("status_list")
 
 
-@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def shipment_list(request):
-    """Loads grouped by kelishuv, with status tabs (in pipeline order) to switch
-    the view. Tabs filter client-side; each row carries its status + overdue flag.
-
-    Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
-    adds the arrived ones and paginates, since that set only grows.
-
-    `?qr=bor|yoq` narrows to the loads whose driver carries a QR kod, or the ones
-    whose driver does not. Server-side rather than a third client-side tab: it has to
-    combine with the holat tabs instead of replacing whichever one is active, it has
-    to reach past the Hammasi pager (a client filter only ever sees the rows on this
-    page), and narrowing the queryset is what makes the tab counts beside it say how
-    many of THOSE loads sit in each holat.
-
-    The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
-    the loads whose planned QR day has come and gone with no kod, counted on the QR
-    yo'q pill, so the ones worth chasing announce themselves without the list having
-    to hide anything to say so."""
+def _filter_shipments(request):
+    """The yuklar list's own filters — shared by the page and its Excel button, so the
+    file holds the loads the screen was showing (including the Hammasi/QR toggles)."""
     q = request.GET.get("q", "").strip()
     show_all = request.GET.get("all") == "1"
     # Anything else in the URL means no QR filter at all — a typo should show every
@@ -1260,6 +1311,44 @@ def shipment_list(request):
     if qr:
         # The date is what says the kod was handed over, so its absence is "yo'q".
         shipments = shipments.filter(qr_given__isnull=qr == "yoq")
+    # The load's own sana, defined exactly as the row prints it: the day it arrived,
+    # or the day it is expected while it is still moving (see _load_date_cell.html).
+    # A yuk carrying neither date has no place on a calendar and drops out of a
+    # narrowed window — it is still there with the filter off.
+    date_from, date_to = _date_window(request)
+    if date_from or date_to:
+        shipments = shipments.annotate(row_date=Coalesce("arrived", "eta"))
+        if date_from:
+            shipments = shipments.filter(row_date__gte=date_from)
+        if date_to:
+            shipments = shipments.filter(row_date__lte=date_to)
+    return shipments, {"q": q, "show_all": show_all, "qr": qr,
+                       "date_from": date_from, "date_to": date_to,
+                       "qr_waiting_count": qr_waiting_count}
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_list(request):
+    """Loads grouped by kelishuv, with status tabs (in pipeline order) to switch
+    the view. Tabs filter client-side; each row carries its status + overdue flag.
+
+    Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
+    adds the arrived ones and paginates, since that set only grows.
+
+    `?qr=bor|yoq` narrows to the loads whose driver carries a QR kod, or the ones
+    whose driver does not. Server-side rather than a third client-side tab: it has to
+    combine with the holat tabs instead of replacing whichever one is active, it has
+    to reach past the Hammasi pager (a client filter only ever sees the rows on this
+    page), and narrowing the queryset is what makes the tab counts beside it say how
+    many of THOSE loads sit in each holat.
+
+    The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
+    the loads whose planned QR day has come and gone with no kod, counted on the QR
+    yo'q pill, so the ones worth chasing announce themselves without the list having
+    to hide anything to say so."""
+    shipments, f = _filter_shipments(request)
+    q, show_all, qr = f["q"], f["show_all"], f["qr"]
+    date_from, date_to, qr_waiting_count = f["date_from"], f["date_to"], f["qr_waiting_count"]
     shipments = list(shipments)
 
     counts = {}
@@ -1308,10 +1397,13 @@ def shipment_list(request):
     default_tab = None if show_all else next(
         (t["status"].pk for t in tabs if t["status"].name.casefold() == "yo'lda"), None)
     return render(request, "crm/shipment_list.html", {
+        "export_url": reverse("shipment_list_export"),
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
         "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count,
         "default_tab": default_tab, "show_all": show_all, "page": page,
+        "date_from": date_from, "date_to": date_to,
+        "daterange": _daterange_bar(request, date_from, date_to),
     })
 
 
@@ -1331,6 +1423,15 @@ def ombor(request):
 
     A skladchi reads this page: the marka, its lots and the kg. The tannarx column
     and every Sotish/Bron button are drawn only for an admin — see the template."""
+    groups, q = _ombor_groups(request)
+    page = Paginator(groups, 20).get_page(request.GET.get("page"))
+    return render(request, "crm/ombor.html", {
+        "page": page, "q": q, "export_url": reverse("ombor_export")})
+
+
+def _ombor_groups(request):
+    """The ombor rows — one per marka, its lots folded in — shared by the page and its
+    Excel button."""
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
     lots = (arrived_lots()
@@ -1381,8 +1482,7 @@ def ombor(request):
             # up to what is still owed on it or still on the shelf.
             bron.servable_kg = min(bron.remaining_kg, g["on_hand"])
 
-    page = Paginator(groups, 20).get_page(request.GET.get("page"))
-    return render(request, "crm/ombor.html", {"page": page, "q": q})
+    return groups, q
 
 
 def _shipment_form_response(request, form, lines, title, invalid=False):
@@ -1849,6 +1949,30 @@ def _sale_groups(sales):
     return blocks
 
 
+def _filter_sales(request):
+    """The sotuvlar list's own filters, in one place.
+
+    The page and its Excel button both go through here, which is what makes the file
+    hold exactly the rows that were on the screen — the two drifting apart is how an
+    export ends up "showing a different figure" from the list it was taken from."""
+    q = request.GET.get("q", "").strip()
+    date_from, date_to = _date_window(request)
+    sales = Sale.objects.select_related(
+        "customer", "line__contract_line", "line__shipment__contract__partner")
+    if q:
+        filters = (Q(customer__name__icontains=q) | Q(line__contract_line__brand__icontains=q))
+        if q.isdigit():
+            filters |= Q(line__shipment_id=int(q))
+        sales = sales.filter(filters)
+    # The sotuv's own sana — the day the granula left the shelf, which is what the
+    # page is a list of.
+    if date_from:
+        sales = sales.filter(date__gte=date_from)
+    if date_to:
+        sales = sales.filter(date__lte=date_to)
+    return sales, q, date_from, date_to
+
+
 @role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def sale_list(request):
     """A row per SOTUV, not per lot: the mahsulot columns stack inside their cells
@@ -1861,16 +1985,13 @@ def sale_list(request):
     Paging still counts rows, so a sotuv straddling the boundary shows the lots that
     fall on each page. Its figures are the ones on that page too — a total that
     counted rows the page is not showing would be the worse of the two lies."""
-    q = request.GET.get("q", "").strip()
-    sales = Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
-    if q:
-        filters = (Q(customer__name__icontains=q) | Q(line__contract_line__brand__icontains=q))
-        if q.isdigit():
-            filters |= Q(line__shipment_id=int(q))
-        sales = sales.filter(filters)
+    sales, q, date_from, date_to = _filter_sales(request)
     page = Paginator(sales, 20).get_page(request.GET.get("page"))
     return render(request, "crm/sale_list.html",
-                  {"page": page, "groups": _sale_groups(page.object_list), "q": q})
+                  {"page": page, "groups": _sale_groups(page.object_list), "q": q,
+                   "export_url": reverse("sale_list_export"),
+                   "date_from": date_from, "date_to": date_to,
+                   "daterange": _daterange_bar(request, date_from, date_to)})
 
 
 def _sale_form_response(request, form, lines, title, invalid=False):
@@ -2417,7 +2538,8 @@ def debt_list(request):
     chase.sort(key=lambda r: (r["earliest_due"], -r["size"]))
     later.sort(key=lambda r: -r["size"])
     page = Paginator(chase + later, 20).get_page(request.GET.get("page"))
-    return render(request, "crm/debt_list.html", {"page": page})
+    return render(request, "crm/debt_list.html", {
+        "page": page, "export_url": reverse("export_debts")})
 
 
 def _customer_history(customer):
@@ -2576,15 +2698,12 @@ def _waterfall(opening, opening_uzs, steps):
     return bars, place(Decimal("0"), Decimal("0"))[0]
 
 
-@role_required(User.Role.ADMIN)
-def kassa(request):
-    """The till, client-crm style: a current-state hero (Kassadagi pul + what we
-    owe hamkorlar), per-method USD balances for the selected period, and two
-    Excel-like ledgers side by side — Kirim (customer payments) and Chiqim
-    (supplier payments + shipment expenses). Purely derived; ?from&to narrows
-    the period section, the hero is all-time."""
-    date_from = _date_param(request, "from")
-    date_to = _date_param(request, "to")
+def _kassa_window(request):
+    """Everything the kassa's ledgers are built from, narrowed to the chosen davr.
+
+    One place that says WHICH rows are in the period, so the page and its Excel
+    download cannot end up looking at different money."""
+    date_from, date_to = _date_window(request)
 
     def _range(qs):
         if date_from:
@@ -2592,6 +2711,202 @@ def kassa(request):
         if date_to:
             qs = qs.filter(date__lte=date_to)
         return qs
+
+    # The Kirim ledger asks each row what it settled and whether its kurs was chosen,
+    # and both answers are read off the allocations — without the prefetch that is a
+    # query per to'lov, then one per slice, for every row on the page.
+    kapital_rows = _range(Kapital.objects.all())
+    return {
+        "date_from": date_from, "date_to": date_to,
+        "cust_pays": _range(CustomerPayment.objects.select_related("customer")
+                            .prefetch_related("allocations__sale")),
+        "sup_pays": _range(SupplierPayment.objects.select_related("contract__partner")),
+        "expenses": _range(ShipmentExpense.objects.select_related(
+            "shipment__contract", "logist", "customs_agent")),
+        "logist_pays": _range(LogistPayment.objects.select_related("logist")),
+        "customs_pays": _range(CustomsPayment.objects.select_related("agent", "shipment")),
+        # Split once here rather than per method below: the two directions land on
+        # opposite sides of every total, and asking the question twice per PayMethod is
+        # where a "+" gets typed for a "−".
+        "kapital_in": kapital_rows.filter(kind=KapitalKind.IN),
+        "kapital_out": kapital_rows.filter(kind=KapitalKind.OUT),
+    }
+
+
+def _kassa_ledger_rows(window):
+    """The kassa's two ledgers as rows: (Kirim, Chiqim), newest first.
+
+    Takes the window's querysets rather than the request, so the page and the Excel
+    button are looking at one definition of what a ledger row IS — a file that
+    listed the rows differently from the screen it was taken from would be worse
+    than no file.
+    """
+    cust_pays, sup_pays = window["cust_pays"], window["sup_pays"]
+    expenses, logist_pays = window["expenses"], window["logist_pays"]
+    customs_pays = window["customs_pays"]
+    kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
+
+    # Kirim ledger: money in — mijoz to'lovlari and ta'sischi kapitali, newest first.
+    # Dicts rather than the model objects this list used to hold: two unrelated models
+    # share the table now, and a kapital row has no mijoz for the template to ask
+    # about. Same shape as the Chiqim rows below, so both ledgers read alike.
+    income_rows = []
+    for p in cust_pays:
+        income_rows.append({
+            "kind": "customer", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": p.customer.name,
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "fee_percent": p.fee_percent,
+            "amount": p.net_amount, "amount_uzs": p.net_amount_uzs,
+            "edit_url": reverse("customer_payment_edit", args=[p.pk]),
+            "detail_url": reverse("customer_payment_detail", args=[p.pk]),
+        })
+    # Only the money the ta'sischi put IN belongs on this side; what they took out is
+    # a chiqim row below, so the two never cancel inside one ledger's total.
+    for k in kapital_in:
+        income_rows.append({
+            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
+            "crossed": k.crosses_currency,
+            "title": "Ta'sischi kapitali" + (f" · {k.note}" if k.note else ""),
+            "method_code": k.method, "method": k.get_method_display(),
+            "currency": k.currency, "exchange_rate": k.exchange_rate,
+            "fee_percent": k.fee_percent,
+            "amount": k.net_amount, "amount_uzs": k.net_amount_uzs,
+            "edit_url": reverse("kapital_edit", args=[k.pk]),
+            "detail_url": "",
+        })
+    income_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
+
+    # Chiqim ledger: money out — supplier payments and per-load expenses.
+    outflow_rows = []
+    for p in sup_pays:
+        outflow_rows.append({
+            "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            # The hamkor is already inside the code, so the brand is the useful half here
+            "title": f"Kelishuv {p.contract.code} · {p.contract.brand_summary}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.amount_uzs, "amount": p.amount,
+        })
+    for p in sup_pays:
+        if not p.commission_amount:
+            continue
+        outflow_rows.append({
+            "kind": "commission", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": (f"Vositachi ({p.commission_percent}%) · "
+                      f"kelishuv {p.contract.code}"),
+            "method_code": p.method, "method": p.get_method_display(),
+            # The cut is a slice of the payment, so it inherits that row's kurs
+            # rather than being re-rated at today's.
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": uzs_slice(p, p.commission_amount),
+            "amount": p.commission_amount,
+        })
+    for p in sup_pays:
+        if not p.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Perechisleniya foizi ({p.fee_percent}%) · kelishuv {p.contract.code}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
+        })
+    for p in logist_pays:
+        outflow_rows.append({
+            "kind": "logist", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Logist {p.logist.name}ga" + (f" · {p.note}" if p.note else ""),
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.amount_uzs, "amount": p.amount,
+        })
+    for p in logist_pays:
+        if not p.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_logist", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Perechisleniya foizi ({p.fee_percent}%) · logist {p.logist.name}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
+        })
+    for p in customs_pays:
+        target = f" · yuk #{p.shipment_id}" if p.shipment_id else ""
+        outflow_rows.append({
+            "kind": "customs", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Bojxona · {p.agent.name}ga{target}"
+                     + (f" · {p.note}" if p.note else ""),
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.amount_uzs, "amount": p.amount,
+        })
+    for p in customs_pays:
+        if not p.fee_amount:
+            continue
+        outflow_rows.append({
+            "kind": "fee_customs", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Perechisleniya foizi ({p.fee_percent}%) · bojxona {p.agent.name}",
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
+        })
+    # Expenses a holder funded — a logist or a bojxonachi — are deliberately absent
+    # from this ledger: the cash they cost left as the top-up above, and listing them
+    # here would show the same money going out twice.
+    for e in expenses:
+        if not e.from_kassa:
+            continue
+        outflow_rows.append({
+            "kind": "expense", "pk": e.pk, "date": e.date, "obj": e,
+            "crossed": e.crosses_currency,
+            "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
+            "method_code": e.method, "method": e.get_method_display(),
+            "currency": e.currency, "exchange_rate": e.exchange_rate,
+            "amount_uzs": e.amount_uzs, "amount": e.amount,
+        })
+    for e in expenses:
+        if not e.fee_amount or not e.from_kassa:
+            continue
+        outflow_rows.append({
+            "kind": "fee_expense", "pk": e.pk, "date": e.date, "obj": e,
+            "crossed": e.crosses_currency,
+            "title": f"Perechisleniya foizi ({e.fee_percent}%) · yuk #{e.shipment_id}",
+            "method_code": e.method, "method": e.get_method_display(),
+            "currency": e.currency, "exchange_rate": e.exchange_rate,
+            "amount_uzs": e.fee_amount_uzs, "amount": e.fee_amount,
+        })
+    # The ta'sischi drawing their own money back out. `net_amount` rather than the
+    # signed figure: this ledger prints magnitudes and supplies the minus itself.
+    for k in kapital_out:
+        outflow_rows.append({
+            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
+            "crossed": k.crosses_currency,
+            "title": "Ta'sischi oldi" + (f" · {k.note}" if k.note else ""),
+            "method_code": k.method, "method": k.get_method_display(),
+            "currency": k.currency, "exchange_rate": k.exchange_rate,
+            "amount_uzs": k.net_amount_uzs, "amount": k.net_amount,
+        })
+    outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
+    return income_rows, outflow_rows
+
+
+@role_required(User.Role.ADMIN)
+def kassa(request):
+    """The till, client-crm style: a current-state hero (Kassadagi pul + what we
+    owe hamkorlar), per-method USD balances for the selected period, and two
+    Excel-like ledgers side by side — Kirim (customer payments) and Chiqim
+    (supplier payments + shipment expenses). Purely derived; ?from&to narrows
+    the period section, the hero is all-time."""
+    date_from, date_to = _date_window(request)
 
     # Summed per row, not in SQL: what reaches the kassa is net of the bank's foiz
     # on the way in and gross of it (plus the vositachi cut) on the way out, and
@@ -2762,22 +3077,10 @@ def kassa(request):
                    for key, title in TILE_GROUPS]
     tile_groups = [g for g in tile_groups if g["tiles"]]
 
-    # The Kirim ledger asks each row what it settled and whether its kurs was chosen,
-    # and both answers are read off the allocations — without the prefetch that is a
-    # query per to'lov, then one per slice, for every row on the page.
-    cust_pays = _range(CustomerPayment.objects.select_related("customer")
-                       .prefetch_related("allocations__sale"))
-    sup_pays = _range(SupplierPayment.objects.select_related("contract__partner"))
-    expenses = _range(ShipmentExpense.objects.select_related(
-        "shipment__contract", "logist", "customs_agent"))
-    logist_pays = _range(LogistPayment.objects.select_related("logist"))
-    customs_pays = _range(CustomsPayment.objects.select_related("agent", "shipment"))
-    kapital_rows = _range(Kapital.objects.all())
-    # Split once here rather than per method below: the two directions land on
-    # opposite sides of every total, and asking the question twice per PayMethod is
-    # where a "+" gets typed for a "−".
-    kapital_in = kapital_rows.filter(kind=KapitalKind.IN)
-    kapital_out = kapital_rows.filter(kind=KapitalKind.OUT)
+    window = _kassa_window(request)
+    cust_pays, sup_pays, expenses = window["cust_pays"], window["sup_pays"], window["expenses"]
+    logist_pays, customs_pays = window["logist_pays"], window["customs_pays"]
+    kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
 
     balances = {}
     net_in = net_out = Decimal("0")
@@ -2806,156 +3109,7 @@ def kassa(request):
         net_in_uzs += m_in_uzs
         net_out_uzs += m_out_uzs
 
-    # Kirim ledger: money in — mijoz to'lovlari and ta'sischi kapitali, newest first.
-    # Dicts rather than the model objects this list used to hold: two unrelated models
-    # share the table now, and a kapital row has no mijoz for the template to ask
-    # about. Same shape as the Chiqim rows below, so both ledgers read alike.
-    income_rows = []
-    for p in cust_pays:
-        income_rows.append({
-            "kind": "customer", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": p.customer.name,
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "fee_percent": p.fee_percent,
-            "amount": p.net_amount, "amount_uzs": p.net_amount_uzs,
-            "edit_url": reverse("customer_payment_edit", args=[p.pk]),
-            "detail_url": reverse("customer_payment_detail", args=[p.pk]),
-        })
-    # Only the money the ta'sischi put IN belongs on this side; what they took out is
-    # a chiqim row below, so the two never cancel inside one ledger's total.
-    for k in kapital_in:
-        income_rows.append({
-            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
-            "crossed": k.crosses_currency,
-            "title": "Ta'sischi kapitali" + (f" · {k.note}" if k.note else ""),
-            "method_code": k.method, "method": k.get_method_display(),
-            "currency": k.currency, "exchange_rate": k.exchange_rate,
-            "fee_percent": k.fee_percent,
-            "amount": k.net_amount, "amount_uzs": k.net_amount_uzs,
-            "edit_url": reverse("kapital_edit", args=[k.pk]),
-            "detail_url": "",
-        })
-    income_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
-
-    # Chiqim ledger: money out — supplier payments and per-load expenses.
-    outflow_rows = []
-    for p in sup_pays:
-        outflow_rows.append({
-            "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            # The hamkor is already inside the code, so the brand is the useful half here
-            "title": f"Kelishuv {p.contract.code} · {p.contract.brand_summary}",
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": p.amount_uzs, "amount": p.amount,
-        })
-    for p in sup_pays:
-        if not p.commission_amount:
-            continue
-        outflow_rows.append({
-            "kind": "commission", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": (f"Vositachi ({p.commission_percent}%) · "
-                      f"kelishuv {p.contract.code}"),
-            "method_code": p.method, "method": p.get_method_display(),
-            # The cut is a slice of the payment, so it inherits that row's kurs
-            # rather than being re-rated at today's.
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": uzs_slice(p, p.commission_amount),
-            "amount": p.commission_amount,
-        })
-    for p in sup_pays:
-        if not p.fee_amount:
-            continue
-        outflow_rows.append({
-            "kind": "fee_supplier", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": f"Perechisleniya foizi ({p.fee_percent}%) · kelishuv {p.contract.code}",
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
-        })
-    for p in logist_pays:
-        outflow_rows.append({
-            "kind": "logist", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": f"Logist {p.logist.name}ga" + (f" · {p.note}" if p.note else ""),
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": p.amount_uzs, "amount": p.amount,
-        })
-    for p in logist_pays:
-        if not p.fee_amount:
-            continue
-        outflow_rows.append({
-            "kind": "fee_logist", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": f"Perechisleniya foizi ({p.fee_percent}%) · logist {p.logist.name}",
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
-        })
-    for p in customs_pays:
-        target = f" · yuk #{p.shipment_id}" if p.shipment_id else ""
-        outflow_rows.append({
-            "kind": "customs", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": f"Bojxona · {p.agent.name}ga{target}"
-                     + (f" · {p.note}" if p.note else ""),
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": p.amount_uzs, "amount": p.amount,
-        })
-    for p in customs_pays:
-        if not p.fee_amount:
-            continue
-        outflow_rows.append({
-            "kind": "fee_customs", "pk": p.pk, "date": p.date, "obj": p,
-            "crossed": p.crosses_currency,
-            "title": f"Perechisleniya foizi ({p.fee_percent}%) · bojxona {p.agent.name}",
-            "method_code": p.method, "method": p.get_method_display(),
-            "currency": p.currency, "exchange_rate": p.exchange_rate,
-            "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
-        })
-    # Expenses a holder funded — a logist or a bojxonachi — are deliberately absent
-    # from this ledger: the cash they cost left as the top-up above, and listing them
-    # here would show the same money going out twice.
-    for e in expenses:
-        if not e.from_kassa:
-            continue
-        outflow_rows.append({
-            "kind": "expense", "pk": e.pk, "date": e.date, "obj": e,
-            "crossed": e.crosses_currency,
-            "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
-            "method_code": e.method, "method": e.get_method_display(),
-            "currency": e.currency, "exchange_rate": e.exchange_rate,
-            "amount_uzs": e.amount_uzs, "amount": e.amount,
-        })
-    for e in expenses:
-        if not e.fee_amount or not e.from_kassa:
-            continue
-        outflow_rows.append({
-            "kind": "fee_expense", "pk": e.pk, "date": e.date, "obj": e,
-            "crossed": e.crosses_currency,
-            "title": f"Perechisleniya foizi ({e.fee_percent}%) · yuk #{e.shipment_id}",
-            "method_code": e.method, "method": e.get_method_display(),
-            "currency": e.currency, "exchange_rate": e.exchange_rate,
-            "amount_uzs": e.fee_amount_uzs, "amount": e.fee_amount,
-        })
-    # The ta'sischi drawing their own money back out. `net_amount` rather than the
-    # signed figure: this ledger prints magnitudes and supplies the minus itself.
-    for k in kapital_out:
-        outflow_rows.append({
-            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
-            "crossed": k.crosses_currency,
-            "title": "Ta'sischi oldi" + (f" · {k.note}" if k.note else ""),
-            "method_code": k.method, "method": k.get_method_display(),
-            "currency": k.currency, "exchange_rate": k.exchange_rate,
-            "amount_uzs": k.net_amount_uzs, "amount": k.net_amount,
-        })
-    outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
+    income_rows, outflow_rows = _kassa_ledger_rows(window)
 
     # The ledger headline in the currency each row was booked in, not a dollar figure
     # with its so'm twin beneath: restating a so'm to'lov in dollars prints a number
@@ -3055,9 +3209,10 @@ def kassa(request):
     # The period control: one compact ‹ date › bar that opens a calendar, rather than
     # a row of preset tabs beside two bare date inputs. The presets did not disappear
     # — they moved inside the popover, next to the month they change.
-    daterange = _daterange_bar(date_from, date_to)
+    daterange = _daterange_bar(request, date_from, date_to)
 
     return render(request, "crm/kassa.html", {
+        "export_url": reverse("kassa_export"),
         "cash_total": cash_total, "cash_total_uzs": cash_total_uzs,
         "advance": advance, "advance_uzs": advance_uzs,
         "own_cash": own_cash, "own_cash_uzs": own_cash_uzs,
@@ -3091,7 +3246,43 @@ def _date_param(request, key):
         return ""
 
 
-def _daterange_bar(date_from, date_to):
+def _date_window(request):
+    """The period a list is filtered by: `?from` & `?to`, one spelling app-wide.
+
+    Two screens used to say `?date_from` / `?date_to` instead, so a period picked on
+    the kassa lost itself on the way to the to'lovlar list and a copied link narrowed
+    nothing. Those older names are still READ here — an old bookmark keeps meaning
+    what it meant — but nothing the app writes says them any more."""
+    return (
+        _date_param(request, "from") or _date_param(request, "date_from"),
+        _date_param(request, "to") or _date_param(request, "date_to"),
+    )
+
+
+# Page numbers to drop whenever the period changes: a new window renumbers the
+# rows, so page 5 of the old one is a page nobody asked for (the kassa's two
+# ledgers page independently, hence three names).
+_PAGE_PARAMS = ("page", "ipage", "opage")
+
+
+def _window_url(request, date_from="", date_to=""):
+    """This page's URL with the period swapped and every other filter kept.
+
+    Built here rather than with `{% querystring %}` in the template because the shared
+    bar has to drop the legacy date names and all three page numbers — knowledge that
+    would otherwise be copied into every page that shows the bar."""
+    params = request.GET.copy()
+    for key in ("from", "to", "date_from", "date_to", *_PAGE_PARAMS):
+        params.pop(key, None)
+    if date_from:
+        params["from"] = date_from
+    if date_to:
+        params["to"] = date_to
+    query = params.urlencode()
+    return f"{request.path}?{query}" if query else request.path
+
+
+def _daterange_bar(request, date_from, date_to):
     """What the compact ‹ date › control needs: how to NAME the chosen period, and
     where its arrows step to.
 
@@ -3104,7 +3295,8 @@ def _daterange_bar(date_from, date_to):
     the month names stay with Django's l10n rather than being spelled here."""
     today = timezone.localdate()
     if not date_from and not date_to:
-        return {"today": today.isoformat(), "is_all": True}
+        return {"today": today.isoformat(), "is_all": True,
+                "today_url": _window_url(request, today.isoformat(), today.isoformat())}
     # One end alone is a real filter ("everything from August"), so the other is
     # filled from what we have rather than treated as missing.
     start = _date.fromisoformat(date_from) if date_from else _date.fromisoformat(date_to)
@@ -3129,19 +3321,28 @@ def _daterange_bar(date_from, date_to):
     return {
         "today": today.isoformat(), "is_all": False,
         "from_date": start, "to_date": end,
+        "from_iso": start.isoformat(), "to_iso": end.isoformat(),
         "is_today": start == end == today,
         "is_single": start == end,
         "is_month": is_month,
+        # Where the arrows step to, and the same two windows as ready-made URLs — the
+        # dates are the stepping math worth reading on its own, the URLs are that math
+        # with the page's other filters kept.
         "prev_from": prev_from.isoformat(), "prev_to": prev_to.isoformat(),
         "next_from": next_from.isoformat(), "next_to": next_to.isoformat(),
+        "prev_url": _window_url(request, prev_from.isoformat(), prev_to.isoformat()),
+        "next_url": _window_url(request, next_from.isoformat(), next_to.isoformat()),
+        "all_url": _window_url(request),
+        "today_url": _window_url(request, today.isoformat(), today.isoformat()),
     }
 
 
 def _report_filters(request):
     """Parse the shared reports/exports querystring filters (?from&to&partner&brand&status)."""
+    date_from, date_to = _date_window(request)
     return {
-        "date_from": _date_param(request, "from"),
-        "date_to": _date_param(request, "to"),
+        "date_from": date_from,
+        "date_to": date_to,
         "partner_id": (request.GET.get("partner") or "").strip(),
         "brand": (request.GET.get("brand") or "").strip(),
         "status_id": (request.GET.get("status") or "").strip(),
@@ -3289,50 +3490,41 @@ def reports(request):
             "brand", flat=True).distinct().order_by("brand"),
         "statuses": ShipmentStatus.objects.all(),
         "date_from": date_from, "date_to": date_to,
+        "daterange": _daterange_bar(request, date_from, date_to),
         "partner_id": partner_id, "brand": brand, "status_id": status_id,
     })
 
 
-@role_required(User.Role.ADMIN)
-def export_contracts(request):
-    contracts = _report_querysets(request)["contracts"]
+# ── Excel tables ──────────────────────────────────────────────────────────────
+#
+# One table definition per entity, used by BOTH the hisobotlar exports (filtered by
+# the report form) and the Excel button on each ro'yxat (filtered by that page's own
+# filters). Two definitions of "the sotuvlar columns" is how the two files start
+# disagreeing about what a sotuv is; there is one here, and the callers only differ
+# in which rows they hand it.
+#
+# Money always leaves as a raw Decimal in BOTH currencies. Which one the reader wants
+# is not knowable here, a spreadsheet cannot follow the app's toggle, and a figure
+# formatted into a string cannot be summed in Excel.
+
+def _contracts_table(contracts):
+    """One row per product, so a multi-product kelishuv is readable. The money columns
+    are per kelishuv, so they repeat down its rows."""
     headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
                "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)", "Yuborilgan kg",
                "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
-    # One row per product, so a multi-product kelishuv is readable in Excel. The
-    # money columns are per kelishuv, so they repeat down its rows. Both currencies
-    # ship in every export — which one the reader wants is not knowable here, and a
-    # spreadsheet cannot follow the app's toggle.
     rows = (
         [c.code, c.created, c.partner.name, ln.brand, ln.kg,
          ln.get_currency_display(), ln.exchange_rate, ln.price, ln.price_uzs,
          ln.total_value, ln.total_value_uzs, ln.shipped_kg,
          c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs]
-        for c in contracts.prefetch_related("lines__shipment_lines", "supplier_payments")
+        for c in contracts
         for ln in c.lines.all()
     )
-    return xlsx_response("kelishuvlar.xlsx", headers, rows)
+    return headers, rows, {"Kg": KG, "Yuborilgan kg": KG, "Kurs": "#,##0"}
 
 
-@role_required(User.Role.ADMIN)
-def export_supplier_payments(request):
-    sup_pays = _report_querysets(request)["sup_pays"]
-    headers = ["Sana", "Kelishuv", "Hamkor", "Valyuta", "Kurs", "Hamkorga ($)",
-               "Hamkorga (so'm)", "Vositachi %", "Vositachi ($)", "Perechisleniya %",
-               "Perechisleniya ($)", "Kassadan ($)", "Kassadan (so'm)", "Usul"]
-    rows = (
-        [p.date, p.contract.code, p.contract.partner.name, p.get_currency_display(),
-         p.exchange_rate, p.amount, p.amount_uzs, p.commission_percent,
-         p.commission_amount, p.fee_percent, p.fee_amount,
-         p.total_out, p.total_out_uzs, p.get_method_display()]
-        for p in sup_pays
-    )
-    return xlsx_response("hamkor-tolovlari.xlsx", headers, rows)
-
-
-@role_required(User.Role.ADMIN)
-def export_shipments(request):
-    shipments = _report_querysets(request)["shipments"]
+def _shipments_table(shipments):
     headers = [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
@@ -3340,15 +3532,13 @@ def export_shipments(request):
     rows = (
         [s.pk, s.contract.code, s.contract.partner.name, ln.brand, ln.kg, s.status.name,
          s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container]
-        for s in shipments.prefetch_related("lines__contract_line")
+        for s in shipments
         for ln in s.lines.all()
     )
-    return xlsx_response("yuklar.xlsx", headers, rows)
+    return headers, rows, {"Kg": KG, "Yuk ID": "0"}
 
 
-@role_required(User.Role.ADMIN)
-def export_sales(request):
-    sales = _report_querysets(request)["sales"]
+def _sales_table(sales):
     headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Valyuta", "Kurs", "Tan narx ($)",
                "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
                "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)"]
@@ -3359,11 +3549,40 @@ def export_sales(request):
          s.profit, s.profit_uzs, s.remaining, s.remaining_uzs]
         for s in sales
     )
-    return xlsx_response("sotuvlar.xlsx", headers, rows)
+    return headers, rows, {"Kg": KG, "Lot ID": "0", "Kurs": "#,##0"}
 
 
-@role_required(User.Role.ADMIN)
-def export_debts(request):
+def _supplier_payments_table(payments):
+    headers = ["Sana", "Kelishuv", "Hamkor", "Valyuta", "Kurs", "Hamkorga ($)",
+               "Hamkorga (so'm)", "Vositachi %", "Vositachi ($)", "Perechisleniya %",
+               "Perechisleniya ($)", "Kassadan ($)", "Kassadan (so'm)", "Usul", "Izoh"]
+    rows = (
+        [p.date, p.contract.code, p.contract.partner.name, p.get_currency_display(),
+         p.exchange_rate, p.amount, p.amount_uzs, p.commission_percent,
+         p.commission_amount, p.fee_percent, p.fee_amount,
+         p.total_out, p.total_out_uzs, p.get_method_display(), p.note]
+        for p in payments
+    )
+    return headers, rows, {"Kurs": "#,##0", "Vositachi %": PERCENT,
+                           "Perechisleniya %": PERCENT}
+
+
+def _customer_payments_table(payments):
+    """What the mijoz handed over, and what reached the kassa after the bank's foiz —
+    the two figures the to'lovlar page shows side by side."""
+    headers = ["Sana", "Mijoz", "Valyuta", "Kurs", "To'langan ($)", "To'langan (so'm)",
+               "Perechisleniya %", "Kassaga ($)", "Kassaga (so'm)", "Usul", "Izoh"]
+    rows = (
+        [p.date, p.customer.name, p.get_currency_display(), p.exchange_rate,
+         p.amount, p.amount_uzs, p.fee_percent, p.net_amount, p.net_amount_uzs,
+         p.get_method_display(), p.note]
+        for p in payments
+    )
+    return headers, rows, {"Kurs": "#,##0", "Perechisleniya %": PERCENT}
+
+
+def _debtors_table():
+    """Every mijoz who owes something, in the currency they owe it in."""
     # A qarz column carries only what is owed IN that currency. Putting a dollar
     # sotuv's so'm face in the so'm column too counts it twice, and this figure
     # leaves the app — it is read in Excel with no row context to correct it.
@@ -3385,7 +3604,168 @@ def export_debts(request):
                    paid.get(Currency.USD, Decimal("0")), paid.get(Currency.UZS, Decimal("0")),
                    max(usd, Decimal("0")), max(uzs, Decimal("0"))]
 
-    return xlsx_response("qarzdorlar.xlsx", headers, _rows())
+    return headers, _rows(), None
+
+
+def _ombor_table(groups):
+    """The ombor as it reads on screen: one row per MARKA, its lots folded in."""
+    headers = ["Marka", "Lotlar", "Hamkorlar", "Kirim kg", "Sotilgan kg", "Qoldiq kg",
+               "Bron kg", "Yetmayapti kg", "Tan narx eng past ($)", "Tan narx eng baland ($)",
+               "Tan narx eng past (so'm)", "Tan narx eng baland (so'm)", "Oxirgi kelgan"]
+    rows = (
+        [g["brand"], len(g["lots"]), ", ".join(g["partners"]), g["kirim"], g["sold"],
+         g["on_hand"], g["reserved"], g["short"], g["cost_min"], g["cost_max"],
+         g["cost_min_uzs"], g["cost_max_uzs"], g["arrived_last"]]
+        for g in groups
+    )
+    kg_columns = {name: KG for name in
+                  ("Kirim kg", "Sotilgan kg", "Qoldiq kg", "Bron kg", "Yetmayapti kg")}
+    return headers, rows, {**kg_columns, "Lotlar": "0"}
+
+
+def _audit_table(entries):
+    headers = ["Vaqt", "Kim", "Amal", "Obyekt", "ID", "Tafsilot"]
+    rows = (
+        [timezone.localtime(e.created_at).replace(tzinfo=None),
+         str(e.user) if e.user else "Tizim", e.get_action_display(),
+         e.target_type, e.target_id, e.summary]
+        for e in entries
+    )
+    # A log line is read to the minute; the date alone would lose the ordering.
+    return headers, rows, {"Vaqt": "DD.MM.YYYY HH:MM", "ID": "0"}
+
+
+def _ledger_table(rows):
+    """One kassa ledger — Kirim or Chiqim — with the same columns the page prints."""
+    headers = ["Sana", "Tavsif", "Turi", "Usul", "Valyuta", "Kurs", "Foiz %",
+               "Summa ($)", "Summa (so'm)"]
+    table = (
+        [r["date"], r["title"], LEDGER_KINDS.get(r["kind"], r["kind"]), r["method"],
+         dict(Currency.choices).get(r["currency"], ""),
+         # The kurs is printed only where it was CHOSEN — on a same-currency row it
+         # was inherited from whoever typed one last and decides nothing here.
+         r["exchange_rate"] if r.get("crossed") else None,
+         r.get("fee_percent") or None,
+         r["amount"], r["amount_uzs"]]
+        for r in rows
+    )
+    return headers, table, {"Kurs": "#,##0", "Foiz %": PERCENT}
+
+
+# How each ledger row reads in the export — the same words the badges on the page use.
+LEDGER_KINDS = {
+    "customer": "Mijoz to'lovi", "kapital": "Kapital", "supplier": "Hamkor to'lovi",
+    "commission": "Vositachi", "fee": "Perechisleniya foizi",
+    "fee_logist": "Perechisleniya foizi", "fee_customs": "Perechisleniya foizi",
+    "fee_expense": "Perechisleniya foizi", "logist": "Logistga", "customs": "Bojxona",
+    "expense": "Yuk xarajati",
+}
+
+
+@role_required(User.Role.ADMIN)
+def export_contracts(request):
+    contracts = _report_querysets(request)["contracts"].prefetch_related(
+        "lines__shipment_lines", "supplier_payments")
+    headers, rows, formats = _contracts_table(contracts)
+    return xlsx_response("kelishuvlar.xlsx", headers, rows, "Kelishuvlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def export_supplier_payments(request):
+    headers, rows, formats = _supplier_payments_table(_report_querysets(request)["sup_pays"])
+    return xlsx_response("hamkor-tolovlari.xlsx", headers, rows, "To'lovlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def export_shipments(request):
+    shipments = _report_querysets(request)["shipments"].prefetch_related(
+        "lines__contract_line")
+    headers, rows, formats = _shipments_table(shipments)
+    return xlsx_response("yuklar.xlsx", headers, rows, "Yuklar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def export_sales(request):
+    headers, rows, formats = _sales_table(_report_querysets(request)["sales"])
+    return xlsx_response("sotuvlar.xlsx", headers, rows, "Sotuvlar", formats)
+
+
+# ── The Excel button on each ro'yxat ──────────────────────────────────────────
+#
+# Each one goes through the SAME filter helper its page does, so the file holds the
+# rows that were on the screen — filtered, searched, in the chosen davr. An export
+# that quietly ignored the page's filters is the one bug this whole arrangement
+# exists to prevent.
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def contract_list_export(request):
+    rows, _f = _filter_contracts(request)
+    headers, table, formats = _contracts_table(rows)
+    return xlsx_response("kelishuvlar.xlsx", headers, table, "Kelishuvlar", formats)
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def shipment_list_export(request):
+    shipments, _f = _filter_shipments(request)
+    headers, table, formats = _shipments_table(
+        shipments.prefetch_related("lines__contract_line"))
+    return xlsx_response("yuklar.xlsx", headers, table, "Yuklar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def sale_list_export(request):
+    sales, _q, _from, _to = _filter_sales(request)
+    headers, table, formats = _sales_table(sales.order_by("-date", "-created_at"))
+    return xlsx_response("sotuvlar.xlsx", headers, table, "Sotuvlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def customer_payment_list_export(request):
+    payments, _f = _filter_customer_payments(request)
+    headers, table, formats = _customer_payments_table(payments)
+    return xlsx_response("mijoz-tolovlari.xlsx", headers, table, "To'lovlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def supplier_payment_list_export(request):
+    payments, _f = _filter_supplier_payments(request)
+    headers, table, formats = _supplier_payments_table(payments)
+    return xlsx_response("hamkor-tolovlari.xlsx", headers, table, "To'lovlar", formats)
+
+
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
+def ombor_export(request):
+    headers, table, formats = _ombor_table(_ombor_groups(request)[0])
+    return xlsx_response("ombor.xlsx", headers, table, "Ombor", formats)
+
+
+@role_required(User.Role.ADMIN)
+def audit_list_export(request):
+    headers, table, formats = _audit_table(_filter_audit(request)[0])
+    return xlsx_response("audit.xlsx", headers, table, "Audit", formats)
+
+
+@role_required(User.Role.ADMIN)
+def kassa_export(request):
+    """Both ledgers in one workbook — Kirim and Chiqim as separate tabs.
+
+    They are read against each other, so they belong in one file the reader opens
+    once rather than two downloads to line up by hand."""
+    income_rows, outflow_rows = _kassa_ledger_rows(_kassa_window(request))
+    sheets = []
+    for title, rows in (("Kirim", income_rows), ("Chiqim", outflow_rows)):
+        headers, table, formats = _ledger_table(rows)
+        sheets.append((title, headers, table, formats))
+    return xlsx_book_response("kassa.xlsx", sheets)
+
+
+@role_required(User.Role.ADMIN)
+def export_debts(request):
+    """Qarzdorlar — the same file from the hisobotlar page and from the Qarzlar list,
+    which is why it takes no filters: a debt is a current-state figure, and the qarzlar
+    page has no window to honour."""
+    headers, rows, formats = _debtors_table()
+    return xlsx_response("qarzdorlar.xlsx", headers, rows, "Qarzdorlar", formats)
 
 
 def holder_loads(expenses, payments=()):

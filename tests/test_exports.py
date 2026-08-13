@@ -21,7 +21,7 @@ EXPORT_URLS = {
     "/reports/export/supplier-payments.xlsx": [
         "Sana", "Kelishuv", "Hamkor", "Valyuta", "Kurs", "Hamkorga ($)",
         "Hamkorga (so'm)", "Vositachi %", "Vositachi ($)", "Perechisleniya %",
-        "Perechisleniya ($)", "Kassadan ($)", "Kassadan (so'm)", "Usul",
+        "Perechisleniya ($)", "Kassadan ($)", "Kassadan (so'm)", "Usul", "Izoh",
     ],
     "/reports/export/shipments.xlsx": [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",

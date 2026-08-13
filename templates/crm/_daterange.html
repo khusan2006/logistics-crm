@@ -1,0 +1,55 @@
+{% comment %}
+The one ‹ davr › bar every list uses. Include it with a `daterange` in context
+(built by `_daterange_bar`) and nothing else:
+
+    {% include "crm/_daterange.html" %}
+
+One compact control that opens a calendar, in place of a row of preset tabs plus two
+bare date inputs plus a submit button — three controls answering one question. Before
+this partial the bar lived on the kassa and the other screens each grew their own pair
+of <input type="date">, which is how the app ended up filtering on two different
+querystring names; see `_date_window`.
+
+The arrows step by the length of the chosen period, so "the week before this week" is
+one click. The presets live inside the popover, beside the month they move, and
+"Hammasi" sits outside it because it is the one choice that removes the period rather
+than picking one. With no period at all there is no previous anything, so the arrows
+are left off and the bar reads "Hammasi".
+
+Every URL is built in the view (`_window_url`), which keeps the page's other filters
+and drops the stale page number.
+{% endcomment %}
+<div class="daterange-bar">
+  {% if daterange.is_all %}
+  <div class="daterange daterange--bare" data-today="{{ daterange.today }}">
+    <button type="button" class="daterange-trigger" aria-haspopup="dialog" aria-expanded="false">
+      <svg class="cal-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <span class="daterange-text">Hammasi</span>
+    </button>
+    <div class="daterange-pop" role="dialog" aria-label="Sana tanlash" hidden></div>
+  </div>
+  {% else %}
+  <div class="daterange" data-from="{{ daterange.from_iso }}" data-to="{{ daterange.to_iso }}" data-today="{{ daterange.today }}">
+    <a class="datebar-btn" href="{{ daterange.prev_url }}" title="Oldingi davr" aria-label="Oldingi davr">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </a>
+    <button type="button" class="daterange-trigger" aria-haspopup="dialog" aria-expanded="false">
+      <svg class="cal-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <span class="daterange-text">
+        {% if daterange.is_today %}Bugun{% elif daterange.is_single %}{{ daterange.from_date|date:"j-F" }}{% elif daterange.is_month %}{{ daterange.from_date|date:"F" }}{% else %}{{ daterange.from_date|date:"j-F" }} – {{ daterange.to_date|date:"j-F" }}{% endif %}
+      </span>
+    </button>
+    <a class="datebar-btn" href="{{ daterange.next_url }}" title="Keyingi davr" aria-label="Keyingi davr">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+    <div class="daterange-pop" role="dialog" aria-label="Sana tanlash" hidden></div>
+  </div>
+  <a class="btn btn-sm btn-ghost" href="{{ daterange.all_url }}">Hammasi</a>
+  {% endif %}
+  {% comment %}
+  Excel sits in this row rather than off in a menu: it downloads what the bar beside
+  it has narrowed, so it reads as part of the view. Drawn only where the view set an
+  `export_url` (see crm/_excel_button.html).
+  {% endcomment %}
+  {% include "crm/_excel_button.html" %}
+</div>

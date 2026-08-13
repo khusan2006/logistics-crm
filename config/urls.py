@@ -102,6 +102,19 @@ urlpatterns = [
     path("reports/export/shipments.xlsx", crm_views.export_shipments, name="export_shipments"),
     path("reports/export/sales.xlsx", crm_views.export_sales, name="export_sales"),
     path("reports/export/debts.xlsx", crm_views.export_debts, name="export_debts"),
+    # The Excel button on each ro'yxat. A separate URL per list rather than the
+    # hisobotlar ones with different params: each goes through its OWN page's filter
+    # helper, so the file holds exactly the rows that were on the screen.
+    path("contracts/export.xlsx", crm_views.contract_list_export, name="contract_list_export"),
+    path("shipments/export.xlsx", crm_views.shipment_list_export, name="shipment_list_export"),
+    path("sales/export.xlsx", crm_views.sale_list_export, name="sale_list_export"),
+    path("customer-payments/export.xlsx", crm_views.customer_payment_list_export,
+         name="customer_payment_list_export"),
+    path("supplier-payments/export.xlsx", crm_views.supplier_payment_list_export,
+         name="supplier_payment_list_export"),
+    path("ombor/export.xlsx", crm_views.ombor_export, name="ombor_export"),
+    path("audit/export.xlsx", crm_views.audit_list_export, name="audit_list_export"),
+    path("kassa/export.xlsx", crm_views.kassa_export, name="kassa_export"),
     path("users/", accounts_views.user_list, name="user_list"),
     path("users/new/", accounts_views.user_create, name="user_create"),
     path("users/<int:pk>/edit/", accounts_views.user_edit, name="user_edit"),

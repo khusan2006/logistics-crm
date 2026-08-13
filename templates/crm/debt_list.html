@@ -4,6 +4,12 @@
 {% block topbar_title %}Qarzlar{% endblock %}
 {% block content %}
 
+{% comment %}
+No davr bar here — a qarz is a current-state figure, and the whole list is what the
+file holds. The button is the same one every ro'yxat carries.
+{% endcomment %}
+<div class="daterange-bar">{% include "crm/_excel_button.html" %}</div>
+
 {% if page.object_list %}
 <div class="table-wrap">
 <table>

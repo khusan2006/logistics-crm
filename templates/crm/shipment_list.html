@@ -19,12 +19,20 @@ and a toast would be gone in 4.5 seconds with the link still unclicked.
 {% endcomment %}
 <div id="bron-alert" aria-live="polite"></div>
 
+{% comment %}
+The load's own sana window — arrived if it has arrived, otherwise the taxminiy kelish
+date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on every list.
+{% endcomment %}
+{% include "crm/_daterange.html" %}
 <form method="get" class="searchbar" role="search" data-live-search>
   {% comment %}
   `all` rides along as a hidden field so searching keeps you in whichever set you
   are looking at — the toggle beside it is what moves you between them.
   {% endcomment %}
   {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+  {# Same reason: searching or toggling must not drop the chosen davr. #}
+  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
   {# Same reason as `all`: searching must not silently drop the QR filter. #}
   {% if qr %}<input type="hidden" name="qr" value="{{ qr }}">{% endif %}
   <div class="toolbar-search{% if q %} is-active{% endif %}">

@@ -10,6 +10,8 @@
     <input type="search" name="q" value="{{ q }}" placeholder="Marka, hamkor yoki kelishuv raqami bo'yicha qidirish…" autocomplete="off" aria-label="Ombor qidirish">
     {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
+  {# Downloads the markalar the search has left, not the whole ombor. #}
+  {% include "crm/_excel_button.html" %}
 </form>
 
 {% if page.object_list %}
