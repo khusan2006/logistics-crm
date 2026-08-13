@@ -1800,21 +1800,58 @@ def partner_positions_by_currency():
             "prepaid": _by_currency(prepaid), "contracts": prepaid_contracts}
 
 
+#: What `stock_value` and `stock_value_by_currency` both need loaded before they ask
+#: a lot what it cost — landed cost reaches into the truck's expenses and the
+#: kelishuv's to'lovlar, so without this it is a handful of queries per lot.
+STOCK_COST_PREFETCH = (
+    "sales__returns", "shipment__expenses",
+    "contract_line__contract__supplier_payments",
+    "contract_line__contract__lines",
+)
+
+
 def stock_value():
     """Granula sitting in the ombor, at its landed cost — goods we paid for and
     still own. Costed rather than priced: what it will sell for is not knowable
-    yet, what it cost us is."""
+    yet, what it cost us is.
+
+    The converted pair, for the screens that need one figure per kg however the
+    money arrived (reports, profit). The kassa board reads
+    `stock_value_by_currency` instead."""
     total = total_uzs = kg = Decimal("0")
-    for lot in arrived_lots().prefetch_related(
-            "sales__returns", "shipment__expenses",
-            "contract_line__contract__supplier_payments",
-            "contract_line__contract__lines"):
+    for lot in arrived_lots().prefetch_related(*STOCK_COST_PREFETCH):
         left = lot.kg - lot.sold_kg + lot.returned_kg
         if left > 0:
             kg += left
             total += (left * lot.landed_cost_per_kg).quantize(Decimal("0.01"))
             total_uzs += (left * lot.landed_cost_per_kg_uzs).quantize(Decimal("0.01"))
     return total, total_uzs, kg
+
+
+def stock_value_by_currency():
+    """([(currency, value)], kg) — the same stock, each lot counted in the currency
+    its KELISHUV was agreed in.
+
+    Split the way transit is: the mol on a so'm kelishuv was bought in so'm, and
+    restating it in dollars publishes a figure nobody agreed to. As one blended dollar
+    total the ombor was the last place on the kassa that did that.
+
+    What still cannot be split is INSIDE a lot. A so'm transport bill on a dollar
+    kelishuv folds into the same tannarx at its own entry-day kurs, because a kg has
+    exactly one cost — a sotuv is priced against it and the profit is computed from it,
+    and "1.3 $ + 200 so'm per kg" is not a price anybody can sell at. So a lot lands
+    wholly on its kelishuv's side, carrying that blended share with it."""
+    entries = []
+    kg = Decimal("0")
+    for lot in arrived_lots().prefetch_related(*STOCK_COST_PREFETCH):
+        left = lot.kg - lot.sold_kg + lot.returned_kg
+        if left > 0:
+            kg += left
+            entries.append((lot.currency, own_side(
+                lot,
+                (left * lot.landed_cost_per_kg).quantize(Decimal("0.01")),
+                (left * lot.landed_cost_per_kg_uzs).quantize(Decimal("0.01")))))
+    return _by_currency(entries), kg
 
 
 def transit_value():
@@ -1839,11 +1876,12 @@ def transit_value():
 def transit_value_by_currency():
     """([(currency, value)], kg, loads) — goods sent and not yet arrived, per currency.
 
-    Split rather than blended, unlike the ombor beside it on the board: transit is
-    valued at the agreed kelishuv narx, and a kelishuv has exactly one currency.
-    `stock_value` cannot follow — a landed cost mixes a dollar mol with a so'm
-    transport bill on purpose (see ShipmentLine.landed_cost_per_kg), so the ombor
-    keeps its converted pair."""
+    Valued at the agreed kelishuv narx, and a kelishuv has exactly one currency, so
+    this side of the board splits cleanly. The ombor beside it splits by the same
+    rule (`stock_value_by_currency`) with one caveat it cannot avoid: a landed cost
+    mixes a dollar mol with a so'm transport bill on purpose (see
+    ShipmentLine.landed_cost_per_kg), so a lot carries that blended share onto its
+    kelishuv's side."""
     entries = []
     kg = Decimal("0")
     loads = set()

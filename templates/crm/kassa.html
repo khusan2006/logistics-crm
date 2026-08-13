@@ -22,11 +22,12 @@ nothing — a debt that is usually zero drew the eye as hard as the till.
 
 EVERY figure is printed in its own currency and never converted. A `split` holds one
 line per currency because that is how many facts it is: the till keeps a dollar heap
-and a so'm heap, and a hamkor owed on a dollar kelishuv and a so'm one is owed two
-separate debts. A tile without a split is a blended COST kept in dollars (Omborda, a
-logist's hisob) — it prints the dollar figure alone. It used to print the so'm twin
-beneath it, which read as a second, separate pile; a so'm number that nobody handed
-over is not a fact this board states.
+and a so'm heap, a hamkor owed on a dollar kelishuv and a so'm one is owed two
+separate debts, and the ombor holds so'm-kelishuv mol beside dollar-kelishuv mol.
+
+What is left without a split is a logist's hisob, which is kept in dollars whatever
+currency the driver was handed: it prints the dollar figure alone, and no so'm zero
+either — the so'm figure exists, it is just the conversion this page refuses to print.
 {% endcomment %}
 <a class="khero khero--{{ hero.tone }}" href="{{ hero.url }}">
   <div class="ktile-label">{{ hero.label }}</div>
@@ -53,8 +54,8 @@ over is not a fact this board states.
       <span class="krow-nums">
         {% if t.split is None %}
         {% comment %}
-        A blended cost, kept in dollars. No so'm line and no so'm zero either: the
-        mol did cost so'm, that figure is just a conversion this page does not print.
+        A hisob kept in dollars. No so'm line and no so'm zero either: a so'm figure
+        exists for it, and it is the conversion this page does not print.
         {% endcomment %}
         <span class="krow-num">{{ t.amount|usd }}</span>
         {% else %}

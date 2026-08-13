@@ -47,7 +47,7 @@ from .models import (
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
     kapital_total_by_currency,
     kassa_cash_by_currency, own_side, partner_positions, partner_positions_by_currency,
-    reconcile_customer_allocations, stock_value, transit_value,
+    reconcile_customer_allocations, stock_value_by_currency, transit_value,
     transit_value_by_currency, trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
 )
@@ -2656,7 +2656,7 @@ def kassa(request):
     hamkor = partner_positions_by_currency()
     logist_held, logist_held_uzs, logist_owed, logist_owed_uzs = logist_positions()
     customs_held, customs_owed = customs_positions()
-    stock, stock_uzs, stock_kg = stock_value()
+    stock, stock_kg = stock_value_by_currency()
     transit, transit_kg, transit_loads = transit_value_by_currency()
     # A board of current facts, not a balance sheet. Each tile is one place money
     # or goods is sitting RIGHT NOW, says so in plain words, and carries the second
@@ -2692,9 +2692,11 @@ def kassa(request):
          "note": "mol berilgan, puli hali olinmagan", "tone": "in",
          "meta": f"{debtors} ta mijozda" if debtors else "",
          "url": reverse("debt_list")},
-        {"label": "Omborda", "split": None, "amount": stock, "amount_uzs": stock_uzs,
+        # A split like Yo'lda now: a so'm kelishuv's mol is counted in so'm. It used to
+        # be one blended dollar figure — the last thing on this page that restated
+        # somebody's so'm as dollars.
+        {"label": "Omborda", "split": stock, "group": "mol",
          "note": "kelgan, hali sotilmagan mol — tannarxda", "tone": "in",
-         "group": "mol",
          "meta": f"{_kg(stock_kg)} kg", "url": reverse("ombor")},
         {"label": "Yo'lda", "split": transit, "group": "mol",
          "note": "jo'natilgan, hali yetib kelmagan mol", "tone": "in",
