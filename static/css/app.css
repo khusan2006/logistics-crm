@@ -523,6 +523,9 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 .krow-num { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .krow--in .krow-num { color: var(--success); }
 .krow--out .krow-num { color: var(--danger); }
+/* A zero side is drawn so the currency is never simply missing, but it is not news:
+   in the tone of a real figure "0 so'm" pulls as hard as the money that is there. */
+.krow-num--nil, .krow--in .krow-num--nil, .krow--out .krow-num--nil { color: var(--text-faint); font-weight: 650; }
 @media (max-width: 1000px) { .kgroups { grid-template-columns: 1fr; } }
 
 .ktiles-foot { margin: 0 0 14px; font-size: 12px; line-height: 1.55; color: var(--text-faint); max-width: 96ch; }

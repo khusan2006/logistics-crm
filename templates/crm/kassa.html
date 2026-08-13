@@ -30,12 +30,13 @@ over is not a fact this board states.
 {% endcomment %}
 <a class="khero khero--{{ hero.tone }}" href="{{ hero.url }}">
   <div class="ktile-label">{{ hero.label }}</div>
+  {% comment %}
+  `split_full`, so both currencies are always on the line and an empty side reads as
+  a zero rather than going missing — a till with no so'm in it says "0 so'm".
+  {% endcomment %}
   <div class="khero-nums">
-    {% for currency, amount in hero.split %}
-    <div class="khero-num">{% money_in amount currency %}</div>
-    {% empty %}
-    {% comment %}An empty split is a real answer — nothing held.{% endcomment %}
-    <div class="khero-num">{% money_in 0 "usd" %}</div>
+    {% for currency, amount in hero.split_full %}
+    <div class="khero-num{% if not amount %} krow-num--nil{% endif %}">{% money_in amount currency %}</div>
     {% endfor %}
   </div>
   <div class="ktile-note">{{ hero.note }}</div>
@@ -51,12 +52,14 @@ over is not a fact this board states.
       <span class="krow-label">{{ t.label }}{% if t.meta %}<span class="krow-meta">{{ t.meta }}</span>{% endif %}</span>
       <span class="krow-nums">
         {% if t.split is None %}
+        {% comment %}
+        A blended cost, kept in dollars. No so'm line and no so'm zero either: the
+        mol did cost so'm, that figure is just a conversion this page does not print.
+        {% endcomment %}
         <span class="krow-num">{{ t.amount|usd }}</span>
         {% else %}
-        {% for currency, amount in t.split %}
-        <span class="krow-num">{% money_in amount currency %}</span>
-        {% empty %}
-        <span class="krow-num">{% money_in 0 "usd" %}</span>
+        {% for currency, amount in t.split_full %}
+        <span class="krow-num{% if not amount %} krow-num--nil{% endif %}">{% money_in amount currency %}</span>
         {% endfor %}
         {% endif %}
       </span>

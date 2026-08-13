@@ -382,6 +382,26 @@ class TestCurrentStateTiles:
         assert som(ombor["amount"]) not in body
         assert som(ombor["amount_uzs"]) not in body
 
+    def test_an_empty_currency_side_is_drawn_as_a_zero(self, admin_client, db):
+        """A missing currency line read as missing DATA. Both sides are drawn now, and
+        a side that holds nothing says so: "0 so'm" beside a dollar figure.
+
+        A cost tile is the exception and gets no zero: Omborda is kept in dollars and
+        the mol genuinely did cost so'm — that figure is a conversion this page does
+        not print, so a zero there would be a lie rather than an empty side."""
+        contract = _contract()                              # a dollar kelishuv
+        _arrived_shipment(contract)
+        CustomerPayment.objects.create(customer=_customer(), date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        tiles = self._tiles(admin_client)
+        # Nothing has been sent to a bojxonachi, so both sides of that one are empty.
+        assert tiles["Bojxonada"]["split"] == []
+        assert tiles["Bojxonada"]["split_full"] == [
+            (Currency.USD, Decimal("0")), (Currency.UZS, Decimal("0"))]
+        assert dict(tiles["Kassada"]["split_full"])[Currency.UZS] == Decimal("0")
+        assert "split_full" not in tiles["Omborda"]
+        assert "0 so&#x27;m" in admin_client.get("/kassa/").content.decode()
+
     def test_the_till_is_the_hero_and_the_rest_read_under_a_heading(self, admin_client, db):
         """Ten equal tiles ranked nothing — a debt that is usually zero pulled as hard
         as the money on hand. Kassada is the hero; every other tile sits in a group."""

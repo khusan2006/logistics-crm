@@ -2740,6 +2740,20 @@ def kassa(request):
             "tone": "out", "meta": "", "note": "o'z pulidan yukni rasmiylashtirgani",
             "url": reverse("customs_list") + "?state=owed"})
 
+    # `split_full` is what the page DRAWS: both currency lines, with an empty side
+    # spelled out as a zero instead of left off. `split` itself keeps dropping the
+    # sides that net to zero — it answers "which currencies does this hold at all",
+    # and the reports and tests read it that way.
+    #
+    # Only a tile that HAS a split gets one. A cost tile (Omborda, a logist's hisob)
+    # is kept in dollars and its so'm figure would be a conversion, not a zero:
+    # "0 so'm" there would say the mol cost no so'm, which is false.
+    for tile in tiles:
+        if tile["split"] is not None:
+            totals = dict(tile["split"])
+            tile["split_full"] = [(currency, totals.get(currency, Decimal("0")))
+                                  for currency in (Currency.USD, Currency.UZS)]
+
     # The flat `tiles` list stays exactly as it was — it is what every kassa test
     # reads and what says which facts the board holds. `hero`/`tile_groups` are the
     # same dicts arranged for the page.
