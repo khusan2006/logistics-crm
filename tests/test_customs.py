@@ -890,7 +890,8 @@ class TestCustomsScreens:
 
         _cleared(_shipment(), _agent("Qarzdor"), "8000000")
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
-        assert dict(tiles["Bojxonaga qarzimiz"]["split"])["uzs"] == Decimal("-8000000.00")
+        # Positive, like every other qarzimiz tile — see the logist tile's twin test.
+        assert dict(tiles["Bojxonaga qarzimiz"]["split"])["uzs"] == Decimal("8000000.00")
         assert tiles["Bojxonaga qarzimiz"]["url"].endswith("?state=owed")
 
     def test_the_modals_render_every_field_they_ask_for(self, admin_client, db):

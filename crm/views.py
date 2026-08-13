@@ -24,13 +24,13 @@ from .forms import (
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     CustomsAgentForm, CustomsPaymentForm,
-    ExpenseGridForm, LogistForm, LogistPaymentForm,
+    ExpenseGridForm, KapitalForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
     ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
-    AuditLog, CustomsAgent, CustomsPayment,
+    AuditLog, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
     Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
@@ -43,6 +43,7 @@ from .models import (
     customs_positions, logist_positions, payable_by_currency, supplier_paid_by_currency,
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
+    kapital_total_by_currency,
     kassa_cash_by_currency, own_side, partner_positions, partner_positions_by_currency,
     reconcile_customer_allocations, stock_value, transit_value,
     transit_value_by_currency, trim_sale_allocations,
@@ -2413,6 +2414,14 @@ def kassa(request):
     def _out_uzs(qs):
         return sum((r.total_out_uzs for r in qs), Decimal("0"))
 
+    # Kapital carries its own direction, so it is summed rather than added or
+    # subtracted by the caller — a ta'sischi who took money out is a negative kirim.
+    def _kapital(qs):
+        return sum((k.signed_amount for k in qs), Decimal("0"))
+
+    def _kapital_uzs(qs):
+        return sum((k.signed_amount_uzs for k in qs), Decimal("0"))
+
     # Joriy holat (all-time, filter-independent): money physically in the till.
     # ShipmentExpense.total_out is already zero for a logist-funded row, so the
     # whole queryset can be summed: the money left when we topped the logist up,
@@ -2422,11 +2431,13 @@ def kassa(request):
     # since the waterfall is a single running line and cannot be two. The tiles
     # above it read the per-currency figures instead; see the `split` note there.
     cash_total = (_in(CustomerPayment.objects.all())
+                  + _kapital(Kapital.objects.all())
                   - _out(SupplierPayment.objects.all())
                   - _out(ShipmentExpense.objects.all())
                   - _out(LogistPayment.objects.all())
                   - _out(CustomsPayment.objects.all()))
     cash_total_uzs = (_in_uzs(CustomerPayment.objects.all())
+                      + _kapital_uzs(Kapital.objects.all())
                       - _out_uzs(SupplierPayment.objects.all())
                       - _out_uzs(ShipmentExpense.objects.all())
                       - _out_uzs(LogistPayment.objects.all())
@@ -2441,6 +2452,7 @@ def kassa(request):
     # the safe is not dollars in the safe.
     cash_split = kassa_cash_by_currency()
     advance_split = customer_advance_by_currency()
+    kapital_split = kapital_total_by_currency()
 
     # Pozitsiya: what the cash figure MEANS. Cash alone reads as a disaster while
     # the money is sitting in trucks and mijoz qarzi; these are the lines that say
@@ -2465,10 +2477,18 @@ def kassa(request):
     # mol was bought in dollars and the transport paid in so'm, which is the one
     # place currencies are deliberately blended (tests/test_cost_blends_currencies.py).
     tiles = [
+        # Two different "not all of this is what it looks like" facts, so both are
+        # named when both apply: an avans is money we are holding for somebody else,
+        # kapital is money that was put in rather than earned.
         {"label": "Kassada", "split": cash_split,
          "note": "hozir qo'lda va hisobda turgan pul", "tone": "cash",
-         "meta": (f"shundan mijoz avansi {_money_line(advance_split)}"
+         "meta": " · ".join(
+             part for part in (
+                 (f"shundan mijoz avansi {_money_line(advance_split)}"
                   if advance_split else ""),
+                 (f"shundan kapital {_money_line(kapital_split)}"
+                  if kapital_split else ""))
+             if part),
          "url": reverse("customer_payment_list")},
         {"label": "Mijozlar qarzi", "split": receivable,
          "note": "mol berilgan, puli hali olinmagan", "tone": "in",
@@ -2509,16 +2529,15 @@ def kassa(request):
     # a driver, so there is no per-currency split to draw yet.
     if logist_owed:
         tiles.append({
-            "label": "Logistlarga qarzimiz", "split": None, "amount": -logist_owed,
-            "amount_uzs": -logist_owed_uzs, "tone": "out", "meta": "",
+            "label": "Logistlarga qarzimiz", "split": None, "amount": logist_owed,
+            "amount_uzs": logist_owed_uzs, "tone": "out", "meta": "",
             "note": "o'z pulidan haydovchiga bergani",
             "url": reverse("logist_list") + "?state=owed"})
     # Same rule for the bojxonachi who cleared a truck out of his own pocket because
     # what we sent ran short — usually zero, so it appears only when it is not.
     if customs_owed:
         tiles.append({
-            "label": "Bojxonaga qarzimiz",
-            "split": [(currency, -amount) for currency, amount in customs_owed],
+            "label": "Bojxonaga qarzimiz", "split": customs_owed,
             "tone": "out", "meta": "", "note": "o'z pulidan yukni rasmiylashtirgani",
             "url": reverse("customs_list") + "?state=owed"})
 
@@ -2532,21 +2551,32 @@ def kassa(request):
         "shipment__contract", "logist", "customs_agent"))
     logist_pays = _range(LogistPayment.objects.select_related("logist"))
     customs_pays = _range(CustomsPayment.objects.select_related("agent", "shipment"))
+    kapital_rows = _range(Kapital.objects.all())
+    # Split once here rather than per method below: the two directions land on
+    # opposite sides of every total, and asking the question twice per PayMethod is
+    # where a "+" gets typed for a "−".
+    kapital_in = kapital_rows.filter(kind=KapitalKind.IN)
+    kapital_out = kapital_rows.filter(kind=KapitalKind.OUT)
 
     balances = {}
     net_in = net_out = Decimal("0")
     net_in_uzs = net_out_uzs = Decimal("0")
     for value, label in PayMethod.choices:
-        m_in = _in(cust_pays.filter(method=value))
+        m_in = (_in(cust_pays.filter(method=value))
+                + _kapital(kapital_in.filter(method=value)))
         m_out = (_out(sup_pays.filter(method=value))
                  + _out(expenses.filter(method=value))
                  + _out(logist_pays.filter(method=value))
-                 + _out(customs_pays.filter(method=value)))
-        m_in_uzs = _in_uzs(cust_pays.filter(method=value))
+                 + _out(customs_pays.filter(method=value))
+                 # Already negative, so it is subtracted to land as an outflow.
+                 - _kapital(kapital_out.filter(method=value)))
+        m_in_uzs = (_in_uzs(cust_pays.filter(method=value))
+                    + _kapital_uzs(kapital_in.filter(method=value)))
         m_out_uzs = (_out_uzs(sup_pays.filter(method=value))
                      + _out_uzs(expenses.filter(method=value))
                      + _out_uzs(logist_pays.filter(method=value))
-                     + _out_uzs(customs_pays.filter(method=value)))
+                     + _out_uzs(customs_pays.filter(method=value))
+                     - _kapital_uzs(kapital_out.filter(method=value)))
         balances[value] = {"label": label, "in": m_in, "out": m_out,
                            "balance": m_in - m_out, "in_uzs": m_in_uzs,
                            "out_uzs": m_out_uzs, "balance_uzs": m_in_uzs - m_out_uzs}
@@ -2555,8 +2585,38 @@ def kassa(request):
         net_in_uzs += m_in_uzs
         net_out_uzs += m_out_uzs
 
-    # Kirim ledger: payments received from customers, newest first.
-    income_rows = sorted(cust_pays, key=lambda p: (p.date, p.pk), reverse=True)
+    # Kirim ledger: money in — mijoz to'lovlari and ta'sischi kapitali, newest first.
+    # Dicts rather than the model objects this list used to hold: two unrelated models
+    # share the table now, and a kapital row has no mijoz for the template to ask
+    # about. Same shape as the Chiqim rows below, so both ledgers read alike.
+    income_rows = []
+    for p in cust_pays:
+        income_rows.append({
+            "kind": "customer", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": p.customer.name,
+            "method_code": p.method, "method": p.get_method_display(),
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "fee_percent": p.fee_percent,
+            "amount": p.net_amount, "amount_uzs": p.net_amount_uzs,
+            "edit_url": reverse("customer_payment_edit", args=[p.pk]),
+            "detail_url": reverse("customer_payment_detail", args=[p.pk]),
+        })
+    # Only the money the ta'sischi put IN belongs on this side; what they took out is
+    # a chiqim row below, so the two never cancel inside one ledger's total.
+    for k in kapital_in:
+        income_rows.append({
+            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
+            "crossed": k.crosses_currency,
+            "title": "Ta'sischi kapitali" + (f" · {k.note}" if k.note else ""),
+            "method_code": k.method, "method": k.get_method_display(),
+            "currency": k.currency, "exchange_rate": k.exchange_rate,
+            "fee_percent": k.fee_percent,
+            "amount": k.net_amount, "amount_uzs": k.net_amount_uzs,
+            "edit_url": reverse("kapital_edit", args=[k.pk]),
+            "detail_url": "",
+        })
+    income_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 
     # Chiqim ledger: money out — supplier payments and per-load expenses.
     outflow_rows = []
@@ -2663,6 +2723,17 @@ def kassa(request):
             "currency": e.currency, "exchange_rate": e.exchange_rate,
             "amount_uzs": e.fee_amount_uzs, "amount": e.fee_amount,
         })
+    # The ta'sischi drawing their own money back out. `net_amount` rather than the
+    # signed figure: this ledger prints magnitudes and supplies the minus itself.
+    for k in kapital_out:
+        outflow_rows.append({
+            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
+            "crossed": k.crosses_currency,
+            "title": "Ta'sischi oldi" + (f" · {k.note}" if k.note else ""),
+            "method_code": k.method, "method": k.get_method_display(),
+            "currency": k.currency, "exchange_rate": k.exchange_rate,
+            "amount_uzs": k.net_amount_uzs, "amount": k.net_amount,
+        })
     outflow_rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
 
     # Each ledger pages independently (?ipage / ?opage) so scrolling one doesn't
@@ -2688,18 +2759,19 @@ def kassa(request):
 
     # Oqim: the same money as the ledgers below, told as a sequence. The opening
     # balance is whatever the till had moved to before the period started — with no
-    # filter that is zero, which is honest: the kassa has no kapital rows yet, so
-    # the run genuinely starts from nothing. Adding them later adds a bar, nothing
-    # else changes.
+    # filter that is zero, which is honest: with no date filter there is no "before".
+    # Kapital counts here like any other row that moved the till.
     if date_from:
         prior = (CustomerPayment.objects.filter(date__lt=date_from),
                  SupplierPayment.objects.filter(date__lt=date_from),
                  ShipmentExpense.objects.filter(date__lt=date_from),
                  LogistPayment.objects.filter(date__lt=date_from),
                  CustomsPayment.objects.filter(date__lt=date_from))
-        opening = _in(prior[0]) - sum((_out(q) for q in prior[1:]), Decimal("0"))
-        opening_uzs = _in_uzs(prior[0]) - sum((_out_uzs(q) for q in prior[1:]),
-                                              Decimal("0"))
+        prior_kapital = Kapital.objects.filter(date__lt=date_from)
+        opening = (_in(prior[0]) + _kapital(prior_kapital)
+                   - sum((_out(q) for q in prior[1:]), Decimal("0")))
+        opening_uzs = (_in_uzs(prior[0]) + _kapital_uzs(prior_kapital)
+                       - sum((_out_uzs(q) for q in prior[1:]), Decimal("0")))
     else:
         opening = opening_uzs = Decimal("0")
 
@@ -3270,6 +3342,66 @@ def logist_payment_delete(request, pk):
         request, "To'lovni o'chirish",
         f"“{payment.amount}$ · {payment.logist.name}” to'lovi o'chiriladi.",
         "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="logist_list")
+
+
+# ── Kapital ──────────────────────────────────────────────────────────────────────
+#
+# The ta'sischi's own money. Admin-only like every other money screen: a tarjimon
+# sees the Yuklar list and nothing that moves the kassa.
+
+
+def _kapital_label(entry):
+    """"Kiritildi · 5 000$" — the direction and the figure, which is what every
+    message and audit line about a Kapital row needs to say."""
+    return f"{entry.get_kind_display()} · {entry.amount}$"
+
+
+@role_required(User.Role.ADMIN)
+def kapital_create(request):
+    form = KapitalForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            entry = form.save(commit=False)
+            entry.created_by = request.user
+            entry.save()
+            AuditLog.record(request.user, AuditLog.Action.PAYMENT, "Kapital", entry.pk,
+                            f"Kapital: {_kapital_label(entry)}")
+            messages.success(request, "Kapital qo'shildi")
+            return form_success(request, reverse("kassa"))
+        return form_response(request, form, "Kapital", invalid=True)
+    return form_response(request, form, "Kapital")
+
+
+@role_required(User.Role.ADMIN)
+def kapital_edit(request, pk):
+    entry = get_object_or_404(Kapital, pk=pk)
+    form = KapitalForm(request.POST or None, instance=entry)
+    title = "Kapitalni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(request.user, AuditLog.Action.UPDATE, "Kapital", entry.pk,
+                            f"Kapital tahrirlandi: {_kapital_label(entry)}")
+            messages.success(request, "Kapital yangilandi")
+            return form_reload(request, reverse("kassa"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def kapital_delete(request, pk):
+    entry = get_object_or_404(Kapital, pk=pk)
+    if request.method == "POST":
+        label = _kapital_label(entry)
+        entry.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Kapital", pk,
+                        f"Kapital o'chirildi: {label}")
+        messages.success(request, "Kapital o'chirildi")
+        return form_reload(request, reverse("kassa"))
+    return render_confirm(
+        request, "Kapitalni o'chirish",
+        f"“{_kapital_label(entry)}” yozuvi o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="kassa")
 
 
 # ── Bojxona ──────────────────────────────────────────────────────────────────────

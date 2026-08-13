@@ -78,7 +78,7 @@ def test_date_filter_excludes_out_of_range_payment(admin_client, db):
     balances = resp.context["balances"]
     assert balances["cash"]["in"] == Decimal("500.00")
 
-    income_dates = [p.date.isoformat() for p in resp.context["income_page"]]
+    income_dates = [r["date"].isoformat() for r in resp.context["income_page"]]
     assert "2026-05-01" not in income_dates
     assert "2026-07-10" in income_dates
 

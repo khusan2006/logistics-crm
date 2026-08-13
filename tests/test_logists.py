@@ -259,7 +259,9 @@ class TestOwedLogistIsVisibleOnTheKassa:
         logist = _logist()
         _advance(_shipment(logist), logist, "800")      # no funding sent first
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
-        assert tiles["Logistlarga qarzimiz"]["amount"] == Decimal("-800.00")
+        # Positive, like every other qarzimiz tile: the "out" tone is what says the
+        # money is leaving, not a minus sign on one tile out of three.
+        assert tiles["Logistlarga qarzimiz"]["amount"] == Decimal("800.00")
         assert tiles["Logistlarga qarzimiz"]["url"].endswith("?state=owed")
 
     def test_no_empty_tile_when_nobody_is_owed(self, admin_client, db):

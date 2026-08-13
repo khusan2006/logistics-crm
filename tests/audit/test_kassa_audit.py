@@ -443,8 +443,10 @@ def test_the_kirim_ledger_rows_add_up_to_the_kirim_total(admin_client):
     _mixed_book(admin_client)
     ctx = _ctx(admin_client)
     rows = list(ctx["income_page"].object_list)
-    assert sum((p.net_amount for p in rows), Decimal("0")) == ctx["net_in"]
-    assert sum((p.net_amount_uzs for p in rows), Decimal("0")) == ctx["net_in_uzs"]
+    # Dicts since the ledger started carrying kapital rows beside the mijoz to'lovlar
+    # — `amount` is already the net figure the row prints.
+    assert sum((r["amount"] for r in rows), Decimal("0")) == ctx["net_in"]
+    assert sum((r["amount_uzs"] for r in rows), Decimal("0")) == ctx["net_in_uzs"]
 
 
 @pytest.mark.xfail(reason="BUG: the Chiqim so'm total does not equal the so'm figures "

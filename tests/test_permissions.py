@@ -19,6 +19,7 @@ ADMIN_ONLY_URLS = [
     # Reachable from the sidebar until the Logistlar link was moved inside the admin
     # guard, so the link showed and then 403'd.
     "/logists/", "/customs/", "/customers/", "/sales/", "/ombor/", "/reports/",
+    "/kapital/new/",
 ]
 
 

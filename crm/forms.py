@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
-    CustomsAgent, CustomsPayment, Logist,
+    CustomsAgent, CustomsPayment, Kapital, Logist,
     LogistPayment, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
@@ -2220,6 +2220,44 @@ def logist_option_label(logist):
     else:
         state = "qoldiq yo'q"
     return f"{logist.name} · {state}"
+
+
+class KapitalForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """Ta'sischi's own money in or out of the kassa.
+
+    No counterparty and no ceiling: unlike a hamkor to'lov there is no qarz to
+    overpay and nobody's balance to keep — the row moves the till and stops there.
+
+    `fee_bearer` is deliberately absent from the fields. The bank's cut on a
+    perechisleniya is real and the row nets by it, but asking WHOSE loss it is only
+    makes sense with two parties, and here both sides of the transfer are the same
+    pocket. `Kapital.default_fee_bearer` answers it once instead."""
+
+    #: The currency the kassa's own figure is anchored in — as with a logist top-up
+    #: a dollar entry crosses nothing, so the same JS hides the kurs box for it.
+    float_currency = Currency.USD
+
+    class Meta:
+        model = Kapital
+        fields = ["kind", "date", "currency", "amount", "exchange_rate",
+                  "method", "fee_percent", "note"]
+        widgets = {"date": date_widget()}
+        labels = {"amount": "Summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["exchange_rate"].help_text = "Faqat so'mda kiritilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def clean(self):
+        # Same rule as a logist top-up, and only a MISSING rate is filled in — one the
+        # operator did supply stands, so an edit keeps the kurs the row was booked at
+        # and a figure already on the books never moves on its own.
+        typed_rate = self.cleaned_data.get("exchange_rate") or Decimal("0")
+        if typed_rate <= 0 and self.cleaned_data.get("currency") == self.float_currency:
+            self.cleaned_data["exchange_rate"] = (
+                self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
+        return super().clean()
 
 
 class CustomsAgentForm(forms.ModelForm):

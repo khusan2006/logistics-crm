@@ -1607,12 +1607,29 @@ def kassa_cash_by_currency():
     for payment in CustomerPayment.objects.all():
         entries.append((payment.currency,
                         own_side(payment, payment.net_amount, payment.net_amount_uzs)))
+    # Already signed by direction, so it joins the inflow side whichever way it went —
+    # a ta'sischi taking money out is a negative kirim, not a fifth kind of chiqim.
+    for entry in Kapital.objects.all():
+        entries.append((entry.currency,
+                        own_side(entry, entry.signed_amount, entry.signed_amount_uzs)))
     for rows in (SupplierPayment.objects.all(), ShipmentExpense.objects.all(),
                  LogistPayment.objects.all(), CustomsPayment.objects.all()):
         for row in rows:
             entries.append((row.currency,
                             -own_side(row, row.total_out, row.total_out_uzs)))
     return _by_currency(entries)
+
+
+def kapital_total_by_currency():
+    """[(currency, sof kapital)] — what the ta'sischi has put in less what they have
+    taken out, each side in the money it actually moved in.
+
+    Read as a meta line under Kassada rather than as a tile of its own: kapital is
+    not a place money is sitting, it is where some of the money in the till came
+    from, and the tiles answer the first question, not the second."""
+    return _by_currency(
+        (entry.currency, own_side(entry, entry.signed_amount, entry.signed_amount_uzs))
+        for entry in Kapital.objects.all())
 
 
 def customer_advance_by_currency():
@@ -2196,6 +2213,93 @@ class Return(MoneyEntry):
 
     def __str__(self):
         return f"Qaytarish #{self.pk} · sotuv #{self.sale_id} · {self.kg} kg"
+
+
+class KapitalKind(models.TextChoices):
+    """Which way the ta'sischi's own money moved.
+
+    Two directions rather than two models because they are the same fact read from
+    either end — money crossing the line between the owner's pocket and the
+    business's till — and a Kapital row means nothing without saying which way it
+    went."""
+
+    IN = "in", "Kiritildi"
+    OUT = "out", "Olindi"
+
+
+class Kapital(CashEntry):
+    """Ta'sischi's own money entering or leaving the kassa.
+
+    The kassa had four outflow models and one inflow (`CustomerPayment`), so the
+    money that FUNDED the business had nowhere to be recorded and "Kassadagi pul"
+    read as how much had been sunk into it rather than what is on hand. This is the
+    row that says where that money came from.
+
+    Not a hamkor qarz and not a mijoz avans: nobody is owed anything on either side,
+    which is why it settles nothing and allocates to nothing. It moves the till and
+    stops there."""
+
+    kind = models.CharField("Yo'nalish", max_length=3, choices=KapitalKind.choices,
+                            default=KapitalKind.IN)
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.TRANSFER)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="kapital_entries",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Kapital"
+        verbose_name_plural = "Kapital"
+
+    #: Same physics as a mijoz to'lov: the bank takes its cut on the way and only the
+    #: rest lands. Whose loss that is answers to nothing here — the ta'sischi and the
+    #: business are one pocket — so the form never asks, and the row nets.
+    default_fee_bearer = FeeBearer.COUNTERPARTY
+
+    @property
+    def is_out(self):
+        return self.kind == KapitalKind.OUT
+
+    @property
+    def net_amount(self):
+        """What actually crossed, after the bank's foiz."""
+        return self.amount - self.fee_amount
+
+    @property
+    def net_amount_uzs(self):
+        """Taken off the stored so'm value rather than reconverted, so the pair keeps
+        this row's own kurs — the rule every derived pair here follows."""
+        return uzs_slice(self, self.net_amount)
+
+    @property
+    def signed_amount(self):
+        """What the kassa MOVES BY: positive when the ta'sischi put money in, negative
+        when they took some out.
+
+        The one place the direction is applied, so every total that touches Kapital
+        gets it right by summing rather than by remembering to branch."""
+        return -self.net_amount if self.is_out else self.net_amount
+
+    @property
+    def signed_amount_uzs(self):
+        return -self.net_amount_uzs if self.is_out else self.net_amount_uzs
+
+    @property
+    def crosses_currency(self):
+        """Never: a Kapital row settles no qarz agreed in another currency, so its
+        kurs was inherited rather than chosen and printing it would tell the reader
+        nothing. Named so the ledgers can ask every row the same question."""
+        return False
+
+    def __str__(self):
+        return f"Kapital {self.get_kind_display().lower()} · {self.amount}$ ({self.date})"
 
 
 class CustomerPayment(CashEntry):
