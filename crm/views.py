@@ -1805,16 +1805,14 @@ def expense_delete(request, pk):
 
 
 def _sale_groups(sales):
-    """Fold the rows entered together into one block each, keeping the list's order.
+    """Fold the rows entered together into one block each — one row on Sotuvlar —
+    keeping the list's order.
 
     A submission's rows sit next to each other in that order already — same sana,
     consecutive created_at — so a single walk over the page is enough and no row
     moves to reach its neighbours. Inside a block they go back into entry order:
     the page reads newest sotuv first, but the mahsulotlar of one trip to the
-    counter were typed oldest first and should be read that way.
-
-    A block of one is an ordinary row; only the ones that really were sold together
-    get a header in the template."""
+    counter were typed oldest first and should be read that way."""
     blocks = []
     for sale in sales:
         block = blocks[-1] if blocks else None
@@ -1827,17 +1825,30 @@ def _sale_groups(sales):
         block["sales"] = rows
         block["first"] = rows[0]
         block["count"] = len(rows)
-        # Markalar, not rows: one marka whose kg came off two lots is one product
-        # the mijoz took, and saying "2 mahsulot" for it would be a lie.
-        block["products"] = len(dict.fromkeys(s.line.brand for s in rows))
         block["kg"] = sum((s.kg for s in rows), Decimal("0"))
+        # What the sotuv means as a whole. The per-kg figures stay per mahsulot in
+        # their own column, but these are only ever read summed — the mijoz owes one
+        # qarz, not one per lot the granula happened to come off.
         block["total"] = sum((s.total for s in rows), Decimal("0"))
         block["total_uzs"] = sum((s.total_uzs for s in rows), Decimal("0"))
+        block["profit"] = sum((s.profit for s in rows), Decimal("0"))
+        block["profit_uzs"] = sum((s.profit_uzs for s in rows), Decimal("0"))
+        block["remaining"] = sum((s.remaining for s in rows), Decimal("0"))
+        block["remaining_uzs"] = sum((s.remaining_uzs for s in rows), Decimal("0"))
+        # Measured per row in each row's own currency, the way `is_paid` does it —
+        # summing the two sides first would let a so'm sotuv's kurs drift decide it.
+        block["owing"] = any(s.remaining_own > 0 for s in rows)
     return blocks
 
 
 @role_required(User.Role.ADMIN)
 def sale_list(request):
+    """A row per SOTUV, not per lot: the mahsulot columns stack inside their cells
+    and jami/foyda/qarz are the sotuv's own totals.
+
+    Paging still counts rows, so a sotuv straddling the boundary shows the lots that
+    fall on each page. Its figures are the ones on that page too — a total that
+    counted rows the page is not showing would be the worse of the two lies."""
     q = request.GET.get("q", "").strip()
     sales = Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
     if q:

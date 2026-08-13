@@ -615,31 +615,17 @@ class TestSotuvlarShowsWhatWasSoldTogether:
         })
         assert Sale.objects.get().group is None
 
-    def test_the_list_bands_them_under_a_header(self, admin_client, db):
-        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
-        _lot_at("HDPE", "400", "2.00", "2026-07-11")
-        customer = Customer.objects.create(name="Ikki marka")
-        self._post(admin_client, customer,
-                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
-                   {"brand": "HDPE", "kg": "50", "price": "3.00"})
-        html = admin_client.get("/sales/").content.decode()
-        assert html.count("Birgalikda sotildi") == 1
-        assert "2 mahsulot" in html
-
-    def test_a_lone_sotuv_gets_no_header(self, admin_client, db):
-        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
-        customer = Customer.objects.create(name="Ali")
-        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
-        html = admin_client.get("/sales/").content.decode()
-        assert "Birgalikda sotildi" not in html
-
-    def test_the_header_counts_lots_when_one_marka_split(self, admin_client, db):
+    def test_a_marka_split_across_lots_is_still_one_row(self, admin_client, db):
+        """The case that made the page unreadable before `group`: one sotuv, two
+        rows, nothing saying they were the same 300 kg."""
         _lot_at("LLDPE", "200", "1.20", "2026-07-19")
         _lot_at("LLDPE", "200", "1.30", "2026-07-23")
         customer = Customer.objects.create(name="Ali")
         self._post(admin_client, customer, {"brand": "LLDPE", "kg": "300", "price": "2.00"})
+        assert Sale.objects.count() == 2
         html = admin_client.get("/sales/").content.decode()
-        assert "1 mahsulot · 2 lot" in html
+        assert html.count("<tr") == 2                 # the header row and the sotuv
+        assert "1.2 $/kg" in html and "1.3 $/kg" in html   # both lots' tannarx
 
     def test_the_detail_page_names_the_other_rows(self, admin_client, db):
         _lot_at("LLDPE", "500", "1.00", "2026-07-10")
@@ -738,3 +724,64 @@ class TestBackfillingTheSotuvlarThatCameBefore:
         Sale.objects.filter(pk__in=[a, b]).update(group=mine)
         self._run()
         assert {s.group for s in Sale.objects.all()} == {mine}
+
+
+class TestTheOneRowView:
+    """`?view=bitta` — a sotuv is ONE row, its mahsulotlar stacked inside the columns
+    they belong to, the way Kelishuvlar already lists a kelishuv's markalar."""
+
+    def _sotuv(self, client):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        customer = Customer.objects.create(name="Ikki marka")
+        client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": "2026-07-24", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                        {"brand": "HDPE", "kg": "50", "price": "3.00"})})
+        return customer
+
+    def test_two_markas_land_on_one_row(self, admin_client, db):
+        self._sotuv(admin_client)
+        html = admin_client.get("/sales/?view=bitta").content.decode()
+        assert html.count("<tr") == 2                 # the header row and the sotuv
+        assert "LLDPE" in html and "HDPE" in html
+        assert "Birgalikda sotildi" not in html       # no band — the row IS the sotuv
+
+    def test_jami_is_the_whole_sotuv(self, admin_client, db):
+        """$150 + $150 printed once as $300, not twice as its halves."""
+        self._sotuv(admin_client)
+        html = admin_client.get("/sales/?view=bitta").content.decode()
+        assert "$300" in html and "$150" not in html
+
+    def test_a_merged_sotuv_offers_its_page_not_a_guessed_row(self, admin_client, db):
+        """Tahrirlash acts on one lot's row, so a merged sotuv links to its page
+        instead of silently picking the first of them."""
+        self._sotuv(admin_client)
+        first = Sale.objects.order_by("pk").first()
+        html = admin_client.get("/sales/?view=bitta").content.decode()
+        assert f"/sales/{first.pk}/" in html
+        assert f"/sales/{first.pk}/edit/" not in html
+
+    def test_a_lone_sotuv_keeps_its_own_actions(self, admin_client, db):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        admin_client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": "2026-07-24", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "100", "price": "1.50"})})
+        sale = Sale.objects.get()
+        html = admin_client.get("/sales/?view=bitta").content.decode()
+        assert f"/sales/{sale.pk}/edit/" in html and f"/sales/{sale.pk}/delete/" in html
+
+    def test_the_default_view_is_still_a_row_per_lot(self, admin_client, db):
+        self._sotuv(admin_client)
+        html = admin_client.get("/sales/").content.decode()
+        assert "Birgalikda sotildi" in html
+        assert html.count("<tr") == 4                 # header + band + two lot rows
+
+    def test_the_toggle_carries_the_search_with_it(self, admin_client, db):
+        """Switching views must not silently widen what is on screen."""
+        self._sotuv(admin_client)
+        html = admin_client.get("/sales/?q=LLDPE").content.decode()
+        assert "?view=bitta&amp;q=LLDPE" in html
