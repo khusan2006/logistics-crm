@@ -64,6 +64,39 @@
   {% if sale.note %}<p class="muted" style="margin-top: 14px;">{{ sale.note }}</p>{% endif %}
 </div>
 
+{% comment %}
+The other rows of the same trip to the counter. This sotuv is one marka off one
+lot; what the mijoz actually took that day may have been several, and the qarz
+they owe is the sum of them — so the rest are named here rather than left to be
+found by scrolling Sotuvlar.
+{% endcomment %}
+{% if group|length > 1 %}
+<div class="card">
+  <h3 style="margin-top: 0;">Birgalikda sotildi <span class="muted" style="font-weight: 400; font-size: 13px;">· {{ group|length }} qator</span></h3>
+  <div class="table-wrap">
+    <table>
+      <tr><th>Sotuv</th><th>Lot</th><th>Kg</th><th>Sotuv narxi</th><th>Jami</th></tr>
+      {% for g in group %}
+      <tr{% if g.pk == sale.pk %} class="sale-group-current"{% endif %}>
+        <td>{% if g.pk == sale.pk %}#{{ g.pk }} <span class="muted">(shu sotuv)</span>{% else %}<a href="{% url 'sale_detail' g.pk %}">#{{ g.pk }}</a>{% endif %}</td>
+        <td>#{{ g.line.shipment_id }} · {{ g.line.brand }}</td>
+        <td>{{ g.kg|floatformat:"-3" }}</td>
+        <td>{% rate g.price g.price_uzs g.currency %}</td>
+        <td>{% money g.total g.total_uzs g.currency %}</td>
+      </tr>
+      {% endfor %}
+      <tr>
+        <td class="muted">Jami</td>
+        <td></td>
+        <td><strong>{{ group_kg|floatformat:"-3" }}</strong></td>
+        <td></td>
+        <td><strong>{% money group_total group_total_uzs sale.currency %}</strong></td>
+      </tr>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
     <h3 style="margin: 0;">Qaytarishlar</h3>

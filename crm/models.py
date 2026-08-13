@@ -2041,6 +2041,13 @@ class Sale(MoneyEntry):
                              related_name="sales", verbose_name="Lot (mahsulot)")
     reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name="+", verbose_name="Bron")
+    # The rows entered in ONE go carry the same id: several markalar typed into one
+    # modal, and each marka's kg split FIFO across lots. Without it Sotuvlar shows a
+    # single trip to the counter as N unrelated rows and nothing on screen says the
+    # mijoz took them together. Null on the sotuvlar entered before the field
+    # existed and on a sale made from one chosen lot, which is one row by nature.
+    group = models.UUIDField("Sotuv guruhi", null=True, blank=True,
+                             editable=False, db_index=True)
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg sotuv narxi (so'm)", max_digits=18,
@@ -2061,6 +2068,17 @@ class Sale(MoneyEntry):
         ordering = ["-date", "-created_at"]
         verbose_name = "Sotuv"
         verbose_name_plural = "Sotuvlar"
+
+    @property
+    def group_sales(self):
+        """The sotuvlar entered together with this one, in the order they were typed
+        — itself alone when it was entered on its own."""
+        if self.group is None:
+            return [self]
+        return list(Sale.objects
+                    .filter(group=self.group)
+                    .select_related("line__contract_line", "line__shipment")
+                    .order_by("pk"))
 
     @property
     def cost_price(self):

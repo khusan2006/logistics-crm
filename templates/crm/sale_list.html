@@ -28,8 +28,27 @@
     <th>Qoldiq/qarz</th>
     <th></th>
   </tr>
-  {% for s in page %}
-  <tr>
+  {% for g in groups %}
+  {% comment %}
+  A sotuv typed in one modal — several markalar, or one marka whose kg came off
+  more than one lot — is banded under a header saying so, the way the yuklar table
+  bands a kelishuv. Nothing else on the row could say it: the rows share a mijoz
+  and a sana with every other sotuv made that day.
+  {% endcomment %}
+  {% if g.count > 1 %}
+  <tr class="sale-group-row">
+    <td colspan="10">
+      <div class="sale-group-head">
+        <span class="sale-group-title">Birgalikda sotildi</span>
+        <span class="sale-group-sub">{{ g.first.customer.name }} · {{ g.first.date }}</span>
+        <span class="sale-group-count">{{ g.products }} mahsulot{% if g.count != g.products %} · {{ g.count }} lot{% endif %}</span>
+        <span class="sale-group-meta muted">{{ g.kg|floatformat:"-3" }} kg · {% money g.total g.total_uzs g.first.currency %}</span>
+      </div>
+    </td>
+  </tr>
+  {% endif %}
+  {% for s in g.sales %}
+  <tr{% if g.count > 1 %} class="sale-group-item"{% endif %}>
     <td class="sticky-col">{{ s.date }}</td>
     <td><a href="{% url 'sale_detail' s.pk %}">{{ s.customer.name }}</a></td>
     <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
@@ -48,6 +67,7 @@
       </a>
     </td>
   </tr>
+  {% endfor %}
   {% endfor %}
 </table>
 </div>

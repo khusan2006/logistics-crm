@@ -563,3 +563,178 @@ class TestMultipleProductsInOneSotuv:
                           {"brand": "", "kg": "", "price": ""})
         assert resp.status_code == 302
         assert Sale.objects.count() == 1
+
+
+class TestSotuvlarShowsWhatWasSoldTogether:
+    """The rows of one submission carry one `group`, and Sotuvlar bands them under a
+    header. Without it a mijoz who took three markalar at the counter reads on the
+    page as three unrelated sotuvlar made to happen to share a day."""
+
+    def _post(self, client, customer, *rows, **extra):
+        data = {"customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+                "date": "2026-07-24", "debt_deadline": "", "note": "",
+                **line_data(*rows)}
+        data.update(extra)
+        return client.post("/sales/new/", data)
+
+    def test_two_markas_in_one_modal_share_one_group(self, admin_client, db):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        customer = Customer.objects.create(name="Ikki marka")
+        self._post(admin_client, customer,
+                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                   {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        groups = {s.group for s in Sale.objects.all()}
+        assert len(groups) == 1 and None not in groups
+
+    def test_fifo_slices_of_one_marka_share_it_too(self, admin_client, db):
+        """One marka off two lots is still ONE product the mijoz took."""
+        _lot_at("LLDPE", "200", "1.20", "2026-07-19")
+        _lot_at("LLDPE", "200", "1.30", "2026-07-23")
+        customer = Customer.objects.create(name="Ali")
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "300", "price": "2.00"})
+        rows = list(Sale.objects.all())
+        assert len(rows) == 2
+        assert rows[0].group is not None and rows[0].group == rows[1].group
+
+    def test_two_separate_sotuvlar_are_not_one_group(self, admin_client, db):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        assert len({s.group for s in Sale.objects.all()}) == 2
+
+    def test_a_sotuv_from_one_chosen_lot_has_no_group(self, admin_client, db):
+        """Nothing to band: the ombor's Sotish sells one lot, one row."""
+        lot = _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        admin_client.post(f"/sales/new/?lot={lot.pk}", {
+            "lot": lot.pk, "customer": customer.pk, "kg": "100", "currency": "usd",
+            "exchange_rate": "12000", "price": "2.00",
+            "date": "2026-07-24", "debt_deadline": "", "note": "",
+        })
+        assert Sale.objects.get().group is None
+
+    def test_the_list_bands_them_under_a_header(self, admin_client, db):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        customer = Customer.objects.create(name="Ikki marka")
+        self._post(admin_client, customer,
+                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                   {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        html = admin_client.get("/sales/").content.decode()
+        assert html.count("Birgalikda sotildi") == 1
+        assert "2 mahsulot" in html
+
+    def test_a_lone_sotuv_gets_no_header(self, admin_client, db):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        html = admin_client.get("/sales/").content.decode()
+        assert "Birgalikda sotildi" not in html
+
+    def test_the_header_counts_lots_when_one_marka_split(self, admin_client, db):
+        _lot_at("LLDPE", "200", "1.20", "2026-07-19")
+        _lot_at("LLDPE", "200", "1.30", "2026-07-23")
+        customer = Customer.objects.create(name="Ali")
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "300", "price": "2.00"})
+        html = admin_client.get("/sales/").content.decode()
+        assert "1 mahsulot · 2 lot" in html
+
+    def test_the_detail_page_names_the_other_rows(self, admin_client, db):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        customer = Customer.objects.create(name="Ikki marka")
+        self._post(admin_client, customer,
+                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                   {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        one, other = Sale.objects.order_by("pk")
+        html = admin_client.get(f"/sales/{one.pk}/").content.decode()
+        assert "Birgalikda sotildi" in html
+        assert f"/sales/{other.pk}/" in html
+
+    def test_a_lone_sotuv_detail_has_no_such_card(self, admin_client, db):
+        lot = _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        admin_client.post(f"/sales/new/?lot={lot.pk}", {
+            "lot": lot.pk, "customer": customer.pk, "kg": "100", "currency": "usd",
+            "exchange_rate": "12000", "price": "2.00",
+            "date": "2026-07-24", "debt_deadline": "", "note": "",
+        })
+        sale = Sale.objects.get()
+        html = admin_client.get(f"/sales/{sale.pk}/").content.decode()
+        assert "Birgalikda sotildi" not in html
+
+
+class TestBackfillingTheSotuvlarThatCameBefore:
+    """Migration 0042: the rows written before `group` existed get banded from the
+    only trace the submission left — one transaction, milliseconds apart, same
+    mijoz/sana/valyuta/kurs/operator."""
+
+    def _rows(self, customer, lot, stamps):
+        """Sotuvlar written at `stamps` seconds past a fixed moment. created_at is
+        auto_now_add, so the clock is set afterwards the way real history has it."""
+        from datetime import timedelta
+        from django.utils import timezone
+        base = timezone.now() - timedelta(days=1)
+        made = []
+        for offset in stamps:
+            sale = Sale.objects.create(
+                customer=customer, line=lot, kg=Decimal("10"), price=Decimal("2.0000"),
+                price_uzs=Decimal("25000"), currency="usd",
+                exchange_rate=Decimal("12500"), date="2026-07-24")
+            Sale.objects.filter(pk=sale.pk).update(created_at=base + timedelta(seconds=offset))
+            made.append(sale.pk)
+        return made
+
+    def _run(self):
+        # A module name starting with a digit is not importable by name.
+        from importlib import import_module
+        from django.apps import apps
+        import_module("crm.migrations.0042_backfill_sale_group").backfill(apps, None)
+
+    def test_one_transaction_becomes_one_group(self, admin_client, db):
+        lot = _lot_at("LLDPE", "5000", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        a, b = self._rows(customer, lot, [0, 0.02])
+        self._run()
+        rows = {s.pk: s.group for s in Sale.objects.all()}
+        assert rows[a] is not None and rows[a] == rows[b]
+
+    def test_two_sotuvlar_typed_apart_stay_apart(self, admin_client, db):
+        """25 seconds is somebody reopening the modal, not one submission."""
+        lot = _lot_at("LLDPE", "5000", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        a, b = self._rows(customer, lot, [0, 25])
+        self._run()
+        rows = {s.pk: s.group for s in Sale.objects.all()}
+        assert rows[a] is None and rows[b] is None
+
+    def test_a_lone_sotuv_is_left_alone(self, admin_client, db):
+        lot = _lot_at("LLDPE", "5000", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        (a,) = self._rows(customer, lot, [0])
+        self._run()
+        assert Sale.objects.get(pk=a).group is None
+
+    def test_two_mijoz_in_the_same_instant_are_not_one_sotuv(self, admin_client, db):
+        """Same millisecond, different mijoz — a batch import, or two operators."""
+        lot = _lot_at("LLDPE", "5000", "1.00", "2026-07-10")
+        one = Customer.objects.create(name="Ali")
+        two = Customer.objects.create(name="Vali")
+        a = self._rows(one, lot, [0])[0]
+        b = self._rows(two, lot, [0.01])[0]
+        self._run()
+        rows = {s.pk: s.group for s in Sale.objects.all()}
+        assert rows[a] is None and rows[b] is None
+
+    def test_a_group_already_stamped_is_not_touched(self, admin_client, db):
+        """The sale form stamps its own rows; the backfill only fills the blanks."""
+        lot = _lot_at("LLDPE", "5000", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Ali")
+        a, b = self._rows(customer, lot, [0, 0.02])
+        from uuid import uuid4
+        mine = uuid4()
+        Sale.objects.filter(pk__in=[a, b]).update(group=mine)
+        self._run()
+        assert {s.group for s in Sale.objects.all()} == {mine}

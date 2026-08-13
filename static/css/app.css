@@ -842,6 +842,43 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 /* Faint SKU shown inline beside a product name in tables (e.g. sale detail). */
 .cell-sku { color: var(--text-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 
+/* Sotuvlar: the rows that were entered together — several markalar in one modal,
+   or one marka whose kg came off more than one lot — banded under a header, the
+   same shape the yuklar table uses for a kelishuv.
+
+   The bar down the left of the member rows is what says where the band ENDS: a
+   header alone leaves the last row of one sotuv looking like the first row of the
+   next. It rides on the frozen first column so it stays put on horizontal scroll,
+   which means restating that column's divider and freeze shadow — one box-shadow
+   replaces the other. */
+.sale-group-row > td {
+  background: var(--table-head);
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+  box-shadow: inset 3px 0 0 var(--violet);
+}
+.sale-group-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sale-group-title { font-weight: 700; color: var(--violet); }
+.sale-group-sub { color: var(--text); font-weight: 600; }
+.sale-group-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.sale-group-meta { font-size: 12px; }
+.sale-group-item td.sticky-col {
+  box-shadow:
+    inset 3px 0 0 var(--violet),
+    inset -1px 0 0 var(--border),
+    5px 0 9px -5px rgba(0, 0, 0, 0.5);
+}
+/* The row you are already on, inside the sotuv's own group table (sale detail) */
+.sale-group-current > td { background: color-mix(in srgb, var(--violet) 8%, transparent); }
+
 /* Standalone table section heading (e.g. payments page) */
 .table-heading { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: -0.01em; }
 .table-heading .muted { font-weight: 400; font-size: 13px; }

@@ -1,6 +1,7 @@
 from datetime import date as _date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
@@ -1803,6 +1804,38 @@ def expense_delete(request, pk):
     )
 
 
+def _sale_groups(sales):
+    """Fold the rows entered together into one block each, keeping the list's order.
+
+    A submission's rows sit next to each other in that order already — same sana,
+    consecutive created_at — so a single walk over the page is enough and no row
+    moves to reach its neighbours. Inside a block they go back into entry order:
+    the page reads newest sotuv first, but the mahsulotlar of one trip to the
+    counter were typed oldest first and should be read that way.
+
+    A block of one is an ordinary row; only the ones that really were sold together
+    get a header in the template."""
+    blocks = []
+    for sale in sales:
+        block = blocks[-1] if blocks else None
+        if block is None or sale.group is None or block["group"] != sale.group:
+            blocks.append({"group": sale.group, "sales": [sale]})
+        else:
+            block["sales"].append(sale)
+    for block in blocks:
+        rows = sorted(block["sales"], key=lambda s: s.pk)
+        block["sales"] = rows
+        block["first"] = rows[0]
+        block["count"] = len(rows)
+        # Markalar, not rows: one marka whose kg came off two lots is one product
+        # the mijoz took, and saying "2 mahsulot" for it would be a lie.
+        block["products"] = len(dict.fromkeys(s.line.brand for s in rows))
+        block["kg"] = sum((s.kg for s in rows), Decimal("0"))
+        block["total"] = sum((s.total for s in rows), Decimal("0"))
+        block["total_uzs"] = sum((s.total_uzs for s in rows), Decimal("0"))
+    return blocks
+
+
 @role_required(User.Role.ADMIN)
 def sale_list(request):
     q = request.GET.get("q", "").strip()
@@ -1813,7 +1846,8 @@ def sale_list(request):
             filters |= Q(line__shipment_id=int(q))
         sales = sales.filter(filters)
     page = Paginator(sales, 20).get_page(request.GET.get("page"))
-    return render(request, "crm/sale_list.html", {"page": page, "q": q})
+    return render(request, "crm/sale_list.html",
+                  {"page": page, "groups": _sale_groups(page.object_list), "q": q})
 
 
 def _sale_form_response(request, form, lines, title, invalid=False):
@@ -1867,6 +1901,10 @@ def sale_create(request):
             # One deal, one currency, one kurs — held on the header and applied to
             # every row, so a sotuv can never end up half in dollars.
             currency, rate = data["currency"], data["exchange_rate"]
+            # One submission, one id on every row it produces — the markalar and the
+            # FIFO slices under them — so Sotuvlar can band them back together as the
+            # one trip to the counter they were.
+            group = uuid4()
             slices, sold = [], []
             with transaction.atomic():
                 for line in lines.rows():
@@ -1885,7 +1923,7 @@ def sale_create(request):
                             # every FIFO slice inherits the one narx agreed for that
                             # marka, in the currency the sotuv was agreed in
                             price=usd, price_uzs=uzs,
-                            currency=currency, exchange_rate=rate,
+                            currency=currency, exchange_rate=rate, group=group,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=request.user,
                         )
@@ -2041,7 +2079,15 @@ def sale_delete(request, pk):
 def sale_detail(request, pk):
     sale = get_object_or_404(
         Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner"), pk=pk)
-    return render(request, "crm/sale_detail.html", {"sale": sale})
+    # The rest of what the mijoz took in the same go, summed — the page otherwise
+    # shows one marka off one lot and says nothing about the trip it belonged to.
+    group = sale.group_sales
+    return render(request, "crm/sale_detail.html", {
+        "sale": sale, "group": group,
+        "group_kg": sum((s.kg for s in group), Decimal("0")),
+        "group_total": sum((s.total for s in group), Decimal("0")),
+        "group_total_uzs": sum((s.total_uzs for s in group), Decimal("0")),
+    })
 
 
 #: Holat tabs, in the order a bron moves through them. Faol leads because an open
