@@ -17,3 +17,10 @@ context for whatever "kun qoldi"/"kechikdi" reads below it.
   {% if s.eta %}<div class="muted load-sub">{{ s.eta }}</div>{% endif %}
 {% endif %}
 {% if s.delays.count %}<span class="muted" title="Uzaytirishlar soni">&#9203;{{ s.delays.count }}</span>{% endif %}
+{% comment %}
+A QR plan that has run out is a deadline missed, so it is said where this table
+already says that — beside "kechikdi", in the same badge shape. A load can carry both
+badges at once and they mean different things: the one above is the truck running
+late, this one is the kod that was meant to make it run early never arriving.
+{% endcomment %}
+{% if s.qr_overdue %}<div class="load-qr-late"><span class="daybadge qr-late" title="QR kod {{ s.qr_date }} ga rejalashtirilgan edi — hali berilmagan">QR {{ s.qr_days_late }} kun kechikdi</span></div>{% endif %}

@@ -129,5 +129,7 @@ def test_marka_row_sotish_preselects_that_marka(admin_client, db):
     html = admin_client.get("/ombor/").content.decode()
     assert "/sales/new/?brand=2102%20kampaund" in html or "/sales/new/?brand=2102+kampaund" in html
 
-    form = admin_client.get("/sales/new/", {"brand": "2102 kampaund"}).context["form"]
-    assert form.initial["brand"] == "2102 kampaund"
+    # The marka is a Mahsulot ROW now, so the shortcut prefills the first row
+    # rather than the header.
+    lines = admin_client.get("/sales/new/", {"brand": "2102 kampaund"}).context["lines"]
+    assert lines.forms[0].initial["brand"] == "2102 kampaund"

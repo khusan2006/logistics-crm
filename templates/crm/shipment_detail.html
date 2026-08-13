@@ -8,9 +8,26 @@
   <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
     <a class="btn btn-ghost" href="{% url 'shipment_list' %}">&larr; Yuklar ro'yxatiga</a>
     <span class="row-actions">
-      {# The tarjimon's one write on a yuk; muddat is admin-only beside it. #}
+      {% comment %}
+      The tarjimon's one write on a yuk, and only theirs — an admin edits the same
+      four fields inside the full dispatch modal, so a second button for them here
+      was just another way in. Muddat and QR are admin-only beside it.
+      {% endcomment %}
+      {% if not user.is_admin_role %}
       <a class="btn btn-ghost" href="{% url 'shipment_driver_edit' shipment.pk %}" data-modal>Haydovchi va konteyner</a>
+      {% endif %}
       {% if user.is_admin_role %}
+      {% comment %}
+      Opens the modal that asks WHEN the kod reached the driver — the same one the
+      yuklar table opens from its QR icon. It was a bare POST button that wrote
+      today's date blind; left that way against the current view it posted an empty
+      form, and an empty date is how the mark comes OFF, so the button cleared the
+      thing it claimed to set.
+      {% endcomment %}
+      <a class="btn{% if not shipment.has_qr %} btn-ghost{% endif %}"
+         href="{% url 'shipment_set_qr' shipment.pk %}" data-modal>
+        {% if shipment.has_qr %}QR kod berilgan ✓{% else %}QR kod berildi{% endif %}
+      </a>
       <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
       {% endif %}
     </span>
@@ -76,6 +93,25 @@
     <div class="stat">
       <div class="muted">Yetib kelgan</div>
       <div>{{ shipment.arrived|default:"—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">QR kod</div>
+      <div>
+        {% comment %}
+        A load past its planned day gets its own badge rather than the plain
+        "Berilmagan" — this page is where someone lands to find out what happened to
+        one truck, and "not given" alone answers that with the least useful half of
+        the fact.
+        {% endcomment %}
+        {% if shipment.has_qr %}<span class="daybadge arrived">Berilgan</span>
+        {% elif shipment.qr_overdue %}<span class="daybadge qr-late">{{ shipment.qr_days_late }} kun kechikdi</span>
+        {% else %}<span class="daybadge today">Berilmagan</span>{% endif %}
+        <div class="muted">
+          {% if shipment.has_qr %}{{ shipment.qr_given }}
+          {% elif shipment.qr_date %}Beriladigan kun: {{ shipment.qr_date }}{% if shipment.qr_overdue %} — hali berilmagan{% endif %}
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
 </div>

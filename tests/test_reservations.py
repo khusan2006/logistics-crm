@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from conftest import line_data
 from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
 )
@@ -68,12 +69,13 @@ def _convert(admin_client, reservation, price=None, kg=None):
     else:
         narx = reservation.price
     return admin_client.post("/sales/new/", {
-        "customer": reservation.customer_id, "brand": reservation.brand,
-        "kg": str(give), "currency": reservation.currency,
-        "price": "" if narx is None else str(narx),
+        "customer": reservation.customer_id,
+        "currency": reservation.currency,
         "exchange_rate": str(reservation.exchange_rate),
         "date": "2026-07-20", "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
+        **line_data({"brand": reservation.brand, "kg": str(give),
+                     "price": "" if narx is None else str(narx)}),
     })
 
 
@@ -283,9 +285,10 @@ class TestBronsDoNotBlockOrdinarySales:
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         resp = admin_client.post("/sales/new/", {
-            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "24000",
-            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "customer": _customer("Kelgan mijoz").pk,
+            "currency": "usd", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         assert resp.status_code == 302
         assert Sale.objects.get().kg == Decimal("24000.000")
@@ -296,9 +299,10 @@ class TestBronsDoNotBlockOrdinarySales:
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         admin_client.post("/sales/new/", {
-            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "24000",
-            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "customer": _customer("Kelgan mijoz").pk,
+            "currency": "usd", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         bron = Reservation.objects.get()
         assert bron.remaining_kg == Decimal("20000.000")
@@ -325,9 +329,10 @@ class TestBronsDoNotBlockOrdinarySales:
         holder = _customer("Bron egasi")
         _reserve(admin_client, "LLDPE", holder, kg="20000")
         resp = admin_client.post("/sales/new/", {
-            "customer": holder.pk, "brand": "LLDPE", "kg": "24000",
-            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "customer": holder.pk,
+            "currency": "usd", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         assert resp.status_code == 302
         assert Sale.objects.get().kg == Decimal("24000.000")
@@ -336,9 +341,10 @@ class TestBronsDoNotBlockOrdinarySales:
         _arrived_lot(kg="24000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Bron egasi"), kg="20000")
         resp = admin_client.post("/sales/new/", {
-            "customer": _customer("Kelgan mijoz").pk, "brand": "LLDPE", "kg": "24001",
-            "currency": "usd", "price": "2.00", "exchange_rate": "12000",
+            "customer": _customer("Kelgan mijoz").pk,
+            "currency": "usd", "exchange_rate": "12000",
             "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "24001", "price": "2.00"}),
         })
         assert resp.status_code == 200          # re-rendered, invalid
         assert not Sale.objects.exists()
@@ -547,9 +553,9 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
 
     def _sell(self, client, customer, brand, kg):
         return client.post("/sales/new/", {
-            "customer": customer.pk, "brand": brand, "kg": kg,
-            "currency": "usd", "price": "1.50", "exchange_rate": "12000",
-            "date": "2026-07-20"})
+            "customer": customer.pk,
+            "currency": "usd", "exchange_rate": "12000", "date": "2026-07-20",
+            **line_data({"brand": brand, "kg": kg, "price": "1.50"})})
 
     def test_selling_to_the_holder_shrinks_their_bron(self, admin_client, db):
         lot = _arrived_lot(kg="10000")
@@ -630,9 +636,10 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
 def _sell(admin_client, brand, customer, kg="2000", price="1.50", **extra):
     """The Yangi sotuv form as the browser posts it — the box ticked unless a test
     says otherwise, because that is how it renders."""
-    data = {"customer": customer.pk, "brand": brand, "kg": kg, "currency": "usd",
-            "price": price, "date": "2026-07-20", "debt_deadline": "", "note": "",
-            "draw_from_bron_asked": "1", "draw_from_bron": "on"}
+    data = {"customer": customer.pk, "currency": "usd",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "draw_from_bron_asked": "1", "draw_from_bron": "on",
+            **line_data({"brand": brand, "kg": kg, "price": price})}
     data.update(extra)
     return admin_client.post("/sales/new/", data)
 
@@ -674,9 +681,9 @@ class TestBronDrawIsAsked:
         customer = _customer()
         _reserve(admin_client, "LLDPE", customer, kg="6000")
         resp = admin_client.post("/sales/new/", {
-            "customer": customer.pk, "brand": "LLDPE", "kg": "2000",
-            "currency": "usd", "price": "1.50", "date": "2026-07-20",
-            "debt_deadline": "", "note": ""})          # no box, no twin
+            "customer": customer.pk, "currency": "usd", "date": "2026-07-20",
+            "debt_deadline": "", "note": "",          # no box, no twin
+            **line_data({"brand": "LLDPE", "kg": "2000", "price": "1.50"})})
         assert resp.status_code == 302
         assert Reservation.objects.get().fulfilled_kg == Decimal("2000.000")
 

@@ -40,6 +40,8 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin12345"
 TRANSLATOR_USERNAME = "tarjimon"
 TRANSLATOR_PASSWORD = "tarjimon12345"
+SKLADCHI_USERNAME = "skladchi"
+SKLADCHI_PASSWORD = "skladchi12345"
 
 
 class Command(BaseCommand):
@@ -47,7 +49,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         with transaction.atomic():
-            admin, translator = self._seed_users()
+            admin, _translator, _skladchi = self._seed_users()
             partners = self._seed_partners()
             contracts = self._seed_contracts(partners, admin)
             self._seed_supplier_payments(contracts, admin)
@@ -66,7 +68,8 @@ class Command(BaseCommand):
         ))
         self.stdout.write(
             f"Login: {ADMIN_USERNAME}/{ADMIN_PASSWORD} (admin), "
-            f"{TRANSLATOR_USERNAME}/{TRANSLATOR_PASSWORD} (tarjimon)"
+            f"{TRANSLATOR_USERNAME}/{TRANSLATOR_PASSWORD} (tarjimon), "
+            f"{SKLADCHI_USERNAME}/{SKLADCHI_PASSWORD} (skladchi)"
         )
 
     # -- Users -----------------------------------------------------------
@@ -98,7 +101,19 @@ class Command(BaseCommand):
             translator.set_password(TRANSLATOR_PASSWORD)
             translator.save()
 
-        return admin, translator
+        skladchi, created = User.objects.get_or_create(
+            username=SKLADCHI_USERNAME,
+            defaults={
+                "role": User.Role.SKLADCHI,
+                "first_name": "Demo",
+                "last_name": "Skladchi",
+            },
+        )
+        if created:
+            skladchi.set_password(SKLADCHI_PASSWORD)
+            skladchi.save()
+
+        return admin, translator, skladchi
 
     # -- Partners / contracts ---------------------------------------------
 

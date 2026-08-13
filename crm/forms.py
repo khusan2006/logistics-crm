@@ -786,7 +786,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     class Meta:
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
-        fields = ["contract", "status", "sent", "eta", "arrived", "logist",
+        fields = ["contract", "status", "sent", "eta", "arrived", "qr_date", "logist",
                   "responsible", "driver_name", "driver_phone", "transport",
                   "container", "note"]
         widgets = {
@@ -794,6 +794,9 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             "sent": date_widget(),
             "eta": date_widget(),
             "arrived": date_widget(),
+            # Only the PLANNED day. Whether the kod was actually handed over is the
+            # QR button's to say, not this form's — see crm.views.shipment_set_qr.
+            "qr_date": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             # Plain text on purpose. It used to carry a UZ/IR country picker that
             # uppercased and re-spaced what was typed, which read as "only these two
@@ -816,7 +819,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     # advance at the bottom of the form — three fields about the logist, six fields
     # away from the logist picker. The generic template renders `form` in order, so
     # the order is set here rather than by hand-writing a template.
-    field_order = ["contract", "status", "sent", "eta", "arrived",
+    field_order = ["contract", "status", "sent", "eta", "arrived", "qr_date",
                    "logist", "driver_advance",
                    "responsible", "driver_name", "driver_phone",
                    "transport", "container", "note"]
@@ -1074,6 +1077,24 @@ class ShipmentExtendForm(forms.Form):
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
 
 
+class ShipmentQrForm(forms.Form):
+    """When the kod actually reached the driver.
+
+    Asked rather than assumed to be today: the mark is often entered a day or two
+    after the fact, and a kod recorded on the day someone got round to clicking is
+    a date that says nothing. `qr_date` is not the default either — that field is
+    the plan, and the whole reason this one exists is that the two differ.
+
+    Optional on purpose: submitting it empty is how the mark comes back off. The
+    press used to be a toggle, and a QR marked on the wrong yuk out of a row of
+    near-identical trucks still needs a way back that is not a full edit."""
+
+    qr_given = forms.DateField(
+        label="QR kod berilgan sana", required=False, widget=date_widget(),
+        help_text="Kod haqiqatda qo'lga tegan kun. "
+                  "Belgini olish uchun — bo'sh qoldiring.")
+
+
 class ShipmentDriverForm(forms.ModelForm):
     """Who is driving this yuk and what it is riding in — the ONLY part of a load a
     tarjimon may change.
@@ -1235,17 +1256,122 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         return cleaned
 
 
-class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin,
-                     PriceEntryFormMixin, forms.ModelForm):
-    """New sales are entered by BRAND, not lot: the view consumes the oldest
-    arrived lots first (FIFO), splitting the kg across lots — one Sale row per
-    lot slice, each snapshotting its own lot's landed cost."""
+def _stock_brand_choices():
+    """The markalar with granula physically on the shelf, labelled the informative
+    way the yuk and kelishuv dropdowns are: marka · kelishuv kod · qolgan kg ·
+    tannarx, with no filler words. `_clean_number` keeps kg readable ("24000", not
+    Decimal.normalize()'s "2.4E+4").
+
+    Anything bronned is NAMED after the on-hand figure as a warning, never deducted
+    from it: the granula may be sold to whoever is in front of the operator, bron or
+    no bron."""
+    return [
+        (row["brand"],
+         f"{row['brand']} · {', '.join(row['codes'])} · "
+         f"{_clean_number(row['on_hand'])} kg omborda"
+         + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
+         + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
+        for row in brand_stock_costed() if row["on_hand"] > 0
+    ]
+
+
+class SaleLineForm(forms.Form):
+    """One marka on a sotuv.
+
+    Deliberately NOT a ModelForm: a row is not a Sale. The view splits each row FIFO
+    across the lots that actually hold that marka, so one row becomes as many Sale
+    objects as it takes lots to fill — which is why the narx lives here, per marka,
+    while the valyuta and the kurs stay on the header. One sotuv is one deal, struck
+    in one currency; the price is the part that differs per product."""
 
     brand = forms.ChoiceField(label="Marka (ombordan)")
+    kg = forms.DecimalField(label="Sotilgan kg", max_digits=12, decimal_places=3)
+    price = forms.DecimalField(label="1 kg sotuv narxi", max_digits=14, decimal_places=4)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["brand"].choices = _stock_brand_choices()
+        # Read by the Brondan ushlansin JS, which now asks whether ANY row's marka is
+        # one this mijoz holds a bron for.
+        self.fields["brand"].widget.attrs["data-bron-brand"] = ""
+        _group_thousands(self.fields["kg"])
+        _group_thousands(self.fields["price"])
+
+    def clean_kg(self):
+        kg = self.cleaned_data.get("kg")
+        if kg is not None and kg <= 0:
+            raise forms.ValidationError("Kg musbat bo'lishi kerak")
+        return kg
+
+    def clean_price(self):
+        price = self.cleaned_data.get("price")
+        if price is not None and price <= 0:
+            raise forms.ValidationError("Narx musbat bo'lishi kerak")
+        return price
+
+
+class BaseSaleLineFormSet(forms.BaseFormSet):
+    """Guards the three ways a sotuv's marka rows can be wrong: empty, carrying the
+    same marka twice, or asking for more than is on the shelf."""
+
+    def rows(self):
+        """The rows that mean something — filled in and not struck out."""
+        return [f for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get("DELETE")
+                and f.cleaned_data.get("brand")]
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        rows = self.rows()
+        if not rows:
+            raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
+
+        # One row per marka. Two rows of the same granula would each be checked
+        # against the whole shelf and pass, then take twice what is there — and the
+        # operator meant one line anyway.
+        wanted = {}
+        for form in rows:
+            brand = form.cleaned_data["brand"]
+            if brand in wanted:
+                form.add_error("brand", "Bu marka ro'yxatda bor")
+                continue
+            wanted[brand] = (form, form.cleaned_data.get("kg") or Decimal("0"))
+
+        for brand, (form, kg) in wanted.items():
+            # The shelf is the only ceiling. A bron is a promise between the operator
+            # and a mijoz, and the operator is the one who decides whether to keep it
+            # today — granula refused to a buyer standing at the counter is a sale
+            # lost to a rule that was never the mijoz's.
+            available = brand_on_hand_kg(brand)
+            if kg > available:
+                form.add_error(
+                    "kg", f"Ombor qoldig'idan oshmasligi kerak "
+                          f"({_clean_number(available)} kg)")
+
+
+SaleLineFormSet = forms.formset_factory(
+    SaleLineForm, formset=BaseSaleLineFormSet, extra=1, can_delete=True)
+
+
+class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
+    """The header of a sotuv: who is buying, in what currency, on what terms.
+
+    WHAT is being sold lives in `SaleLineFormSet` beside it — a sotuv may carry
+    several markalar, and one trip to the counter should be one entry rather than
+    one modal per product. Each row is then consumed from the oldest arrived lots
+    first (FIFO), one Sale row per lot slice so every slice keeps its own lot's
+    landed cost.
+
+    No PriceEntryFormMixin here any more: there is no single narx to convert on the
+    header now that each marka carries its own. The valyuta stays (one deal, one
+    currency) and `InheritedRateMixin` keeps filling the kurs, so the view has both
+    halves it needs to convert each row's price."""
 
     class Meta:
         model = Sale
-        fields = ["customer", "brand", "kg", "currency", "price", "exchange_rate",
+        fields = ["customer", "currency", "exchange_rate",
                   "date", "debt_deadline", "note"]
         widgets = {
             "date": date_widget(),
@@ -1257,38 +1383,7 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin,
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # marka · kelishuv kod · qolgan kg · tannarx — the informative shape of the
-        # yuk and kelishuv dropdowns, with no filler words. _clean_number keeps kg
-        # readable ("24000", not Decimal.normalize()'s "2.4E+4").
-        # The kg offered is what is physically on the shelf. Anything bronned is
-        # named after it as a warning, not deducted: the granula may be sold to
-        # whoever is in front of the operator, bron or no bron.
-        costed = brand_stock_costed()
-        self.fields["brand"].choices = [
-            (row["brand"],
-             f"{row['brand']} · {', '.join(row['codes'])} · "
-             f"{_clean_number(row['on_hand'])} kg omborda"
-             + (f" ({_clean_number(row['reserved'])} kg bronlangan)" if row["reserved"] else "")
-             + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
-            for row in costed if row["on_hand"] > 0
-        ]
-
-    def clean(self):
-        cleaned = super().clean()
-        brand, kg = cleaned.get("brand"), cleaned.get("kg")
-        if kg is not None and kg <= 0:
-            self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if brand and kg is not None and kg > 0:
-            # The shelf is the only ceiling. A bron is a promise between the operator
-            # and a mijoz, and the operator is the one who decides whether to keep it
-            # today — granula that was refused to a buyer standing at the counter is
-            # a sale lost to a rule that was never the mijoz's.
-            available = brand_on_hand_kg(brand)
-            if kg > available:
-                self.add_error(
-                    "kg", f"Ombor qoldig'idan oshmasligi kerak "
-                          f"({_clean_number(available)} kg)")
-        return cleaned
+        self.fields["currency"].widget.attrs["data-money-currency"] = ""
 
 
 class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,

@@ -40,6 +40,11 @@
       </div>
       {% endif %}
 
+      {% comment %}
+      Nothing in Logistika is a skladchi's: they answer for what is on the shelf,
+      not for what is on the road or what it was bought for.
+      {% endcomment %}
+      {% if not user.is_skladchi %}
       <div class="nav-group">
         <div class="nav-group-label">Logistika</div>
         {% if user.is_admin_role %}
@@ -79,14 +84,21 @@
         </a>
         {% endif %}
       </div>
+      {% endif %}
 
-      {% if user.is_admin_role %}
+      {% comment %}
+      Savdo is the only group a skladchi sees, and only two links in it: the shelf
+      and what left it. The rest of the group — and every group after it — is money.
+      {% endcomment %}
+      {% if user.is_admin_role or user.is_skladchi %}
       <div class="nav-group">
         <div class="nav-group-label">Savdo</div>
+        {% if user.is_admin_role %}
         <a class="nav-item {% if 'customer' in url_name and 'payment' not in url_name %}active{% endif %}" href="{% url 'customer_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
           <span>Mijozlar</span>
         </a>
+        {% endif %}
         <a class="nav-item {% if url_name == 'ombor' %}active{% endif %}" href="{% url 'ombor' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
           <span>Ombor</span>
@@ -95,6 +107,7 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
           <span>Sotuvlar</span>
         </a>
+        {% if user.is_admin_role %}
         <a class="nav-item {% if 'debt' in url_name %}active{% endif %}" href="{% url 'debt_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
           <span>Qarzlar</span>
@@ -111,8 +124,11 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="16" cy="14" r="1.5"/></svg></span>
           <span>Kassa</span>
         </a>
+        {% endif %}
       </div>
+      {% endif %}
 
+      {% if user.is_admin_role %}
       <div class="nav-group">
         <div class="nav-group-label">Nazorat</div>
         <a class="nav-item {% if 'audit' in url_name %}active{% endif %}" href="{% url 'audit_list' %}">
@@ -1987,12 +2003,19 @@
   // mijoz <option> carries the markalar they have booked (CustomerBronSelect), so
   // the answer needs no round trip.
   (function () {
-    function brandOf(form) {
-      var picker = form.querySelector('[data-bron-brand]');
-      if (picker) { return picker.value || ''; }
+    // Every marka the form is selling. A sotuv carries a Mahsulot row per marka now,
+    // so this is a list: reading only the first picker asked the bron question about
+    // row 1 and stayed silent when the bron was for row 2.
+    function brandsOf(form) {
+      var pickers = form.querySelectorAll('[data-bron-brand]');
+      if (pickers.length) {
+        return Array.prototype.map.call(pickers, function (p) { return p.value || ''; })
+                    .filter(function (v) { return v; });
+      }
       // The per-lot form has no marka picker — the lot already decided it.
       var box = form.querySelector('[data-bron-draw]');
-      return box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+      var fixed = box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+      return fixed ? [fixed] : [];
     }
     function update(form) {
       var box = form.querySelector('[data-bron-draw]');
@@ -2003,7 +2026,10 @@
       try {
         brands = JSON.parse((option && option.getAttribute('data-bron-brands')) || '[]');
       } catch (err) { brands = []; }
-      var asks = brands.indexOf(brandOf(form)) !== -1;
+      // Asked as soon as ANY row is a marka this mijoz holds a bron for. The
+      // drawdown itself is per slice and marka-matched, so the other rows are
+      // untouched by answering yes.
+      var asks = brandsOf(form).some(function (b) { return brands.indexOf(b) !== -1; });
       (box.closest('p') || box.closest('label') || box).hidden = !asks;
       // Ticked whenever it comes back: serving a bron holder normally draws the
       // bron down, and a box that reappeared unticked would change that silently.

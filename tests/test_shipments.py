@@ -754,3 +754,281 @@ class TestEditKeepsHolatAndArrivalTogether:
         shipment.refresh_from_db()
         assert shipment.arrived is None
         assert not arrived_lots().filter(shipment=shipment).exists()
+
+
+class TestQrKod:
+    """A QR kod is handed to SOME drivers as they leave Eron; those trucks land
+    earlier. The yuklar table has to say which at a glance, so every row carries a
+    marker: green once the kod is given, yellow while it is not."""
+
+    def _shipment(self):
+        contract = _contract()
+        return make_shipment(contract=contract, kg="100")
+
+    def test_qr_day_is_saved_from_the_yuk_form(self, admin_client, db):
+        """The planned day is entered when the load is dispatched — it is known then,
+        and nobody comes back to a saved yuk to add it."""
+        contract = _contract()
+        assert _post_shipment(admin_client, contract, qr_date="2026-07-08").status_code == 302
+        assert Shipment.objects.get().qr_date == date(2026, 7, 8)
+
+    def test_qr_day_is_optional(self, admin_client, db):
+        """Most loads never get one, so leaving it blank has to be an ordinary save."""
+        contract = _contract()
+        assert _post_shipment(admin_client, contract).status_code == 302
+        shipment = Shipment.objects.get()
+        assert shipment.qr_date is None and shipment.has_qr is False
+
+    def test_the_modal_asks_for_the_date_rather_than_assuming_today(self, admin_client, db):
+        """The mark is often entered a day or two after the fact. A press that wrote
+        today recorded a date that was simply wrong, and `qr_given` is read as the
+        fact of WHEN it happened, so the real day has to be asked for."""
+        shipment = self._shipment()
+        admin_client.post(f"/shipments/{shipment.pk}/qr/", {"qr_given": "2026-08-07"})
+        shipment.refresh_from_db()
+        assert shipment.qr_given == date(2026, 8, 7)
+        assert shipment.has_qr is True
+
+    def test_the_field_opens_on_today_for_an_unmarked_load(self, admin_client, db):
+        """The common case is still "this happened today", so that stays one click."""
+        shipment = self._shipment()
+        form = admin_client.get(f"/shipments/{shipment.pk}/qr/").context["form"]
+        assert form.initial["qr_given"] == date.today()
+
+    def test_the_field_opens_on_the_stored_date_once_marked(self, admin_client, db):
+        """Reopening it is how a wrong date gets corrected, so it must show what is
+        actually saved rather than resetting to today."""
+        shipment = self._shipment()
+        shipment.qr_given = date(2026, 8, 3)
+        shipment.save(update_fields=["qr_given"])
+        form = admin_client.get(f"/shipments/{shipment.pk}/qr/").context["form"]
+        assert form.initial["qr_given"] == date(2026, 8, 3)
+
+    def test_an_empty_date_takes_the_mark_back(self, admin_client, db):
+        """The way back from a QR marked on the wrong yuk, without a full edit."""
+        shipment = self._shipment()
+        admin_client.post(f"/shipments/{shipment.pk}/qr/", {"qr_given": "2026-08-07"})
+        admin_client.post(f"/shipments/{shipment.pk}/qr/", {"qr_given": ""})
+        shipment.refresh_from_db()
+        assert shipment.qr_given is None and shipment.has_qr is False
+
+    def _row(self, client, shipment):
+        """The opening <tr> of that load's row — where the marker classes live.
+        No `qr` param, so the row is on screen whichever side it belongs to."""
+        html = client.get("/shipments/?all=1").content.decode()
+        return html.split(f'data-load="{shipment.pk}"', 1)[0].rsplit("<tr", 1)[1]
+
+    def test_the_row_stays_yellow_until_the_kod_is_given(self, admin_client, db):
+        """`has-qr` is what turns the left bar green; without it the CSS leaves it
+        yellow, which is the ordinary case rather than a warning."""
+        shipment = self._shipment()
+        assert "load-row" in self._row(admin_client, shipment)
+        assert "has-qr" not in self._row(admin_client, shipment)
+
+        admin_client.post(f"/shipments/{shipment.pk}/qr/", {"qr_given": "2026-08-07"})
+        assert "has-qr" in self._row(admin_client, shipment)
+
+    def test_a_late_load_carries_both_marks_at_once(self, admin_client, db):
+        """Late AND no QR is exactly the truck worth finding, so one colour must not
+        replace the other — the bar splits and shows both."""
+        shipment = self._shipment()
+        shipment.eta = date.today() - timedelta(days=3)
+        shipment.save(update_fields=["eta"])
+        row = self._row(admin_client, shipment)
+        assert "is-overdue" in row and "has-qr" not in row
+
+        admin_client.post(f"/shipments/{shipment.pk}/qr/", {"qr_given": "2026-08-07"})
+        row = self._row(admin_client, shipment)
+        assert "is-overdue" in row and "has-qr" in row
+
+    def test_a_translator_cannot_mark_a_qr(self, translator_client, db):
+        """They read the marker; changing it is admin work, like holat beside it."""
+        shipment = self._shipment()
+        resp = translator_client.post(f"/shipments/{shipment.pk}/qr/")
+        assert resp.status_code in (302, 403)
+        shipment.refresh_from_db()
+        assert shipment.qr_given is None
+
+    def test_a_translator_sees_no_qr_button_but_still_reads_the_marker(
+            self, translator_client, db):
+        """A button that 403s on click is worse than no button. The bar is CSS on the
+        row, so a tarjimon still sees which trucks carry a kod — they just cannot
+        change it."""
+        shipment = self._shipment()
+        html = translator_client.get("/shipments/?all=1").content.decode()
+        assert "act-qr" not in html
+        assert "load-toggle" in html
+
+        shipment.qr_given = date.today()
+        shipment.save(update_fields=["qr_given"])
+        assert "has-qr" in self._row(translator_client, shipment)
+
+
+def test_only_a_tarjimon_gets_the_haydovchi_button(admin_client, translator_client, db):
+    """The full dispatch modal already carries those four fields for an admin, so a
+    second door to them only crowded a row that has five other actions. The view
+    still serves both roles — this is the row saying whose job it is."""
+    shipment = make_shipment(contract=_contract(), kg="100")
+    href = f"/shipments/{shipment.pk}/driver/"
+    assert href in translator_client.get("/shipments/").content.decode()
+    assert href not in admin_client.get("/shipments/").content.decode()
+
+    detail = f"/shipments/{shipment.pk}/"
+    assert href in translator_client.get(detail).content.decode()
+    assert href not in admin_client.get(detail).content.decode()
+
+
+class TestQrFilter:
+    """QR bor / QR yo'q on the yuklar page. Server-side: it has to combine with the
+    holat tabs rather than replace whichever is active, and it has to reach past the
+    Hammasi pager, which a client-side filter never could."""
+
+    def _loads(self):
+        contract = _contract(kg="5000")
+        with_qr = make_shipment(contract=contract, kg="100")
+        with_qr.qr_given = date.today()
+        with_qr.save(update_fields=["qr_given"])
+        without = make_shipment(contract=contract, kg="100")
+        return with_qr, without
+
+    def _rows(self, client, query=""):
+        return [s.pk for s in client.get(f"/shipments/{query}").context["shipments"]]
+
+    def test_bor_keeps_only_the_loads_carrying_a_kod(self, admin_client, db):
+        with_qr, without = self._loads()
+        assert self._rows(admin_client, "?qr=bor") == [with_qr.pk]
+
+    def test_yoq_keeps_only_the_loads_without_one(self, admin_client, db):
+        with_qr, without = self._loads()
+        assert self._rows(admin_client, "?qr=yoq") == [without.pk]
+
+    def test_no_filter_shows_both(self, admin_client, db):
+        with_qr, without = self._loads()
+        assert set(self._rows(admin_client)) == {with_qr.pk, without.pk}
+
+    def test_an_unknown_value_filters_nothing(self, admin_client, db):
+        """A typo in the URL should show every yuk, not silently drop half of them."""
+        with_qr, without = self._loads()
+        resp = admin_client.get("/shipments/?qr=nonsense")
+        assert set(s.pk for s in resp.context["shipments"]) == {with_qr.pk, without.pk}
+        assert resp.context["qr"] == ""
+
+    def test_the_holat_counts_follow_the_filter(self, admin_client, db):
+        """The tabs sit right under these buttons — counting the whole set there
+        while the table below shows one row is the two disagreeing on screen."""
+        with_qr, without = self._loads()
+        status = with_qr.status
+        resp = admin_client.get("/shipments/?qr=bor")
+        counts = {t["status"].pk: t["count"] for t in resp.context["tabs"]}
+        assert counts[status.pk] == 1
+        assert resp.context["total"] == 1
+
+    def test_it_combines_with_the_search_term(self, admin_client, db):
+        """Both are server-side, so one must not throw the other away."""
+        with_qr, without = self._loads()
+        with_qr.transport = "TRUCK-XYZ"
+        with_qr.save(update_fields=["transport"])
+        assert self._rows(admin_client, "?qr=bor&q=XYZ") == [with_qr.pk]
+        assert self._rows(admin_client, "?qr=yoq&q=XYZ") == []
+
+    def test_the_active_pill_links_back_to_no_filter(self, admin_client, db):
+        """Clicking the active one clears it, the way the holat tabs behave."""
+        self._loads()
+        html = admin_client.get("/shipments/?qr=bor&all=1").content.decode()
+        # Active pill is not a ghost, and its href drops qr while keeping all=1.
+        assert 'class="btn qr-filter"' in html
+        assert 'href="?all=1"' in html
+
+    def test_searching_keeps_the_filter_on(self, admin_client, db):
+        """The search box posts as a GET form, so the filter rides along as a hidden
+        field — otherwise typing a plate would quietly widen the set again."""
+        self._loads()
+        html = admin_client.get("/shipments/?qr=yoq").content.decode()
+        assert '<input type="hidden" name="qr" value="yoq">' in html
+
+    def test_the_empty_state_says_the_filter_is_why(self, admin_client, db):
+        """Otherwise it reads "Faol yuklar yo'q" on a screen where the loads are one
+        click away."""
+        make_shipment(contract=_contract(), kg="100")     # exists, but has no kod
+        html = admin_client.get("/shipments/?qr=bor").content.decode()
+        assert "QR kod berilganlari orasida" in html
+
+    def test_a_translator_gets_the_filter_too(self, translator_client, db):
+        """They read the marker on every row, so they can narrow by it."""
+        with_qr, without = self._loads()
+        assert self._rows(translator_client, "?qr=bor") == [with_qr.pk]
+
+
+class TestQrOverdue:
+    """`qr_date` is the day the kod was MEANT to reach the driver, and nothing makes
+    it so. Once that day is behind us with the kod still not handed over, the load is
+    no longer "a truck without a kod" — it is a promise that was missed, and it needs
+    saying, because on screen the two look identical."""
+
+    def _load(self, qr_date=None, qr_given=None):
+        shipment = make_shipment(contract=_contract(), kg="100")
+        shipment.qr_date = qr_date
+        shipment.qr_given = qr_given
+        shipment.save(update_fields=["qr_date", "qr_given"])
+        return shipment
+
+    def test_a_passed_day_with_no_kod_is_late(self, db):
+        assert self._load(qr_date=date.today() - timedelta(days=2)).qr_overdue is True
+
+    def test_no_planned_day_is_never_late(self, db):
+        """Most loads were never meant to get one. Without a plan there is nothing to
+        miss, and calling those late would flag the whole fleet."""
+        assert self._load().qr_overdue is False
+
+    def test_today_is_not_yet_late(self, db):
+        """The day itself is still the day it can happen — warning on the morning of
+        would cry wolf on every load the moment it was dispatched."""
+        assert self._load(qr_date=date.today()).qr_overdue is False
+
+    def test_a_kod_that_arrived_is_not_late_however_late_it_was(self, db):
+        """Once it is in the driver's hands the plan stops mattering. Marking a load
+        given has to clear the warning even when it is marked days after the plan —
+        which is the ordinary case, not the exception."""
+        shipment = self._load(qr_date=date.today() - timedelta(days=5),
+                              qr_given=date.today())
+        assert shipment.qr_overdue is False
+
+    def test_it_counts_the_days_since_the_promise(self, db):
+        assert self._load(qr_date=date.today() - timedelta(days=3)).qr_days_late == 3
+
+    def test_a_load_that_is_not_late_counts_zero(self, db):
+        """Templates read this unconditionally, so it must not blow up on a load with
+        no qr_date at all."""
+        assert self._load().qr_days_late == 0
+
+    def test_the_row_says_so(self, admin_client, db):
+        """The bar is already how "no kod" is read, so the missed plan is said there
+        and again in words beside the kechikdi badge — a colour alone cannot carry
+        the difference between "never getting one" and "should have had one".
+        """
+        self._load(qr_date=date.today() - timedelta(days=4))
+        html = admin_client.get("/shipments/?all=1").content.decode()
+        assert "qr-late" in html
+        assert "QR 4 kun kechikdi" in html
+
+    def test_a_load_still_within_its_plan_says_nothing(self, db, admin_client):
+        self._load(qr_date=date.today() + timedelta(days=2))
+        html = admin_client.get("/shipments/?all=1").content.decode()
+        assert "qr-late" not in html
+
+    def test_the_pill_carries_the_count(self, admin_client, db):
+        """The number is what makes the warning reachable from the default screen:
+        the loads still waiting are on the other side of a filter nobody has pressed
+        yet."""
+        self._load(qr_date=date.today() - timedelta(days=1))
+        self._load(qr_date=date.today() - timedelta(days=6))
+        self._load(qr_date=date.today() + timedelta(days=1))     # still in plan
+        self._load()                                             # never planned
+        assert admin_client.get("/shipments/").context["qr_waiting_count"] == 2
+
+    def test_the_count_survives_standing_on_qr_bor(self, admin_client, db):
+        """Counted before the filter narrows anything. Filtering to the loads that
+        HAVE a kod must not report zero still waiting — that is precisely the screen
+        on which the number is the only thing speaking for the hidden rows."""
+        self._load(qr_date=date.today() - timedelta(days=2))
+        assert admin_client.get("/shipments/?qr=bor").context["qr_waiting_count"] == 1

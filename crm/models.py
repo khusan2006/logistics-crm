@@ -1116,6 +1116,17 @@ class Shipment(models.Model):
     sent = models.DateField("Jo'natilgan sana", null=True, blank=True)
     eta = models.DateField("Taxminiy kelish", null=True, blank=True)
     arrived = models.DateField("Yetib kelgan sana", null=True, blank=True)
+    # A QR kod is handed to SOME drivers as they leave Eron; the ones carrying it
+    # clear the road faster and land earlier, so which trucks have one is worth
+    # seeing at a glance. Two dates, not a date and a flag: `qr_date` is the day it
+    # is meant to be handed over (known at dispatch, a plan), `qr_given` the day it
+    # actually was. The date is what says it happened — the same rule `arrived`
+    # follows, and it keeps "planned for Friday" from reading as "done".
+    qr_date = models.DateField(
+        "QR kod beriladigan kun", null=True, blank=True,
+        help_text="QR kod olgan haydovchi tezroq yetib keladi. Bu yukka berilmasa — "
+                  "bo'sh qoldiring.")
+    qr_given = models.DateField("QR kod berilgan sana", null=True, blank=True)
     transport = models.CharField("Transport raqami", max_length=50, blank=True)
     container = models.CharField("Konteyner raqami", max_length=50, blank=True)
     # Who on our side owns this load — free text rather than a user FK, since the
@@ -1148,6 +1159,31 @@ class Shipment(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Yuk"
         verbose_name_plural = "Yuklar"
+
+    @property
+    def has_qr(self):
+        """Whether this load's driver is carrying a QR kod. Green in the yuklar
+        table; every load without one is yellow, since "no QR" is itself the fact
+        worth reading — that truck takes the slow road."""
+        return self.qr_given is not None
+
+    @property
+    def qr_overdue(self):
+        """The day the kod was meant to be handed over has passed and it still has
+        not been.
+
+        `qr_date` is a plan and nothing enforces it, so this is the gap between what
+        was promised for a load and what happened to it. Worth saying out loud
+        because the row is otherwise indistinguishable from a truck that was never
+        meant to get a kod at all: both are simply "berilmagan", while only this one
+        means someone expected a kod today and the driver is still waiting on the
+        slow road. Loads with no `qr_date` are not late — nothing was planned."""
+        return (self.qr_given is None and self.qr_date is not None
+                and self.qr_date < timezone.localdate())
+
+    @property
+    def qr_days_late(self):
+        return (timezone.localdate() - self.qr_date).days if self.qr_overdue else 0
 
     @property
     def is_overdue(self):
@@ -2022,6 +2058,13 @@ class Sale(MoneyEntry):
                              related_name="sales", verbose_name="Lot (mahsulot)")
     reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name="+", verbose_name="Bron")
+    # The rows entered in ONE go carry the same id: several markalar typed into one
+    # modal, and each marka's kg split FIFO across lots. Without it Sotuvlar shows a
+    # single trip to the counter as N unrelated rows and nothing on screen says the
+    # mijoz took them together. Null on the sotuvlar entered before the field
+    # existed and on a sale made from one chosen lot, which is one row by nature.
+    group = models.UUIDField("Sotuv guruhi", null=True, blank=True,
+                             editable=False, db_index=True)
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg sotuv narxi (so'm)", max_digits=18,
@@ -2042,6 +2085,17 @@ class Sale(MoneyEntry):
         ordering = ["-date", "-created_at"]
         verbose_name = "Sotuv"
         verbose_name_plural = "Sotuvlar"
+
+    @property
+    def group_sales(self):
+        """The sotuvlar entered together with this one, in the order they were typed
+        — itself alone when it was entered on its own."""
+        if self.group is None:
+            return [self]
+        return list(Sale.objects
+                    .filter(group=self.group)
+                    .select_related("line__contract_line", "line__shipment")
+                    .order_by("pk"))
 
     @property
     def cost_price(self):

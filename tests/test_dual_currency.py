@@ -124,9 +124,10 @@ def test_every_fifo_slice_inherits_the_agreed_currency(admin_client, db):
     _lot(kg="600")
     _lot(kg="600")
     resp = admin_client.post("/sales/new/", {
-        "customer": _customer().pk, "brand": "LLDPE", "kg": "1000",
-        "currency": "uzs", "price": "14040", "exchange_rate": "12000",
+        "customer": _customer().pk,
+        "currency": "uzs", "exchange_rate": "12000",
         "date": "2026-07-18", "debt_deadline": "", "note": "",
+        **line_data({"brand": "LLDPE", "kg": "1000", "price": "14040"}),
     })
     assert resp.status_code == 302
     slices = Sale.objects.all()

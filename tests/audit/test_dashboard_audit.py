@@ -24,7 +24,7 @@ from decimal import ROUND_HALF_UP, Decimal
 import pytest
 from django.utils import timezone
 
-from conftest import make_contract, make_shipment
+from conftest import line_data, make_contract, make_shipment
 from crm.models import (
     ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation,
     Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -681,9 +681,10 @@ def test_a_som_sotuv_reaches_mijoz_qarzi_exact_and_stays_a_som_sotuv(admin_clien
     customer = _customer("Somchi")
 
     resp = admin_client.post("/sales/new/", {
-        "customer": customer.pk, "brand": "LLDPE", "kg": "1000",
-        "currency": "uzs", "price": "15000", "exchange_rate": "12500",
+        "customer": customer.pk,
+        "currency": "uzs", "exchange_rate": "12500",
         "date": "2026-07-15", "debt_deadline": "", "note": "",
+        **line_data({"brand": "LLDPE", "kg": "1000", "price": "15000"}),
     })
     assert resp.status_code in (200, 302), resp.status_code
     sale = Sale.objects.get()

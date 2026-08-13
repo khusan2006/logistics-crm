@@ -1,12 +1,14 @@
 from datetime import date as _date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from urllib.parse import urlparse
+from uuid import uuid4
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
-from django.http import JsonResponse
+from django.http import JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -25,9 +27,9 @@ from .forms import (
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, LogistForm, LogistPaymentForm,
-    SaleCreateForm, SaleForm, SaleLotForm, ShipmentExpenseForm,
+    SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
     ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
-    ShipmentLegForm, ShipmentStatusForm, SupplierPaymentForm,
+    ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
 )
 from .models import (
     AuditLog, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
@@ -65,9 +67,13 @@ def _bar_pct(part, whole):
 
 def dashboard(request):
     if not request.user.is_admin_role:
-        return redirect("shipment_list")
+        # Everyone lands on the first page their role can actually open. A skladchi
+        # sent to Yuklar would meet a 403 on login, since that page is not theirs.
+        return redirect("ombor" if request.user.is_skladchi else "shipment_list")
+    # `legs` for the kechikkan table: it names the transport carrying the load NOW,
+    # which is the active leg's, and reading that per row is a query per row.
     shipments = (Shipment.objects.select_related("contract__partner", "status")
-                 .prefetch_related("lines__contract_line"))
+                 .prefetch_related("lines__contract_line", "legs"))
     # Prefetched here rather than per figure below: the chart reads every kelishuv's
     # lines, payments and yuklar, which is three queries per row without this.
     contracts = (Contract.objects.select_related("partner")
@@ -1215,9 +1221,26 @@ def shipment_list(request):
     the view. Tabs filter client-side; each row carries its status + overdue flag.
 
     Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
-    adds the arrived ones and paginates, since that set only grows."""
+    adds the arrived ones and paginates, since that set only grows.
+
+    `?qr=bor|yoq` narrows to the loads whose driver carries a QR kod, or the ones
+    whose driver does not. Server-side rather than a third client-side tab: it has to
+    combine with the holat tabs instead of replacing whichever one is active, it has
+    to reach past the Hammasi pager (a client filter only ever sees the rows on this
+    page), and narrowing the queryset is what makes the tab counts beside it say how
+    many of THOSE loads sit in each holat.
+
+    The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
+    the loads whose planned QR day has come and gone with no kod, counted on the QR
+    yo'q pill, so the ones worth chasing announce themselves without the list having
+    to hide anything to say so."""
     q = request.GET.get("q", "").strip()
     show_all = request.GET.get("all") == "1"
+    # Anything else in the URL means no QR filter at all — a typo should show every
+    # yuk, not silently drop half of them.
+    qr = request.GET.get("qr", "")
+    if qr not in ("bor", "yoq"):
+        qr = ""
     shipments = (Shipment.objects
                  .select_related("contract__partner", "status")
                  .prefetch_related("delays", "legs", "expenses"))
@@ -1228,6 +1251,15 @@ def shipment_list(request):
             Q(transport__icontains=q) | Q(container__icontains=q)
             | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q)
             | Q(driver_name__icontains=q) | Q(responsible__icontains=q)).distinct()
+    # Counted before the QR filter narrows anything, so the number on the pill keeps
+    # meaning "waiting, among the yuklar you are looking at" — standing on QR bor
+    # must not zero out the count of the loads you are not looking at.
+    qr_waiting_count = shipments.filter(
+        qr_given__isnull=True, qr_date__isnull=False,
+        qr_date__lt=timezone.localdate()).count()
+    if qr:
+        # The date is what says the kod was handed over, so its absence is "yo'q".
+        shipments = shipments.filter(qr_given__isnull=qr == "yoq")
     shipments = list(shipments)
 
     counts = {}
@@ -1278,7 +1310,8 @@ def shipment_list(request):
     return render(request, "crm/shipment_list.html", {
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
-        "q": q, "default_tab": default_tab, "show_all": show_all, "page": page,
+        "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count,
+        "default_tab": default_tab, "show_all": show_all, "page": page,
     })
 
 
@@ -1289,12 +1322,15 @@ def shipment_done_list(request):
     return redirect(f"{reverse('shipment_list')}?all=1")
 
 
-@role_required(User.Role.ADMIN)
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def ombor(request):
     """Ombor by MARKA, one row per granula. The same marka can arrive on several
     lots at different landed costs; showing those as separate rows made the stock
     look like different products, so they merge here and the lots live inside the
-    row — each still sellable on its own (a lot's own tan narx follows the sale)."""
+    row — each still sellable on its own (a lot's own tan narx follows the sale).
+
+    A skladchi reads this page: the marka, its lots and the kg. The tannarx column
+    and every Sotish/Bron button are drawn only for an admin — see the template."""
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
     lots = (arrived_lots()
@@ -1603,6 +1639,62 @@ def shipment_set_status(request, pk):
     return redirect(request.POST.get("next") or "shipment_list")
 
 
+def _qr_side_url(request, qr):
+    """The yuklar list the load has just moved to, keeping whatever else was on the
+    screen it was marked from.
+
+    Rebuilt from the referring URL rather than hard-coded, so marking a kod while
+    searching for a plate, or while standing in Hammasi, does not silently throw
+    that away and land the operator somewhere they did not ask to be. `page` is
+    dropped: page 3 of the old side means nothing on the new one."""
+    params = QueryDict(urlparse(request.META.get("HTTP_REFERER") or "").query,
+                       mutable=True)
+    params["qr"] = qr
+    params.pop("page", None)
+    return f"{reverse('shipment_list')}?{params.urlencode()}"
+
+
+@role_required(User.Role.ADMIN)
+def shipment_set_qr(request, pk):
+    """Mark this load's QR kod handed over — or take the mark back.
+
+    A modal asking for the date, not the one-press toggle this used to be. The press
+    wrote today, which is only right when the mark is entered on the day; entered on
+    Monday for a kod handed over on Friday it recorded a date that was simply wrong,
+    and `qr_given` is read as the fact of when it happened. Nothing else knows the
+    real date, so it has to be asked.
+
+    Still the same button and still reversible: submitting the date empty clears the
+    mark, which is what a mis-click on a row of near-identical trucks needs. The
+    field starts on whatever is already stored, or today for a load being marked for
+    the first time — the common case is still "this happened today"."""
+    shipment = get_object_or_404(Shipment, pk=pk)
+    title = f"Yuk #{shipment.pk} — QR kod"
+    initial = {"qr_given": shipment.qr_given or timezone.localdate()}
+    form = ShipmentQrForm(request.POST or None, initial=initial)
+    if request.method == "POST":
+        if form.is_valid():
+            given = form.cleaned_data["qr_given"]
+            shipment.qr_given = given
+            shipment.save(update_fields=["qr_given"])
+            AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                            f"QR kod berildi: {given}" if given else "QR kod bekor qilindi")
+            messages.success(request, "QR kod berildi" if given else "QR kod belgisi olindi")
+            # Marked from the list, the load follows its mark: the page swaps to the
+            # side it now belongs to. Without this it simply vanished from under the
+            # cursor — the list opens on QR bor, so a load marked from QR yo'q left
+            # that set on reload with nothing to say where it went.
+            #
+            # Marked from a yuk's own page there is no side to move to, so that one
+            # reloads in place instead of throwing the operator out to the list.
+            referer = urlparse(request.META.get("HTTP_REFERER") or "").path
+            if referer == reverse("shipment_list"):
+                return form_success(request, _qr_side_url(request, "bor" if given else "yoq"))
+            return form_reload(request, reverse("shipment_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
 @role_required(User.Role.ADMIN)
 def shipment_delete(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
@@ -1720,8 +1812,55 @@ def expense_delete(request, pk):
     )
 
 
-@role_required(User.Role.ADMIN)
+def _sale_groups(sales):
+    """Fold the rows entered together into one block each — one row on Sotuvlar —
+    keeping the list's order.
+
+    A submission's rows sit next to each other in that order already — same sana,
+    consecutive created_at — so a single walk over the page is enough and no row
+    moves to reach its neighbours. Inside a block they go back into entry order:
+    the page reads newest sotuv first, but the mahsulotlar of one trip to the
+    counter were typed oldest first and should be read that way."""
+    blocks = []
+    for sale in sales:
+        block = blocks[-1] if blocks else None
+        if block is None or sale.group is None or block["group"] != sale.group:
+            blocks.append({"group": sale.group, "sales": [sale]})
+        else:
+            block["sales"].append(sale)
+    for block in blocks:
+        rows = sorted(block["sales"], key=lambda s: s.pk)
+        block["sales"] = rows
+        block["first"] = rows[0]
+        block["count"] = len(rows)
+        block["kg"] = sum((s.kg for s in rows), Decimal("0"))
+        # What the sotuv means as a whole. The per-kg figures stay per mahsulot in
+        # their own column, but these are only ever read summed — the mijoz owes one
+        # qarz, not one per lot the granula happened to come off.
+        block["total"] = sum((s.total for s in rows), Decimal("0"))
+        block["total_uzs"] = sum((s.total_uzs for s in rows), Decimal("0"))
+        block["profit"] = sum((s.profit for s in rows), Decimal("0"))
+        block["profit_uzs"] = sum((s.profit_uzs for s in rows), Decimal("0"))
+        block["remaining"] = sum((s.remaining for s in rows), Decimal("0"))
+        block["remaining_uzs"] = sum((s.remaining_uzs for s in rows), Decimal("0"))
+        # Measured per row in each row's own currency, the way `is_paid` does it —
+        # summing the two sides first would let a so'm sotuv's kurs drift decide it.
+        block["owing"] = any(s.remaining_own > 0 for s in rows)
+    return blocks
+
+
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def sale_list(request):
+    """A row per SOTUV, not per lot: the mahsulot columns stack inside their cells
+    and jami/foyda/qarz are the sotuv's own totals.
+
+    A skladchi reads this page for what left the shelf and to whom — the narx, jami,
+    foyda and qarz columns are drawn only for an admin, and so is every action. The
+    sotuv's own page stays admin-only, so their mijoz cell is not a link.
+
+    Paging still counts rows, so a sotuv straddling the boundary shows the lots that
+    fall on each page. Its figures are the ones on that page too — a total that
+    counted rows the page is not showing would be the worse of the two lies."""
     q = request.GET.get("q", "").strip()
     sales = Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner")
     if q:
@@ -1730,23 +1869,35 @@ def sale_list(request):
             filters |= Q(line__shipment_id=int(q))
         sales = sales.filter(filters)
     page = Paginator(sales, 20).get_page(request.GET.get("page"))
-    return render(request, "crm/sale_list.html", {"page": page, "q": q})
+    return render(request, "crm/sale_list.html",
+                  {"page": page, "groups": _sale_groups(page.object_list), "q": q})
+
+
+def _sale_form_response(request, form, lines, title, invalid=False):
+    return form_response(request, form, title, invalid=invalid,
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
 
 
 @role_required(User.Role.ADMIN)
 def sale_create(request):
-    """Sale by brand: the entered kg is consumed from the oldest arrived lots
-    first (FIFO), one Sale row per lot slice so each slice keeps its own lot's
-    landed cost. `?lot=` (opening one lot from inside a marka in the ombor) sells
-    from THAT lot instead — see sale_create_lot."""
+    """Sale by brand, and by SEVERAL brands at once: one trip to the counter is one
+    sotuv, however many markalar the mijoz took, rather than one modal per product.
+
+    Each Mahsulot row's kg is consumed from the oldest arrived lots of that marka
+    first (FIFO), one Sale row per lot slice so each slice keeps its own lot's landed
+    cost. A row therefore becomes as many Sale objects as it takes lots to fill, and
+    the whole submission becomes the sum of those.
+
+    `?lot=` (opening one lot from inside a marka in the ombor) sells from THAT lot
+    instead, and stays single-product — see sale_create_lot."""
     lot_id = request.GET.get("lot") or request.POST.get("lot")
     if lot_id and str(lot_id).isdigit():
         return sale_create_lot(request, int(lot_id))
 
-    initial = {}
+    initial, row = {}, {}
     brand = (request.GET.get("brand") or "").strip()   # marka row's Sotish shortcut
     if brand:
-        initial["brand"] = brand
+        row["brand"] = brand
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
@@ -1759,49 +1910,74 @@ def sale_create(request):
     price = (request.GET.get("price") or "").strip()
     if price:
         try:
-            initial["price"] = Decimal(price)
+            row["price"] = Decimal(price)
         except (ArithmeticError, ValueError):
             pass
     form = SaleCreateForm(request.POST or None, initial=initial)
+    # The marka and its narx are a ROW now, so a shortcut that named one prefills the
+    # first row rather than the header.
+    lines = SaleLineFormSet(request.POST or None, prefix="lines",
+                            initial=[row] if row else None)
     if request.method == "POST":
-        if form.is_valid():
+        if form.is_valid() and lines.is_valid():
             data = form.cleaned_data
-            remaining = data["kg"]
-            slices = []
+            # One deal, one currency, one kurs — held on the header and applied to
+            # every row, so a sotuv can never end up half in dollars.
+            currency, rate = data["currency"], data["exchange_rate"]
+            # One submission, one id on every row it produces — the markalar and the
+            # FIFO slices under them — so Sotuvlar can band them back together as the
+            # one trip to the counter they were.
+            group = uuid4()
+            slices, sold = [], []
             with transaction.atomic():
-                for lot in fifo_lots(data["brand"]):
-                    if remaining <= 0:
-                        break
-                    take = min(lot.available_kg, remaining)
-                    sale = Sale.objects.create(
-                        customer=data["customer"], line=lot, kg=take,
-                        # every FIFO slice inherits the one narx that was agreed,
-                        # in the currency it was agreed in
-                        **form.money_kwargs(),
-                        date=data["date"], debt_deadline=data["debt_deadline"],
-                        note=data["note"], created_by=request.user,
-                    )
-                    slices.append(sale)
-                    remaining -= take
-                    # Serving this mijoz normally makes their own promise smaller,
-                    # whichever lot the granula came off — per slice and in order, so
-                    # the bron falls by exactly what was sold. Unticked, the sotuv is
-                    # something else they bought and the booking stands untouched.
-                    if data.get("draw_from_bron"):
-                        draw_down_bron(sale)
+                for line in lines.rows():
+                    take_from = line.cleaned_data
+                    # The same conversion PriceEntryFormMixin does, at the header's
+                    # kurs. Four decimals: rounding a $/kg to cents would move a
+                    # 24-tonne lot by dollars.
+                    usd, uzs = convert_pair(take_from["price"], currency, rate, "0.0001")
+                    remaining = take_from["kg"]
+                    for lot in fifo_lots(take_from["brand"]):
+                        if remaining <= 0:
+                            break
+                        take = min(lot.available_kg, remaining)
+                        sale = Sale.objects.create(
+                            customer=data["customer"], line=lot, kg=take,
+                            # every FIFO slice inherits the one narx agreed for that
+                            # marka, in the currency the sotuv was agreed in
+                            price=usd, price_uzs=uzs,
+                            currency=currency, exchange_rate=rate, group=group,
+                            date=data["date"], debt_deadline=data["debt_deadline"],
+                            note=data["note"], created_by=request.user,
+                        )
+                        slices.append(sale)
+                        remaining -= take
+                        # Serving this mijoz normally makes their own promise smaller,
+                        # whichever lot the granula came off — per slice and in order,
+                        # so the bron falls by exactly what was sold. Unticked, the
+                        # sotuv is something else they bought and the booking stands.
+                        if data.get("draw_from_bron"):
+                            draw_down_bron(sale)
+                    sold.append(f"{take_from['kg']} kg {take_from['brand']}")
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
-                f"Yangi sotuv (FIFO): {data['kg']} kg {data['brand']} · "
+                f"Yangi sotuv (FIFO): {', '.join(sold)} · "
                 f"{data['customer'].name} · {len(slices)} lot",
             )
             for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
                 apply_customer_advance(sale)
-            messages.success(
-                request,
-                f"Sotuv qo'shildi ({len(slices)} lotdan)" if len(slices) > 1 else "Sotuv qo'shildi")
+            # Says what actually happened: several markalar, or one split across
+            # lots, or the ordinary single row.
+            if len(sold) > 1:
+                note = f"Sotuv qo'shildi ({len(sold)} mahsulot, {len(slices)} lotdan)"
+            elif len(slices) > 1:
+                note = f"Sotuv qo'shildi ({len(slices)} lotdan)"
+            else:
+                note = "Sotuv qo'shildi"
+            messages.success(request, note)
             return form_success(request, reverse("sale_list"))
-        return form_response(request, form, "Yangi sotuv", invalid=True)
-    return form_response(request, form, "Yangi sotuv")
+        return _sale_form_response(request, form, lines, "Yangi sotuv", invalid=True)
+    return _sale_form_response(request, form, lines, "Yangi sotuv")
 
 
 def sale_create_lot(request, lot_id):
@@ -1926,7 +2102,15 @@ def sale_delete(request, pk):
 def sale_detail(request, pk):
     sale = get_object_or_404(
         Sale.objects.select_related("customer", "line__contract_line", "line__shipment__contract__partner"), pk=pk)
-    return render(request, "crm/sale_detail.html", {"sale": sale})
+    # The rest of what the mijoz took in the same go, summed — the page otherwise
+    # shows one marka off one lot and says nothing about the trip it belonged to.
+    group = sale.group_sales
+    return render(request, "crm/sale_detail.html", {
+        "sale": sale, "group": group,
+        "group_kg": sum((s.kg for s in group), Decimal("0")),
+        "group_total": sum((s.total for s in group), Decimal("0")),
+        "group_total_uzs": sum((s.total_uzs for s in group), Decimal("0")),
+    })
 
 
 #: Holat tabs, in the order a bron moves through them. Faol leads because an open
@@ -2956,7 +3140,11 @@ def reports(request):
     # tannarx blends a dollar mol with a so'm transport bill by design.
     profit_total = sum((s.profit for s in sales), Decimal("0"))
     profit_total_uzs = sum((s.profit_uzs for s in sales), Decimal("0"))
-    late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False) if s.is_overdue]
+    # `legs` prefetched on this narrow slice only — the table names the transport on
+    # the load now, and the wider `shipments` above is walked by figures that never
+    # touch a leg.
+    late_shipments = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
+                      .prefetch_related("legs") if s.is_overdue]
     kechikkan_soni = len(late_shipments)
 
     # Per-partner table
@@ -3053,11 +3241,11 @@ def export_shipments(request):
     shipments = _report_querysets(request)["shipments"]
     headers = [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
-        "Yetib kelgan", "Transport", "Konteyner",
+        "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
     ]
     rows = (
         [s.pk, s.contract.code, s.contract.partner.name, ln.brand, ln.kg, s.status.name,
-         s.sent, s.eta, s.arrived, s.transport, s.container]
+         s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container]
         for s in shipments.prefetch_related("lines__contract_line")
         for ln in s.lines.all()
     )

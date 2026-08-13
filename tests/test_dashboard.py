@@ -266,3 +266,39 @@ def test_a_load_sent_in_another_month_lands_in_that_month(admin_client, db):
     assert rows[date(2026, 7, 1)]["sent"] == 8      # iyulda jo'natilganlar
     assert rows[date(2026, 6, 1)]["sent"] == 1      # to'qqizinchisi iyunda
     assert rows[date(2026, 7, 1)]["arrived"] == 1   # lekin iyulda yetib kelgan
+
+
+class TestKechikkanYuklarNamesTheTruck:
+    """Chasing a late load needs the numbers it answers to: the transport raqami on
+    the phone, the konteyner at the border. Both, on both boards that list them."""
+
+    def _late(self, **kw):
+        contract = make_contract(kg="100000", price="1.00")
+        return make_shipment(contract=contract, kg="400",
+                             eta=date.today() - timedelta(days=3), **kw)
+
+    def test_dashboard_shows_transport_and_container(self, admin_client, db):
+        self._late(transport="01A111AA", container="MSCU-778")
+        html = admin_client.get("/").content.decode()
+        assert "01A111AA" in html and "MSCU-778" in html
+
+    def test_reports_shows_transport_and_container(self, admin_client, db):
+        self._late(transport="01B222BB", container="TCLU-991")
+        html = admin_client.get("/reports/").content.decode()
+        assert "01B222BB" in html and "TCLU-991" in html
+
+    def test_the_transport_is_the_one_carrying_it_now(self, admin_client, db):
+        """A load that changed vehicle mid-route names the leg's truck, not the
+        one it left on — the old plate would send somebody after the wrong driver."""
+        from crm.models import ShipmentLeg
+        shipment = self._late(transport="01A111AA", container="MSCU-778")
+        ShipmentLeg.objects.create(shipment=shipment, order=1, transport="90Z999ZZ",
+                                   from_location="Xorgos", to_location="Toshkent",
+                                   departed=date.today() - timedelta(days=5))
+        html = admin_client.get("/").content.decode()
+        assert "90Z999ZZ" in html and "MSCU-778" in html
+
+    def test_a_load_with_neither_number_still_renders(self, admin_client, db):
+        self._late(transport="", container="")
+        assert admin_client.get("/").status_code == 200
+        assert admin_client.get("/reports/").status_code == 200

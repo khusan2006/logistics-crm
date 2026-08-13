@@ -2,7 +2,7 @@
 {% load crm_extras %}
 {% block title %}Sotuvlar · GranulaLog{% endblock %}
 {% block topbar_title %}Sotuvlar{% endblock %}
-{% block fab %}<a class="fab" href="{% url 'sale_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi sotuv</a>{% endblock %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'sale_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi sotuv</a>{% endif %}{% endblock %}
 {% block content %}
 
 <form method="get" class="searchbar" role="search" data-live-search>
@@ -19,34 +19,59 @@
   <tr>
     <th class="sticky-col">Sana</th>
     <th>Mijoz</th>
-    <th>Lot</th>
+    <th>Mahsulotlar</th>
     <th>Kg</th>
+    {% comment %}
+    Every figure past the kg is money, and a skladchi answers for the granula, not
+    for the deal — so the columns are not drawn for them at all rather than blanked,
+    which would still say how many there are.
+    {% endcomment %}
+    {% if user.is_admin_role %}
     <th>Tan narx</th>
     <th>Sotuv narxi</th>
     <th>Jami</th>
     <th>Foyda</th>
     <th>Qoldiq/qarz</th>
     <th></th>
+    {% endif %}
   </tr>
-  {% for s in page %}
+  {% comment %}
+  One sotuv, one row — the way Kelishuvlar lists a kelishuv's markalar. The columns
+  that describe a MAHSULOT stack a line each (the lot, its kg, its tannarx, its
+  narx), while jami, foyda and qarz are printed once as the sotuv's own figure,
+  because that is the only way they are ever read: the mijoz owes one qarz, not one
+  per lot the granula came off.
+  {% endcomment %}
+  {% for g in groups %}
   <tr>
-    <td class="sticky-col">{{ s.date }}</td>
-    <td><a href="{% url 'sale_detail' s.pk %}">{{ s.customer.name }}</a></td>
-    <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
-    <td>{{ s.kg|floatformat:"-3" }}</td>
-    <td>{% rate s.cost_price s.cost_price_uzs s.currency %}</td>
-    <td>{% rate s.price s.price_uzs s.currency %}</td>
-    <td>{% money s.total s.total_uzs s.currency %}</td>
-    <td>{% money s.profit s.profit_uzs s.currency %}</td>
-    <td{% if s.remaining_own > 0 %} class="late"{% endif %}>{% money s.remaining s.remaining_uzs s.currency %}</td>
+    <td class="sticky-col">{{ g.first.date }}</td>
+    {% comment %}
+    Plain text for a skladchi: the sotuv's own page is admin-only and carries the
+    narx, so a link there would be a 403 dressed up as a way in.
+    {% endcomment %}
+    <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}</td>
+    <td>{% for s in g.sales %}<div class="cell-line">#{{ s.line.shipment_id }} · {{ s.line.brand }}</div>{% endfor %}</td>
+    <td>{% for s in g.sales %}<div class="cell-line">{{ s.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    {% if user.is_admin_role %}
+    <td>{% for s in g.sales %}<div class="cell-line">{% rate s.cost_price s.cost_price_uzs s.currency %}</div>{% endfor %}</td>
+    <td>{% for s in g.sales %}<div class="cell-line">{% rate s.price s.price_uzs s.currency %}</div>{% endfor %}</td>
+    <td>{% money g.total g.total_uzs g.first.currency %}</td>
+    <td>{% money g.profit g.profit_uzs g.first.currency %}</td>
+    <td{% if g.owing %} class="late"{% endif %}>{% money g.remaining g.remaining_uzs g.first.currency %}</td>
+    {% comment %}
+    A sotuv of several mahsulotlar gets ONE action — open it. Tahrirlash and
+    O'chirish work on a single lot's row (that is what carries the kg and the narx
+    being corrected), and an icon that silently picked the first of three would be
+    worse than no icon; the sotuv's own page lists every row with its own pair.
+    {% endcomment %}
     <td class="row-actions">
-      <a class="icon-action act-edit" href="{% url 'sale_edit' s.pk %}" data-modal title="Tahrirlash">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      {% if g.count > 1 %}
+      <a class="icon-action" href="{% url 'sale_detail' g.first.pk %}" title="Sotuvni ochish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
       </a>
-      <a class="icon-action act-delete" href="{% url 'sale_delete' s.pk %}" data-modal title="O'chirish">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-      </a>
+      {% else %}{% with s=g.first %}{% include "crm/_sale_row_actions.html" %}{% endwith %}{% endif %}
     </td>
+    {% endif %}
   </tr>
   {% endfor %}
 </table>
