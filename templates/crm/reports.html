@@ -175,7 +175,7 @@
       {% endcomment %}
       <td>
         <div>{{ s.current_transport|default:"—" }}</div>
-        <div class="muted load-sub">{{ s.container|default:"—" }}</div>
+        {% if s.container %}<div class="muted load-sub">{{ s.container }}</div>{% endif %}
       </td>
       <td>{{ s.eta }}</td>
       <td><span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span></td>

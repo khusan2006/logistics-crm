@@ -23,8 +23,14 @@
     <th class="num">Sotilgan</th>
     <th class="num" title="Mijozlarga va'da qilingan — eslatma, taqiq emas: kerak bo'lsa boshqa mijozga ham sotiladi">Bronlangan</th>
     <th class="num" title="Omborda turgan kg — hammasi sotuvga tayyor">Sotish mumkin</th>
+    {% comment %}
+    Tannarx and every Sotish/Bron button are an admin's. A skladchi reads the marka,
+    its lots and the kg — what is on the shelf — and sells nothing from this page.
+    {% endcomment %}
+    {% if user.is_admin_role %}
     <th class="num">Tan narx</th>
     <th></th>
+    {% endif %}
   </tr>
   {% for g in page %}
   <tr class="stock-row">
@@ -48,6 +54,7 @@
       {% else %}<span class="muted">—</span>{% endif %}</td>
     <td class="num"><strong>{{ g.on_hand|floatformat:"-3" }}</strong>
       {% if g.short %}<div class="late load-sub">bronlarga {{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
+    {% if user.is_admin_role %}
     <td class="num">
       {% if g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}
       {% else %}<span title="Lotlar turli tan narxda keldi">{% rate_range_both g.cost_min g.cost_max g.cost_min_uzs g.cost_max_uzs %}</span>{% endif %}
@@ -59,9 +66,10 @@
       <button type="button" class="btn btn-sm" disabled>Sotish</button>
       {% endif %}
     </td>
+    {% endif %}
   </tr>
   <tr class="stock-detail" data-marka="{{ forloop.counter }}" hidden>
-    <td colspan="9">
+    <td colspan="{% if user.is_admin_role %}9{% else %}7{% endif %}">
       <div class="legs-inline">
         <div class="legs-inline-head">
           <strong>{{ g.brand }} lotlari</strong>
@@ -76,17 +84,25 @@
             {% endcomment %}
             <th>Lot</th><th>Kelishuv</th><th>Hamkor</th><th>Kelgan sana</th>
             <th class="num">Kirim</th><th class="num">Sotilgan</th>
-            <th class="num">Qoldiq</th><th class="num">Tan narx</th><th></th>
+            <th class="num">Qoldiq</th>
+            {% if user.is_admin_role %}<th class="num">Tan narx</th><th></th>{% endif %}
           </tr>
           {% for lot in g.lots %}
           <tr>
-            <td><a class="load-id" href="{% url 'shipment_detail' lot.shipment_id %}">#{{ lot.pk }}</a></td>
+            {% comment %}
+            The lot number opens its yuk, which is not a skladchi's page — so for
+            them it is plain text. A link that 403s reads as a broken page rather
+            than as a limit, same as the kelishuv kod does for a tarjimon.
+            {% endcomment %}
+            <td>{% if user.is_admin_role %}<a class="load-id" href="{% url 'shipment_detail' lot.shipment_id %}">#{{ lot.pk }}</a>
+                {% else %}<span class="load-id">#{{ lot.pk }}</span>{% endif %}</td>
             <td>{{ lot.shipment.contract.code }}</td>
             <td>{{ lot.shipment.contract.partner.name }}</td>
             <td>{{ lot.arrived }}</td>
             <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
             <td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
             <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
+            {% if user.is_admin_role %}
             <td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>
             <td class="row-actions">
               {% if lot.available_kg > 0 %}
@@ -96,6 +112,7 @@
               <span class="muted">tugagan</span>
               {% endif %}
             </td>
+            {% endif %}
           </tr>
           {% endfor %}
         </table>
@@ -114,7 +131,8 @@
         <table class="legs-inline-table">
           <tr>
             <th>#</th><th>Mijoz</th><th>Sana</th>
-            <th class="num">Qolgan kg</th><th class="num">Narx</th><th class="num">Jami</th><th></th>
+            <th class="num">Qolgan kg</th>
+            {% if user.is_admin_role %}<th class="num">Narx</th><th class="num">Jami</th><th></th>{% endif %}
           </tr>
           {% for r in g.brons %}
           <tr>
@@ -123,6 +141,7 @@
             <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
             <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
               {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>
+            {% if user.is_admin_role %}
             <td class="num">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
             <td class="num">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}—{% endif %}</td>
             <td class="row-actions">
@@ -139,6 +158,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="8" y1="8" x2="16" y2="16"/></svg>
               </a>
             </td>
+            {% endif %}
           </tr>
           {% endfor %}
         </table>

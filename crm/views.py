@@ -66,7 +66,9 @@ def _bar_pct(part, whole):
 
 def dashboard(request):
     if not request.user.is_admin_role:
-        return redirect("shipment_list")
+        # Everyone lands on the first page their role can actually open. A skladchi
+        # sent to Yuklar would meet a 403 on login, since that page is not theirs.
+        return redirect("ombor" if request.user.is_skladchi else "shipment_list")
     # `legs` for the kechikkan table: it names the transport carrying the load NOW,
     # which is the active leg's, and reading that per row is a query per row.
     shipments = (Shipment.objects.select_related("contract__partner", "status")
@@ -1319,12 +1321,15 @@ def shipment_done_list(request):
     return redirect(f"{reverse('shipment_list')}?all=1")
 
 
-@role_required(User.Role.ADMIN)
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def ombor(request):
     """Ombor by MARKA, one row per granula. The same marka can arrive on several
     lots at different landed costs; showing those as separate rows made the stock
     look like different products, so they merge here and the lots live inside the
-    row — each still sellable on its own (a lot's own tan narx follows the sale)."""
+    row — each still sellable on its own (a lot's own tan narx follows the sale).
+
+    A skladchi reads this page: the marka, its lots and the kg. The tannarx column
+    and every Sotish/Bron button are drawn only for an admin — see the template."""
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
     lots = (arrived_lots()
@@ -1843,10 +1848,14 @@ def _sale_groups(sales):
     return blocks
 
 
-@role_required(User.Role.ADMIN)
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def sale_list(request):
     """A row per SOTUV, not per lot: the mahsulot columns stack inside their cells
     and jami/foyda/qarz are the sotuv's own totals.
+
+    A skladchi reads this page for what left the shelf and to whom — the narx, jami,
+    foyda and qarz columns are drawn only for an admin, and so is every action. The
+    sotuv's own page stays admin-only, so their mijoz cell is not a link.
 
     Paging still counts rows, so a sotuv straddling the boundary shows the lots that
     fall on each page. Its figures are the ones on that page too — a total that

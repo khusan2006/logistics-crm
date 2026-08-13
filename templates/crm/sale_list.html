@@ -2,7 +2,7 @@
 {% load crm_extras %}
 {% block title %}Sotuvlar · GranulaLog{% endblock %}
 {% block topbar_title %}Sotuvlar{% endblock %}
-{% block fab %}<a class="fab" href="{% url 'sale_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi sotuv</a>{% endblock %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'sale_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi sotuv</a>{% endif %}{% endblock %}
 {% block content %}
 
 <form method="get" class="searchbar" role="search" data-live-search>
@@ -21,12 +21,19 @@
     <th>Mijoz</th>
     <th>Mahsulotlar</th>
     <th>Kg</th>
+    {% comment %}
+    Every figure past the kg is money, and a skladchi answers for the granula, not
+    for the deal — so the columns are not drawn for them at all rather than blanked,
+    which would still say how many there are.
+    {% endcomment %}
+    {% if user.is_admin_role %}
     <th>Tan narx</th>
     <th>Sotuv narxi</th>
     <th>Jami</th>
     <th>Foyda</th>
     <th>Qoldiq/qarz</th>
     <th></th>
+    {% endif %}
   </tr>
   {% comment %}
   One sotuv, one row — the way Kelishuvlar lists a kelishuv's markalar. The columns
@@ -38,9 +45,14 @@
   {% for g in groups %}
   <tr>
     <td class="sticky-col">{{ g.first.date }}</td>
-    <td><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a></td>
+    {% comment %}
+    Plain text for a skladchi: the sotuv's own page is admin-only and carries the
+    narx, so a link there would be a 403 dressed up as a way in.
+    {% endcomment %}
+    <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}</td>
     <td>{% for s in g.sales %}<div class="cell-line">#{{ s.line.shipment_id }} · {{ s.line.brand }}</div>{% endfor %}</td>
     <td>{% for s in g.sales %}<div class="cell-line">{{ s.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    {% if user.is_admin_role %}
     <td>{% for s in g.sales %}<div class="cell-line">{% rate s.cost_price s.cost_price_uzs s.currency %}</div>{% endfor %}</td>
     <td>{% for s in g.sales %}<div class="cell-line">{% rate s.price s.price_uzs s.currency %}</div>{% endfor %}</td>
     <td>{% money g.total g.total_uzs g.first.currency %}</td>
@@ -59,6 +71,7 @@
       </a>
       {% else %}{% with s=g.first %}{% include "crm/_sale_row_actions.html" %}{% endwith %}{% endif %}
     </td>
+    {% endif %}
   </tr>
   {% endfor %}
 </table>

@@ -244,10 +244,13 @@
       — chasing a late load needs whichever the person on the other end uses.
       `current_transport` rather than the load's own field, so a load that changed
       vehicle mid-route names the one carrying it now.
+
+      A missing konteyner draws no line at all: a dash stacked under a dash reads as
+      two facts where there are none, and this table is scanned down the column.
       {% endcomment %}
       <td>
         <div>{{ s.current_transport|default:"—" }}</div>
-        <div class="muted load-sub">{{ s.container|default:"—" }}</div>
+        {% if s.container %}<div class="muted load-sub">{{ s.container }}</div>{% endif %}
       </td>
       <td>{{ s.eta }}</td>
       <td><span class="daybadge overdue">{{ s.days_late }} kun kechikdi</span></td>

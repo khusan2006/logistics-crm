@@ -73,6 +73,14 @@ def translator_user(db):
 
 
 @pytest.fixture
+def skladchi_user(db):
+    return User.objects.create_user(
+        username="skladchi", password=PASSWORD, role=User.Role.SKLADCHI,
+        first_name="Sklad", last_name="Chi",
+    )
+
+
+@pytest.fixture
 def admin_client(admin_user):
     client = Client()
     client.force_login(admin_user)
@@ -83,6 +91,13 @@ def admin_client(admin_user):
 def translator_client(translator_user):
     client = Client()
     client.force_login(translator_user)
+    return client
+
+
+@pytest.fixture
+def skladchi_client(skladchi_user):
+    client = Client()
+    client.force_login(skladchi_user)
     return client
 
 
