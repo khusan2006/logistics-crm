@@ -544,7 +544,11 @@ def test_audit_log_is_not_writable_through_any_route(admin_client, world, admin_
     AuditLog.record(admin_user, AuditLog.Action.CREATE, "Hamkor", 1, "seed")
     resp = admin_client.get(reverse("audit_list"))
     assert resp.status_code == 200
-    assert "<form" not in resp.content.decode().split("<main")[-1].lower()
+    # The page carries one form — the search box, which is a GET and narrows the list.
+    # What must not be there is anything that WRITES: no POST, no method= other than get.
+    body = resp.content.decode().split("<main")[-1].lower()
+    assert 'method="post"' not in body
+    assert body.count("<form") == 1 and 'method="get"' in body
     # The export writes nothing either: downloading it leaves the log the size it was.
     before = AuditLog.objects.count()
     assert admin_client.get(reverse("audit_list_export")).status_code == 200

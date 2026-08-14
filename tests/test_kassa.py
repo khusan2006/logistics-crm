@@ -257,7 +257,8 @@ class TestCurrentStateTiles:
                                        amount=Decimal("200.00"), method="cash")
         tiles = self._tiles(admin_client)
         assert list(tiles) == ["Kassada", "Mijozlar qarzi", "Omborda", "Yo'lda",
-                               "Hamkorlarda avansimiz", "Logistlarda", "Bojxonada",
+                               "Hamkorlarda avansimiz", "Logistlarda avansimiz",
+                               "Bojxonada avansimiz",
                                "Hamkorlarga qarzimiz"]
         for tile in tiles.values():
             assert tile["note"], tile["label"]
@@ -407,7 +408,7 @@ class TestCurrentStateTiles:
         tiles = self._tiles(admin_client)
         assert all(t["split"] is not None for t in tiles.values())
         assert all("split_full" in t for t in tiles.values())
-        assert dict(tiles["Logistlarda"]["split"])[Currency.USD] == Decimal("1000.00")
+        assert dict(tiles["Logistlarda avansimiz"]["split"])[Currency.USD] == Decimal("1000.00")
         assert "class=&quot;money-alt&quot;" not in admin_client.get("/kassa/").content.decode()
 
     def test_a_logist_funded_in_som_keeps_a_som_heap(self, admin_client, db):
@@ -435,7 +436,7 @@ class TestCurrentStateTiles:
         assert held == [(Currency.UZS, Decimal("12000000.00"))]
         assert owed == [(Currency.USD, Decimal("400.00"))]
         tiles = self._tiles(admin_client)
-        assert dict(tiles["Logistlarda"]["split"]) == {Currency.UZS: Decimal("12000000.00")}
+        assert dict(tiles["Logistlarda avansimiz"]["split"]) == {Currency.UZS: Decimal("12000000.00")}
         assert dict(tiles["Logistlarga qarzimiz"]["split"]) == {Currency.USD: Decimal("400.00")}
 
     def test_an_empty_currency_side_is_drawn_as_a_zero(self, admin_client, db):
@@ -447,8 +448,8 @@ class TestCurrentStateTiles:
                                        amount=Decimal("500.00"), method="cash")
         tiles = self._tiles(admin_client)
         # Nothing has been sent to a bojxonachi, so both sides of that one are empty.
-        assert tiles["Bojxonada"]["split"] == []
-        assert tiles["Bojxonada"]["split_full"] == [
+        assert tiles["Bojxonada avansimiz"]["split"] == []
+        assert tiles["Bojxonada avansimiz"]["split_full"] == [
             (Currency.USD, Decimal("0")), (Currency.UZS, Decimal("0"))]
         assert dict(tiles["Kassada"]["split_full"])[Currency.UZS] == Decimal("0")
         assert "0 so&#x27;m" in admin_client.get("/kassa/").content.decode()
@@ -468,7 +469,7 @@ class TestCurrentStateTiles:
         assert len(grouped) == len(set(grouped))
         assert set(grouped) == {t["label"] for t in ctx["tiles"]} - {"Kassada"}
         assert [g["title"] for g in ctx["tile_groups"]] == [
-            "Mol — tannarxda", "Bizga qaytadigan pul", "Qarzlarimiz"]
+            "Mol — tannarxda", "Boshqa qo'ldagi pulimiz", "Qarzlarimiz"]
 
 
 class TestDaterangeBar:

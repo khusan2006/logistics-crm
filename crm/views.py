@@ -47,7 +47,8 @@ from .models import (
     customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
     kapital_total_by_currency,
-    kassa_cash_by_currency, own_side, partner_positions, partner_positions_by_currency,
+    kassa_cash_by_currency, kassa_cash_by_method, own_side, partner_positions,
+    partner_positions_by_currency,
     reconcile_customer_allocations, stock_value_by_currency, transit_value,
     transit_value_by_currency, trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
@@ -228,10 +229,38 @@ def _monthly_rows(limit=12):
     return sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
 
 
+def _audit_search(q):
+    """One box across everything an audit row says: amal, obyekt, tafsilot, kim, ID.
+
+    A jurnal is read by remembering a fragment — "sotuv", "Pars", "12 000" — not by
+    knowing which column it fell in, so asking the reader to pick a column first is
+    asking them the one thing they cannot answer.
+
+    `action` is stored as a code ("payment") while the screen shows the Uzbek label
+    ("To'lov"), so the labels are matched here and turned back into codes; searching
+    for what is written in front of you has to work. A bare number matches the row's
+    own ID as well as any figure inside the tafsilot — "#38" and "38 546 940" are both
+    things people search for."""
+    filters = (Q(summary__icontains=q) | Q(target_type__icontains=q)
+               | Q(user__first_name__icontains=q) | Q(user__last_name__icontains=q)
+               | Q(user__username__icontains=q))
+    actions = [code for code, label in AuditLog.Action.choices if q.lower() in label.lower()]
+    if actions:
+        filters |= Q(action__in=actions)
+    digits = q.lstrip("#")
+    if digits.isdigit():
+        filters |= Q(target_id=int(digits))
+    return filters
+
+
 def _filter_audit(request):
-    """The audit jurnali's window — shared by the page and its Excel button."""
+    """The audit jurnali's search and window — shared by the page and its Excel
+    button, so the file holds the rows the screen was showing."""
+    q = request.GET.get("q", "").strip()
     date_from, date_to = _date_window(request)
     entries = AuditLog.objects.select_related("user")
+    if q:
+        entries = entries.filter(_audit_search(q))
     # Filtered on the calendar day the entry was written, not on a timestamp: the bar
     # hands over whole days, and `created_at__gte="2026-08-13"` would read as midnight
     # and drop everything logged during that last day.
@@ -239,16 +268,18 @@ def _filter_audit(request):
         entries = entries.filter(created_at__date__gte=date_from)
     if date_to:
         entries = entries.filter(created_at__date__lte=date_to)
-    return entries, date_from, date_to
+    return entries, {"q": q, "date_from": date_from, "date_to": date_to}
 
 
 @role_required(User.Role.ADMIN)
 def audit_list(request):
-    entries, date_from, date_to = _filter_audit(request)
+    entries, f = _filter_audit(request)
+    date_from, date_to = f["date_from"], f["date_to"]
     page = Paginator(entries, 20).get_page(request.GET.get("page"))
     return render(request, "crm/audit_list.html", {
         "export_url": reverse("audit_list_export"),
-        "page": page, "daterange": _daterange_bar(request, date_from, date_to)})
+        "page": page, "q": f["q"], "date_from": date_from, "date_to": date_to,
+        "daterange": _daterange_bar(request, date_from, date_to)})
 
 
 @role_required(User.Role.ADMIN)
@@ -2646,9 +2677,13 @@ WATERFALL_EXPENSE_OTHER = "Boshqa xarajatlar"
 #: morning — sat the same size as Bojxonaga qarzimiz, which is usually zero. The
 #: kassa figure is the hero now and the rest answer one question each: where the mol
 #: is, what is coming back to us, what we owe.
+# "Bizga qaytadigan pul" was wrong about three of the four rows under it: an avans at a
+# hamkor, a logist or a bojxonachi is not coming back as cash — it gets spent on the
+# next yuk. What all four DO have in common is that the money is ours and it is
+# somewhere else, which is what the heading says now.
 TILE_GROUPS = [
     ("mol", "Mol — tannarxda"),
-    ("back", "Bizga qaytadigan pul"),
+    ("back", "Boshqa qo'ldagi pulimiz"),
     ("owed", "Qarzlarimiz"),
 ]
 
@@ -2731,6 +2766,36 @@ def _waterfall(opening, opening_uzs, steps):
     for bar in bars:
         bar["left"], bar["width"] = place(*bar["span"])
     return bars, place(Decimal("0"), Decimal("0"))[0]
+
+
+def _digits(text):
+    """Just the digits — "28 800.00" and "28800" are the same figure to a reader."""
+    return "".join(ch for ch in str(text) if ch.isdigit())
+
+
+def _ledger_search(rows, q):
+    """One box across everything a kassa row says: kim/nima uchun, turi, usuli, sanasi
+    and the sum itself.
+
+    Money is remembered as a fragment — a hamkor's name, "bojxona", "28 800", the day —
+    and which column that fragment lives in is exactly what the person searching does
+    not know. Numbers are matched on their digits alone, so the same search works
+    whether the operator types 28800, 28 800 or 28,800.00, and it matches the figure
+    the row actually moved in rather than its converted twin."""
+    needle = q.casefold()
+    digits = _digits(q)
+    found = []
+    for row in rows:
+        text = " ".join([
+            row["title"], row["method"], LEDGER_KINDS.get(row["kind"], ""),
+            row["date"].strftime("%d.%m.%Y"),
+        ]).casefold()
+        if needle in text:
+            found.append(row)
+        elif digits and any(digits in _digits(row[side])
+                            for side in ("amount", "amount_uzs")):
+            found.append(row)
+    return found
 
 
 def _kassa_window(request):
@@ -3059,10 +3124,12 @@ def kassa(request):
         # A split like every other holder now. It was a blended dollar figure while a
         # logist's hisob was assumed to be dollars-only; they are funded in so'm too,
         # and that assumption hid a so'm gap entirely (see Logist.balance_by_currency).
-        {"label": "Logistlarda", "split": logist_held, "group": "back",
+        # Named "avansimiz", like the hamkor row above: the money is ours and it is in
+        # their hands, but it is spent on our next yuk rather than handed back.
+        {"label": "Logistlarda avansimiz", "split": logist_held, "group": "back",
          "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
          "tone": "in", "meta": "", "url": reverse("logist_list")},
-        {"label": "Bojxonada", "split": customs_held, "group": "back",
+        {"label": "Bojxonada avansimiz", "split": customs_held, "group": "back",
          "note": "yuklarni rasmiylashtirish uchun oldindan yuborilgan",
          "tone": "in", "meta": "", "url": reverse("customs_list")},
         {"label": "Hamkorlarga qarzimiz", "split": hamkor["owed"], "tone": "out",
@@ -3145,6 +3212,13 @@ def kassa(request):
         net_out_uzs += m_out_uzs
 
     income_rows, outflow_rows = _kassa_ledger_rows(window)
+    # One box over both daftar, applied to the rows rather than in SQL: a kassa row is
+    # assembled in Python out of six different models, so there is no queryset to ask.
+    # The lists are a period's worth of rows, not a table, so walking them is cheap.
+    q = request.GET.get("q", "").strip()
+    if q:
+        income_rows = _ledger_search(income_rows, q)
+        outflow_rows = _ledger_search(outflow_rows, q)
 
     # The ledger headline in the currency each row was booked in, not a dollar figure
     # with its so'm twin beneath: restating a so'm to'lov in dollars prints a number
@@ -3252,6 +3326,11 @@ def kassa(request):
         "advance": advance, "advance_uzs": advance_uzs,
         "own_cash": own_cash, "own_cash_uzs": own_cash_uzs,
         "tiles": tiles, "hero": hero, "tile_groups": tile_groups,
+        # Where the till's money is actually held. The hero answers "how much have we
+        # got"; this answers "how much of it can I hand over right now", and cash in
+        # the safe, money on a card and a bank balance are three different answers.
+        "cash_by_method": kassa_cash_by_method(),
+        "q": q,
         "income_split": income_split, "outflow_split": outflow_split,
         "waterfall": waterfall, "zero_line": zero_line,
         "balances": balances, "net_in": net_in, "net_out": net_out,
@@ -3846,6 +3925,12 @@ def kassa_export(request):
     They are read against each other, so they belong in one file the reader opens
     once rather than two downloads to line up by hand."""
     income_rows, outflow_rows = _kassa_ledger_rows(_kassa_window(request))
+    # Same rule as every other Excel button: the file is what the screen was showing,
+    # so the search narrows it too.
+    q = request.GET.get("q", "").strip()
+    if q:
+        income_rows = _ledger_search(income_rows, q)
+        outflow_rows = _ledger_search(outflow_rows, q)
     sheets = []
     for title, rows in (("Kirim", income_rows), ("Chiqim", outflow_rows)):
         headers, table, formats = _ledger_table(rows)

@@ -230,7 +230,7 @@ class TestTheTwoHeapsAreNeverAdded:
         _send(agent, "40000000")
         _send_usd(agent, "4000")
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
-        assert dict(tiles["Bojxonada"]["split"]) == {
+        assert dict(tiles["Bojxonada avansimiz"]["split"]) == {
             "usd": Decimal("4000.00"), "uzs": Decimal("40000000.00")}
 
 
@@ -880,8 +880,8 @@ class TestCustomsScreens:
     def test_kassa_carries_a_bojxonada_tile(self, admin_client, db):
         _send(_agent(), "40000000")
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
-        assert dict(tiles["Bojxonada"]["split"])["uzs"] == Decimal("40000000.00")
-        assert tiles["Bojxonada"]["url"] == "/customs/"
+        assert dict(tiles["Bojxonada avansimiz"]["split"])["uzs"] == Decimal("40000000.00")
+        assert tiles["Bojxonada avansimiz"]["url"] == "/customs/"
 
     def test_a_bojxonachi_we_owe_gets_a_tile_only_when_owed(self, admin_client, db):
         _send(_agent(), "40000000")

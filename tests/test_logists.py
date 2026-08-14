@@ -236,8 +236,8 @@ class TestLogistScreens:
         _send(logist, "10000")
         tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
         from crm.models import Currency
-        assert tiles["Logistlarda"]["split"] == [(Currency.USD, Decimal("10000.00"))]
-        assert tiles["Logistlarda"]["url"] == "/logists/"
+        assert tiles["Logistlarda avansimiz"]["split"] == [(Currency.USD, Decimal("10000.00"))]
+        assert tiles["Logistlarda avansimiz"]["url"] == "/logists/"
 
     def test_a_logist_with_money_behind_them_cannot_be_deleted(self, admin_client, db):
         logist = _logist()
@@ -273,7 +273,7 @@ class TestOwedLogistIsVisibleOnTheKassa:
     def test_no_empty_tile_when_nobody_is_owed(self, admin_client, db):
         _send(_logist(), "5000")
         labels = [t["label"] for t in admin_client.get("/kassa/").context["tiles"]]
-        assert "Logistlarda" in labels
+        assert "Logistlarda avansimiz" in labels
         assert "Logistlarga qarzimiz" not in labels
 
 

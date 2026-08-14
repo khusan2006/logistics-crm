@@ -4,13 +4,30 @@
 {% block content %}
 {# Narrowed by the day an entry was written — the shared ‹ davr › bar, as everywhere. #}
 {% include "crm/_daterange.html" %}
+
+{% comment %}
+One box across every column the table draws — amal, obyekt, tafsilot, kim, ID. A
+jurnal is read by remembering a fragment, not by knowing which column it fell in, so
+there is nothing to pick first. The davr rides along hidden: searching must not widen
+the window back out.
+{% endcomment %}
+<form method="get" class="searchbar" role="search" data-live-search>
+  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Amal, obyekt, tafsilot, kim yoki ID bo'yicha qidirish…" autocomplete="off" aria-label="Audit qidirish">
+    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+</form>
+
 <div class="table-wrap"><table>
   <tr><th>Vaqt</th><th>Kim</th><th>Amal</th><th>Obyekt</th><th>Tafsilot</th></tr>
   {% for row in page %}
   <tr><td>{{ row.created_at|date:"d.m.Y H:i" }}</td><td>{{ row.user|default:"Tizim" }}</td>
       <td>{{ row.get_action_display }}</td><td>{{ row.target_type }} {% if row.target_id %}#{{ row.target_id }}{% endif %}</td>
       <td>{{ row.summary }}</td></tr>
-  {% empty %}<tr><td colspan="5" class="muted">Yozuvlar yo'q</td></tr>{% endfor %}
+  {% empty %}<tr><td colspan="5" class="muted">{% if q %}«{{ q }}» bo'yicha yozuv topilmadi{% else %}Yozuvlar yo'q{% endif %}</td></tr>{% endfor %}
 </table></div>
 {% include "crm/_pagination.html" with label="yozuv" %}
 {% endblock %}

@@ -1704,6 +1704,53 @@ def kassa_cash_by_currency():
     return _by_currency(entries)
 
 
+def kassa_cash_by_method():
+    """The till split by WHERE it is held: naqd, kartada, bank o'tkazmasida — each in
+    its own currency.
+
+    "Kassada" as one figure answers "how much have we got"; it does not answer "how
+    much of it can I hand over right now", and those are different questions with
+    different answers. Cash in the safe, money on a card and a bank balance are three
+    separate heaps: the first is spendable this minute, the last can take a day and
+    carries a foiz on the way out.
+
+    Same arithmetic as `kassa_cash_by_currency` (kirim minus chiqim, each row counted
+    on its own side only) — this only keeps the method a row moved by. Every method is
+    returned even when empty, because an operator checking the safe against the screen
+    needs to see the zero rather than wonder where the line went."""
+    totals = {}
+
+    def add(method, currency, amount):
+        totals.setdefault(method, []).append((currency, amount))
+
+    for payment in CustomerPayment.objects.all():
+        add(payment.method, payment.currency,
+            own_side(payment, payment.net_amount, payment.net_amount_uzs))
+    # Already signed by direction, so it joins the inflow side whichever way it went.
+    for entry in Kapital.objects.all():
+        add(entry.method, entry.currency,
+            own_side(entry, entry.signed_amount, entry.signed_amount_uzs))
+    for rows in (SupplierPayment.objects.all(), ShipmentExpense.objects.all(),
+                 LogistPayment.objects.all(), CustomsPayment.objects.all()):
+        for row in rows:
+            add(row.method, row.currency,
+                -own_side(row, row.total_out, row.total_out_uzs))
+
+    rows = []
+    for code, label in PayMethod.choices:
+        split = _by_currency(totals.get(code, []))
+        held = dict(split)
+        rows.append({
+            "code": code, "label": label, "split": split,
+            # Both currencies always drawn, an empty side spelled out as a zero: the
+            # figure is checked against what is actually in the safe, and a missing
+            # line reads as "not counted" rather than as "none".
+            "split_full": [(currency, held.get(currency, Decimal("0")))
+                           for currency in (Currency.USD, Currency.UZS)],
+        })
+    return rows
+
+
 def kapital_total_by_currency():
     """[(currency, sof kapital)] — what the ta'sischi has put in less what they have
     taken out, each side in the money it actually moved in.

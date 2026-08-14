@@ -27,19 +27,32 @@ owed two separate debts, the ombor holds so'm-kelishuv mol beside dollar-kelishu
 and a logist carries both kinds of money for us. A side holding nothing says so —
 "0 so'm" — in the muted tone, so the currency is never simply missing.
 {% endcomment %}
+{% comment %}
+The till is drawn as the three places it is actually held — naqd, karta, bank — and
+NOT as a grand total above them. The total answered "how much have we got", which is
+never the question at the safe: what is being checked is one heap at a time, and the
+sum of three heaps you cannot spend interchangeably is not a fact anybody acts on.
+Adding it back would also put the same money on the screen twice.
+
+`split_full` on every line, so both currencies are always drawn and an empty side
+reads as a zero rather than going missing — a card with no so'm on it says "0 so'm".
+{% endcomment %}
 <a class="khero khero--{{ hero.tone }}" href="{{ hero.url }}">
   <div class="ktile-label">{{ hero.label }}</div>
-  {% comment %}
-  `split_full`, so both currencies are always on the line and an empty side reads as
-  a zero rather than going missing — a till with no so'm in it says "0 so'm".
-  {% endcomment %}
-  <div class="khero-nums">
-    {% for currency, amount in hero.split_full %}
-    <div class="khero-num{% if not amount %} krow-num--nil{% endif %}">{% money_in amount currency %}</div>
-    {% endfor %}
-  </div>
   <div class="ktile-note">{{ hero.note }}</div>
   {% if hero.meta %}<div class="ktile-meta">{{ hero.meta }}</div>{% endif %}
+  <div class="kmethods kmethods--hero">
+    {% for method in cash_by_method %}
+    <div>
+      <div class="ksm-label">{{ method.label }}</div>
+      <div class="ksm-flow">
+        {% for currency, amount in method.split_full %}
+        <span class="ksm-val{% if not amount %} krow-num--nil{% endif %}">{% money_in amount currency %}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
 </a>
 
 <div class="kgroups">
@@ -61,6 +74,25 @@ and a logist carries both kinds of money for us. A side holding nothing says so 
 </div>
 
 {% include "crm/_daterange.html" %}
+
+{% comment %}
+One box over BOTH daftar below — kim/nima uchun, turi, usuli, sanasi and the sum
+itself. Money is remembered as a fragment ("bojxona", a hamkor's name, 28 800), and
+which column that fragment sits in is the one thing the person searching does not
+know. The davr rides along hidden: searching must not widen the window back out.
+
+It narrows the two ro'yxat and their +/- totals. The board above stays put — those
+figures are the state of things today, not a slice of this period.
+{% endcomment %}
+<form method="get" class="searchbar" role="search" data-live-search>
+  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+  <div class="toolbar-search{% if q %} is-active{% endif %}">
+    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ q }}" placeholder="Mijoz, hamkor, turi, usuli, sana yoki summa bo'yicha qidirish…" autocomplete="off" aria-label="Kassa qidirish">
+    {% if q %}<a href="{% querystring q=None ipage=None opage=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+  </div>
+</form>
 
 <div class="grid-2 kassa-ledger">
   {# ── Kirim: mijozlardan qabul qilingan to'lovlar ── #}
@@ -105,7 +137,7 @@ and a logist carries both kinds of money for us. A side holding nothing says so 
           {% if r.detail_url %}<a class="icon-action" href="{{ r.detail_url }}" data-modal title="Batafsil"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg></a>{% endif %}
         </td>
       </tr>
-      {% empty %}<tr><td colspan="6" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="6" class="muted">{% if q %}«{{ q }}» bo'yicha kirim topilmadi.{% else %}Bu davrda kirim yo'q.{% endif %}</td></tr>{% endfor %}
     </table>
     </div>
     {% if income_page.has_other_pages %}
@@ -173,7 +205,7 @@ and a logist carries both kinds of money for us. A side holding nothing says so 
           {% endif %}
         </td>
       </tr>
-      {% empty %}<tr><td colspan="6" class="muted">Bu davrda chiqim yo'q.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="6" class="muted">{% if q %}«{{ q }}» bo'yicha chiqim topilmadi.{% else %}Bu davrda chiqim yo'q.{% endif %}</td></tr>{% endfor %}
     </table>
     </div>
     {% if outflow_page.has_other_pages %}
