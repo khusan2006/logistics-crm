@@ -1,0 +1,54 @@
+{% comment %}
+The Filtrlar panel and the chips that say what it did. Include it with a `filters`
+in context (built by `_filter_panel`) and nothing else:
+
+    {% include "crm/_filter_panel.html" %}
+
+Why a panel: the selects used to sit in the search row, so a page with four filters
+had four boxes competing with the search box and the davr bar, and on a narrow screen
+they wrapped into a wall. Here the row keeps ONE button that says how many filters are
+on, and the answer to "what is this list currently showing" is the chips — each one
+naming a filter and carrying its own ✕.
+
+The drawer markup (#filter-drawer, [data-filter-open], [data-filter-close]) and its
+CSS were already in base.html and app.css, written for the sotuvlar page and then
+never used by any template. This is that code finally being driven.
+
+The form carries the search term and the davr as hidden fields, so applying a filter
+never drops the question the user was asking.
+{% endcomment %}
+{% if filters %}
+{% if filters.chips %}
+<div class="filter-chips">
+  {% for chip in filters.chips %}
+  <span class="chip">{{ chip.label }}: <strong>{{ chip.value }}</strong><a href="{{ chip.remove_url }}" class="chip-x" title="Olib tashlash" aria-label="{{ chip.label }} filtrini olib tashlash">&times;</a></span>
+  {% endfor %}
+  <a href="{{ filters.clear_url }}" class="chip-clear">Tozalash</a>
+</div>
+{% endif %}
+
+<div class="drawer-backdrop" data-filter-close hidden></div>
+<aside class="filter-drawer" id="filter-drawer" aria-hidden="true" aria-label="Filtrlar">
+  <div class="drawer-head">
+    <h2>Filtrlar</h2>
+    <button type="button" class="modal-x" data-filter-close aria-label="Yopish">&times;</button>
+  </div>
+  <form method="get" class="drawer-body" data-autosubmit>
+    {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    {% for field in filters.fields %}
+    <label>{{ field.label }}
+      <select name="{{ field.name }}"{% if field.combobox %} data-combobox{% endif %}>
+        {% for value, label in field.options %}
+        <option value="{{ value }}"{% if field.value == value %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endfor %}
+    {# The no-JS path: without it a filter could be chosen and never applied. #}
+    <noscript><button type="submit" class="btn">Qo'llash</button></noscript>
+    <a class="btn btn-ghost" href="{{ filters.clear_url }}">Tozalash</a>
+  </form>
+</aside>
+{% endif %}

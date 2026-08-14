@@ -6,9 +6,10 @@ Tahlil sanasi: 2026-08-13. Taqqoslangan: `Desktop/package-crm` (crm ~14 000 satr
 Maqsad: logistika ishini yengillashtiradigan, allaqachon boshqa loyihada
 ishlab turgan va kichik xatolarning oldini oladigan narsalarni topish.
 
-> **Holat (2026-08-13):** 1-band (sana filtri bir xillashtirildi) va 2-band (Excel:
-> `exports.py` kuchaytirildi + har ro'yxatga tugma) bajarildi — pastda ✅ bilan
-> belgilangan. Keyingi navbatda: kelajak sanasi guardi va filtr paneli.
+> **Holat (2026-08-13):** 1, 2, 4 va 5.1-bandlar bajarildi — sana filtri
+> bir xillashtirildi, Excel har ro'yxatga qo'yildi, filtr paneli jonlandi va
+> kelajak sanasi taqiqlandi (pastda ✅ bilan belgilangan). Qolgani: muddat chipi,
+> kassa eksport modali va Excel yuklash (import).
 
 ---
 
@@ -172,7 +173,7 @@ yuk qatorlari va to'lovlar. Dry-run bosqichi bo'lmasa import o'zi bag manbasiga 
 
 ---
 
-## 4. Filtr paneli va chiplar — kod bor, ishlatilmayapti
+## 4. Filtr paneli va chiplar — ✅ BAJARILDI (kod bor edi, ishlatilmayotgan edi)
 
 `templates/base.html` da drawer JS **bor** ([base.html:1602](../templates/base.html:1602),
 [:1616](../templates/base.html:1616)), CSS da `.filter-chips`, `.chip-x`, `.filter-badge`
@@ -192,13 +193,38 @@ mas'ul xodim.
 olib yuradi — hozirgi logistics ro'yxatlarida filtrni almashtirganda qidiruv so'zi
 yo'qolib ketadi.
 
+### Nima qilindi — ✅
+
+1. **`_filter_panel(request, fields)`** — bitta ro'yxatdan uchta narsa quriladi:
+   paneldagi selectlar, jadval ustidagi chiplar va har chipning ✕ havolasi. Uchtasini
+   alohida yozish — filtrlar ro'yxati uch joyda takrorlanishi, ya'ni bittasi eskirib
+   qolishi degani. Chip **yorliqni** ko'rsatadi, xom qiymatni emas: `?partner=7`
+   o'qiyotgan odamga hech narsa demaydi, "Hamkor: Pars" esa deydi.
+2. **Standart qiymatdagi filtr — filtr emas.** Kelishuvlar "Tugallanmagan" bilan
+   ochiladi, saralash esa eng yangisidan — bularni sanash "Filtrlash (2)" ni
+   ma'nosiz qilardi. Badge faqat ro'yxatni haqiqatan toraytirgan filtrlarni sanaydi.
+3. **Uch sahifada qo'llandi**: kelishuvlar (hamkor · holat · to'lov · saralash),
+   hamkor to'lovlari va mijoz to'lovlari (hamkor/mijoz · usul · saralash). Selectlar
+   qidiruv qatoridan panelga ko'chdi; qatorda endi qidiruv, ‹davr›, "Filtrlash (N)"
+   va Excel turadi.
+4. **Ikki tomonlama saqlanish**: panel formasi `q` va `from/to` ni yashirin olib
+   yuradi, qidiruv formasi esa filtrlarni — ya'ni filtr qo'yganda qidiruv, qidirganda
+   filtr tushib qolmaydi.
+5. **O'lik kod jonlandi**: `base.html` dagi drawer JS va `app.css` dagi
+   `.filter-chips` / `.filter-badge` / `.filter-drawer` klasslari birinchi marta
+   ishlatilyapti — yangi CSS yozilmadi.
+6. `tests/test_filter_panel.py` — 9 ta test.
+
 **Hajmi:** o'rtacha. **Foydasi:** yuqori (allaqachon yozilgan JS/CSS jonlanadi).
+
+**Qolgan:** bronlar, bojxona, logistlar ro'yxatlarida ham select filtrlar bor —
+ular ham shu panelga o'tishi mumkin (`_filter_panel` ga bitta ro'yxat berilsa bo'ldi).
 
 ---
 
 ## 5. Kichik guardlar — arzon, lekin xato yo'lini yopadi
 
-### 5.1 Kelajak sanasi taqiqlansin
+### 5.1 Kelajak sanasi taqiqlansin — ✅ BAJARILDI
 
 package-crm da umumiy validator bor (`_reject_future`, forms.py:45): pul harakati
 kelajak sanasi bilan yozilmaydi. Sababi aniq yozilgan: kassa sahifasi bugungi kunga
@@ -209,8 +235,24 @@ logistics-crm da bunday guard **faqat bitta joyda**: `arrived`
 ([forms.py:962](../crm/forms.py:962)). Ochiq qolgan: mijoz to'lovi, hamkor to'lovi,
 logist to'lovi, bojxona to'lovi, kapital, xarajatlar, sotuv sanasi.
 
-**Taklif:** `crm/forms.py` ga bitta `reject_future(value)` validatori va uni barcha
-pul/sana maydonlariga ulash. Orqaga sana yozish ochiq qolsin (eski daftar kiritiladi).
+**Nima qilindi — ✅** `crm/forms.py` ga `reject_future(value)` validatori va uni
+ulaydigan `no_future_date(field)` qo'shildi. Ikkinchisi validatorni ham qo'yadi, ham
+`<input type="date">` ga `max="bugun"` yozadi: `max` noto'g'ri sanani **tanlab
+bo'lmaydigan** qiladi, validator esa qoidani haqiqiy qiladi (qo'lda yozilgan yoki
+skript orqali yuborilgan qiymat brauzer pickeriga umuman kirmaydi).
+
+Ulanish joyi — `MoneyEntryFormMixin.__init__`: unga tayangan har bir forma pul yozadi,
+shuning uchun `date` maydoni bo'lsa avtomatik guardlanadi (hamkor to'lovi, mijoz
+to'lovi va uning qatorlari, xarajat, kapital, logist to'lovi, bojxona to'lovi,
+qaytarish, bron). Mixinga tayanmaydigan uchtasi — `SaleCreateForm`,
+`CustomerAvansForm`, `CustomerPaymentTargetForm` — alohida ulandi.
+
+**Ataylab tegilmadi:** `debt_deadline` (muddat — ta'rifi bo'yicha kelajakda), yukning
+`eta` si (bu reja) va uzaytirishdagi `new_eta`. Yukning `arrived` sanasi esa
+allaqachon guardlangan edi.
+
+`tests/test_no_future_dates.py` — 14 ta test, shu jumladan "kechagi sana hali ham
+o'tadi" va "muddat kelajakda bo'lishi mumkin" degan ikki qarshi tekshiruv.
 
 ### 5.2 Muddat chipi (deadline badge)
 
@@ -248,8 +290,8 @@ kim uzoq vaqtdan beri yo'q — bir qarashda ko'rinadi.
 | ~~2~~ | ~~‹davr› barni barcha ro'yxatlarga qo'yish~~ ✅ | O'rtacha | ★★★ |
 | ~~3~~ | ~~`exports.py` ni kuchaytirish (format, ustun kengligi, ko'p varaq)~~ ✅ | Kichik | ★★ |
 | ~~4~~ | ~~Har bir ro'yxatga Excel tugmasi (sahifa filtri bilan)~~ ✅ | O'rtacha | ★★★ |
-| 5 | Kelajak sanasi guardi — barcha pul formalariga | Kichik | ★★ |
-| 6 | Filtr paneli + chiplar (o'lik JS/CSS jonlansin) | O'rtacha | ★★ |
+| ~~5~~ | ~~Kelajak sanasi guardi — barcha pul formalariga~~ ✅ | Kichik | ★★ |
+| ~~6~~ | ~~Filtr paneli + chiplar (o'lik JS/CSS jonlansin)~~ ✅ | O'rtacha | ★★ |
 | 7 | Muddat chipi + `timeago_uz` + "oxirgi harakat" | Kichik | ★ |
 | 8 | Kassa eksport modali (davr presetlari) | Kichik | ★ |
 | 9 | Excel yuklash (dry-run bilan) | Katta | ★★★ |

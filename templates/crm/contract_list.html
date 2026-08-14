@@ -31,39 +31,17 @@ so changing a select keeps it (see crm/_daterange.html).
     <input type="search" name="q" value="{{ q }}" placeholder="Marka, hamkor yoki kod bo'yicha qidirish…" autocomplete="off" aria-label="Kelishuv qidirish">
     {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
-  <label>Hamkor
-    <select name="partner" data-combobox>
-      <option value="">Hammasi</option>
-      {% for p in partners %}
-      <option value="{{ p.pk }}"{% if partner_id == p.pk|stringformat:"s" %} selected{% endif %}>{{ p.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Holat
-    <select name="state">
-      <option value="open"{% if state == "open" %} selected{% endif %}>Tugallanmagan</option>
-      <option value="done"{% if state == "done" %} selected{% endif %}>Tugallangan</option>
-      <option value=""{% if not state %} selected{% endif %}>Hammasi</option>
-    </select>
-  </label>
-  {% if pay_applies %}
-  <label>To'lov
-    <select name="pay">
-      {% for t in pay_tabs %}
-      <option value="{{ t.key }}"{% if pay == t.key %} selected{% endif %}>{{ t.label }} ({{ t.count }})</option>
-      {% endfor %}
-    </select>
-  </label>
-  {% endif %}
-  <label>Saralash
-    <select name="sort">
-      {% for key, label in sort_options %}
-      <option value="{{ key }}"{% if sort == key %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
-  {% if has_filters or q %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
+  {% comment %}
+  Hamkor / Holat / To'lov / Saralash moved into the Filtrlar panel — see
+  crm/_filter_panel.html. They rode along in this row as four selects, which on a
+  narrow screen wrapped into a wall above the table and left no room for the search
+  box they were meant to refine. The active ones now say so as chips.
+  {% endcomment %}
+  {% if state %}<input type="hidden" name="state" value="{{ state }}">{% endif %}
+  {% if partner_id %}<input type="hidden" name="partner" value="{{ partner_id }}">{% endif %}
+  {% if pay %}<input type="hidden" name="pay" value="{{ pay }}">{% endif %}
+  {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+  <noscript><button type="submit" class="btn btn-sm">Qidirish</button></noscript>
 </form>
 
 {% if page.object_list %}

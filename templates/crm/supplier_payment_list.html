@@ -23,31 +23,11 @@ changing a select never drops the window the user picked.
     {# Clears the search term only — the chosen davr stays where it is. #}
     {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
-  <label>Hamkor
-    <select name="partner" data-combobox>
-      <option value="">Hammasi</option>
-      {% for p in partners %}
-      <option value="{{ p.pk }}"{% if partner_id == p.pk|stringformat:"s" %} selected{% endif %}>{{ p.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Usul
-    <select name="method">
-      <option value="">Hammasi</option>
-      {% for value, label in methods %}
-      <option value="{{ value }}"{% if method == value %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Saralash
-    <select name="sort">
-      {% for key, label in sort_options %}
-      <option value="{{ key }}"{% if sort == key %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
-  {% if has_filters %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
+  {# Hamkor / Usul / Saralash live in the Filtrlar panel now (crm/_filter_panel.html). #}
+  {% if partner_id %}<input type="hidden" name="partner" value="{{ partner_id }}">{% endif %}
+  {% if method %}<input type="hidden" name="method" value="{{ method }}">{% endif %}
+  {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+  <noscript><button type="submit" class="btn btn-sm">Qidirish</button></noscript>
 </form>
 
 {% if page.object_list %}

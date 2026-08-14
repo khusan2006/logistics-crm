@@ -645,8 +645,25 @@ def contract_list(request):
     # hamkor's older kelishuv was pulled up beside their newest.
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     rows = list(page.object_list)
+    # The selects that used to crowd the search row. `state` defaults to "open"
+    # (unfinished business is the working view), so standing there draws no chip —
+    # a chip means "this list is narrower than it normally is".
+    panel = [
+        {"name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
+         "options": [("", "Hammasi")] + [(p.pk, p.name) for p in Partner.objects.all()]},
+        {"name": "state", "label": "Holat", "value": state, "default": "open",
+         "options": [("open", "Tugallanmagan"), ("done", "Tugallangan"), ("", "Hammasi")]},
+        {"name": "sort", "label": "Saralash", "value": sort, "default": CONTRACT_SORT_DEFAULT,
+         "options": [(key, label) for key, label, *_ in CONTRACT_SORTS]},
+    ]
+    if pay_applies:
+        panel.insert(2, {
+            "name": "pay", "label": "To'lov", "value": pay,
+            "options": [(t["key"], f"{t['label']} ({t['count']})") for t in pay_tabs],
+            "chip_options": [(t["key"], t["label"]) for t in pay_tabs]})
     return render(request, "crm/contract_list.html", {
         "export_url": reverse("contract_list_export"),
+        "filters": _filter_panel(request, panel),
         "page": page, "rows": rows,
         "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
@@ -829,6 +846,15 @@ def supplier_payment_list(request):
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/supplier_payment_list.html", {
         "export_url": reverse("supplier_payment_list_export"),
+        "filters": _filter_panel(request, [
+            {"name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
+             "options": [("", "Hammasi")] + [(p.pk, p.name) for p in Partner.objects.all()]},
+            {"name": "method", "label": "Usul", "value": method,
+             "options": [("", "Hammasi")] + list(PayMethod.choices)},
+            {"name": "sort", "label": "Saralash", "value": sort,
+             "default": SUPPLIER_PAYMENT_SORT_DEFAULT,
+             "options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS]},
+        ]),
         "page": page, "q": q, "partner_id": partner_id, "method": method,
         "date_from": date_from, "date_to": date_to, "sort": sort,
         "daterange": _daterange_bar(request, date_from, date_to),
@@ -1019,6 +1045,15 @@ def customer_payment_list(request):
     page = Paginator(payments, 20).get_page(request.GET.get("page"))
     return render(request, "crm/customer_payment_list.html", {
         "export_url": reverse("customer_payment_list_export"),
+        "filters": _filter_panel(request, [
+            {"name": "customer", "label": "Mijoz", "value": customer_id, "combobox": True,
+             "options": [("", "Hammasi")] + [(c.pk, c.name) for c in Customer.objects.all()]},
+            {"name": "method", "label": "Usul", "value": method,
+             "options": [("", "Hammasi")] + list(PayMethod.choices)},
+            {"name": "sort", "label": "Saralash", "value": sort,
+             "default": CUSTOMER_PAYMENT_SORT_DEFAULT,
+             "options": [(key, label) for key, label, *_ in CUSTOMER_PAYMENT_SORTS]},
+        ]),
         "page": page, "q": q, "customer_id": customer_id, "method": method,
         "date_from": date_from, "date_to": date_to, "sort": sort,
         "daterange": _daterange_bar(request, date_from, date_to),
@@ -3280,6 +3315,65 @@ def _window_url(request, date_from="", date_to=""):
         params["to"] = date_to
     query = params.urlencode()
     return f"{request.path}?{query}" if query else request.path
+
+
+def _filters_url(request, **overrides):
+    """This page's URL with some filters changed — `None` removes one.
+
+    The page number always goes: filtering renumbers the rows, so page 3 of the old
+    set is a page nobody asked for."""
+    params = request.GET.copy()
+    for key, value in overrides.items():
+        params.pop(key, None)
+        if value not in (None, ""):
+            params[key] = value
+    for key in _PAGE_PARAMS:
+        params.pop(key, None)
+    query = params.urlencode()
+    return f"{request.path}?{query}" if query else request.path
+
+
+def _filter_panel(request, fields):
+    """The slide-in Filtrlar panel and the chips above the table, from one list of
+    field specs — `{"name", "label", "options": [(value, label)], "value"}`.
+
+    Built here rather than in each template because a filter has to be said three
+    times over — as a control in the panel, as a chip naming what it did, and as a
+    link that removes it — and three copies of "which filters this page has" is three
+    chances for one of them to go stale. A chip carries the LABEL, not the raw value:
+    `?partner=7` says nothing to the person reading the page.
+
+    A field whose value is the default (blank, unless the spec says otherwise) draws
+    no chip and is not counted — "Filtrlash (2)" must mean two filters that are
+    actually narrowing something."""
+    panel_fields, chips = [], []
+    for spec in fields:
+        value = str(spec.get("value") or "")
+        default = str(spec.get("default", ""))
+        options = [(str(key), label) for key, label in spec["options"]]
+        # A select may say more than a chip should: the to'lov options carry their
+        # faceted counts ("To'lanmagan (3)"), which answer "what would picking this
+        # give me" — a question the chip is not asking. `chip_options` is how a field
+        # says its chip reads differently.
+        chip_names = dict((str(key), label)
+                          for key, label in spec.get("chip_options", options))
+        chosen = chip_names.get(value)
+        panel_fields.append({
+            "name": spec["name"], "label": spec["label"], "value": value,
+            "options": options, "combobox": spec.get("combobox", False),
+        })
+        if value != default and chosen is not None:
+            chips.append({"label": spec["label"], "value": chosen,
+                          "remove_url": _filters_url(request, **{spec["name"]: default or None})})
+    # Tozalash puts every field back to its default and keeps the search term and the
+    # davr: those are the question being asked, the panel is only how it was narrowed.
+    cleared = {spec["name"]: str(spec.get("default", "")) or None for spec in fields}
+    return {
+        "fields": panel_fields,
+        "chips": chips,
+        "count": len(chips),
+        "clear_url": _filters_url(request, **cleared),
+    }
 
 
 def _daterange_bar(request, date_from, date_to):

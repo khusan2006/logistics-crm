@@ -47,9 +47,11 @@ and drops the stale page number.
   <a class="btn btn-sm btn-ghost" href="{{ daterange.all_url }}">Hammasi</a>
   {% endif %}
   {% comment %}
-  Excel sits in this row rather than off in a menu: it downloads what the bar beside
-  it has narrowed, so it reads as part of the view. Drawn only where the view set an
-  `export_url` (see crm/_excel_button.html).
+  One row answers "what is this list showing": the period, how many filters are on,
+  and the file of exactly that. Each piece draws itself only where the view provided
+  it (crm/_filter_button.html, crm/_excel_button.html).
   {% endcomment %}
+  {% include "crm/_filter_button.html" %}
   {% include "crm/_excel_button.html" %}
 </div>
+{% include "crm/_filter_panel.html" %}

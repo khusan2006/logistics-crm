@@ -29,6 +29,36 @@ def date_widget(**attrs):
     return forms.DateInput(attrs={"type": "date", **attrs}, format="%Y-%m-%d")
 
 
+def reject_future(value):
+    """Money moves when it moves; it cannot move next month.
+
+    A pul harakati dated ahead of today splits the books in two: the kassa page
+    counts up to the day you are looking at, while every "how much is in the till"
+    figure counts every row there is. One future-dated to'lov is enough to make the
+    page show money that another part of the app insists is already there.
+
+    Backdating stays allowed — an old daftar is entered with its real dates, and
+    that is the ordinary case. Only tomorrow is refused.
+
+    Deliberately NOT applied to `debt_deadline` (a muddat is a future date by
+    definition), to a yuk's `eta` (a plan), or to `new_eta` on an uzaytirish.
+    """
+    if value and value > timezone.localdate():
+        raise forms.ValidationError("Sana kelajakda bo'la olmaydi.")
+    return value
+
+
+def no_future_date(field):
+    """Refuse tomorrow on a money field, in the form AND in the date picker.
+
+    The `max` attribute is what stops the wrong date being picked at all; the
+    validator is what makes the rule true — a hand-typed or scripted value never
+    reaches the browser's picker."""
+    field.validators.append(reject_future)
+    field.widget.attrs.setdefault("max", timezone.localdate().isoformat())
+    return field
+
+
 def currency_suffix(currency):
     """The unit a money box should be labelled with, once the currency is no longer
     the operator's to pick — the kelishuv already settled it."""
@@ -160,6 +190,11 @@ class MoneyEntryFormMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Every form built on this mixin books money, so its `date` is the day money
+        # moved and cannot be in the future (see reject_future). A row form with no
+        # date of its own — a kelishuv/yuk product line — simply has nothing to guard.
+        if "date" in self.fields:
+            no_future_date(self.fields["date"])
         if "currency" in self.fields:
             self.fields["currency"].widget.attrs["data-money-currency"] = ""
         if "exchange_rate" in self.fields:
@@ -485,6 +520,7 @@ class CustomerAvansForm(forms.Form):
         super().__init__(*args, **kwargs)
         for name in ("amount_usd", "amount_uzs"):
             _group_thousands(self.fields[name])
+        no_future_date(self.fields["date"])
 
     def clean(self):
         cleaned = super().clean()
@@ -1384,6 +1420,10 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["currency"].widget.attrs["data-money-currency"] = ""
+        # A sotuv is money moving too, and it draws granula off the shelf — neither
+        # can happen tomorrow. `debt_deadline` beside it is left alone: a muddat is a
+        # future date by definition.
+        no_future_date(self.fields["date"])
 
 
 class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
@@ -1672,6 +1712,9 @@ class CustomerPaymentTargetForm(forms.Form):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _customer_payer_field(self.fields["customer"])
+        # This header carries the sana for every row beneath it, so the guard belongs
+        # here too — the rows get it from MoneyEntryFormMixin.
+        no_future_date(self.fields["date"])
 
 
 class CustomerPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,

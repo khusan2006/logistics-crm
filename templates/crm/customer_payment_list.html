@@ -24,31 +24,11 @@ changing a select never drops the period the user chose.
     {# Clears the search term only — the chosen davr stays where it is. #}
     {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
-  <label>Mijoz
-    <select name="customer" data-combobox>
-      <option value="">Hammasi</option>
-      {% for c in customers %}
-      <option value="{{ c.pk }}"{% if customer_id == c.pk|stringformat:"s" %} selected{% endif %}>{{ c.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Usul
-    <select name="method">
-      <option value="">Hammasi</option>
-      {% for value, label in methods %}
-      <option value="{{ value }}"{% if method == value %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Saralash
-    <select name="sort">
-      {% for key, label in sort_options %}
-      <option value="{{ key }}"{% if sort == key %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <noscript><button type="submit" class="btn btn-sm">Filtrlash</button></noscript>
-  {% if has_filters %}<a class="btn btn-ghost btn-sm" href="?">Tozalash</a>{% endif %}
+  {# Mijoz / Usul / Saralash live in the Filtrlar panel now (crm/_filter_panel.html). #}
+  {% if customer_id %}<input type="hidden" name="customer" value="{{ customer_id }}">{% endif %}
+  {% if method %}<input type="hidden" name="method" value="{{ method }}">{% endif %}
+  {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+  <noscript><button type="submit" class="btn btn-sm">Qidirish</button></noscript>
 </form>
 
 {% if page.object_list %}

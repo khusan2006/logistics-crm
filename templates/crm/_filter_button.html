@@ -1,0 +1,13 @@
+{% comment %}
+The "Filtrlash" button that opens the panel, with a badge counting the filters that
+are actually narrowing something (see crm/_filter_panel.html). It lives in the same
+row as the ‹ davr › bar and the Excel button, so one row answers "what is this list
+showing" — and the badge is what makes an active filter impossible to miss after a
+page reload.
+{% endcomment %}
+{% if filters %}
+<button type="button" class="btn btn-sm btn-ghost filter-toggle{% if filters.count %} is-active{% endif %}" data-filter-open>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+  Filtrlash{% if filters.count %} <span class="filter-badge">{{ filters.count }}</span>{% endif %}
+</button>
+{% endif %}
