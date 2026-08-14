@@ -40,7 +40,7 @@ from crm.models import (
     SupplierPayment, fifo_lots, stock_value, transit_value,
 )
 
-from conftest import PASSWORD, make_contract, make_shipment
+from conftest import PASSWORD, make_contract, make_shipment, supplier_payment_rows
 
 
 # ---------------------------------------------------------------------------
@@ -252,10 +252,11 @@ def test_money_writes_require_a_csrf_token(world, admin_user):
     session posting a form somebody else built."""
     client = Client(enforce_csrf_checks=True)
     client.force_login(admin_user)
-    resp = client.post(reverse("supplier_payment_create"), {
-        "contract": world["contract"].pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "999", "exchange_rate": "12000", "method": "cash",
-    })
+    resp = client.post(
+        reverse("supplier_payment_create"),
+        supplier_payment_rows({"currency": "usd", "amount": "999", "exchange_rate": "12000",
+            "method": "cash"},
+                              contract=world["contract"].pk, date="2026-07-20"))
     assert resp.status_code == 403
     assert not SupplierPayment.objects.filter(amount=Decimal("999")).exists()
 
@@ -427,11 +428,12 @@ def test_de_arriving_a_lot_that_has_sales_does_not_double_count_the_sold_kg(
 # ---------------------------------------------------------------------------
 
 def test_audit_records_the_actor_and_the_amount_of_a_dollar_payment(admin_client, world, admin_user):
-    admin_client.post(reverse("supplier_payment_create"), {
-        "contract": world["contract"].pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "234.56", "exchange_rate": "12000", "method": "cash",
-        "commission_percent": "0", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        reverse("supplier_payment_create"),
+        supplier_payment_rows({"currency": "usd", "amount": "234.56", "exchange_rate": "12000",
+            "method": "cash", "commission_percent": "0", "fee_percent": "0",
+            "note": ""},
+                              contract=world["contract"].pk, date="2026-07-20"))
     payment = SupplierPayment.objects.get(amount=Decimal("234.56"))
     row = AuditLog.objects.filter(target_type="Hamkor to'lovi", target_id=payment.pk).get()
     assert row.user == admin_user
@@ -462,11 +464,12 @@ def test_audit_records_the_tarjimon_who_changed_a_driver(translator_client, tran
 # reporting wish, not a defect. Asserted below as the convention it is, with the
 # no-drift property that actually matters made explicit.
 def test_audit_of_a_som_payment_journals_the_stored_usd_side_exactly(admin_client, world):
-    admin_client.post(reverse("supplier_payment_create"), {
-        "contract": world["contract"].pk, "date": "2026-07-20", "currency": "uzs",
-        "amount": "2400000", "exchange_rate": "12000", "method": "cash",
-        "commission_percent": "0", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        reverse("supplier_payment_create"),
+        supplier_payment_rows({"currency": "uzs", "amount": "2400000", "exchange_rate": "12000",
+            "method": "cash", "commission_percent": "0", "fee_percent": "0",
+            "note": ""},
+                              contract=world["contract"].pk, date="2026-07-20"))
     payment = SupplierPayment.objects.get(amount_uzs=Decimal("2400000.00"))
     # the typed side is kept exact, the dollar side derived once \u2014 convert_pair's rule
     assert payment.currency == Currency.UZS and payment.amount == Decimal("200.00")
@@ -482,11 +485,12 @@ def test_audit_of_a_som_payment_journals_the_stored_usd_side_exactly(admin_clien
 
 def test_invalid_payment_submission_writes_no_audit_row_and_no_money(admin_client, world):
     before_money, before_audit = _money_snapshot(), AuditLog.objects.count()
-    resp = admin_client.post(reverse("supplier_payment_create"), {
-        "contract": world["contract"].pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "-5", "exchange_rate": "12000", "method": "cash",
-        "commission_percent": "0", "fee_percent": "0", "note": "",
-    })
+    resp = admin_client.post(
+        reverse("supplier_payment_create"),
+        supplier_payment_rows({"currency": "usd", "amount": "-5", "exchange_rate": "12000",
+            "method": "cash", "commission_percent": "0", "fee_percent": "0",
+            "note": ""},
+                              contract=world["contract"].pk, date="2026-07-20"))
     assert resp.status_code == 200          # form re-rendered with errors
     assert AuditLog.objects.count() == before_audit
     assert _money_snapshot() == before_money
@@ -748,11 +752,12 @@ def test_a_dollar_write_by_an_admin_round_trips_through_its_own_kurs(admin_clien
     from the audit side: the figure the trail journals must be the same figure the
     row stores, and converting it back at the row's own kurs must land on the stored
     so'm column — no third derivation anywhere in the write path."""
-    admin_client.post(reverse("supplier_payment_create"), {
-        "contract": world["contract"].pk, "date": "2026-07-20", "currency": "usd",
-        "amount": "123.45", "exchange_rate": "12345.67", "method": "cash",
-        "commission_percent": "0", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        reverse("supplier_payment_create"),
+        supplier_payment_rows({"currency": "usd", "amount": "123.45",
+            "exchange_rate": "12345.67", "method": "cash",
+            "commission_percent": "0", "fee_percent": "0", "note": ""},
+                              contract=world["contract"].pk, date="2026-07-20"))
     payment = SupplierPayment.objects.get(amount=Decimal("123.45"))
     assert payment.amount_uzs == (Decimal("123.45") * Decimal("12345.67")).quantize(
         Decimal("0.01"))
@@ -763,11 +768,12 @@ def test_a_dollar_write_by_an_admin_round_trips_through_its_own_kurs(admin_clien
 
 
 def test_a_som_write_by_an_admin_round_trips_through_its_own_kurs(admin_client, world):
-    admin_client.post(reverse("supplier_payment_create"), {
-        "contract": world["contract"].pk, "date": "2026-07-20", "currency": "uzs",
-        "amount": "2400000", "exchange_rate": "12000", "method": "cash",
-        "commission_percent": "0", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        reverse("supplier_payment_create"),
+        supplier_payment_rows({"currency": "uzs", "amount": "2400000", "exchange_rate": "12000",
+            "method": "cash", "commission_percent": "0", "fee_percent": "0",
+            "note": ""},
+                              contract=world["contract"].pk, date="2026-07-20"))
     payment = SupplierPayment.objects.get(currency=Currency.UZS)
     # the TYPED side survives untouched; the dollar side is the derived one
     assert payment.amount_uzs == Decimal("2400000.00")
@@ -853,14 +859,19 @@ def test_one_audit_row_per_successful_money_write_and_none_per_refused_one(
     lifecycle — create, refused create, edit, delete — and assert the journal grew by
     exactly the number of writes that actually landed."""
     before = AuditLog.objects.filter(target_type="Hamkor to'lovi").count()
-    payload = {"contract": world["contract"].pk, "date": "2026-07-20", "currency": "usd",
-               "amount": "10", "exchange_rate": "12000", "method": "cash",
-               "commission_percent": "0", "fee_percent": "0", "note": ""}
+    row = {"currency": "usd", "amount": "10", "exchange_rate": "12000",
+           "method": "cash", "commission_percent": "0", "fee_percent": "0", "note": ""}
 
-    admin_client.post(reverse("supplier_payment_create"), payload)               # +1
+    def create(**changes):
+        return admin_client.post(
+            reverse("supplier_payment_create"),
+            supplier_payment_rows({**row, **changes},
+                                  contract=world["contract"].pk, date="2026-07-20"))
+
+    create()                                                                     # +1
     payment = SupplierPayment.objects.get(amount=Decimal("10"))
-    admin_client.post(reverse("supplier_payment_create"), {**payload, "amount": "-1"})
-    admin_client.post(reverse("supplier_payment_create"), {**payload, "amount": "999999"})
+    create(amount="-1")
+    create(amount="999999")
     admin_client.post(reverse("supplier_payment_edit", args=[payment.pk]),
                       _payment_payload(payment, note="tuzatildi"))               # +1
     admin_client.post(reverse("supplier_payment_delete", args=[payment.pk]))     # +1

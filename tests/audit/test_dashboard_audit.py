@@ -24,7 +24,7 @@ from decimal import ROUND_HALF_UP, Decimal
 import pytest
 from django.utils import timezone
 
-from conftest import line_data, make_contract, make_shipment
+from conftest import line_data, make_contract, make_shipment, supplier_payment_rows
 from crm.models import (
     ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation,
     Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -186,11 +186,12 @@ def test_hamkor_tolov_typed_in_som_reaches_the_dashboard_exact(admin_client):
     """(a) round-trip through the REAL create view: the so'm the operator typed is
     the so'm the headline shows, to the tiyin, at an awkward kurs."""
     contract = make_contract(kg="100000", price="10.00")
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-05", "currency": "uzs",
-        "amount": "12345678", "exchange_rate": "12345.67",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12345678",
+            "exchange_rate": "12345.67", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-05"))
     assert resp.status_code == 302
     payment = SupplierPayment.objects.get()
     assert payment.currency == Currency.UZS
@@ -206,11 +207,12 @@ def test_hamkor_tolov_typed_in_som_reaches_the_dashboard_exact(admin_client):
 
 def test_hamkor_tolov_typed_in_usd_reaches_the_dashboard_exact(admin_client):
     contract = make_contract(kg="100000", price="10.00")
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-05", "currency": "usd",
-        "amount": "1234.56", "exchange_rate": "12345.67",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1234.56",
+            "exchange_rate": "12345.67", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-05"))
     assert resp.status_code == 302
     payment = SupplierPayment.objects.get()
     assert payment.amount == Decimal("1234.56")                  # typed side exact
@@ -226,11 +228,12 @@ def test_hamkor_tolov_typed_in_usd_reaches_the_dashboard_exact(admin_client):
 def test_resaving_a_dollar_hamkor_tolov_unchanged_moves_nothing(admin_client):
     """The control case: a row typed in dollars survives an untouched re-save."""
     contract = make_contract(kg="100000", price="10.00")
-    admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-05", "currency": "usd",
-        "amount": "1000", "exchange_rate": "12500",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1000", "exchange_rate": "12500",
+            "commission_percent": "0", "method": "cash", "fee_percent": "0",
+            "note": ""},
+                              contract=contract.pk, date="2026-07-05"))
     payment = SupplierPayment.objects.get()
     before = _figures(admin_client)
 
@@ -250,11 +253,12 @@ def test_resaving_a_dollar_hamkor_tolov_unchanged_moves_nothing(admin_client):
 def test_resaving_a_som_hamkor_tolov_unchanged_moves_nothing(admin_client):
     """(b) The 'values change by themselves' report, reproduced end to end."""
     contract = make_contract(kg="100000", price="10.00")
-    admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-05", "currency": "uzs",
-        "amount": "12500000", "exchange_rate": "12500",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12500000",
+            "exchange_rate": "12500", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-05"))
     payment = SupplierPayment.objects.get()
     assert (payment.amount, payment.amount_uzs) == (Decimal("1000.00"), Decimal("12500000.00"))
     before = _figures(admin_client)
@@ -308,11 +312,12 @@ def test_resaving_a_som_kelishuv_unchanged_moves_nothing(admin_client):
 # so'm figure. Kept as a test so the defect cannot come back.
 def test_a_som_row_reopens_with_the_som_figure_in_the_summa_box(admin_client):
     contract = make_contract(kg="100000", price="10.00")
-    admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-05", "currency": "uzs",
-        "amount": "12500000", "exchange_rate": "12500",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12500000",
+            "exchange_rate": "12500", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-05"))
     payment = SupplierPayment.objects.get()
 
     page = admin_client.get(f"/supplier-payments/{payment.pk}/edit/")
@@ -648,16 +653,18 @@ def test_a_legacy_rateless_row_is_counted_in_dollars_and_missing_in_som(admin_cl
 
 def test_a_huge_and_a_tiny_kurs_both_survive_the_round_trip(admin_client):
     contract = make_contract(kg="1000000", price="1.00")
-    admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-05", "currency": "uzs",
-        "amount": "999999999.99", "exchange_rate": "999999.99",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
-    admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-06", "currency": "usd",
-        "amount": "100", "exchange_rate": "0.01",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "999999999.99",
+            "exchange_rate": "999999.99", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-05"))
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "0.01",
+            "commission_percent": "0", "method": "cash", "fee_percent": "0",
+            "note": ""},
+                              contract=contract.pk, date="2026-07-06"))
     payments = list(SupplierPayment.objects.order_by("date"))
     assert len(payments) == 2
     assert payments[0].amount_uzs == Decimal("999999999.99")   # typed so'm exact

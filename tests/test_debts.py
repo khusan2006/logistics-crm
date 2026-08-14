@@ -135,6 +135,108 @@ def test_due_customers_sort_above_bigger_debts_not_yet_owed(admin_client, db):
     assert "muddati o'tgan" in html
 
 
+class TestTheQarzlarRow:
+    """Qarzlar carries the same row as every other ro'yxat: search on the left,
+    ‹ davr › and Excel on the right.
+
+    It had none of them for a while, on the reasoning that a qarz is a current-state
+    figure with no window to honour. But the table prints a MUDDAT, and the person on
+    this screen is chasing money by the day it was due — so the davr reads against the
+    muddat, and the search reads the name and telefon a debtor is looked up by."""
+
+    def _names(self, admin_client, qs=""):
+        rows = admin_client.get("/debts/" + qs).context["page"].object_list
+        return [r["customer"].name for r in rows]
+
+    def test_the_row_has_a_search_a_davr_and_an_excel(self, admin_client, db):
+        html = admin_client.get("/debts/").content.decode()
+        assert (html.index('class="listbar"')
+                < html.index('class="searchbar')
+                < html.index('class="daterange-bar"'))
+        assert "/debts/export.xlsx" in html
+
+    def test_the_search_reads_the_name_and_the_telefon(self, admin_client, db):
+        lot = _lot()
+        alisher = Customer.objects.create(name="Alisher Mebel", phone="901112233")
+        bekzod = Customer.objects.create(name="Bekzod Plast", phone="935556677")
+        _sale(alisher, lot, "100", "1.00", "2026-07-17")
+        _sale(bekzod, lot, "100", "1.00", "2026-07-17")
+
+        assert self._names(admin_client, "?q=alisher") == ["Alisher Mebel"]
+        assert self._names(admin_client, "?q=9355") == ["Bekzod Plast"]
+
+    def test_the_davr_narrows_by_the_muddat(self, admin_client, db):
+        lot = _lot()
+        july = _customer(name="Iyulda to'laydi")
+        august = _customer(name="Avgustda to'laydi")
+        _sale(july, lot, "100", "1.00", "2026-07-01", debt_deadline="2026-07-20")
+        _sale(august, lot, "100", "1.00", "2026-07-01", debt_deadline="2026-08-20")
+
+        assert self._names(admin_client, "?from=2026-07-01&to=2026-07-31") == ["Iyulda to'laydi"]
+        assert self._names(admin_client, "?from=2026-08-01&to=2026-08-31") == ["Avgustda to'laydi"]
+        assert sorted(self._names(admin_client)) == sorted([july.name, august.name])
+
+    def test_a_muddat_that_has_not_arrived_yet_is_still_findable(self, admin_client, db):
+        """The row shows the oldest muddat that has already come — but the window has
+        to reach the ones still ahead, or "kimning puli kelasi oyda kerak" has no
+        answer and the ‹ arrow › forward lands on an empty page every time."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        lot = _lot()
+        later = _customer(name="Keyin to'laydi")
+        deadline = timezone.localdate() + timedelta(days=20)
+        _sale(later, lot, "100", "1.00", "2026-07-01", debt_deadline=str(deadline))
+
+        rows = admin_client.get("/debts/", {"from": str(deadline), "to": str(deadline)})
+        listed = rows.context["page"].object_list
+        assert [r["customer"].name for r in listed] == ["Keyin to'laydi"]
+        # …and the row still says it is not due yet.
+        assert listed[0]["earliest_due"] is None
+
+    def test_a_qarz_with_no_muddat_at_all_stays_out_of_a_chosen_window(self, admin_client, db):
+        """It has no place on a calendar. With the filter off it is there as always."""
+        lot = _lot()
+        undated = _customer(name="Muddatsiz")
+        _sale(undated, lot, "100", "1.00", "2026-07-01")
+        Sale.objects.filter(customer=undated).update(debt_deadline=None)
+
+        assert self._names(admin_client) == ["Muddatsiz"]
+        assert self._names(admin_client, "?from=2026-07-01&to=2026-07-31") == []
+
+    def test_the_excel_file_is_what_the_screen_is_showing(self, admin_client, db):
+        """The promise every other Excel button on the app makes — the download is the
+        searched, filtered list, not the whole table."""
+        import openpyxl
+        from io import BytesIO
+        lot = _lot()
+        alisher = Customer.objects.create(name="Alisher Mebel", phone="901112233")
+        bekzod = Customer.objects.create(name="Bekzod Plast", phone="935556677")
+        _sale(alisher, lot, "100", "1.00", "2026-07-17")
+        _sale(bekzod, lot, "100", "1.00", "2026-07-17")
+
+        sheet = openpyxl.load_workbook(
+            BytesIO(admin_client.get("/debts/export.xlsx?q=alisher").content)).active
+        names = [row[0] for row in sheet.iter_rows(min_row=2, values_only=True)]
+        assert names == ["Alisher Mebel"]
+
+    def test_the_hisobotlar_link_is_still_the_whole_table(self, admin_client, db):
+        """That one is a report, not a screen — narrowing it by somebody else's
+        search would make the two buttons quietly mean different things."""
+        import openpyxl
+        from io import BytesIO
+        lot = _lot()
+        alisher = Customer.objects.create(name="Alisher Mebel", phone="901112233")
+        bekzod = Customer.objects.create(name="Bekzod Plast", phone="935556677")
+        _sale(alisher, lot, "100", "1.00", "2026-07-17")
+        _sale(bekzod, lot, "100", "1.00", "2026-07-17")
+
+        sheet = openpyxl.load_workbook(BytesIO(
+            admin_client.get("/reports/export/debts.xlsx?q=alisher").content)).active
+        names = sorted(row[0] for row in sheet.iter_rows(min_row=2, values_only=True))
+        assert names == ["Alisher Mebel", "Bekzod Plast"]
+
+
 def test_translator_forbidden(translator_client, db):
     customer = _customer()
     assert translator_client.get("/debts/").status_code == 403

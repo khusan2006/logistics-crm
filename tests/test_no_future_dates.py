@@ -15,7 +15,8 @@ the question that actually matters: did the row get written?
 from datetime import timedelta
 
 import pytest
-from conftest import line_data, make_contract, make_lot, make_shipment, payment_rows
+from conftest import (kapital_rows, line_data, logist_payment_rows, make_contract,
+                      make_lot, make_shipment, payment_rows, supplier_payment_rows)
 from django.utils import timezone
 
 from crm.models import (
@@ -54,10 +55,11 @@ def _arrived_lot(kg="1000", brand="LLDPE"):
 
 def test_a_hamkor_tolovi_cannot_be_dated_tomorrow(admin_client, db):
     contract = make_contract(kg="9000")
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": tomorrow(), "currency": "usd", "amount": "100",
-        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "12000",
+            "commission_percent": "", "method": "cash", "note": ""},
+                              contract=contract.pk, date=tomorrow()))
     assert not SupplierPayment.objects.exists()
     assert ERROR in resp.content.decode()
 
@@ -66,10 +68,11 @@ def test_the_same_tolov_dated_yesterday_goes_through(admin_client, db):
     """The guard is about tomorrow, not about "today only" — an old daftar is entered
     with the dates it really has."""
     contract = make_contract(kg="9000")
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": yesterday(), "currency": "usd", "amount": "100",
-        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "12000",
+            "commission_percent": "", "method": "cash", "note": ""},
+                              contract=contract.pk, date=yesterday()))
     assert resp.status_code == 302
     assert SupplierPayment.objects.count() == 1
 
@@ -83,9 +86,11 @@ def test_a_mijoz_tolovi_cannot_be_dated_tomorrow(admin_client, db):
 
 
 def test_kapital_cannot_be_dated_tomorrow(admin_client, db):
-    resp = admin_client.post("/kapital/new/", {
-        "kind": "in", "date": tomorrow(), "currency": "usd", "amount": "50000",
-        "exchange_rate": "12000", "method": "cash", "fee_percent": ""})
+    resp = admin_client.post(
+        "/kapital/new/",
+        kapital_rows({"currency": "usd", "amount": "50000", "exchange_rate": "12000",
+                      "method": "cash", "fee_percent": ""},
+                     kind="in", date=tomorrow()))
     assert not Kapital.objects.exists()
     assert ERROR in resp.content.decode()
 
@@ -102,9 +107,11 @@ def test_a_yuk_xarajati_cannot_be_dated_tomorrow(admin_client, db):
 
 def test_a_logist_tolovi_cannot_be_dated_tomorrow(admin_client, db):
     logist = Logist.objects.create(name="Bek", phone="1")
-    resp = admin_client.post("/logist-payments/new/", {
-        "logist": logist.pk, "date": tomorrow(), "currency": "usd", "amount": "100",
-        "exchange_rate": "12000", "method": "cash", "fee_percent": "", "note": ""})
+    resp = admin_client.post(
+        "/logist-payments/new/",
+        logist_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "12000",
+                             "method": "cash", "fee_percent": "", "note": ""},
+                            logist=logist.pk, date=tomorrow()))
     assert not LogistPayment.objects.exists()
     assert ERROR in resp.content.decode()
 

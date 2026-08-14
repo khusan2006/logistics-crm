@@ -31,6 +31,10 @@ from .forms import (
     SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
     ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
+    SupplierPaymentFormSet, SupplierPaymentTargetForm,
+    LogistPaymentFormSet, LogistPaymentTargetForm,
+    CustomsPaymentFormSet, CustomsPaymentTargetForm,
+    KapitalFormSet, KapitalTargetForm,
 )
 from .models import (
     AuditLog, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
@@ -44,9 +48,8 @@ from .models import (
     customer_paid_by_currency, customer_sales_by_currency,
     draw_down_bron, release_bron,
     customs_positions, logist_positions, payable_by_currency, supplier_paid_by_currency,
-    customer_advance_by_currency, customer_advance_total, customer_balance_by_currency,
+    customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
-    kapital_total_by_currency,
     kassa_cash_by_currency, kassa_cash_by_method, own_side, partner_positions,
     partner_positions_by_currency,
     reconcile_customer_allocations, stock_value_by_currency, transit_value,
@@ -916,24 +919,47 @@ def _payment_code_filter(q):
 
 @role_required(User.Role.ADMIN)
 def supplier_payment_create(request):
+    """Several to'lovlar at once: a hamkor paid 10 000$ is commonly paid part in cash
+    and the rest by perechisleniya. Each way the money left is its own row — its own
+    valyuta, kurs, usul, bank foizi and vositachi foizi, because they charge
+    differently; the kelishuv and the sana are shared."""
     initial = {}
     contract_id = request.GET.get("contract")
     if contract_id and contract_id.isdigit():
         initial["contract"] = int(contract_id)
-    form = SupplierPaymentForm(request.POST or None, initial=initial)
+    target = SupplierPaymentTargetForm(request.POST or None, initial=initial)
+    # Read straight off POST rather than from cleaned_data: the rows have to be BUILT
+    # knowing which kelishuv is being paid, because that is what decides whether each
+    # one has to ask for a kurs, and the header is not clean yet.
+    contract = _posted_contract(request)
+    rows = SupplierPaymentFormSet(
+        request.POST or None, queryset=SupplierPayment.objects.none(),
+        form_kwargs={"contract": contract})
+    rows.contract = contract
+
+    def respond(invalid=False):
+        return form_response(request, target, "Yangi to'lov", invalid=invalid,
+                             extra_context={"lines": rows, "lines_legend": "To'lovlar",
+                                            "lines_class": "lineset--money lineset--payment",
+                                            "lines_add_label": "+ To'lov qo'shish"})
+
     if request.method == "POST":
-        if form.is_valid():
-            payment = form.save(commit=False)
-            payment.created_by = request.user
-            payment.save()
+        if target.is_valid() and rows.is_valid():
+            contract = target.cleaned_data["contract"]
+            saved = _save_split_rows(rows, request.user,
+                                     contract=contract, date=target.cleaned_data["date"])
+            total = sum((p.amount for p in saved), Decimal("0"))
             AuditLog.record(
-                request.user, AuditLog.Action.PAYMENT, "Hamkor to'lovi", payment.pk,
-                f"To'lov: {payment.amount}$ · kelishuv #{payment.contract_id}",
+                request.user, AuditLog.Action.PAYMENT, "Hamkor to'lovi",
+                saved[0].pk if saved else None,
+                f"To'lov: {len(saved)} ta · {total}$ · kelishuv #{contract.pk}",
             )
-            messages.success(request, "To'lov qo'shildi")
+            messages.success(
+                request,
+                f"{len(saved)} ta to'lov qo'shildi" if len(saved) > 1 else "To'lov qo'shildi")
             return form_success(request, reverse("supplier_payment_list"))
-        return form_response(request, form, "Yangi to'lov", invalid=True)
-    return form_response(request, form, "Yangi to'lov")
+        return respond(invalid=True)
+    return respond()
 
 
 @role_required(User.Role.ADMIN)
@@ -1130,11 +1156,15 @@ def customer_payment_create(request):
             # is what makes that correct: every allocation lowers the sotuv's qoldiq,
             # so the second row picks up the same pick where the first ran out.
             picks = _parse_alloc_picks(request.POST)
+            kept = [f for f in rows.forms
+                    if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+            # Same id on every row of one settlement, so the kassa draws a mijoz who
+            # handed over half in dollars and half in so'm as one to'lov — see
+            # `CashEntry.group`. Not written on a single row: that is not a group.
+            group = uuid4() if len(kept) > 1 else None
             saved = []
             with transaction.atomic():
-                for form in rows.forms:
-                    if not form.cleaned_data or form.cleaned_data.get("DELETE"):
-                        continue
+                for form in kept:
                     payment = form.save(commit=False)
                     payment.customer = customer
                     payment.date = target.cleaned_data["date"]
@@ -1142,6 +1172,7 @@ def customer_payment_create(request):
                     # the later sweeps — which run long after this modal closed — put
                     # the money back where the operator aimed it.
                     payment.target_currency = target.cleaned_data["debt_currency"]
+                    payment.group = group
                     payment.created_by = request.user
                     payment.save()
                     allocate_customer_payment(payment, picks)
@@ -1161,6 +1192,49 @@ def customer_payment_create(request):
             return form_success(request, reverse("customer_payment_list"))
         return respond(invalid=True)
     return respond()
+
+
+def _save_split_rows(rows, user, **shared):
+    """Write the rows of one split payment, all of them or none.
+
+    One transaction on purpose: a settlement that landed half-written — the naqd in,
+    the perechisleniya lost to a validation error nobody read — is worse than one
+    that was refused outright, because the kassa then looks right to everybody except
+    the hamkor. `shared` is what the header answered once for every row.
+
+    They come out carrying one `group` id, so the screens can draw them as the single
+    payment they are — see `CashEntry.group`."""
+    kept = [f for f in rows.forms
+            if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+    # Only a real split gets one. A to'lov that moved one way is not a group of
+    # anything, and an id on it would make every screen ask a question with one
+    # possible answer.
+    group = uuid4() if len(kept) > 1 else None
+    saved = []
+    with transaction.atomic():
+        for form in kept:
+            row = form.save(commit=False)
+            for name, value in shared.items():
+                setattr(row, name, value)
+            row.group = group
+            row.created_by = user
+            row.save()
+            saved.append(row)
+    return saved
+
+
+def _posted_contract(request):
+    """The kelishuv a split hamkor to'lov is being written against, straight off POST.
+
+    Its currency is what tells each row whether it has to ask for a kurs, and the
+    rows are built before the header has been validated — the same reason the mijoz
+    modal reads `debt_currency` off POST (see `customer_payment_create`). A missing
+    or junk id is simply no kelishuv: the header's own validation is what reports
+    that, not a crash here."""
+    raw = (request.POST.get("contract") or "").strip()
+    if not raw.isdigit():
+        return None
+    return Contract.objects.filter(pk=raw).first()
 
 
 def _bound_customer(target, request):
@@ -2574,18 +2648,49 @@ def return_delete(request, pk):
     )
 
 
-@role_required(User.Role.ADMIN)
-def debt_list(request):
+def _filter_debts(request):
+    """The qarzdorlar a screen is showing — searched, and narrowed to a muddat davr.
+
+    Shared by the page and its Excel button, so the file cannot be a different list
+    from the one on screen.
+
+    The davr is read against the MUDDAT, the one date this list prints: "kimning puli
+    shu oralig'da kelishi kerak" is the question a qarz screen has a date for. It
+    matches ANY unpaid sotuv's muddat, not just the one the row happens to show —
+    that one is the oldest muddat that has already ARRIVED (see `Sale.is_due`), so
+    matching on it alone would make next week's window permanently empty and the
+    arrows pointless in the one direction a debt chaser actually looks.
+
+    A qarz with no muddat at all has no place on a calendar, so a chosen window leaves
+    it out rather than inventing a day for it — the same rule the yuklar list follows
+    for a load with no sana."""
+    q = request.GET.get("q", "").strip()
+    date_from, date_to = _date_window(request)
+    window_from = _date.fromisoformat(date_from) if date_from else None
+    window_to = _date.fromisoformat(date_to) if date_to else None
+
+    customers = Customer.objects.prefetch_related("sales__allocations",
+                                                  "customer_payments__allocations")
+    if q:
+        customers = customers.filter(Q(name__icontains=q) | Q(phone__icontains=q))
+
     # A mijoz is a debtor if ANY currency they deal in is owed — a dollar avans does
     # not cancel a so'm qarz, so netting the two would hide a debt that is real.
     rows = []
-    for c in Customer.objects.prefetch_related("sales__allocations",
-                                               "customer_payments__allocations"):
+    for c in customers:
         positions = customer_balance_by_currency(c)
         owed = [(currency, amount) for currency, amount in positions if amount > 0]
         if not owed:
             continue
         due = [s.debt_deadline for s in c.sales.all() if s.is_due]
+        earliest_due = min(due) if due else None
+        if window_from or window_to:
+            muddats = [s.debt_deadline for s in c.sales.all()
+                       if s.remaining > 0 and s.debt_deadline is not None]
+            if not any((window_from is None or muddat >= window_from)
+                       and (window_to is None or muddat <= window_to)
+                       for muddat in muddats):
+                continue
         rows.append({
             "customer": c,
             "positions": owed,
@@ -2594,7 +2699,7 @@ def debt_list(request):
             "size": max(amount for _currency, amount in owed),
             "overdue_count": sum(1 for s in c.sales.all() if s.is_overdue),
             "due_count": len(due),
-            "earliest_due": min(due) if due else None,
+            "earliest_due": earliest_due,
         })
     # Whoever has to pay NOW comes first — oldest muddat at the very top, so the
     # longest-waiting debt leads. Sorting the whole list by size of qarz instead
@@ -2603,9 +2708,21 @@ def debt_list(request):
     later = [r for r in rows if not r["earliest_due"]]
     chase.sort(key=lambda r: (r["earliest_due"], -r["size"]))
     later.sort(key=lambda r: -r["size"])
-    page = Paginator(chase + later, 20).get_page(request.GET.get("page"))
+    return chase + later, q, date_from, date_to
+
+
+@role_required(User.Role.ADMIN)
+def debt_list(request):
+    rows, q, date_from, date_to = _filter_debts(request)
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
     return render(request, "crm/debt_list.html", {
-        "page": page, "export_url": reverse("export_debts")})
+        "page": page, "q": q,
+        "date_from": date_from, "date_to": date_to,
+        "daterange": _daterange_bar(request, date_from, date_to),
+        # Its OWN export, not the hisobotlar one: this button has to hand back the
+        # rows the search and the davr left, and the reports page's link is the whole
+        # table on purpose.
+        "export_url": reverse("debt_list_export")})
 
 
 def _customer_history(customer):
@@ -2681,10 +2798,16 @@ WATERFALL_EXPENSE_OTHER = "Boshqa xarajatlar"
 # hamkor, a logist or a bojxonachi is not coming back as cash — it gets spent on the
 # next yuk. What all four DO have in common is that the money is ours and it is
 # somewhere else, which is what the heading says now.
+# The three headings the kassa board reads under, and the colour each card wears.
+# The tone is the semantic one the app already uses everywhere: mol is stock we are
+# holding (violet, like every other "goods" figure), `back` is money that is ours and
+# is coming back (green), `owed` is money going out (red). The key is what picks the
+# card's icon in the template — kept there, beside every other inline svg, rather than
+# as markup smuggled through the view.
 TILE_GROUPS = [
-    ("mol", "Mol — tannarxda"),
-    ("back", "Boshqa qo'ldagi pulimiz"),
-    ("owed", "Qarzlarimiz"),
+    ("mol", "Mol — tannarxda", "violet"),
+    ("back", "Boshqa qo'ldagi pulimiz", "green"),
+    ("owed", "Qarzlarimiz", "red"),
 ]
 
 
@@ -2802,8 +2925,9 @@ def _kassa_window(request):
     """Everything the kassa's ledgers are built from, narrowed to the chosen davr.
 
     One place that says WHICH rows are in the period, so the page and its Excel
-    download cannot end up looking at different money."""
-    date_from, date_to = _date_window(request)
+    download cannot end up looking at different money — including the bugun the screen
+    opens on, which the file would otherwise ignore and hand back the whole history."""
+    date_from, date_to = _kassa_date_window(request)
 
     def _range(qs):
         if date_from:
@@ -2853,7 +2977,7 @@ def _kassa_ledger_rows(window):
     income_rows = []
     for p in cust_pays:
         income_rows.append({
-            "kind": "customer", "pk": p.pk, "date": p.date, "obj": p,
+            "kind": "customer", "pk": p.pk, "date": p.date, "obj": p, "group": p.group,
             "crossed": p.crosses_currency,
             "title": p.customer.name,
             "method_code": p.method, "method": p.get_method_display(),
@@ -2867,7 +2991,7 @@ def _kassa_ledger_rows(window):
     # a chiqim row below, so the two never cancel inside one ledger's total.
     for k in kapital_in:
         income_rows.append({
-            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
+            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k, "group": k.group,
             "crossed": k.crosses_currency,
             "title": "Ta'sischi kapitali" + (f" · {k.note}" if k.note else ""),
             "method_code": k.method, "method": k.get_method_display(),
@@ -2883,7 +3007,7 @@ def _kassa_ledger_rows(window):
     outflow_rows = []
     for p in sup_pays:
         outflow_rows.append({
-            "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p,
+            "kind": "supplier", "pk": p.pk, "date": p.date, "obj": p, "group": p.group,
             "crossed": p.crosses_currency,
             # The hamkor is already inside the code, so the brand is the useful half here
             "title": f"Kelishuv {p.contract.code} · {p.contract.brand_summary}",
@@ -2919,7 +3043,7 @@ def _kassa_ledger_rows(window):
         })
     for p in logist_pays:
         outflow_rows.append({
-            "kind": "logist", "pk": p.pk, "date": p.date, "obj": p,
+            "kind": "logist", "pk": p.pk, "date": p.date, "obj": p, "group": p.group,
             "crossed": p.crosses_currency,
             "title": f"Logist {p.logist.name}ga" + (f" · {p.note}" if p.note else ""),
             "method_code": p.method, "method": p.get_method_display(),
@@ -2940,7 +3064,7 @@ def _kassa_ledger_rows(window):
     for p in customs_pays:
         target = f" · yuk #{p.shipment_id}" if p.shipment_id else ""
         outflow_rows.append({
-            "kind": "customs", "pk": p.pk, "date": p.date, "obj": p,
+            "kind": "customs", "pk": p.pk, "date": p.date, "obj": p, "group": p.group,
             "crossed": p.crosses_currency,
             "title": f"Bojxona · {p.agent.name}ga{target}"
                      + (f" · {p.note}" if p.note else ""),
@@ -2966,7 +3090,7 @@ def _kassa_ledger_rows(window):
         if not e.from_kassa:
             continue
         outflow_rows.append({
-            "kind": "expense", "pk": e.pk, "date": e.date, "obj": e,
+            "kind": "expense", "pk": e.pk, "date": e.date, "obj": e, "group": e.group,
             "crossed": e.crosses_currency,
             "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
             "method_code": e.method, "method": e.get_method_display(),
@@ -2988,7 +3112,7 @@ def _kassa_ledger_rows(window):
     # signed figure: this ledger prints magnitudes and supplies the minus itself.
     for k in kapital_out:
         outflow_rows.append({
-            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k,
+            "kind": "kapital", "pk": k.pk, "date": k.date, "obj": k, "group": k.group,
             "crossed": k.crosses_currency,
             "title": "Ta'sischi oldi" + (f" · {k.note}" if k.note else ""),
             "method_code": k.method, "method": k.get_method_display(),
@@ -2999,14 +3123,56 @@ def _kassa_ledger_rows(window):
     return income_rows, outflow_rows
 
 
+def _ledger_blocks(rows):
+    """The ledger's rows folded so one to'lov reads as one line.
+
+    A settlement paid half naqd and half by perechisleniya is two movements of money
+    and stays two rows everywhere they are counted — the safe and the bank went down
+    by different figures, the totals add them separately, and the Excel file lists
+    both. It is on the SCREEN that two lines with the same sana and the same tavsif
+    read as two payments to somebody who made one, so the daftar draws the block as a
+    single line with the usul and the summa stacked inside it (the sotuvlar list folds
+    a multi-marka sotuv the same way; see `_sale_blocks`).
+
+    Blocked on (kind, group) rather than on the id alone: a vositachi cut and a bank
+    foiz are drawn as their own rows off the same to'lov, and those are separate
+    money leaving rather than another way the same money left.
+
+    The block carries the first row's own keys, so everything the template already
+    asks a row for — sana, tavsif, the links — keeps working; `rows` and `count` are
+    what the stacked cells read."""
+    blocks = []
+    for row in rows:
+        block = blocks[-1] if blocks else None
+        # `.get`, because the derived rows — a vositachi cut, a bank foiz — carry no
+        # group at all: they are not a way some to'lov moved, they are their own money
+        # leaving off the back of one.
+        same = (block is not None and row.get("group") is not None
+                and block.get("group") == row.get("group")
+                and block["kind"] == row["kind"])
+        if same:
+            block["rows"].append(row)
+        else:
+            blocks.append({**row, "rows": [row]})
+    for block in blocks:
+        # Back into entry order inside the block: the daftar reads newest first, but
+        # the halves of one to'lov were typed oldest first and read that way.
+        block["rows"] = sorted(block["rows"], key=lambda r: r["pk"])
+        block["count"] = len(block["rows"])
+    return blocks
+
+
 @role_required(User.Role.ADMIN)
 def kassa(request):
     """The till, client-crm style: a current-state hero (Kassadagi pul + what we
     owe hamkorlar), per-method USD balances for the selected period, and two
     Excel-like ledgers side by side — Kirim (customer payments) and Chiqim
     (supplier payments + shipment expenses). Purely derived; ?from&to narrows
-    the period section, the hero is all-time."""
-    date_from, date_to = _date_window(request)
+    the period section, the hero is all-time.
+
+    Unlike every other list this one opens on BUGUN rather than on hammasi — see
+    `_kassa_date_window`."""
+    date_from, date_to = _kassa_date_window(request)
 
     # Summed per row, not in SQL: what reaches the kassa is net of the bank's foiz
     # on the way in and gross of it (plus the vositachi cut) on the way out, and
@@ -3061,8 +3227,6 @@ def kassa(request):
     # The same two facts as heaps rather than as one sum converted twice: so'm in
     # the safe is not dollars in the safe.
     cash_split = kassa_cash_by_currency()
-    advance_split = customer_advance_by_currency()
-    kapital_split = kapital_total_by_currency()
 
     # Pozitsiya: what the cash figure MEANS. Cash alone reads as a disaster while
     # the money is sitting in trucks and mijoz qarzi; these are the lines that say
@@ -3090,18 +3254,13 @@ def kassa(request):
     # `group` is which of the TILE_GROUPS headings a tile reads under; the Kassada
     # tile carries none because it is the hero above them.
     tiles = [
-        # Two different "not all of this is what it looks like" facts, so both are
-        # named when both apply: an avans is money we are holding for somebody else,
-        # kapital is money that was put in rather than earned.
+        # The hero carries no note and no meta: it is the card the page is opened for,
+        # and a line saying "hozir qo'lda va hisobda turgan pul" above the till only
+        # pushed the three heaps down. Every other tile keeps its note — those DO need
+        # saying, because "Hamkorlarda avansimiz" is not self-evident the way the
+        # kassa is.
         {"label": "Kassada", "split": cash_split, "group": None,
-         "note": "hozir qo'lda va hisobda turgan pul", "tone": "cash",
-         "meta": " · ".join(
-             part for part in (
-                 (f"shundan mijoz avansi {_money_line(advance_split)}"
-                  if advance_split else ""),
-                 (f"shundan kapital {_money_line(kapital_split)}"
-                  if kapital_split else ""))
-             if part),
+         "note": "", "tone": "cash", "meta": "",
          "url": reverse("customer_payment_list")},
         {"label": "Mijozlar qarzi", "split": receivable, "group": "back",
          "note": "mol berilgan, puli hali olinmagan", "tone": "in",
@@ -3174,9 +3333,9 @@ def kassa(request):
     # reads and what says which facts the board holds. `hero`/`tile_groups` are the
     # same dicts arranged for the page.
     hero = tiles[0]
-    tile_groups = [{"title": title,
+    tile_groups = [{"key": key, "title": title, "tone": tone,
                     "tiles": [t for t in tiles if t["group"] == key]}
-                   for key, title in TILE_GROUPS]
+                   for key, title, tone in TILE_GROUPS]
     tile_groups = [g for g in tile_groups if g["tiles"]]
 
     window = _kassa_window(request)
@@ -3236,9 +3395,11 @@ def kassa(request):
 
     # Each ledger pages independently (?ipage / ?opage) so scrolling one doesn't
     # reset the other. The +/- totals above are the whole-period figures, not the
-    # page's, so they stay computed from the full lists.
-    income_page = Paginator(income_rows, 20).get_page(request.GET.get("ipage"))
-    outflow_page = Paginator(outflow_rows, 20).get_page(request.GET.get("opage"))
+    # page's, so they stay computed from the full ROW lists — a split to'lov is two
+    # movements of money however many lines it is drawn on. Paging counts lines,
+    # because that is what the reader is scrolling through.
+    income_page = Paginator(_ledger_blocks(income_rows), 20).get_page(request.GET.get("ipage"))
+    outflow_page = Paginator(_ledger_blocks(outflow_rows), 20).get_page(request.GET.get("opage"))
 
     # What we owe hamkorlar RIGHT NOW (not date-filtered — a current-state figure):
     # per contract the debt accrues per shipped truck (shipped value − paid).
@@ -3318,7 +3479,7 @@ def kassa(request):
     # The period control: one compact ‹ date › bar that opens a calendar, rather than
     # a row of preset tabs beside two bare date inputs. The presets did not disappear
     # — they moved inside the popover, next to the month they change.
-    daterange = _daterange_bar(request, date_from, date_to)
+    daterange = _daterange_bar(request, date_from, date_to, opens_on_today=True)
 
     return render(request, "crm/kassa.html", {
         "export_url": reverse("kassa_export"),
@@ -3378,16 +3539,42 @@ def _date_window(request):
 # ledgers page independently, hence three names).
 _PAGE_PARAMS = ("page", "ipage", "opage")
 
+# "I really do mean hammasi", for a screen whose empty state is a period rather than
+# everything. Only the kassa uses it; see `_window_url` and `_kassa_date_window`.
+_ALL_PARAM = "davr"
 
-def _window_url(request, date_from="", date_to=""):
+
+def _kassa_date_window(request):
+    """The kassa's period: bugun unless the URL says otherwise.
+
+    Every other list opens on hammasi, because "all the sotuvlar" is a question people
+    actually ask. "All the money that ever moved" is not — the till is checked for the
+    day, and opening on 763 rows of history meant scrolling or filtering before the
+    screen answered anything. `?davr=all` is the way back out, and any real ?from&to
+    wins over the default outright."""
+    date_from, date_to = _date_window(request)
+    if date_from or date_to or request.GET.get(_ALL_PARAM) == "all":
+        return date_from, date_to
+    today = timezone.localdate().isoformat()
+    return today, today
+
+
+def _window_url(request, date_from="", date_to="", *, show_all=False):
     """This page's URL with the period swapped and every other filter kept.
 
     Built here rather than with `{% querystring %}` in the template because the shared
     bar has to drop the legacy date names and all three page numbers — knowledge that
-    would otherwise be copied into every page that shows the bar."""
+    would otherwise be copied into every page that shows the bar.
+
+    `show_all` writes the one screen that opens on a period rather than on everything:
+    the kassa defaults to bugun, so on it "no ?from&to" cannot mean "Hammasi" — that
+    is the state it starts in. `?davr=all` is how the person says they meant it. Every
+    other page leaves the marker off and an empty querystring keeps meaning hammasi."""
     params = request.GET.copy()
-    for key in ("from", "to", "date_from", "date_to", *_PAGE_PARAMS):
+    for key in ("from", "to", "date_from", "date_to", _ALL_PARAM, *_PAGE_PARAMS):
         params.pop(key, None)
+    if show_all:
+        params[_ALL_PARAM] = "all"
     if date_from:
         params["from"] = date_from
     if date_to:
@@ -3455,9 +3642,13 @@ def _filter_panel(request, fields):
     }
 
 
-def _daterange_bar(request, date_from, date_to):
+def _daterange_bar(request, date_from, date_to, *, opens_on_today=False):
     """What the compact ‹ date › control needs: how to NAME the chosen period, and
     where its arrows step to.
+
+    `opens_on_today` is the kassa's flag (see `_kassa_date_window`): its Hammasi link
+    has to SAY hammasi with `?davr=all`, because on that one screen an empty
+    querystring is the bugun it started on.
 
     The arrows step by the length of the period itself — a week back from a week, a
     day back from a day — because "the previous one of these" is what somebody
@@ -3468,7 +3659,7 @@ def _daterange_bar(request, date_from, date_to):
     the month names stay with Django's l10n rather than being spelled here."""
     today = timezone.localdate()
     if not date_from and not date_to:
-        return {"today": today.isoformat(), "is_all": True,
+        return {"today": today.isoformat(), "is_all": True, "opens_on_today": opens_on_today,
                 "today_url": _window_url(request, today.isoformat(), today.isoformat())}
     # One end alone is a real filter ("everything from August"), so the other is
     # filled from what we have rather than treated as missing.
@@ -3492,7 +3683,7 @@ def _daterange_bar(request, date_from, date_to):
         prev_from, prev_to = start - span, end - span
         next_from, next_to = start + span, end + span
     return {
-        "today": today.isoformat(), "is_all": False,
+        "today": today.isoformat(), "is_all": False, "opens_on_today": opens_on_today,
         "from_date": start, "to_date": end,
         "from_iso": start.isoformat(), "to_iso": end.isoformat(),
         "is_today": start == end == today,
@@ -3505,7 +3696,7 @@ def _daterange_bar(request, date_from, date_to):
         "next_from": next_from.isoformat(), "next_to": next_to.isoformat(),
         "prev_url": _window_url(request, prev_from.isoformat(), prev_to.isoformat()),
         "next_url": _window_url(request, next_from.isoformat(), next_to.isoformat()),
-        "all_url": _window_url(request),
+        "all_url": _window_url(request, show_all=opens_on_today),
         "today_url": _window_url(request, today.isoformat(), today.isoformat()),
     }
 
@@ -3754,8 +3945,12 @@ def _customer_payments_table(payments):
     return headers, rows, {"Kurs": "#,##0", "Perechisleniya %": PERCENT}
 
 
-def _debtors_table():
-    """Every mijoz who owes something, in the currency they owe it in."""
+def _debtors_table(customers=None):
+    """Every mijoz who owes something, in the currency they owe it in.
+
+    `customers` narrows it to a chosen set — the qarzlar list hands over exactly the
+    mijozlar its search and davr left, so the button downloads the screen. Left out,
+    it is the whole table, which is what the hisobotlar link means."""
     # A qarz column carries only what is owed IN that currency. Putting a dollar
     # sotuv's so'm face in the so'm column too counts it twice, and this figure
     # leaves the app — it is read in Excel with no row context to correct it.
@@ -3763,9 +3958,9 @@ def _debtors_table():
                "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
 
     def _rows():
-        customers = Customer.objects.prefetch_related(
+        rows = customers if customers is not None else Customer.objects.prefetch_related(
             "sales__returns", "sales__allocations", "customer_payments__allocations")
-        for customer in customers:
+        for customer in rows:
             owed = dict(customer_balance_by_currency(customer))
             usd, uzs = owed.get(Currency.USD, Decimal("0")), owed.get(Currency.UZS, Decimal("0"))
             if usd <= 0 and uzs <= 0:
@@ -3940,11 +4135,20 @@ def kassa_export(request):
 
 @role_required(User.Role.ADMIN)
 def export_debts(request):
-    """Qarzdorlar — the same file from the hisobotlar page and from the Qarzlar list,
-    which is why it takes no filters: a debt is a current-state figure, and the qarzlar
-    page has no window to honour."""
+    """Qarzdorlar, whole — the hisobotlar page's link, where the file IS the report.
+
+    The Qarzlar list has its own button (`debt_list_export`) because that one has a
+    search and a davr to honour."""
     headers, rows, formats = _debtors_table()
     return xlsx_response("qarzdorlar.xlsx", headers, rows, "Qarzdorlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def debt_list_export(request):
+    """The same file, cut to what the Qarzlar screen is showing."""
+    rows, *_ = _filter_debts(request)
+    headers, table, formats = _debtors_table([row["customer"] for row in rows])
+    return xlsx_response("qarzdorlar.xlsx", headers, table, "Qarzdorlar", formats)
 
 
 def holder_loads(expenses, payments=()):
@@ -4137,23 +4341,39 @@ def logist_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def logist_payment_create(request):
+    """Several ways one top-up left us — part naqd, part perechisleniya — each its
+    own row; the logist and the sana are shared. See `supplier_payment_create`."""
     initial = {}
     logist_id = request.GET.get("logist")
     if logist_id and logist_id.isdigit():
         initial["logist"] = int(logist_id)
-    form = LogistPaymentForm(request.POST or None, initial=initial)
+    target = LogistPaymentTargetForm(request.POST or None, initial=initial)
+    rows = LogistPaymentFormSet(request.POST or None,
+                                queryset=LogistPayment.objects.none())
+
+    def respond(invalid=False):
+        return form_response(request, target, "Logistga to'lov", invalid=invalid,
+                             extra_context={"lines": rows, "lines_legend": "To'lovlar",
+                                            "lines_class": "lineset--money lineset--payment",
+                                            "lines_add_label": "+ To'lov qo'shish"})
+
     if request.method == "POST":
-        if form.is_valid():
-            payment = form.save(commit=False)
-            payment.created_by = request.user
-            payment.save()
+        if target.is_valid() and rows.is_valid():
+            logist = target.cleaned_data["logist"]
+            saved = _save_split_rows(rows, request.user,
+                                     logist=logist, date=target.cleaned_data["date"])
+            total = sum((p.amount for p in saved), Decimal("0"))
             AuditLog.record(
-                request.user, AuditLog.Action.PAYMENT, "Logistga to'lov", payment.pk,
-                f"Logistga to'lov: {payment.amount}$ · {payment.logist.name}")
-            messages.success(request, "Logistga to'lov qo'shildi")
+                request.user, AuditLog.Action.PAYMENT, "Logistga to'lov",
+                saved[0].pk if saved else None,
+                f"Logistga to'lov: {len(saved)} ta · {total}$ · {logist.name}")
+            messages.success(
+                request,
+                f"{len(saved)} ta to'lov qo'shildi" if len(saved) > 1
+                else "Logistga to'lov qo'shildi")
             return form_success(request, reverse("logist_list"))
-        return form_response(request, form, "Logistga to'lov", invalid=True)
-    return form_response(request, form, "Logistga to'lov")
+        return respond(invalid=True)
+    return respond()
 
 
 @role_required(User.Role.ADMIN)
@@ -4203,18 +4423,33 @@ def _kapital_label(entry):
 
 @role_required(User.Role.ADMIN)
 def kapital_create(request):
-    form = KapitalForm(request.POST or None)
+    """Several ways the ta'sischi's money moved, each its own row; the direction and
+    the sana are shared. See `supplier_payment_create`."""
+    target = KapitalTargetForm(request.POST or None)
+    rows = KapitalFormSet(request.POST or None, queryset=Kapital.objects.none())
+
+    def respond(invalid=False):
+        return form_response(request, target, "Kapital", invalid=invalid,
+                             extra_context={"lines": rows, "lines_legend": "Summalar",
+                                            "lines_class": "lineset--money lineset--payment",
+                                            "lines_add_label": "+ Summa qo'shish"})
+
     if request.method == "POST":
-        if form.is_valid():
-            entry = form.save(commit=False)
-            entry.created_by = request.user
-            entry.save()
-            AuditLog.record(request.user, AuditLog.Action.PAYMENT, "Kapital", entry.pk,
-                            f"Kapital: {_kapital_label(entry)}")
-            messages.success(request, "Kapital qo'shildi")
+        if target.is_valid() and rows.is_valid():
+            saved = _save_split_rows(rows, request.user,
+                                     kind=target.cleaned_data["kind"],
+                                     date=target.cleaned_data["date"])
+            AuditLog.record(request.user, AuditLog.Action.PAYMENT, "Kapital",
+                            saved[0].pk if saved else None,
+                            f"Kapital: {len(saved)} ta · "
+                            + " · ".join(_kapital_label(e) for e in saved))
+            messages.success(
+                request,
+                f"{len(saved)} ta yozuv qo'shildi" if len(saved) > 1
+                else "Kapital qo'shildi")
             return form_success(request, reverse("kassa"))
-        return form_response(request, form, "Kapital", invalid=True)
-    return form_response(request, form, "Kapital")
+        return respond(invalid=True)
+    return respond()
 
 
 @role_required(User.Role.ADMIN)
@@ -4459,6 +4694,8 @@ def customs_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def customs_payment_create(request):
+    """Several ways one bojxona to'lov left us, each its own row; the bojxonachi, the
+    yuk and the sana are shared. See `supplier_payment_create`."""
     initial = {}
     # Prefilled from either side: from the bojxonachi's page (who), or from a yuk
     # (what for) — the two ways this form is actually reached.
@@ -4468,19 +4705,34 @@ def customs_payment_create(request):
     shipment_id = request.GET.get("shipment")
     if shipment_id and shipment_id.isdigit():
         initial["shipment"] = int(shipment_id)
-    form = CustomsPaymentForm(request.POST or None, initial=initial)
+    target = CustomsPaymentTargetForm(request.POST or None, initial=initial)
+    rows = CustomsPaymentFormSet(request.POST or None,
+                                 queryset=CustomsPayment.objects.none())
+
+    def respond(invalid=False):
+        return form_response(request, target, "Bojxonaga pul yuborish", invalid=invalid,
+                             extra_context={"lines": rows, "lines_legend": "To'lovlar",
+                                            "lines_class": "lineset--money lineset--payment",
+                                            "lines_add_label": "+ To'lov qo'shish"})
+
     if request.method == "POST":
-        if form.is_valid():
-            payment = form.save(commit=False)
-            payment.created_by = request.user
-            payment.save()
+        if target.is_valid() and rows.is_valid():
+            saved = _save_split_rows(rows, request.user,
+                                     agent=target.cleaned_data["agent"],
+                                     shipment=target.cleaned_data["shipment"],
+                                     date=target.cleaned_data["date"])
             AuditLog.record(
-                request.user, AuditLog.Action.PAYMENT, "Bojxonaga to'lov", payment.pk,
-                f"Bojxonaga to'lov: {_payment_label(payment)}")
-            messages.success(request, "Bojxonaga to'lov qo'shildi")
+                request.user, AuditLog.Action.PAYMENT, "Bojxonaga to'lov",
+                saved[0].pk if saved else None,
+                f"Bojxonaga to'lov: {len(saved)} ta · "
+                + " · ".join(_payment_label(p) for p in saved))
+            messages.success(
+                request,
+                f"{len(saved)} ta to'lov qo'shildi" if len(saved) > 1
+                else "Bojxonaga to'lov qo'shildi")
             return form_success(request, reverse("customs_list"))
-        return form_response(request, form, "Bojxonaga pul yuborish", invalid=True)
-    return form_response(request, form, "Bojxonaga pul yuborish")
+        return respond(invalid=True)
+    return respond()
 
 
 @role_required(User.Role.ADMIN)

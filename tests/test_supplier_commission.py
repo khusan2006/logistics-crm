@@ -3,7 +3,7 @@ beradi va foiz ushlab qoladi. Kiritilgan summa — hamkor OLADIGAN summa; foiz u
 ustiga qo'shiladi va kassadan chiqadi."""
 from decimal import Decimal
 
-from conftest import make_contract, make_shipment
+from conftest import make_contract, make_shipment, supplier_payment_rows
 from crm.models import Contract, ShipmentStatus, SupplierPayment, commission_total
 
 
@@ -58,11 +58,11 @@ def test_rounding_lands_on_cents(db):
 # --- form ------------------------------------------------------------------
 
 def _post(client, contract, **extra):
-    data = {"contract": contract.pk, "date": "2026-07-20", "currency": "usd",
-            "amount": "500", "exchange_rate": "12000", "commission_percent": "2",
-            "method": "cash", "note": ""}
-    data.update(extra)
-    return client.post("/supplier-payments/new/", data)
+    row = {"currency": "usd", "amount": "500", "exchange_rate": "12000",
+           "commission_percent": "2", "method": "cash", "note": ""}
+    row.update(extra)
+    return client.post("/supplier-payments/new/",
+                       supplier_payment_rows(row, contract=contract, date="2026-07-20"))
 
 
 def test_form_saves_the_percent(admin_client, db):
@@ -97,7 +97,7 @@ def test_the_debt_cap_ignores_the_cut(admin_client, db):
 def test_kassa_takes_the_cut_out_of_the_till(admin_client, db):
     contract = _contract(kg="20000")
     _pay(contract, amount="1000", percent="2")
-    resp = admin_client.get("/kassa/")
+    resp = admin_client.get("/kassa/?davr=all")
     assert resp.context["cash_total"] == Decimal("-1020.00")
     assert resp.context["balances"]["cash"]["out"] == Decimal("1020.00")
 
@@ -105,7 +105,7 @@ def test_kassa_takes_the_cut_out_of_the_till(admin_client, db):
 def test_kassa_lists_the_cut_as_its_own_chiqim_row(admin_client, db):
     contract = _contract(kg="20000")
     _pay(contract, amount="1000", percent="2")
-    rows = admin_client.get("/kassa/").context["outflow_page"]
+    rows = admin_client.get("/kassa/?davr=all").context["outflow_page"]
     kinds = {r["kind"]: r["amount"] for r in rows}
     assert kinds["supplier"] == Decimal("1000")
     assert kinds["commission"] == Decimal("20.00")
@@ -114,7 +114,7 @@ def test_kassa_lists_the_cut_as_its_own_chiqim_row(admin_client, db):
 def test_a_zero_percent_payment_adds_no_chiqim_row(admin_client, db):
     contract = _contract(kg="20000")
     _pay(contract, amount="1000", percent="0")
-    rows = admin_client.get("/kassa/").context["outflow_page"]
+    rows = admin_client.get("/kassa/?davr=all").context["outflow_page"]
     assert [r["kind"] for r in rows] == ["supplier"]
 
 

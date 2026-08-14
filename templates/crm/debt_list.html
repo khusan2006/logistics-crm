@@ -5,10 +5,26 @@
 {% block content %}
 
 {% comment %}
-No davr bar here — a qarz is a current-state figure, and the whole list is what the
-file holds. The button is the same one every ro'yxat carries.
+The same row every ro'yxat carries: search on the left, ‹ davr › and Excel on the
+right. This screen had neither for a while, on the reasoning that a qarz is a
+current-state figure — but the list still prints a MUDDAT, and "kimning puli shu
+oralig'da kelishi kerak edi" is exactly what somebody chasing debts asks. The davr
+reads against that muddat; the search reads the mijoz's name and telefon, which is
+how a debtor is looked up.
 {% endcomment %}
-<div class="daterange-bar">{% include "crm/_excel_button.html" %}</div>
+<div class="listbar">
+  <form method="get" class="searchbar" role="search" data-live-search>
+    {# Searching must not widen the muddat window back out. #}
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    <div class="toolbar-search{% if q %} is-active{% endif %}">
+      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Mijoz nomi yoki telefon bo'yicha qidirish…" autocomplete="off" aria-label="Qarzdor qidirish">
+      {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    </div>
+  </form>
+  {% include "crm/_daterange.html" %}
+</div>
 
 {% if page.object_list %}
 <div class="table-wrap">

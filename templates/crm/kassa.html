@@ -36,15 +36,38 @@ Adding it back would also put the same money on the screen twice.
 
 `split_full` on every line, so both currencies are always drawn and an empty side
 reads as a zero rather than going missing — a card with no so'm on it says "0 so'm".
+
+Nothing between the label and the heaps. The explaining lines that used to sit here —
+"hozir qo'lda va hisobda turgan pul", "shundan mijoz avansi …" — said what the card
+already says by being the till: the one card everybody opens the page for does not
+need to introduce itself, and two lines of small grey type above the figures pushed
+the only numbers that matter down the card. An avans is still read where it is acted
+on — on the mijoz whose money it is.
+
+"Kassada" is the section's eyebrow rather than a line inside the card, the same way
+the dashboard captions a group of KPIs: it names what the card below IS, and inside
+the card the three method labels are the only headings, so the eye goes label → heap
+instead of label → label → heap.
+
+Each method wears the KPI head the rest of the app uses (crm/dashboard.html) — a
+tinted icon chip beside an uppercase label — and the three are ruled apart, because
+they are three separate heaps rather than one figure split for display. The colour
+lives on the chip alone: the money keeps the text colour, since a green naqd and a
+violet bank would read as good and bad news rather than as two places.
 {% endcomment %}
+<div class="section-eyebrow">{{ hero.label }}</div>
 <a class="khero khero--{{ hero.tone }}" href="{{ hero.url }}">
-  <div class="ktile-label">{{ hero.label }}</div>
-  <div class="ktile-note">{{ hero.note }}</div>
-  {% if hero.meta %}<div class="ktile-meta">{{ hero.meta }}</div>{% endif %}
   <div class="kmethods kmethods--hero">
     {% for method in cash_by_method %}
-    <div>
-      <div class="ksm-label">{{ method.label }}</div>
+    <div class="ksm ksm--{{ method.code }}">
+      <div class="ksm-head">
+        <span class="ksm-icon">
+          {% if method.code == "cash" %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01"/><path d="M18 12h.01"/></svg>
+          {% elif method.code == "card" %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+          {% else %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10"/><path d="M19 21V10"/><path d="M9 21v-6h6v6"/><path d="M2 10l10-7 10 7"/></svg>{% endif %}
+        </span>
+        <span class="ksm-label">{{ method.label }}</span>
+      </div>
       <div class="ksm-flow">
         {% for currency, amount in method.split_full %}
         <span class="ksm-val{% if not amount %} krow-num--nil{% endif %}">{% money_in amount currency %}</span>
@@ -55,10 +78,24 @@ reads as a zero rather than going missing — a card with no so'm on it says "0 
   </div>
 </a>
 
+{% comment %}
+The three boards below wear the same KPI clothes as the hero's columns and as the
+dashboard: an icon chip in the group's own colour, the heading beside it, and the
+faint glow that marks a card as a summary rather than a table. Violet is the mol we
+are holding, green the money that is ours and coming back, red what goes out — the
+tones the app already uses for exactly those three things.
+{% endcomment %}
 <div class="kgroups">
   {% for g in tile_groups %}
-  <div class="kgroup">
-    <div class="kgroup-title">{{ g.title }}</div>
+  <div class="kgroup kgroup--{{ g.tone }}">
+    <div class="kgroup-head">
+      <span class="kgroup-icon">
+        {% if g.key == "mol" %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        {% elif g.key == "back" %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        {% else %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l10 18H2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>{% endif %}
+      </span>
+      <span class="kgroup-title">{{ g.title }}</span>
+    </div>
     {% for t in g.tiles %}
     <a class="krow krow--{{ t.tone }}" href="{{ t.url }}" title="{{ t.note }}">
       <span class="krow-label">{{ t.label }}{% if t.meta %}<span class="krow-meta">{{ t.meta }}</span>{% endif %}</span>
@@ -73,8 +110,6 @@ reads as a zero rather than going missing — a card with no so'm on it says "0 
   {% endfor %}
 </div>
 
-{% include "crm/_daterange.html" %}
-
 {% comment %}
 One box over BOTH daftar below — kim/nima uchun, turi, usuli, sanasi and the sum
 itself. Money is remembered as a fragment ("bojxona", a hamkor's name, 28 800), and
@@ -83,16 +118,25 @@ know. The davr rides along hidden: searching must not widen the window back out.
 
 It narrows the two ro'yxat and their +/- totals. The board above stays put — those
 figures are the state of things today, not a slice of this period.
+
+Search left, davr and Excel right, one .listbar row (see the CSS) — the two questions
+"which rows" and "which davr" were stacked as two full-width bars, which read as two
+unrelated toolbars and pushed the daftar a row further down every screen.
 {% endcomment %}
-<form method="get" class="searchbar" role="search" data-live-search>
-  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
-  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
-  <div class="toolbar-search{% if q %} is-active{% endif %}">
-    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    <input type="search" name="q" value="{{ q }}" placeholder="Mijoz, hamkor, turi, usuli, sana yoki summa bo'yicha qidirish…" autocomplete="off" aria-label="Kassa qidirish">
-    {% if q %}<a href="{% querystring q=None ipage=None opage=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
-  </div>
-</form>
+<div class="listbar">
+  <form method="get" class="searchbar" role="search" data-live-search>
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    {# Hammasi is a CHOICE here, not the empty state: dropping it on submit would snap a searched-over-everything list back to bugun. #}
+    {% if daterange.is_all %}<input type="hidden" name="davr" value="all">{% endif %}
+    <div class="toolbar-search{% if q %} is-active{% endif %}">
+      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Mijoz, hamkor, turi, usuli, sana yoki summa bo'yicha qidirish…" autocomplete="off" aria-label="Kassa qidirish">
+      {% if q %}<a href="{% querystring q=None ipage=None opage=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    </div>
+  </form>
+  {% include "crm/_daterange.html" %}
+</div>
 
 <div class="grid-2 kassa-ledger">
   {# ── Kirim: mijozlardan qabul qilingan to'lovlar ── #}
@@ -123,18 +167,28 @@ figures are the state of things today, not a slice of this period.
         <th class="num">Kirim summa</th>
         <th></th>
       </tr>
+      {% comment %}
+      One line per TO'LOV, not per movement of money: a mijoz who handed over half in
+      dollars and half in so'm made one payment, and two rows carrying the same sana
+      and the same name read as two. The usul, the foiz/kurs and the summa are stacked
+      inside the line — one per way the money arrived — which is the same fold the
+      sotuvlar list makes for the markalar bought in one trip (see `_ledger_blocks`).
+      {% endcomment %}
       {% for r in income_page %}
-      <tr>
+      <tr{% if r.count > 1 %} class="ledger-split"{% endif %}>
         <td>{{ r.date|date:"d.m.Y" }}</td>
-        <td>{{ r.title }}</td>
-        <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
-        <td class="num muted">{% if r.fee_percent %}{{ r.fee_percent|floatformat:"-2" }}%{% endif %}{% if r.fee_percent and r.crossed %} · {% endif %}{% if r.crossed %}{{ r.exchange_rate|floatformat:"0g" }}{% endif %}{% if not r.fee_percent and not r.crossed %}—{% endif %}</td>
+        <td>{{ r.title }}{% if r.count > 1 %}<span class="split-tag">bitta to'lov · {{ r.count }} usul</span>{% endif %}</td>
+        <td>{% for s in r.rows %}<div class="cell-line">{% include "crm/_method_badge.html" with code=s.method_code label=s.method %}</div>{% endfor %}</td>
+        <td class="num muted">{% for s in r.rows %}<div class="cell-line">{% if s.fee_percent %}{{ s.fee_percent|floatformat:"-2" }}%{% endif %}{% if s.fee_percent and s.crossed %} · {% endif %}{% if s.crossed %}{{ s.exchange_rate|floatformat:"0g" }}{% endif %}{% if not s.fee_percent and not s.crossed %}—{% endif %}</div>{% endfor %}</td>
         {# What landed, not what was sent: a perechisleniya foiz never reached the kassa. #}
-        <td class="num amt-in"><strong>+{% money r.amount r.amount_uzs r.currency %}</strong></td>
+        <td class="num amt-in">{% for s in r.rows %}<div class="cell-line"><strong>+{% money s.amount s.amount_uzs s.currency %}</strong></div>{% endfor %}</td>
         <td class="row-actions">
-          <a class="icon-action act-edit" href="{{ r.edit_url }}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-          {# A kapital row has no allocations to break down, so there is no detail to open. #}
-          {% if r.detail_url %}<a class="icon-action" href="{{ r.detail_url }}" data-modal title="Batafsil"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg></a>{% endif %}
+          {# One pair per ARRIVAL, beside the summa it belongs to: a folded line is one to'lov to read and still two rows to correct. #}
+          {% for s in r.rows %}<div class="cell-line">
+            <a class="icon-action act-edit" href="{{ s.edit_url }}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+            {# A kapital row has no allocations to break down, so there is no detail to open. #}
+            {% if s.detail_url %}<a class="icon-action" href="{{ s.detail_url }}" data-modal title="Batafsil"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg></a>{% endif %}
+          </div>{% endfor %}
         </td>
       </tr>
       {% empty %}<tr><td colspan="6" class="muted">{% if q %}«{{ q }}» bo'yicha kirim topilmadi.{% else %}Bu davrda kirim yo'q.{% endif %}</td></tr>{% endfor %}
@@ -166,16 +220,23 @@ figures are the state of things today, not a slice of this period.
         <th class="num">Chiqim summa</th>
         <th></th>
       </tr>
+      {# One line per TO'LOV, the usul and the summa stacked inside it — see Kirim. #}
       {% for t in outflow_page %}
-      <tr>
+      <tr{% if t.count > 1 %} class="ledger-split"{% endif %}>
         <td>{{ t.date|date:"d.m.Y" }}</td>
-        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% elif t.kind == 'kapital' %}<span class="badge badge-remit">Kapital</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}</td>
-        <td>{% include "crm/_method_badge.html" with code=t.method_code label=t.method %}</td>
+        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% elif t.kind == 'kapital' %}<span class="badge badge-remit">Kapital</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}{% if t.count > 1 %}<span class="split-tag">bitta to'lov · {{ t.count }} usul</span>{% endif %}</td>
+        <td>{% for s in t.rows %}<div class="cell-line">{% include "crm/_method_badge.html" with code=s.method_code label=s.method %}</div>{% endfor %}</td>
         {# Same rule as Kirim: an inherited kurs decided nothing, so it is not shown. #}
-        <td class="num muted">{% if t.crossed %}{{ t.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</td>
-        <td class="num amt-out"><strong>−{% money t.amount t.amount_uzs t.currency %}</strong></td>
+        <td class="num muted">{% for s in t.rows %}<div class="cell-line">{% if s.crossed %}{{ s.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</div>{% endfor %}</td>
+        <td class="num amt-out">{% for s in t.rows %}<div class="cell-line"><strong>−{% money s.amount s.amount_uzs s.currency %}</strong></div>{% endfor %}</td>
         <td class="row-actions">
           {% comment %}
+          One pair per MOVEMENT, stacked beside the summa it belongs to. A folded
+          line is one to'lov to read and still two rows to correct: an icon that
+          silently edited the naqd half of a payment that also went by bank would be
+          worse than no icon (the sotuvlar list makes the same call for a multi-marka
+          sotuv, and sends you to its own page instead).
+
           Vositachi and foiz rows are derived from a parent to'lov, not stored in
           their own right — they change only by editing that parent, so they get no
           action icons. They used to fall through to the expense links below and
@@ -186,23 +247,25 @@ figures are the state of things today, not a slice of this period.
           ShipmentExpense URL — a different row, or a 404. That is what fee_logist,
           fee_customs, logist and customs were all doing.
           {% endcomment %}
-          {% if t.kind == 'commission' or t.kind == 'fee_supplier' or t.kind == 'fee_expense' or t.kind == 'fee_logist' or t.kind == 'fee_customs' %}
-          {% elif t.kind == 'logist' %}
-          <a class="icon-action" href="{% url 'logist_payment_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-          <a class="icon-action danger" href="{% url 'logist_payment_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-          {% elif t.kind == 'customs' %}
-          <a class="icon-action" href="{% url 'customs_payment_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-          <a class="icon-action danger" href="{% url 'customs_payment_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-          {% elif t.kind == 'kapital' %}
-          <a class="icon-action" href="{% url 'kapital_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-          <a class="icon-action danger" href="{% url 'kapital_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-          {% elif t.kind == 'supplier' %}
-          <a class="icon-action" href="{% url 'supplier_payment_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-          <a class="icon-action danger" href="{% url 'supplier_payment_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-          {% else %}
-          <a class="icon-action" href="{% url 'expense_edit' t.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-          <a class="icon-action danger" href="{% url 'expense_delete' t.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-          {% endif %}
+          {% for s in t.rows %}<div class="cell-line">
+            {% if s.kind == 'commission' or s.kind == 'fee_supplier' or s.kind == 'fee_expense' or s.kind == 'fee_logist' or s.kind == 'fee_customs' %}
+            {% elif s.kind == 'logist' %}
+            <a class="icon-action" href="{% url 'logist_payment_edit' s.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+            <a class="icon-action danger" href="{% url 'logist_payment_delete' s.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+            {% elif s.kind == 'customs' %}
+            <a class="icon-action" href="{% url 'customs_payment_edit' s.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+            <a class="icon-action danger" href="{% url 'customs_payment_delete' s.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+            {% elif s.kind == 'kapital' %}
+            <a class="icon-action" href="{% url 'kapital_edit' s.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+            <a class="icon-action danger" href="{% url 'kapital_delete' s.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+            {% elif s.kind == 'supplier' %}
+            <a class="icon-action" href="{% url 'supplier_payment_edit' s.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+            <a class="icon-action danger" href="{% url 'supplier_payment_delete' s.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+            {% else %}
+            <a class="icon-action" href="{% url 'expense_edit' s.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+            <a class="icon-action danger" href="{% url 'expense_delete' s.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+            {% endif %}
+          </div>{% endfor %}
         </td>
       </tr>
       {% empty %}<tr><td colspan="6" class="muted">{% if q %}«{{ q }}» bo'yicha chiqim topilmadi.{% else %}Bu davrda chiqim yo'q.{% endif %}</td></tr>{% endfor %}

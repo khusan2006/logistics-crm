@@ -30,7 +30,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import make_contract, make_shipment
+from conftest import make_contract, make_shipment, supplier_payment_rows
 from crm.models import (
     Currency, ShipmentStatus, SupplierPayment, commission_total,
 )
@@ -50,6 +50,8 @@ def _contract(kg="40000", price="1.00", shipped=True):
 
 
 def _payload(contract, **extra):
+    """The TAHRIRLASH form's POST: one flat row, which is what editing one to'lov
+    still is — the split lives on the create modal (see `_create`)."""
     data = {"contract": contract.pk, "date": "2026-07-20", "currency": "usd",
             "amount": "100", "exchange_rate": str(RATE), "commission_percent": "",
             "method": "cash", "fee_percent": "0", "note": ""}
@@ -58,8 +60,16 @@ def _payload(contract, **extra):
 
 
 def _create(client, contract, **extra):
-    resp = client.post("/supplier-payments/new/", _payload(contract, **extra))
-    return resp
+    """The create modal's POST — the shared kelishuv and sana, plus ONE to'lov row.
+
+    These probe how a single to'lov is stored, so one row is the whole point; the
+    modal takes several (half naqd, half perechisleniya) and `extra` overrides the
+    fields of the row rather than of the header."""
+    row = {"currency": "usd", "amount": "100", "exchange_rate": str(RATE),
+           "commission_percent": "", "method": "cash", "fee_percent": "0", "note": ""}
+    row.update({k: str(v) for k, v in extra.items()})
+    return client.post("/supplier-payments/new/",
+                       supplier_payment_rows(row, contract=contract, date="2026-07-20"))
 
 
 def _rendered_post(form, **changes):
@@ -79,7 +89,7 @@ def _money(payment):
 
 def _ledger(client):
     """The kassa chiqim ledger, keyed by row kind (one to'lov per test)."""
-    return {r["kind"]: r for r in client.get("/kassa/").context["outflow_page"]}
+    return {r["kind"]: r for r in client.get("/kassa/?davr=all").context["outflow_page"]}
 
 
 # --- (a) ROUND-TRIP --------------------------------------------------------
@@ -417,7 +427,7 @@ def test_the_kassa_row_and_the_list_agree_on_the_cut(admin_client, db):
     _create(admin_client, contract, currency="uzs", amount="126505000",
             commission_percent="2")
     p = SupplierPayment.objects.get()
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     ledger = {r["kind"]: r for r in ctx["outflow_page"]}
     assert ledger["commission"]["amount_uzs"] == p.commission_amount_uzs
     # and therefore the rows on screen add up to the total printed above them
@@ -493,7 +503,7 @@ def test_the_kassa_chiqim_rows_add_up_to_the_chiqim_total(admin_client, db):
     contract = _contract()
     _create(admin_client, contract, amount="10000", commission_percent="2",
             method="transfer", fee_percent="1")
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     rows = list(ctx["outflow_page"])
     assert {r["kind"] for r in rows} == {"supplier", "commission", "fee_supplier"}
     assert sum((r["amount"] for r in rows), Decimal("0")) == ctx["net_out"]
@@ -522,7 +532,7 @@ def test_deleting_the_only_tolov_empties_every_total(admin_client, db):
     assert contract.paid_total_uzs == Decimal("0")
     assert contract.commission_accrued == Decimal("0")
     assert admin_client.get("/supplier-payments/").context["totals"] == []
-    assert admin_client.get("/kassa/").context["net_out_uzs"] == Decimal("0")
+    assert admin_client.get("/kassa/?davr=all").context["net_out_uzs"] == Decimal("0")
 
 
 # --- boundaries ------------------------------------------------------------
@@ -570,7 +580,9 @@ def test_the_cap_is_measured_on_the_dollar_column(admin_client, db):
     SupplierPayment.objects.all().delete()
     resp = _create(admin_client, contract, currency="uzs", amount="12660000")
     assert resp.status_code == 200
-    assert "oshib ketdi" in resp.context["form"].errors["amount"][0]
+    # The ceiling is checked over the whole settlement, so it is the row set that
+    # reports it rather than one row's amount box — see BaseSupplierPaymentFormSet.
+    assert "oshib ketdi" in resp.context["lines"].non_form_errors()[0]
     assert not SupplierPayment.objects.exists()
 
 

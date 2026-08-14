@@ -120,6 +120,62 @@ def payment_rows(*entries, customer, date="2026-07-20", debt_currency=""):
     return data
 
 
+def supplier_payment_rows(*entries, contract, date="2026-07-02"):
+    """POST payload for the hamkor to'lov modal: the shared kelishuv and sana, plus
+    one row per way the money left. The twin of `payment_rows` on the incoming side.
+
+    Rows default to a dollar naqd at 12,000 so a test only spells out what it is
+    actually testing. Called with no entries it posts an empty formset, which is how
+    "a to'lov with no rows at all" is exercised."""
+    data = {"contract": getattr(contract, "pk", contract), "date": date,
+            "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
+            "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
+    defaults = {"currency": "usd", "amount": "0", "exchange_rate": "12000",
+                "commission_percent": "", "method": "cash", "fee_percent": "0",
+                "note": ""}
+    for i, entry in enumerate(entries):
+        for key, value in {**defaults, **entry}.items():
+            data[f"form-{i}-{key}"] = "" if value is None else str(value)
+    return data
+
+
+def _split_rows(entries, defaults, header):
+    """The shared shape of every split-payment POST: a header answered once, plus one
+    formset row per way the money moved."""
+    data = {k: getattr(v, "pk", v) for k, v in header.items()}
+    data.update({"form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
+                 "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"})
+    for i, entry in enumerate(entries):
+        for key, value in {**defaults, **entry}.items():
+            data[f"form-{i}-{key}"] = "" if value is None else str(value)
+    return data
+
+
+def logist_payment_rows(*entries, logist, date="2026-07-10"):
+    """POST payload for the logist to'ldirish modal."""
+    return _split_rows(entries,
+                       {"currency": "usd", "amount": "0", "exchange_rate": "12000",
+                        "method": "cash", "fee_percent": "0", "note": ""},
+                       {"logist": logist, "date": date})
+
+
+def customs_payment_rows(*entries, agent, shipment="", date="2026-07-10"):
+    """POST payload for the bojxonaga pul yuborish modal. So'm by default: that is
+    what bojxona is overwhelmingly paid in, and it is what the form opens on."""
+    return _split_rows(entries,
+                       {"currency": "uzs", "amount": "0", "exchange_rate": "12000",
+                        "method": "cash", "fee_percent": "0", "note": ""},
+                       {"agent": agent, "shipment": shipment, "date": date})
+
+
+def kapital_rows(*entries, kind="in", date="2026-07-01"):
+    """POST payload for the kapital modal."""
+    return _split_rows(entries,
+                       {"currency": "usd", "amount": "0", "exchange_rate": "12000",
+                        "method": "cash", "fee_percent": "0", "note": ""},
+                       {"kind": kind, "date": date})
+
+
 def line_data(*rows, initial=0, prefix="lines"):
     """POST payload for a Mahsulotlar formset: management fields plus one dict per
     product row, e.g. line_data({"brand": "LLDPE", "kg": "100", "price": "1"}).

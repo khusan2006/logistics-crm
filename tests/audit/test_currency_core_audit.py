@@ -18,7 +18,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import make_contract, make_shipment, payment_rows
+from conftest import make_contract, make_shipment, payment_rows, supplier_payment_rows
 from crm.models import (
     LEGACY_RATE, Currency, Customer, CustomerPayment, Reservation, Sale,
     ShipmentExpense, ShipmentStatus, SupplierPayment, convert_pair,
@@ -478,11 +478,13 @@ def test_the_kassa_total_is_the_sum_of_its_parts_across_mixed_rows(admin_client,
                {"currency": "uzs", "amount": "999999", "exchange_rate": "13000",
                 "method": "transfer", "fee_percent": "2"}]:
         create_payment(admin_client, customer, **kw)
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": make_contract(kg="100000", price="1.00").pk,
-        "date": "2026-07-02", "currency": "uzs", "amount": "6500000",
-        "exchange_rate": "13000", "commission_percent": "", "method": "cash",
-        "fee_percent": "0", "note": ""})
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "6500000", "exchange_rate": "13000",
+                               "commission_percent": "", "method": "cash",
+                               "fee_percent": "0", "note": ""},
+                              contract=make_contract(kg="100000", price="1.00").pk,
+                              date="2026-07-02"))
     assert resp.status_code == 302
 
     kirim = list(CustomerPayment.objects.all())
@@ -492,7 +494,7 @@ def test_the_kassa_total_is_the_sum_of_its_parts_across_mixed_rows(admin_client,
     expected_uzs = (sum(p.net_amount_uzs for p in kirim)
                     - sum(p.total_out_uzs for p in chiqim))
 
-    page = admin_client.get("/kassa/")
+    page = admin_client.get("/kassa/?davr=all")
     assert page.context["cash_total"] == expected
     assert page.context["cash_total_uzs"] == expected_uzs
     # …and the so'm figure is genuinely per-row, not the dollar total × one kurs
@@ -507,13 +509,13 @@ def test_deleting_a_row_takes_exactly_its_own_money_out_of_the_total(admin_clien
                    exchange_rate="12000")
     create_payment(admin_client, customer, currency="uzs", amount="12650000",
                    exchange_rate="12650")
-    before = admin_client.get("/kassa/").context
+    before = admin_client.get("/kassa/?davr=all").context
     doomed = CustomerPayment.objects.get(currency=UZS)
     lost, lost_uzs = doomed.net_amount, doomed.net_amount_uzs
 
     assert admin_client.post(
         f"/customer-payments/{doomed.pk}/delete/").status_code == 302
-    after = admin_client.get("/kassa/").context
+    after = admin_client.get("/kassa/?davr=all").context
     assert after["cash_total"] == before["cash_total"] - lost
     assert after["cash_total_uzs"] == before["cash_total_uzs"] - lost_uzs
 

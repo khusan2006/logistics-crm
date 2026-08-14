@@ -229,7 +229,7 @@ class TestTheTwoHeapsAreNeverAdded:
         agent = _agent()
         _send(agent, "40000000")
         _send_usd(agent, "4000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
         assert dict(tiles["Bojxonada avansimiz"]["split"]) == {
             "usd": Decimal("4000.00"), "uzs": Decimal("40000000.00")}
 
@@ -312,7 +312,7 @@ class TestKassaCountsTheMoneyOnce:
         shipment = _shipment()
         _send(agent, "40000000", shipment)
         _cleared(shipment, agent, "37000000")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["net_out_uzs"] == Decimal("40000000.00")
         assert ctx["cash_total_uzs"] == Decimal("-40000000.00")
 
@@ -328,7 +328,7 @@ class TestKassaCountsTheMoneyOnce:
         shipment = _shipment()
         _send(agent, "40000000", shipment)
         _cleared(shipment, agent, "37000000")
-        rows = admin_client.get("/kassa/").context["outflow_page"].paginator.object_list
+        rows = admin_client.get("/kassa/?davr=all").context["outflow_page"].paginator.object_list
         assert {r["kind"] for r in rows} == {"customs"}
         assert sum(r["amount_uzs"] for r in rows) == Decimal("40000000.00")
 
@@ -337,7 +337,7 @@ class TestKassaCountsTheMoneyOnce:
         shipment = _shipment()
         _send(agent, "40000000", shipment)
         _cleared(shipment, agent, "37000000")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         closing = ctx["waterfall"][-1]
         assert closing["running_uzs"] == ctx["cash_total_uzs"]
         labels = {b["label"]: b["amount_uzs"] for b in ctx["waterfall"]}
@@ -345,7 +345,7 @@ class TestKassaCountsTheMoneyOnce:
 
     def test_per_method_totals_include_the_customs_payment(self, admin_client, db):
         _send(_agent(), "40000000", method="transfer")
-        balances = admin_client.get("/kassa/").context["balances"]
+        balances = admin_client.get("/kassa/?davr=all").context["balances"]
         assert balances["transfer"]["out_uzs"] == Decimal("40000000.00")
         assert balances["cash"]["out_uzs"] == Decimal("0")
 
@@ -471,7 +471,7 @@ class TestTheGridCanSayWhoPaid:
         _send(agent, "40000000", shipment)
         admin_client.post("/expenses/new/", self._grid(
             shipment, payer_customs=f"customs:{agent.pk}", amount_customs="37000000"))
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["cash_total_uzs"] == Decimal("-40000000.00")
 
     def test_left_alone_it_still_bills_the_kassa(self, admin_client, db):
@@ -879,17 +879,17 @@ class TestCustomsScreens:
 
     def test_kassa_carries_a_bojxonada_tile(self, admin_client, db):
         _send(_agent(), "40000000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
         assert dict(tiles["Bojxonada avansimiz"]["split"])["uzs"] == Decimal("40000000.00")
         assert tiles["Bojxonada avansimiz"]["url"] == "/customs/"
 
     def test_a_bojxonachi_we_owe_gets_a_tile_only_when_owed(self, admin_client, db):
         _send(_agent(), "40000000")
-        labels = [t["label"] for t in admin_client.get("/kassa/").context["tiles"]]
+        labels = [t["label"] for t in admin_client.get("/kassa/?davr=all").context["tiles"]]
         assert "Bojxonaga qarzimiz" not in labels
 
         _cleared(_shipment(), _agent("Qarzdor"), "8000000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
         # Positive, like every other qarzimiz tile — see the logist tile's twin test.
         assert dict(tiles["Bojxonaga qarzimiz"]["split"])["uzs"] == Decimal("8000000.00")
         assert tiles["Bojxonaga qarzimiz"]["url"].endswith("?state=owed")
@@ -899,7 +899,10 @@ class TestCustomsScreens:
         long after the page that links to it was called done."""
         ajax = {"headers": {"X-Requested-With": "XMLHttpRequest"}}
         html = admin_client.get("/customs-payments/new/", **ajax).content.decode()
-        for name in ("agent", "shipment", "date", "currency", "amount", "method"):
+        # The shared header, then the fields of the first to'lov row: this modal takes
+        # several ways one payment moved, so the money boxes are formset-prefixed.
+        for name in ("agent", "shipment", "date",
+                     "form-0-currency", "form-0-amount", "form-0-method"):
             assert f'name="{name}"' in html, name
         assert admin_client.get("/customs/new/", **ajax).status_code == 200
 

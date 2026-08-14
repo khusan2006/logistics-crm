@@ -9,6 +9,7 @@ never pretends to be a mijoz to'lov.
 
 from decimal import Decimal
 
+from conftest import customs_payment_rows, kapital_rows, logist_payment_rows
 from crm.models import (
     Customer, CustomerPayment, Kapital, KapitalKind, kapital_total_by_currency,
     kassa_cash_by_currency,
@@ -117,30 +118,29 @@ class TestTheTotalHelper:
 
 class TestTheKassaScreen:
     def _ctx(self, client):
-        return client.get("/kassa/").context
+        return client.get("/kassa/?davr=all").context
 
     def _tiles(self, client):
         return {t["label"]: t for t in self._ctx(client)["tiles"]}
 
-    def test_kapital_is_a_meta_line_not_a_tile(self, admin_client, db):
+    def test_kapital_is_not_a_tile(self, admin_client, db):
         """A tile answers "where is money sitting right now". Kapital is not a place
-        money sits, it is where some of it came from — so it belongs under Kassada,
-        and the tile list must not grow."""
+        money sits, it is where some of it came from — it reads in the kirim daftar
+        below, and the tile list must not grow."""
         _kapital("50000")
-        tiles = self._tiles(admin_client)
-        assert "Kapital" not in tiles
-        assert "shundan kapital" in tiles["Kassada"]["meta"]
+        assert "Kapital" not in self._tiles(admin_client)
 
-    def test_the_meta_line_names_both_facts_when_both_apply(self, admin_client, db):
+    def test_the_hero_card_carries_no_explaining_lines(self, admin_client, db):
+        """The Kassada card is the one the page is opened for, so it is label and the
+        three heaps and nothing else. The "shundan kapital / shundan mijoz avansi"
+        lines that used to sit here pushed the only figures that matter down the card;
+        both facts stay readable where they are acted on."""
         _kapital("50000")
         CustomerPayment.objects.create(customer=_customer(), date="2026-07-02",
                                        amount=Decimal("500.00"), method="cash")
-        meta = self._tiles(admin_client)["Kassada"]["meta"]
-        assert "shundan mijoz avansi" in meta
-        assert "shundan kapital" in meta
-
-    def test_no_meta_line_when_nothing_was_put_in(self, admin_client, db):
-        assert "kapital" not in self._tiles(admin_client)["Kassada"]["meta"]
+        hero = self._tiles(admin_client)["Kassada"]
+        assert hero["meta"] == ""
+        assert hero["note"] == ""
 
     def test_the_hero_figure_includes_it(self, admin_client, db):
         _kapital("50000")
@@ -194,10 +194,12 @@ class TestTheKassaScreen:
 
 class TestTheForm:
     def test_admin_can_book_money_in(self, admin_client, db):
-        resp = admin_client.post("/kapital/new/", {
-            "kind": "in", "date": "2026-07-01", "currency": "usd",
-            "amount": "50000", "exchange_rate": "12000", "method": "cash",
-            "fee_percent": "0", "note": "ta'sischi ulushi"})
+        resp = admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"currency": "usd", "amount": "50000",
+                          "exchange_rate": "12000", "method": "cash",
+                          "fee_percent": "0", "note": "ta'sischi ulushi"},
+                         kind="in", date="2026-07-01"))
         assert resp.status_code in (200, 302), resp.content[:400]
         entry = Kapital.objects.get()
         assert entry.amount == Decimal("50000.00")
@@ -207,24 +209,30 @@ class TestTheForm:
         assert entry.amount_uzs == Decimal("600000000.00")
 
     def test_it_records_who_entered_it(self, admin_client, db, django_user_model):
-        admin_client.post("/kapital/new/", {
-            "kind": "in", "date": "2026-07-01", "currency": "usd",
-            "amount": "1000", "exchange_rate": "12000", "method": "cash",
-            "fee_percent": "0"})
+        admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"currency": "usd", "amount": "1000",
+                          "exchange_rate": "12000", "method": "cash",
+                          "fee_percent": "0"},
+                         kind="in", date="2026-07-01"))
         assert Kapital.objects.get().created_by is not None
 
     def test_a_negative_amount_is_refused(self, admin_client, db):
-        admin_client.post("/kapital/new/", {
-            "kind": "in", "date": "2026-07-01", "currency": "usd",
-            "amount": "-5000", "exchange_rate": "12000", "method": "cash",
-            "fee_percent": "0"})
+        admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"currency": "usd", "amount": "-5000",
+                          "exchange_rate": "12000", "method": "cash",
+                          "fee_percent": "0"},
+                         kind="in", date="2026-07-01"))
         assert not Kapital.objects.exists()
 
     def test_a_foiz_over_a_hundred_is_refused(self, admin_client, db):
-        admin_client.post("/kapital/new/", {
-            "kind": "in", "date": "2026-07-01", "currency": "usd",
-            "amount": "5000", "exchange_rate": "12000", "method": "transfer",
-            "fee_percent": "200"})
+        admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"currency": "usd", "amount": "5000",
+                          "exchange_rate": "12000", "method": "transfer",
+                          "fee_percent": "200"},
+                         kind="in", date="2026-07-01"))
         assert not Kapital.objects.exists()
 
     def test_an_edit_keeps_the_kurs_the_row_was_booked_at(self, admin_client, db):
@@ -251,16 +259,18 @@ class TestTheForm:
         assert admin_client.get("/kapital/new/").status_code == 200
 
     def test_the_kassa_offers_the_button(self, admin_client, db):
-        assert "/kapital/new/" in admin_client.get("/kassa/").content.decode()
+        assert "/kapital/new/" in admin_client.get("/kassa/?davr=all").content.decode()
 
 
 class TestPermissions:
     def test_a_tarjimon_cannot_book_kapital(self, translator_client, db):
         assert translator_client.get("/kapital/new/").status_code == 403
-        assert translator_client.post("/kapital/new/", {
-            "kind": "in", "date": "2026-07-01", "currency": "usd",
-            "amount": "50000", "exchange_rate": "12000", "method": "cash",
-            "fee_percent": "0"}).status_code == 403
+        assert translator_client.post(
+            "/kapital/new/",
+            kapital_rows({"currency": "usd", "amount": "50000",
+                          "exchange_rate": "12000", "method": "cash",
+                          "fee_percent": "0"},
+                         kind="in", date="2026-07-01")).status_code == 403
         assert not Kapital.objects.exists()
 
     def test_a_tarjimon_cannot_edit_or_delete_one(self, translator_client, db):
@@ -268,3 +278,89 @@ class TestPermissions:
         assert translator_client.get(f"/kapital/{entry.pk}/edit/").status_code == 403
         assert translator_client.post(f"/kapital/{entry.pk}/delete/").status_code == 403
         assert Kapital.objects.exists()
+
+
+class TestSplitOutgoingPayments:
+    """One payment, the several ways it actually left — on every chiqim modal.
+
+    Half naqd and half perechisleniya is one settlement to the person making it and
+    two movements to the kassa: the safe goes down by one figure, the bank by the
+    other, and only the transfer carries a bank foiz. Rows are what let a single
+    modal say all three of those things at once."""
+
+    def test_a_logist_top_up_can_leave_two_ways_at_once(self, admin_client, db):
+        from crm.models import Logist, LogistPayment
+        logist = Logist.objects.create(name="Sardor aka", phone="1")
+        resp = admin_client.post(
+            "/logist-payments/new/",
+            logist_payment_rows({"amount": "600", "method": "cash"},
+                                {"amount": "400", "method": "transfer"},
+                                logist=logist.pk))
+        assert resp.status_code == 302
+        rows = LogistPayment.objects.order_by("pk")
+        assert [(r.method, r.amount) for r in rows] == [
+            ("cash", Decimal("600.00")), ("transfer", Decimal("400.00"))]
+        # One float, whichever way the money reached it.
+        assert logist.balance == Decimal("1000.00")
+
+    def test_a_bojxona_payment_can_leave_two_ways_at_once(self, admin_client, db):
+        from crm.models import CustomsAgent, CustomsPayment
+        agent = CustomsAgent.objects.create(name="Bojxonachi", phone="1")
+        resp = admin_client.post(
+            "/customs-payments/new/",
+            customs_payment_rows({"amount": "20000000", "method": "cash"},
+                                 {"amount": "20000000", "method": "transfer"},
+                                 agent=agent.pk))
+        assert resp.status_code == 302
+        rows = CustomsPayment.objects.order_by("pk")
+        assert [r.method for r in rows] == ["cash", "transfer"]
+        assert sum(r.amount_uzs for r in rows) == Decimal("40000000.00")
+
+    def test_kapital_can_be_put_in_two_ways_at_once(self, admin_client, db):
+        resp = admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"amount": "30000", "method": "cash"},
+                         {"amount": "20000", "method": "transfer"},
+                         kind=KapitalKind.IN))
+        assert resp.status_code == 302
+        rows = Kapital.objects.order_by("pk")
+        assert [r.method for r in rows] == ["cash", "transfer"]
+        # The direction is the settlement's, so both rows carry it.
+        assert {r.kind for r in rows} == {KapitalKind.IN}
+        assert _split(kassa_cash_by_currency())["usd"] == Decimal("50000.00")
+
+    def test_only_the_transfer_half_pays_a_bank_foiz(self, admin_client, db):
+        """The reason these are rows and not one row with a breakdown: 2% off the
+        perechisleniya and nothing off the naqd."""
+        resp = admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"amount": "1000", "method": "cash", "fee_percent": "2"},
+                         {"amount": "1000", "method": "transfer", "fee_percent": "2"},
+                         kind=KapitalKind.IN))
+        assert resp.status_code == 302
+        naqd, bank = Kapital.objects.order_by("pk")
+        assert naqd.fee_amount == Decimal("0")
+        assert bank.fee_amount == Decimal("20.00")
+        # 1000 naqd + 980 that actually landed
+        assert _split(kassa_cash_by_currency())["usd"] == Decimal("1980.00")
+
+    def test_the_kassa_shows_each_half_where_it_actually_went(self, admin_client, db):
+        resp = admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"amount": "300", "method": "cash"},
+                         {"amount": "400", "method": "card"},
+                         kind=KapitalKind.IN))
+        assert resp.status_code == 302
+        balances = admin_client.get("/kassa/?davr=all").context["balances"]
+        assert balances["cash"]["in"] == Decimal("300.00")
+        assert balances["card"]["in"] == Decimal("400.00")
+
+    def test_nothing_is_written_when_one_row_is_bad(self, admin_client, db):
+        """All of it or none — a settlement half-written is worse than one refused."""
+        resp = admin_client.post(
+            "/kapital/new/",
+            kapital_rows({"amount": "300", "method": "cash"},
+                         {"amount": "-5", "method": "transfer"},
+                         kind=KapitalKind.IN))
+        assert resp.status_code == 200
+        assert not Kapital.objects.exists()

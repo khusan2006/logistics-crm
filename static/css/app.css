@@ -488,35 +488,68 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
    nobody has to hunt for. Everything else is a row: still one fact with its own
    number and link, but ranked below the money actually on hand. */
 .khero {
-  display: block; padding: 17px 19px; margin-bottom: 12px; color: inherit; text-decoration: none;
+  display: block; padding: 15px 19px 17px; margin-bottom: 14px; color: inherit; text-decoration: none;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
   transition: border-color 0.12s, background 0.12s;
 }
 .khero:hover { border-color: var(--border-strong); background: var(--surface-hover); }
 .khero:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 /* No grand total lives here any more — the three method heaps below ARE the figure
-   of the morning, so they carry the type the total used to. */
+   of the morning, so they carry the type the total used to. "Kassada" names the card
+   from outside it, as a .section-eyebrow. */
 
+/* ── The board of current facts ─────────────────────────────────────────────
+   Three cards wearing the app's KPI clothes (.kpi, crm/dashboard.html): a tinted icon
+   chip, the heading beside it, and the faint corner glow that marks a card as a
+   summary rather than a table. `--kgroup` is the group's own colour — violet for the
+   mol we hold, green for money coming back to us, red for money going out, which is
+   what those tones already mean everywhere else in the app. */
 .kgroups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .kgroup {
-  padding: 13px 15px; background: var(--surface); border: 1px solid var(--border);
+  --kgroup: var(--text-faint);
+  position: relative; overflow: hidden;
+  padding: 13px 15px 4px; background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--kgroup) 26%, var(--border));
   border-radius: var(--r-lg);
 }
+.kgroup--violet { --kgroup: var(--violet); }
+.kgroup--green { --kgroup: var(--success); }
+.kgroup--red { --kgroup: var(--danger); }
+.kgroup::after {
+  content: ""; position: absolute; top: -55px; right: -30px;
+  width: 135px; height: 135px; border-radius: 50%;
+  background: radial-gradient(circle, var(--kgroup), transparent 70%);
+  opacity: 0.16; pointer-events: none;
+}
+.kgroup-head { position: relative; display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.kgroup-icon {
+  width: 28px; height: 28px; flex-shrink: 0; border-radius: 8px;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--kgroup) 20%, transparent); color: var(--kgroup);
+}
+.kgroup-icon svg { width: 15px; height: 15px; }
 .kgroup-title {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-  font-weight: 700; color: var(--text-faint); margin-bottom: 4px;
+  font-weight: 700; color: var(--text-muted);
 }
+/* The rows sit above the glow, or the last one in a card reads through it. */
+.kgroup .krow { position: relative; }
 .krow {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding: 8px 0; color: inherit; text-decoration: none;
   border-bottom: 1px solid var(--border);
 }
 .kgroup .krow:last-child { border-bottom: none; padding-bottom: 0; }
-.krow:hover .krow-label { color: var(--text); }
-.krow-label { font-size: 13px; color: var(--text-muted); min-width: 0; }
+/* Full text colour, not the muted grey it used to wear. These labels name the thing
+   the row IS — "Omborda", "Mijozlar qarzi" — so they are read, not skimmed past, and
+   at 13px muted they went soft against the card. The figure beside them still leads
+   on weight and colour, which is what keeps the row from reading as two headlines. */
+.krow-label { font-size: 14px; font-weight: 550; color: var(--text); min-width: 0; }
+.krow:hover .krow-label { color: var(--accent); }
 /* The kg / mijoz count belongs to the label, not to the figure: it says WHAT the
-   number counts, and on its own line it stops the row wrapping mid-figure. */
-.krow-meta { display: block; font-size: 11px; color: var(--text-faint); }
+   number counts, and on its own line it stops the row wrapping mid-figure. One step
+   down from the label rather than two — at --text-faint it was decoration. */
+.krow-meta { display: block; margin-top: 1px; font-size: 11.5px; font-weight: 500; color: var(--text-muted); }
 .krow-nums { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; }
 .krow-num { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .krow--in .krow-num { color: var(--success); }
@@ -546,23 +579,90 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
    specificity the later one wins and an override placed above would be ignored (which
    is exactly how the mobile stack silently stayed three columns wide). */
 .kmethods--hero {
-  margin-top: 14px; margin-bottom: 0;
-  padding-top: 12px; padding-bottom: 0;
-  border-top: 1px solid var(--border); border-bottom: none;
+  margin: 0; padding: 0; border: none;
+  gap: 0;                            /* the rules between the columns carry the gap */
 }
-/* These three are what the page opens on, so they are read at a glance rather than
-   looked up: the size the single total used to carry, split three ways. */
-.kmethods--hero .ksm-flow { margin-top: 7px; gap: 3px; font-size: 22px; font-weight: 750; letter-spacing: -0.02em; }
+/* Ruled apart rather than merely spaced: naqd, karta and bank are three separate
+   heaps you cannot spend interchangeably, and three columns floating in one box read
+   as one figure chopped up for display. */
+.kmethods--hero > .ksm { padding: 0 18px; }
+.kmethods--hero > .ksm:first-child { padding-left: 0; }
+.kmethods--hero > .ksm:last-child { padding-right: 0; }
+.kmethods--hero > .ksm + .ksm { border-left: 1px solid var(--border); }
+/* The same head the dashboard's KPI cards wear: tinted chip, label beside it. The
+   colour stops at the chip — a green naqd beside a violet bank would read as good and
+   bad news rather than as two places money is kept. */
+.ksm { --ksm: var(--text-faint); }
+.ksm--cash { --ksm: var(--success); }
+.ksm--card { --ksm: var(--accent); }
+.ksm--transfer { --ksm: var(--violet); }
+.ksm-head { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+.ksm-icon {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--ksm) 20%, transparent); color: var(--ksm);
+}
+.ksm-icon svg { width: 16px; height: 16px; }
+.kmethods--hero .ksm-label { color: var(--text-muted); }
+/* These three ARE the card — nothing but the label sits above them now, so they are
+   sized to be read from across the room rather than looked up. Bigger than any other
+   figure on the page on purpose: this is the one card ranked above the rest, and a
+   hero that matches the rows below it ranks nothing.
+
+   Sized on .ksm-val, NOT on the .ksm-flow wrapper: the base .ksm-val rule sets its own
+   font-size, so a size put on the wrapper is inherited and then immediately overridden
+   on the span itself — which is how the hero quietly stayed at the shared 17px while a
+   22px rule sat right here looking like it was doing something. */
+.kmethods--hero .ksm-label { font-size: 11.5px; color: var(--text-muted); }
+.kmethods--hero .ksm-flow { margin-top: 0; gap: 3px; }   /* the head carries the spacing */
+.kmethods--hero .ksm-val {
+  margin-top: 0; font-size: 30px; font-weight: 780; letter-spacing: -0.025em; line-height: 1.15;
+}
+/* Laptop widths. Three columns of 30px so'm need about 245px of text each, so with
+   the rules and their padding the card runs out of room a little under 1200px — and
+   the figures only grow, a heap one digit longer than today's eating ~17px a column.
+   Stepping down at 1280 (rather than at the width where today's numbers happen to
+   touch) leaves a digit of slack at every width, and 26px still reads from across the
+   room — the point of the size in the first place. */
+@media (max-width: 1280px) { .kmethods--hero .ksm-val { font-size: 26px; } }
 /* One under the other on a phone: three money columns of this size do not fit across
-   375px, and a page that scrolls sideways hides the third of them. */
+   375px, and a page that scrolls sideways hides the third of them. Stacked, the rule
+   that separates them turns from a left edge into a top one — the same line, drawn
+   where the join now is. */
 @media (max-width: 620px) {
-  .kmethods--hero { grid-template-columns: 1fr; gap: 12px; }
-  .kmethods--hero .ksm-flow { font-size: 19px; }
+  .kmethods--hero { grid-template-columns: 1fr; }
+  .kmethods--hero > .ksm { padding: 13px 0 0; }
+  .kmethods--hero > .ksm:first-child { padding-top: 0; }
+  .kmethods--hero > .ksm + .ksm { border-left: none; border-top: 1px solid var(--border); }
+  .kmethods--hero .ksm-val { font-size: 26px; }
 }
 
 /* The shared ‹ davr › bar's own row (crm/_daterange.html). Was .kassa-filter, back
    when the kassa was the only screen that had it. */
 .daterange-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 14px; }
+
+/* ── The one row above a ro'yxat ────────────────────────────────────────────
+   Search on the left, ‹ davr › + Filtrlash + Excel on the right. They answer two
+   different questions — "which rows am I looking for" and "what is this list set
+   to" — and as two stacked full-width bars they read as two unrelated toolbars and
+   cost a row of height on every list.
+
+   The daterange partial also renders the filter chips and the drawer; the chips take
+   a whole row of their own below (they are an answer, not a control), and the drawer
+   is position:fixed so being a flex item costs it nothing. */
+.listbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 16px; }
+.listbar > .searchbar { flex: 1 1 260px; min-width: 0; margin-bottom: 0; }
+.listbar > .daterange-bar { margin-left: auto; margin-bottom: 0; }
+.listbar .filter-chips { flex-basis: 100%; }
+/* A list with no davr bar puts its Excel at the same right edge, so the button does
+   not move from page to page. */
+.searchbar > .btn-excel { margin-left: auto; }
+/* Narrow: the davr bar drops under the search rather than squeezing it to nothing,
+   and goes back to sitting at the left where every other row starts. */
+@media (max-width: 760px) {
+  .listbar > .searchbar { flex-basis: 100%; }
+  .listbar > .daterange-bar { margin-left: 0; }
+}
 
 
 /* Flow and position side by side — they answer "what moved" and "what it means",
@@ -1037,8 +1137,11 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 
 /* Excel: a quiet button in the toolbar row, green enough to be found by eye without
    competing with the page's own actions (crm/_excel_button.html). */
-.btn-excel { background: var(--success-soft); color: var(--success); border-color: transparent; }
-.btn-excel:hover { background: var(--success); color: #fff; }
+/* Solid green, not the pale tint it used to be: it is the one thing in the row you
+   DO to the list rather than set on it, and at --success-soft it read as a disabled
+   chip beside the white davr bar. */
+.btn-excel { background: var(--success); color: #fff; border-color: transparent; }
+.btn-excel:hover { background: color-mix(in srgb, var(--success) 84%, #000); color: #fff; }
 .btn-excel svg { width: 15px; height: 15px; }
 
 .btn-sm { padding: 5px 11px; font-size: 13px; }
@@ -2421,6 +2524,19 @@ form.stacked .lineset-field[hidden] { display: none; }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
+
+/* ── One to'lov paid several ways, in the kassa daftar ──────────────────────
+   The line is ONE payment; the usul and the summa are stacked inside it, one per
+   way the money moved. The tag is what stops the two figures reading as a mistake:
+   without it a reader sees one name against two sums and looks for the error. */
+.split-tag {
+  display: block; margin-top: 2px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  font-weight: 700; color: var(--text-faint);
+}
+/* A hairline down the left edge, not a fill: it ties the stacked lines together as
+   one payment without making a perfectly ordinary to'lov look flagged. */
+.ledger-split > td:first-child { box-shadow: inset 2px 0 0 var(--border-strong); }
 
 /* Money rows — a slice of a mijoz to'lov. One question per line, in the order the
    operator answers them: how much, then how it moved, then who paid the bank, then

@@ -109,7 +109,7 @@ def test_the_kassa_file_is_two_tabs(admin_client, db):
     SupplierPayment.objects.create(contract=make_contract(), date=date(2026, 7, 6),
                                    amount=Decimal("40"))
 
-    wb = openpyxl.load_workbook(BytesIO(admin_client.get("/kassa/export.xlsx").content))
+    wb = openpyxl.load_workbook(BytesIO(admin_client.get("/kassa/export.xlsx?davr=all").content))
     assert [ws.title for ws in wb.worksheets] == ["Kirim", "Chiqim"]
     assert len(list(wb["Kirim"].iter_rows(min_row=2))) == 1
     assert len(list(wb["Chiqim"].iter_rows(min_row=2))) == 1
@@ -166,4 +166,4 @@ def test_a_translator_gets_only_the_two_lists_they_can_read(translator_client, d
 
 def test_a_skladchi_can_take_the_ombor_but_not_the_kassa(skladchi_client, db):
     assert skladchi_client.get("/ombor/export.xlsx").status_code == 200
-    assert skladchi_client.get("/kassa/export.xlsx").status_code == 403
+    assert skladchi_client.get("/kassa/export.xlsx?davr=all").status_code == 403

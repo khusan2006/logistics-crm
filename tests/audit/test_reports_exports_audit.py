@@ -33,7 +33,7 @@ from unittest.mock import patch
 import openpyxl
 import pytest
 
-from conftest import line_data
+from conftest import line_data, supplier_payment_rows
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Sale,
     Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
@@ -261,11 +261,12 @@ def test_a_som_sotuv_narx_reaches_the_xlsx_as_som(admin_client, db):
 
 def test_a_som_hamkor_tolovi_reaches_the_xlsx_as_som(admin_client, db):
     contract = _contract(kg="10000", price="1.00")
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-02", "currency": "uzs",
-        "amount": "12000000", "exchange_rate": "12000", "commission_percent": "",
-        "method": "cash", "fee_percent": "0", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12000000",
+            "exchange_rate": "12000", "commission_percent": "",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-02"))
     assert resp.status_code == 302
 
     row = _rows(admin_client.get(SUP_PAYS))[0]
@@ -280,11 +281,12 @@ def test_a_som_figure_that_does_not_divide_evenly_still_ships_exact(admin_client
     typed side comes back untouched, so the so'm column must be the round figure
     and only the dollar one may carry the rounding."""
     contract = _contract(kg="10000", price="1.00")
-    assert admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-02", "currency": "uzs",
-        "amount": "13000000", "exchange_rate": "12345", "commission_percent": "",
-        "method": "cash", "fee_percent": "0", "note": "",
-    }).status_code == 302
+    assert admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "13000000",
+            "exchange_rate": "12345", "commission_percent": "",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-02")).status_code == 302
 
     row = _rows(admin_client.get(SUP_PAYS))[0]
     assert _dec(row["Hamkorga (so'm)"]) == Decimal("13000000")   # typed, undivided
@@ -781,11 +783,12 @@ def test_kassadan_som_equals_its_parts_in_the_export(admin_client, db):
                    strict=False)
 def test_re_saving_a_som_hamkor_tolovi_unchanged_keeps_the_exported_figures(admin_client, db):
     contract = _contract(kg="100000", price="1.00")
-    assert admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-02", "currency": "uzs",
-        "amount": "12000000", "exchange_rate": "12000", "commission_percent": "",
-        "method": "cash", "fee_percent": "0", "note": "",
-    }).status_code == 302
+    assert admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12000000",
+            "exchange_rate": "12000", "commission_percent": "",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-02")).status_code == 302
     payment = SupplierPayment.objects.get()
     before = _rows(admin_client.get(SUP_PAYS))[0]
 

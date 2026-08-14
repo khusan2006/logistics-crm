@@ -100,7 +100,7 @@ class TestKassaCountsTheMoneyOnce:
         shipment = _shipment(logist)
         _send(logist, "10000")
         _advance(shipment, logist, "500")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["net_out"] == Decimal("10000.00")
         assert ctx["cash_total"] == Decimal("-10000.00")
 
@@ -123,7 +123,7 @@ class TestKassaCountsTheMoneyOnce:
         shipment = _shipment(logist)
         _send(logist, "10000")
         _advance(shipment, logist, "500")
-        rows = admin_client.get("/kassa/").context["outflow_page"].paginator.object_list
+        rows = admin_client.get("/kassa/?davr=all").context["outflow_page"].paginator.object_list
         kinds = {r["kind"] for r in rows}
         assert "logist" in kinds
         assert sum(r["amount"] for r in rows) == Decimal("10000.00")
@@ -137,7 +137,7 @@ class TestKassaCountsTheMoneyOnce:
                                        amount_uzs=Decimal("48000000"), method="cash")
         _send(logist, "10000")
         _advance(shipment, logist, "500")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         closing = ctx["waterfall"][-1]
         assert closing["running"] == ctx["cash_total"] == Decimal("-6000.00")
         assert closing["running_uzs"] == ctx["cash_total_uzs"]
@@ -147,7 +147,7 @@ class TestKassaCountsTheMoneyOnce:
     def test_per_method_totals_include_the_logist_payment(self, admin_client, db):
         logist = _logist()
         _send(logist, "10000", method="transfer")
-        balances = admin_client.get("/kassa/").context["balances"]
+        balances = admin_client.get("/kassa/?davr=all").context["balances"]
         assert balances["transfer"]["out"] == Decimal("10000.00")
         assert balances["cash"]["out"] == Decimal("0")
 
@@ -234,7 +234,7 @@ class TestLogistScreens:
     def test_kassa_carries_a_logistlarda_tile(self, admin_client, db):
         logist = _logist()
         _send(logist, "10000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
         from crm.models import Currency
         assert tiles["Logistlarda avansimiz"]["split"] == [(Currency.USD, Decimal("10000.00"))]
         assert tiles["Logistlarda avansimiz"]["url"] == "/logists/"
@@ -263,7 +263,7 @@ class TestOwedLogistIsVisibleOnTheKassa:
     def test_a_logist_who_fronted_cash_gets_a_tile(self, admin_client, db):
         logist = _logist()
         _advance(_shipment(logist), logist, "800")      # no funding sent first
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
         # Positive, like every other qarzimiz tile: the "out" tone is what says the
         # money is leaving, not a minus sign on one tile out of three.
         from crm.models import Currency
@@ -272,7 +272,7 @@ class TestOwedLogistIsVisibleOnTheKassa:
 
     def test_no_empty_tile_when_nobody_is_owed(self, admin_client, db):
         _send(_logist(), "5000")
-        labels = [t["label"] for t in admin_client.get("/kassa/").context["tiles"]]
+        labels = [t["label"] for t in admin_client.get("/kassa/?davr=all").context["tiles"]]
         assert "Logistlarda avansimiz" in labels
         assert "Logistlarga qarzimiz" not in labels
 
@@ -327,7 +327,7 @@ class TestDriverAdvanceOnDispatch:
         shipment = Shipment.objects.get()
         assert shipment.expenses_total == Decimal("480.00")
         assert shipment.expense_per_kg == Decimal("0.02")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["net_out"] == Decimal("10000.00")     # only the funding
 
     def test_an_advance_with_no_logist_is_refused(self, admin_client, db):
@@ -460,6 +460,8 @@ class TestAdvanceFieldPresentation:
         app rendered nothing at all."""
         html = admin_client.get("/supplier-payments/new/",
                                 headers={"X-Requested-With": "XMLHttpRequest"}).content.decode()
-        for name in ("contract", "date", "amount", "method"):
+        # The shared header, then the fields of the first to'lov row: this modal takes
+        # several ways one payment moved, so the money boxes are formset-prefixed.
+        for name in ("contract", "date", "form-0-amount", "form-0-method"):
             assert f'name="{name}"' in html, name
         assert "fieldgroup" not in html

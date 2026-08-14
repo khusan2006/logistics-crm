@@ -10,45 +10,48 @@ kassa and the ro'yxatlar carry. It stays outside the filter form and rides along
 as a hidden pair, so pressing Filtrlash keeps the window rather than clearing it. The
 xlsx links below pass `request.GET` straight through, so they export this same window.
 {% endcomment %}
-{% include "crm/_daterange.html" %}
-<form method="get" class="searchbar" style="margin-bottom: 16px;">
-  {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
-  {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
-  <label>Hamkor
-    <select name="partner">
-      <option value="">Barchasi</option>
-      {% for p in partners %}
-      <option value="{{ p.pk }}" {% if partner_id == p.pk|stringformat:"s" %}selected{% endif %}>{{ p.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Marka
-    <select name="brand">
-      <option value="">Barchasi</option>
-      {% for b in brands %}
-      <option value="{{ b }}" {% if brand == b %}selected{% endif %}>{{ b }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Holat
-    <select name="status">
-      <option value="">Barchasi</option>
-      {% for st in statuses %}
-      <option value="{{ st.pk }}" {% if status_id == st.pk|stringformat:"s" %}selected{% endif %}>{{ st.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <button type="submit" class="btn">Filtrlash</button>
-  {% if date_from or date_to or partner_id or brand or status_id %}
-  <a class="btn btn-ghost" href="{% url 'reports' %}">Tozalash</a>
-  {% endif %}
-  <a class="btn btn-ghost" href="{% url 'export_contracts' %}?{{ request.GET.urlencode }}">Kelishuvlar (xlsx)</a>
-  <a class="btn btn-ghost" href="{% url 'export_supplier_payments' %}?{{ request.GET.urlencode }}">Hamkor to'lovlari (xlsx)</a>
-  <a class="btn btn-ghost" href="{% url 'export_shipments' %}?{{ request.GET.urlencode }}">Yuklar (xlsx)</a>
-  <a class="btn btn-ghost" href="{% url 'export_sales' %}?{{ request.GET.urlencode }}">Sotuvlar (xlsx)</a>
-  <a class="btn btn-ghost" href="{% url 'export_debts' %}?{{ request.GET.urlencode }}">Qarzdorlar (xlsx)</a>
-  <button type="button" class="btn btn-ghost" onclick="window.print()">🖨 Chop etish / PDF</button>
-</form>
+<div class="listbar">
+  {# Spacing comes from .listbar now — an inline margin here would beat it. #}
+  <form method="get" class="searchbar">
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    <label>Hamkor
+      <select name="partner">
+        <option value="">Barchasi</option>
+        {% for p in partners %}
+        <option value="{{ p.pk }}" {% if partner_id == p.pk|stringformat:"s" %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Marka
+      <select name="brand">
+        <option value="">Barchasi</option>
+        {% for b in brands %}
+        <option value="{{ b }}" {% if brand == b %}selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Holat
+      <select name="status">
+        <option value="">Barchasi</option>
+        {% for st in statuses %}
+        <option value="{{ st.pk }}" {% if status_id == st.pk|stringformat:"s" %}selected{% endif %}>{{ st.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn">Filtrlash</button>
+    {% if date_from or date_to or partner_id or brand or status_id %}
+    <a class="btn btn-ghost" href="{% url 'reports' %}">Tozalash</a>
+    {% endif %}
+    <a class="btn btn-ghost" href="{% url 'export_contracts' %}?{{ request.GET.urlencode }}">Kelishuvlar (xlsx)</a>
+    <a class="btn btn-ghost" href="{% url 'export_supplier_payments' %}?{{ request.GET.urlencode }}">Hamkor to'lovlari (xlsx)</a>
+    <a class="btn btn-ghost" href="{% url 'export_shipments' %}?{{ request.GET.urlencode }}">Yuklar (xlsx)</a>
+    <a class="btn btn-ghost" href="{% url 'export_sales' %}?{{ request.GET.urlencode }}">Sotuvlar (xlsx)</a>
+    <a class="btn btn-ghost" href="{% url 'export_debts' %}?{{ request.GET.urlencode }}">Qarzdorlar (xlsx)</a>
+    <button type="button" class="btn btn-ghost" onclick="window.print()">🖨 Chop etish / PDF</button>
+  </form>
+  {% include "crm/_daterange.html" %}
+</div>
 
 <div class="kpi-grid">
   <div class="kpi kpi--blue">

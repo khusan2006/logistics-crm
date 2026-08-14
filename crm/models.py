@@ -144,6 +144,17 @@ class CashEntry(MoneyEntry):
     differ in label and default per model, and Django forbids overriding an
     inherited field."""
 
+    # The rows written in ONE go carry the same id: one to'lov paid half naqd and half
+    # by perechisleniya is one settlement to the person making it and two movements of
+    # money to the kassa. They stay two rows — the safe and the bank went down by
+    # different figures, and only the transfer paid a bank foiz — but the id is what
+    # lets a screen draw them as the single payment they are.
+    #
+    # Null on everything entered before the field existed, and on a to'lov that moved
+    # one way, which is one row by nature. Same shape and the same reasoning as
+    # `Sale.group`, which does this for the markalar bought in one trip.
+    group = models.UUIDField("To'lov guruhi", null=True, blank=True,
+                             editable=False, db_index=True)
     fee_percent = models.DecimalField(
         "Perechisleniya foizi (%)", max_digits=5, decimal_places=2, default=0, blank=True,
         help_text="Faqat perechisleniya uchun; naqd va kartada e'tiborga olinmaydi")
@@ -161,6 +172,14 @@ class CashEntry(MoneyEntry):
 
     class Meta:
         abstract = True
+
+    @property
+    def settlement_rows(self):
+        """The rows entered together with this one, in the order they were typed —
+        itself alone when the money moved one way."""
+        if self.group is None:
+            return [self]
+        return list(type(self).objects.filter(group=self.group).order_by("pk"))
 
     @property
     def fee_on_company(self):

@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import line_data, payment_rows
+from conftest import line_data, payment_rows, supplier_payment_rows
 from crm.forms import SaleCreateForm
 from crm.templatetags.crm_extras import NBSP
 from crm.models import (
@@ -186,11 +186,12 @@ def test_an_incoming_foiz_only_pays_down_what_arrived(admin_client, db):
 def test_an_outgoing_foiz_rides_on_top(admin_client, db):
     """The hamkor is credited in full; the bank's cut costs the kassa extra."""
     contract = _contract()
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-02", "currency": "usd",
-        "amount": "1000", "exchange_rate": "12000", "commission_percent": "",
-        "method": "transfer", "fee_percent": "2", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1000", "exchange_rate": "12000",
+            "commission_percent": "", "method": "transfer",
+            "fee_percent": "2", "note": ""},
+                              contract=contract.pk, date="2026-07-02"))
     assert resp.status_code == 302
     payment = SupplierPayment.objects.get()
     assert payment.amount == Decimal("1000.00")      # what the hamkor receives

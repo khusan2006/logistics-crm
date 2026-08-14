@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
-    CustomsAgent, CustomsPayment, Kapital, Logist,
+    CustomsAgent, CustomsPayment, Kapital, KapitalKind, Logist,
     LogistPayment, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
@@ -602,6 +602,19 @@ def contract_currency(data, instance=None):
     if instance is not None and instance.pk:
         return instance.currency
     return Currency.USD
+
+
+def _clean_percent(percent):
+    """A foiz box as a usable number: blank is nought, and it has to be a real
+    percentage. Shared by the single-row hamkor to'lov and the split one's rows, so
+    the two cannot drift into disagreeing about what 150% means."""
+    if percent is None:
+        return Decimal("0")
+    if percent < 0:
+        raise forms.ValidationError("Foiz manfiy bo'la olmaydi")
+    if percent > 100:
+        raise forms.ValidationError("Foiz 100 dan oshmasligi kerak")
+    return percent
 
 
 def _keep_if(queryset, predicate, keep_pk=None):
@@ -1243,14 +1256,7 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
             lambda c: contract_option_label(c, payable=True))
 
     def clean_commission_percent(self):
-        percent = self.cleaned_data.get("commission_percent")
-        if percent is None:
-            return Decimal("0")
-        if percent < 0:
-            raise forms.ValidationError("Foiz manfiy bo'la olmaydi")
-        if percent > 100:
-            raise forms.ValidationError("Foiz 100 dan oshmasligi kerak")
-        return percent
+        return _clean_percent(self.cleaned_data.get("commission_percent"))
 
     def clean(self):
         # Seeded before the mixin converts. Paying a kelishuv in its own currency
@@ -1749,20 +1755,278 @@ class CustomerPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
         return self.target_currency
 
 
-class BaseCustomerPaymentFormSet(forms.BaseModelFormSet):
+class BaseSplitPaymentFormSet(forms.BaseModelFormSet):
+    """One payment written as the several ways it actually moved.
+
+    Half naqd and half perechisleniya is one settlement to the person making it and
+    two movements of money to the kassa — the naqd leaves the safe, the transfer
+    leaves the bank and carries the bank's foiz on the way. Each row is one of those
+    movements, so it keeps its own summa, valyuta, kurs, usul and foiz; what the
+    payment is FOR — the kelishuv, the logist, the sana — is asked once in the header
+    above them.
+
+    That is also why this is rows rather than a breakdown inside one row: a single
+    row could not say which part of itself the bank charged 2% on.
+
+    `kept_forms` is what a subclass checks a total against — the rows that will
+    actually be saved, with the deleted and the never-filled-in ones dropped."""
+
+    def kept_forms(self):
+        return [f for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+
     def clean(self):
         super().clean()
         if any(self.errors):
             return
-        kept = [f for f in self.forms
-                if f.cleaned_data and not f.cleaned_data.get("DELETE")]
-        if not kept:
+        if not self.kept_forms():
             raise forms.ValidationError("Kamida bitta to'lov kiritilishi kerak")
 
 
-CustomerPaymentFormSet = forms.modelformset_factory(
-    CustomerPayment, form=CustomerPaymentRowForm, formset=BaseCustomerPaymentFormSet,
-    extra=1, can_delete=True)
+#: Kept under its old name: it is what the mijoz to'lov modal has always been built
+#: from, and the outgoing forms below now share the same base.
+BaseCustomerPaymentFormSet = BaseSplitPaymentFormSet
+
+
+def split_payment_formset(model, form, formset=BaseSplitPaymentFormSet):
+    """The formset every split-payment modal uses: one blank row to start, and a −
+    on each so a row typed by mistake can go."""
+    return forms.modelformset_factory(model, form=form, formset=formset,
+                                      extra=1, can_delete=True)
+
+
+CustomerPaymentFormSet = split_payment_formset(CustomerPayment, CustomerPaymentRowForm)
+
+
+class SupplierPaymentTargetForm(forms.Form):
+    """The header of a split hamkor to'lov: which kelishuv is being paid, and when.
+
+    Both are facts about the settlement rather than about how the money moved, so
+    they are asked once — the same division the mijoz modal makes (see
+    `CustomerPaymentTargetForm`). Everything that CAN differ between the naqd half
+    and the bank half — summa, valyuta, kurs, usul, foiz, vositachi — lives on the
+    rows."""
+
+    contract = forms.ModelChoiceField(
+        queryset=Contract.objects.none(), label="Kelishuv",
+        widget=ContractChoiceSelect(attrs={"data-contract-currency": ""}))
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        base = (Contract.objects.select_related("partner")
+                .prefetch_related("lines__shipment_lines", "supplier_payments"))
+        self.fields["contract"].queryset = _keep_if(base, lambda c: c.payable_left_own > 0)
+        self.fields["contract"].label_from_instance = (
+            lambda c: contract_option_label(c, payable=True))
+        # This header carries the sana for every row beneath it.
+        no_future_date(self.fields["date"])
+
+
+class SupplierPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                             MoneyEntryFormMixin, forms.ModelForm):
+    """One way a hamkor to'lov moved: a sum, the currency it left in, and how.
+
+    The vositachi foizi rides on the ROW, not on the header, for the same reason the
+    bank foiz does: a payment sent half in cash by hand and half through a vositachi's
+    account paid a cut on one half and nothing on the other, and a single shared box
+    could only say one of those two things."""
+
+    fee_counterparty = "Hamkordan ushlansin"
+    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
+                   "commission_percent", "exchange_rate", "note"]
+
+    class Meta:
+        model = SupplierPayment
+        # No kelishuv, no sana: both are shared, so the header asks once.
+        fields = ["currency", "amount", "exchange_rate", "commission_percent",
+                  "method", "fee_percent", "fee_bearer", "note"]
+        widgets = {
+            "commission_percent": forms.NumberInput(attrs={
+                "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
+                "placeholder": "0"}),
+            "note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}),
+        }
+        labels = {"amount": "Hamkor oladigan summa"}
+
+    def __init__(self, *args, contract=None, **kwargs):
+        # Handed down from the header: which kelishuv is being paid decides whether
+        # this row has to ask for a kurs, and the header is not clean yet when the
+        # rows are built (same reason CustomerPaymentRowForm takes its currency).
+        self.contract = contract
+        super().__init__(*args, **kwargs)
+        self.fields["amount"].widget.attrs["data-commission-base"] = ""
+        self.fields["exchange_rate"].help_text = (
+            "Faqat kelishuv valyutasidan boshqa valyutada to'lanayotganda kerak")
+
+    def settled_against(self):
+        return self.contract.currency if self.contract else ""
+
+    def clean_commission_percent(self):
+        return _clean_percent(self.cleaned_data.get("commission_percent"))
+
+
+class BaseSupplierPaymentFormSet(BaseSplitPaymentFormSet):
+    """The kelishuv's ceiling, checked over the WHOLE settlement.
+
+    Per row it would let two halves through that only overshoot together: $6 000 naqd
+    and $6 000 bank are each under a $10 000 kelishuv and are $2 000 over it as the
+    one payment they are. The single-row form checks the same thing (see
+    `SupplierPaymentForm.clean`); this is that check with the rows added up first."""
+
+    contract = None
+
+    def clean(self):
+        super().clean()
+        if any(self.errors) or self.non_form_errors() or self.contract is None:
+            return
+        contract = self.contract
+        paid = sum(((form.cleaned_data.get("amount_uzs") if contract.is_som
+                     else form.cleaned_data.get("amount")) or Decimal("0"))
+                   for form in self.kept_forms())
+        left = contract.payable_left_own
+        if paid > left:
+            shown = som(left) if contract.is_som else usd(left)
+            raise forms.ValidationError(
+                f"Kelishuv qiymatidan oshib ketdi (to'lash mumkin: {shown})")
+
+
+SupplierPaymentFormSet = split_payment_formset(
+    SupplierPayment, SupplierPaymentRowForm, formset=BaseSupplierPaymentFormSet)
+
+
+class LogistPaymentTargetForm(forms.Form):
+    """The header of a split logist to'ldirish: whose balance, and when."""
+
+    logist = forms.ModelChoiceField(queryset=Logist.objects.all(), label="Logist")
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["logist"].label_from_instance = logist_option_label
+        no_future_date(self.fields["date"])
+
+
+class LogistPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                           MoneyEntryFormMixin, forms.ModelForm):
+    """One way a logist top-up left us. The balance it lands in is kept in dollars
+    (see `LogistPaymentForm`), so a dollar row crosses nothing and asks for no kurs
+    while a so'm one does."""
+
+    fee_counterparty = "Logistdan ushlansin"
+    float_currency = Currency.USD
+    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
+                   "exchange_rate", "note"]
+
+    class Meta:
+        model = LogistPayment
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
+                  "fee_bearer", "note"]
+        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+        labels = {"amount": "Yuboriladigan summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["exchange_rate"].help_text = "Faqat so'mda yuborilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def settled_against(self):
+        return self.float_currency
+
+
+LogistPaymentFormSet = split_payment_formset(LogistPayment, LogistPaymentRowForm)
+
+
+class CustomsPaymentTargetForm(forms.Form):
+    """The header of a split bojxona to'lov: which bojxonachi, for which yuk, when."""
+
+    agent = forms.ModelChoiceField(queryset=CustomsAgent.objects.all(),
+                                   label="Bojxonachi")
+    shipment = forms.ModelChoiceField(
+        queryset=Shipment.objects.none(), label="Qaysi yuk uchun", required=False,
+        empty_label="Yukka bog'lanmagan",
+        help_text="Bo'sh qoldirilsa — umumiy to'ldirish, yukka bog'lanmaydi")
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["agent"].label_from_instance = customs_agent_option_label
+        self.fields["shipment"].queryset = (
+            Shipment.objects.select_related("contract__partner")
+            .prefetch_related("customs_payments", "expenses"))
+        self.fields["shipment"].label_from_instance = customs_shipment_option_label
+        no_future_date(self.fields["date"])
+
+
+class CustomsPaymentRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """One way money reached a bojxonachi. Nothing here ever crosses a currency — a
+    bojxonachi holds a dollar heap and a so'm heap rather than one float — so no kurs
+    is ever demanded and the row simply inherits one for the kassa's other column,
+    exactly as the single-row form does."""
+
+    fee_counterparty = "Bojxonachidan ushlansin"
+    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
+                   "exchange_rate", "note"]
+
+    class Meta:
+        model = CustomsPayment
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
+                  "fee_bearer", "note"]
+        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+        labels = {"amount": "Yuboriladigan summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["currency"].widget.attrs["data-settled-against"] = ""
+        # Bojxona is overwhelmingly paid in so'm; only a NEW row is steered.
+        if not self.instance.pk:
+            self.initial.setdefault("currency", Currency.UZS)
+
+    def clean(self):
+        if (self.cleaned_data.get("exchange_rate") or Decimal("0")) <= 0:
+            self.cleaned_data["exchange_rate"] = latest_exchange_rate()
+        return super().clean()
+
+
+CustomsPaymentFormSet = split_payment_formset(CustomsPayment, CustomsPaymentRowForm)
+
+
+class KapitalTargetForm(forms.Form):
+    """The header of a split kapital entry: in or out, and when."""
+
+    kind = forms.ChoiceField(label="Turi", choices=KapitalKind.choices,
+                             initial=KapitalKind.IN)
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        no_future_date(self.fields["date"])
+
+
+class KapitalRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                     MoneyEntryFormMixin, forms.ModelForm):
+    """One way the ta'sischi's money moved. No fee_bearer, for the reason the
+    single-row form gives: both sides of the transfer are the same pocket."""
+
+    float_currency = Currency.USD
+    field_order = ["amount", "currency", "method", "fee_percent", "exchange_rate", "note"]
+
+    class Meta:
+        model = Kapital
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent", "note"]
+        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+        labels = {"amount": "Summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["exchange_rate"].help_text = "Faqat so'mda kiritilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def settled_against(self):
+        return self.float_currency
+
+
+KapitalFormSet = split_payment_formset(Kapital, KapitalRowForm)
 
 
 def payer_choices(category):

@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 
+from conftest import logist_payment_rows, supplier_payment_rows
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Logist,
     LogistPayment, Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -70,7 +71,10 @@ def _money(obj):
 
 
 def _ctx(admin_client, **params):
-    resp = admin_client.get("/kassa/", params)
+    # Over ALL the money unless a test names a davr: the screen itself opens on bugun
+    # (see `_kassa_date_window`), and these are about what the arithmetic does, not
+    # about which window it does it in.
+    resp = admin_client.get("/kassa/", {"davr": "all", **params})
     assert resp.status_code == 200
     return resp.context
 
@@ -82,11 +86,12 @@ def _ctx(admin_client, **params):
 def test_supplier_payment_typed_in_som_keeps_the_som_figure_exact(admin_client):
     """A so'm to'lov stores the typed so'm bit-exact; only USD is derived."""
     contract = _contract()
-    assert _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "uzs",
-        "amount": "12345678", "exchange_rate": "12345.67",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    }).status_code == 204
+    assert _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12345678",
+            "exchange_rate": "12345.67", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-10")).status_code == 204
 
     p = SupplierPayment.objects.get()
     assert p.currency == Currency.UZS
@@ -97,11 +102,12 @@ def test_supplier_payment_typed_in_som_keeps_the_som_figure_exact(admin_client):
 
 def test_supplier_payment_typed_in_dollars_keeps_the_dollar_figure_exact(admin_client):
     contract = _contract()
-    assert _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "usd",
-        "amount": "1234.56", "exchange_rate": "12650",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    }).status_code == 204
+    assert _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1234.56", "exchange_rate": "12650",
+            "commission_percent": "0", "method": "cash", "fee_percent": "0",
+            "note": ""},
+                              contract=contract.pk, date="2026-07-10")).status_code == 204
 
     p = SupplierPayment.objects.get()
     assert p.currency == Currency.USD
@@ -115,11 +121,11 @@ def test_a_huge_and_a_tiny_kurs_both_round_trip(admin_client):
     customer = _customer()
     logist = _logist()
     # tiny kurs — a dollar row whose so'm twin is small
-    assert _post(admin_client, "/logist-payments/new/", {
-        "logist": logist.pk, "date": "2026-07-10", "currency": "usd",
-        "amount": "100", "exchange_rate": "0.01", "method": "cash",
-        "fee_percent": "0", "note": "",
-    }).status_code == 204
+    assert _post(
+        admin_client, "/logist-payments/new/",
+        logist_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "0.01",
+                            "method": "cash", "fee_percent": "0", "note": ""},
+                            logist=logist.pk, date="2026-07-10")).status_code == 204
     tiny = LogistPayment.objects.get()
     assert (tiny.amount, tiny.amount_uzs) == (Decimal("100.00"), Decimal("1.00"))
 
@@ -141,11 +147,12 @@ def test_a_kurs_of_zero_is_refused_rather_than_stored(admin_client):
     """convert_pair raises without a kurs; the form must catch it as a field error,
     not a 500 and not a silently-zero so'm row."""
     contract = _contract()
-    resp = _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "uzs",
-        "amount": "12000000", "exchange_rate": "0",
-        "commission_percent": "0", "method": "cash", "fee_percent": "0", "note": "",
-    })
+    resp = _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12000000", "exchange_rate": "0",
+            "commission_percent": "0", "method": "cash", "fee_percent": "0",
+            "note": ""},
+                              contract=contract.pk, date="2026-07-10"))
     assert resp.status_code == 422
     assert not SupplierPayment.objects.exists()
 
@@ -153,11 +160,12 @@ def test_a_kurs_of_zero_is_refused_rather_than_stored(admin_client):
 def test_zero_and_negative_sums_are_refused(admin_client):
     logist = _logist()
     for amount in ("0", "-500"):
-        resp = _post(admin_client, "/logist-payments/new/", {
-            "logist": logist.pk, "date": "2026-07-10", "currency": "usd",
-            "amount": amount, "exchange_rate": "12000", "method": "cash",
-            "fee_percent": "0", "note": "",
-        })
+        resp = _post(
+            admin_client, "/logist-payments/new/",
+            logist_payment_rows({"currency": "usd", "amount": amount,
+                                "exchange_rate": "12000", "method": "cash",
+                                "fee_percent": "0", "note": ""},
+                                logist=logist.pk, date="2026-07-10"))
         assert resp.status_code == 422, amount
     assert not LogistPayment.objects.exists()
 
@@ -180,11 +188,12 @@ def _resave_twice(admin_client, url, obj, **overrides):
 
 def test_resaving_a_dollar_supplier_payment_moves_nothing(admin_client):
     contract = _contract()
-    _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "usd",
-        "amount": "1234.56", "exchange_rate": "12650", "commission_percent": "2",
-        "method": "transfer", "fee_percent": "1", "note": "asl",
-    })
+    _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1234.56", "exchange_rate": "12650",
+            "commission_percent": "2", "method": "transfer",
+            "fee_percent": "1", "note": "asl"},
+                              contract=contract.pk, date="2026-07-10"))
     p = SupplierPayment.objects.get()
     before = _money(p)
     after = _resave_twice(admin_client, f"/supplier-payments/{p.pk}/edit/", p)
@@ -193,11 +202,12 @@ def test_resaving_a_dollar_supplier_payment_moves_nothing(admin_client):
 
 def test_changing_only_the_note_moves_no_dollar_figure(admin_client):
     contract = _contract()
-    _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "usd",
-        "amount": "999.99", "exchange_rate": "12345.67", "commission_percent": "0",
-        "method": "cash", "fee_percent": "0", "note": "asl",
-    })
+    _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "999.99",
+            "exchange_rate": "12345.67", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": "asl"},
+                              contract=contract.pk, date="2026-07-10"))
     p = SupplierPayment.objects.get()
     before = _money(p)
     after = _resave_twice(admin_client, f"/supplier-payments/{p.pk}/edit/", p,
@@ -210,11 +220,12 @@ def test_changing_only_the_note_moves_no_dollar_figure(admin_client):
 # its so'm figure. Kept as a test so the defect cannot come back.
 def test_resaving_a_som_supplier_payment_moves_nothing(admin_client):
     contract = _contract()
-    _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "uzs",
-        "amount": "12000000", "exchange_rate": "12000", "commission_percent": "0",
-        "method": "cash", "fee_percent": "0", "note": "asl",
-    })
+    _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12000000",
+            "exchange_rate": "12000", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": "asl"},
+                              contract=contract.pk, date="2026-07-10"))
     p = SupplierPayment.objects.get()
     before = _money(p)
     assert before[:2] == (Decimal("1000.00"), Decimal("12000000.00"))
@@ -226,11 +237,12 @@ def test_the_dollar_control_for_the_same_round_trip_holds(admin_client):
     """Same open-and-save on a USD row: proves the drift above is the currency
     handling, not the edit path itself."""
     contract = _contract()
-    _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "usd",
-        "amount": "1000", "exchange_rate": "12000", "commission_percent": "0",
-        "method": "cash", "fee_percent": "0", "note": "",
-    })
+    _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1000", "exchange_rate": "12000",
+            "commission_percent": "0", "method": "cash", "fee_percent": "0",
+            "note": ""},
+                              contract=contract.pk, date="2026-07-10"))
     p = SupplierPayment.objects.get()
     form = admin_client.get(f"/supplier-payments/{p.pk}/edit/",
                             HTTP_X_REQUESTED_WITH="XMLHttpRequest").context["form"]
@@ -266,11 +278,12 @@ def test_resaving_a_som_customer_payment_moves_nothing(admin_client):
 # its so'm figure. Kept as a test so the defect cannot come back.
 def test_resaving_a_som_logist_payment_moves_nothing(admin_client):
     logist = _logist()
-    _post(admin_client, "/logist-payments/new/", {
-        "logist": logist.pk, "date": "2026-07-10", "currency": "uzs",
-        "amount": "24000000", "exchange_rate": "12000", "method": "cash",
-        "fee_percent": "0", "note": "",
-    })
+    _post(
+        admin_client, "/logist-payments/new/",
+        logist_payment_rows({"currency": "uzs", "amount": "24000000",
+                            "exchange_rate": "12000", "method": "cash", "fee_percent": "0",
+                            "note": ""},
+                            logist=logist.pk, date="2026-07-10"))
     p = LogistPayment.objects.get()
     before = _money(p)
     after = _resave_twice(admin_client, f"/logist-payments/{p.pk}/edit/", p)
@@ -346,11 +359,12 @@ def test_a_per_box_som_override_sticks_on_the_expense_grid(admin_client):
 # its so'm figure. Kept as a test so the defect cannot come back.
 def test_the_edit_modal_of_a_som_row_shows_the_som_figure(admin_client):
     contract = _contract()
-    _post(admin_client, "/supplier-payments/new/", {
-        "contract": contract.pk, "date": "2026-07-10", "currency": "uzs",
-        "amount": "12000000", "exchange_rate": "12000", "commission_percent": "0",
-        "method": "cash", "fee_percent": "0", "note": "",
-    })
+    _post(
+        admin_client, "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "12000000",
+            "exchange_rate": "12000", "commission_percent": "0",
+            "method": "cash", "fee_percent": "0", "note": ""},
+                              contract=contract.pk, date="2026-07-10"))
     p = SupplierPayment.objects.get()
     form = admin_client.get(f"/supplier-payments/{p.pk}/edit/",
                             HTTP_X_REQUESTED_WITH="XMLHttpRequest").context["form"]
@@ -631,11 +645,11 @@ def test_a_malformed_date_filter_does_not_500_the_kassa(admin_client):
 def test_the_usd_side_rounds_half_up_at_the_cent(admin_client):
     """60 so'm at 12 000 is exactly half a cent — the documented rule is HALF_UP."""
     logist = _logist()
-    assert _post(admin_client, "/logist-payments/new/", {
-        "logist": logist.pk, "date": "2026-07-10", "currency": "uzs",
-        "amount": "60", "exchange_rate": "12000", "method": "cash",
-        "fee_percent": "0", "note": "",
-    }).status_code == 204
+    assert _post(
+        admin_client, "/logist-payments/new/",
+        logist_payment_rows({"currency": "uzs", "amount": "60", "exchange_rate": "12000",
+                            "method": "cash", "fee_percent": "0", "note": ""},
+                            logist=logist.pk, date="2026-07-10")).status_code == 204
     p = LogistPayment.objects.get()
     assert (p.amount, p.amount_uzs) == (Decimal("0.01"), Decimal("60.00"))
     assert _ctx(admin_client)["cash_total_uzs"] == Decimal("-60.00")

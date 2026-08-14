@@ -112,6 +112,7 @@ urlpatterns = [
          name="customer_payment_list_export"),
     path("supplier-payments/export.xlsx", crm_views.supplier_payment_list_export,
          name="supplier_payment_list_export"),
+    path("debts/export.xlsx", crm_views.debt_list_export, name="debt_list_export"),
     path("ombor/export.xlsx", crm_views.ombor_export, name="ombor_export"),
     path("audit/export.xlsx", crm_views.audit_list_export, name="audit_list_export"),
     path("kassa/export.xlsx", crm_views.kassa_export, name="kassa_export"),

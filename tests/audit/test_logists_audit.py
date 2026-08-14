@@ -15,7 +15,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import make_contract
+from conftest import make_contract, logist_payment_rows
 from crm.models import (
     LEGACY_RATE, Logist, LogistPayment, Shipment, ShipmentExpense, ShipmentStatus,
     logist_positions,
@@ -32,7 +32,13 @@ def _logist(name="Sardor aka"):
 
 
 def _pay_body(logist, **over):
-    return {"logist": logist.pk, "date": "2026-07-01", **PAY_DEFAULTS, **over}
+    """The create modal's POST — the shared logist and sana, plus ONE top-up row.
+
+    The modal takes several (part naqd, part perechisleniya); these probe how one row
+    is stored, so `over` overrides that row's own fields — except `date`, which
+    belongs to the settlement rather than to one way it moved."""
+    date = over.pop("date", "2026-07-01")
+    return logist_payment_rows({**PAY_DEFAULTS, **over}, logist=logist, date=date)
 
 
 def _send(client, logist, **over):
@@ -353,7 +359,7 @@ def test_a_dollar_only_logist_publishes_no_som_gap_at_all(admin_client, db):
     assert logist.balance_by_currency() == []
     held, owed = logist_positions()
     assert (held, owed) == ([], [])
-    assert "500&nbsp;000 so&#x27;m" not in admin_client.get("/kassa/").content.decode()
+    assert "500&nbsp;000 so&#x27;m" not in admin_client.get("/kassa/?davr=all").content.decode()
 
 
 # ── the bank foiz on a top-up ────────────────────────────────────────────────────
@@ -387,7 +393,7 @@ def test_the_kassa_loses_the_top_up_and_the_foiz_and_nothing_else(admin_client, 
     logist = _logist()
     _send(admin_client, logist, amount="10000", method="transfer", fee_percent="2")
     _dispatch(admin_client, logist, advance="500")
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     assert ctx["net_out"] == Decimal("10200.00")
     rows = ctx["outflow_page"].paginator.object_list
     assert sum(r["amount"] for r in rows) == Decimal("10200.00")
@@ -412,7 +418,7 @@ def test_the_waterfall_still_closes_when_a_logist_paid_a_yuk_bojxona_by_transfer
         amount=Decimal("3200"), amount_uzs=Decimal("38400000"),
         exchange_rate=Decimal("12000"), method="transfer",
         fee_percent=Decimal("2"), logist=logist)
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     assert ctx["cash_total"] == Decimal("-10000.00")
     assert ctx["waterfall"][-1]["running"] == ctx["cash_total"]
 
@@ -451,7 +457,7 @@ def test_deleting_a_top_up_leaves_the_balance_and_the_kassa_consistent(
     from crm.models import Currency
     held, owed = logist_positions()
     assert (held, owed) == ([(Currency.USD, Decimal("4500.00"))], [])
-    assert admin_client.get("/kassa/").context["net_out"] == Decimal("5000.00")
+    assert admin_client.get("/kassa/?davr=all").context["net_out"] == Decimal("5000.00")
 
 
 def test_deleting_the_only_top_up_does_not_re_price_the_advance_it_paid_for(

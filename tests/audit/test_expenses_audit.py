@@ -383,7 +383,7 @@ def test_the_som_chiqim_total_equals_the_som_rows_it_is_made_of(admin_client, sh
     assert e.total_out_uzs == ledger_som
     # ...and the same gap reaches the page: the so'm chiqim total is short of the
     # so'm rows listed under it.
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     rows = [r for r in ctx["outflow_page"].object_list if r["kind"].endswith("expense")]
     assert sum(r["amount_uzs"] for r in rows) == ctx["net_out_uzs"]
 
@@ -395,7 +395,7 @@ def test_the_kassa_som_outflow_equals_the_som_rows_of_its_own_ledger(
     admin_client.post("/expenses/new/",
                       grid(shipment, currency="uzs", exchange_rate="12500",
                            method="transfer", fee_percent="2", customs="1250000"))
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     rows = [r for r in ctx["outflow_page"].object_list if r["kind"].endswith("expense")]
     assert len(rows) == 2                              # the xarajat and its foiz
     assert sum(r["amount"] for r in rows) == ctx["net_out"]
@@ -524,7 +524,7 @@ def test_the_grid_never_saves_a_logist_funded_row(admin_client, shipment):
     # Consequence when the logist really did pay it: 1 300 shown as gone from the
     # kassa though only the 1 000 top-up left, and the logist still reads as
     # holding the full 1 000 they have already spent 300 of.
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     assert ctx["net_out"] == Decimal("1300.00")
     logist.refresh_from_db()
     assert logist.balance == Decimal("1000.00")

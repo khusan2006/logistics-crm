@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from conftest import make_contract, make_shipment
+from conftest import make_contract, make_shipment, supplier_payment_rows
 from crm.templatetags.crm_extras import NBSP
 from crm.models import (
     Contract, ContractLine, Currency, Partner, Shipment, ShipmentLine, ShipmentStatus,
@@ -27,10 +27,11 @@ def test_paying_before_anything_ships_is_allowed_as_avans(admin_client, db):
     to'lov kelishuv qiymatigacha qabul qilinadi."""
     c = _contract(db, ship_kg=None)
     assert c.debt == Decimal("0")
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
-        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "12000",
+            "commission_percent": "", "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     assert resp.status_code == 302
     assert c.paid_total == Decimal("100")
 
@@ -48,38 +49,42 @@ def test_debt_accrues_per_truck_at_its_own_price(admin_client, db):
     # far and not the signed 1 000$: 600$ gone + 500 kg still due at 1.00 = 1 100$,
     # raised above the estimate by the truck that shipped at 2.00.
     assert c.payable_left == Decimal("1100.00")
-    resp = admin_client.post("/supplier-payments/new/", {  # 1101 > 1100 → blocked
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1101",
-        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1101", "exchange_rate": "12000",
+            "commission_percent": "", "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     assert resp.status_code == 200 and not SupplierPayment.objects.exists()
 
 
 def test_payment_reduces_debt(admin_client, db):
     c = _contract(db)
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "400",
-        "exchange_rate": "12000", "method": "transfer", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "400", "exchange_rate": "12000",
+            "method": "transfer", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     assert resp.status_code == 302
     assert c.debt == Decimal("600.00")
 
 
 def test_overpay_blocked(admin_client, db):
     c = _contract(db)
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "1500",
-        "exchange_rate": "12000", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "1500", "exchange_rate": "12000",
+            "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     assert resp.status_code == 200 and not SupplierPayment.objects.exists()
 
 
 def test_uzs_converted_to_usd(admin_client, db):
     c = _contract(db)
-    admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "uzs", "amount": "1265000",
-        "exchange_rate": "12650", "method": "cash", "note": "",
-    })
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "1265000", "exchange_rate": "12650",
+            "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     p = SupplierPayment.objects.get()
     assert p.amount == Decimal("100.00")
     # the typed so'm figure is kept exact, not re-derived from the rounded dollars
@@ -91,10 +96,11 @@ def test_usd_entry_also_stores_a_som_value(admin_client, db):
     """The kurs is asked in both directions, so a dollar to'lov is reportable in
     so'm too — the gap that made every pre-existing dollar row unconvertible."""
     c = _contract(db)
-    admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
-        "exchange_rate": "12650", "method": "cash", "note": "",
-    })
+    admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "12650",
+            "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     p = SupplierPayment.objects.get()
     assert p.amount == Decimal("100.00")
     assert p.amount_uzs == Decimal("1265000")
@@ -104,10 +110,11 @@ def test_a_cross_currency_entry_without_a_kurs_is_rejected(admin_client, db):
     """Paying a dollar kelishuv in so'm: without a kurs there is no way to say how
     much of the qarz the money cleared, so the row is refused rather than guessed."""
     c = _contract(db)
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "uzs", "amount": "1265000",
-        "exchange_rate": "", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "uzs", "amount": "1265000", "exchange_rate": "",
+            "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     assert resp.status_code == 200          # redisplayed, not saved
     assert SupplierPayment.objects.count() == 0
 
@@ -116,10 +123,11 @@ def test_paying_a_kelishuv_in_its_own_currency_asks_for_no_kurs(admin_client, db
     """Same currency in and out — the summa IS what the qarz falls by. The row still
     ends up with a kurs so the kassa's other column has something to add up."""
     c = _contract(db)
-    resp = admin_client.post("/supplier-payments/new/", {
-        "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "100",
-        "exchange_rate": "", "method": "cash", "note": "",
-    })
+    resp = admin_client.post(
+        "/supplier-payments/new/",
+        supplier_payment_rows({"currency": "usd", "amount": "100", "exchange_rate": "",
+            "method": "cash", "note": ""},
+                              contract=c.pk, date="2026-07-02"))
     assert resp.status_code == 302
     payment = SupplierPayment.objects.get()
     assert payment.amount == Decimal("100.00")
@@ -152,10 +160,9 @@ def test_create_modal_post_valid_returns_204_with_redirect(admin_client, db):
     c = _contract(db)
     resp = admin_client.post(
         "/supplier-payments/new/",
-        {
-            "contract": c.pk, "date": "2026-07-02", "currency": "usd", "amount": "400",
-            "exchange_rate": "12000", "method": "transfer", "note": "",
-        },
+        supplier_payment_rows({"currency": "usd", "amount": "400", "exchange_rate": "12000",
+                               "method": "transfer", "note": ""},
+                              contract=c.pk, date="2026-07-02"),
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
     )
     assert resp.status_code == 204
@@ -194,11 +201,11 @@ def _fresh_contract(kg="1000", price="2.00"):
 
 
 def _post_payment(client, contract, amount, **extra):
-    data = {"contract": contract.pk, "date": "2026-07-23", "currency": "usd",
-            "amount": amount, "exchange_rate": "12000", "commission_percent": "",
-            "method": "cash", "note": ""}
-    data.update(extra)
-    return client.post("/supplier-payments/new/", data)
+    row = {"currency": "usd", "amount": amount, "exchange_rate": "12000",
+           "commission_percent": "", "method": "cash", "note": ""}
+    row.update(extra)
+    return client.post("/supplier-payments/new/",
+                       supplier_payment_rows(row, contract=contract, date="2026-07-23"))
 
 
 def test_can_pay_before_any_yuk_is_sent(admin_client, db):
@@ -467,3 +474,114 @@ class TestKelishuvOptionShowsWhatIsLeftToPay:
         label = next(l for l in labels if l.startswith(c.code))
         assert "jami 100 kg" in label
         assert "to'lash" not in label
+
+
+# --- one to'lov, several ways it left --------------------------------------
+
+class TestASplitPayment:
+    """Half naqd, half perechisleniya: one settlement to the person making it, two
+    movements of money to the kassa.
+
+    Rows rather than a breakdown inside one row, because the two halves charge
+    differently — the bank takes a foiz on the transfer and nothing on the cash, and
+    a single row could not say which part it took it from."""
+
+    def _pay(self, client, contract, *rows):
+        return client.post("/supplier-payments/new/",
+                           supplier_payment_rows(*rows, contract=contract.pk))
+
+    def test_two_methods_in_one_go_become_two_rows(self, admin_client, db):
+        c = _contract(db)
+        resp = self._pay(admin_client, c,
+                         {"amount": "300", "method": "cash"},
+                         {"amount": "400", "method": "transfer"})
+        assert resp.status_code == 302
+        rows = SupplierPayment.objects.order_by("pk")
+        assert [(r.method, r.amount) for r in rows] == [
+            ("cash", Decimal("300.00")), ("transfer", Decimal("400.00"))]
+
+    def test_the_kelishuv_falls_by_the_whole_settlement(self, admin_client, db):
+        """Both halves settle the same qarz — 300 + 400 off a 1 000$ kelishuv."""
+        c = _contract(db)
+        self._pay(admin_client, c,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "card"})
+        assert Contract.objects.get(pk=c.pk).paid_total == Decimal("700.00")
+
+    def test_the_kelishuv_and_the_sana_are_asked_once(self, admin_client, db):
+        c = _contract(db)
+        self._pay(admin_client, c,
+                  {"amount": "100", "method": "cash"},
+                  {"amount": "200", "method": "transfer"})
+        rows = SupplierPayment.objects.all()
+        assert {r.contract_id for r in rows} == {c.pk}
+        assert {str(r.date) for r in rows} == {"2026-07-02"}
+
+    def test_only_the_transfer_half_pays_a_bank_foiz(self, admin_client, db):
+        """The whole reason this is two rows: 2% of the perechisleniya and nothing
+        off the naqd, which one shared foiz box could not express."""
+        c = _contract(db)
+        self._pay(admin_client, c,
+                  {"amount": "300", "method": "cash", "fee_percent": "2"},
+                  {"amount": "400", "method": "transfer", "fee_percent": "2"})
+        naqd, bank = SupplierPayment.objects.order_by("pk")
+        assert naqd.fee_amount == Decimal("0")           # naqd never pays one
+        assert bank.fee_amount == Decimal("8.00")        # 2% of 400
+
+    def test_each_half_can_leave_in_its_own_currency(self, admin_client, db):
+        c = _contract(db)
+        resp = self._pay(admin_client, c,
+                         {"amount": "100", "currency": "usd", "method": "cash"},
+                         {"amount": "1265000", "currency": "uzs",
+                          "exchange_rate": "12650", "method": "transfer"})
+        assert resp.status_code == 302
+        usd_row, uzs_row = SupplierPayment.objects.order_by("pk")
+        assert usd_row.amount == Decimal("100.00")
+        assert uzs_row.amount_uzs == Decimal("1265000")   # typed side exact
+        assert uzs_row.amount == Decimal("100.00")
+
+    def test_the_kassa_shows_each_half_under_its_own_method(self, admin_client, db):
+        """The point of the split, seen from the till: the safe is 300 lighter and
+        the bank 400, rather than one 700 heap that is in neither."""
+        c = _contract(db)
+        self._pay(admin_client, c,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer"})
+        balances = admin_client.get("/kassa/?davr=all").context["balances"]
+        assert balances["cash"]["out"] == Decimal("300.00")
+        assert balances["transfer"]["out"] == Decimal("400.00")
+
+    def test_the_ceiling_is_checked_over_the_whole_settlement(self, admin_client, db):
+        """600 + 600 are each under a 1 000$ kelishuv and are 200 over it together.
+        Checked per row this would go straight through."""
+        c = _contract(db)
+        resp = self._pay(admin_client, c,
+                         {"amount": "600", "method": "cash"},
+                         {"amount": "600", "method": "transfer"})
+        assert resp.status_code == 200
+        assert "oshib ketdi" in resp.context["lines"].non_form_errors()[0]
+        assert not SupplierPayment.objects.exists()
+
+    def test_nothing_is_written_when_one_row_is_bad(self, admin_client, db):
+        """All of it or none: the rows are saved in one transaction, so a settlement
+        cannot land half-written with the operator thinking it went in whole."""
+        c = _contract(db)
+        resp = self._pay(admin_client, c,
+                         {"amount": "300", "method": "cash"},
+                         {"amount": "-5", "method": "transfer"})
+        assert resp.status_code == 200
+        assert not SupplierPayment.objects.exists()
+
+    def test_a_settlement_with_no_rows_at_all_is_refused(self, admin_client, db):
+        c = _contract(db)
+        resp = admin_client.post("/supplier-payments/new/",
+                                 supplier_payment_rows(contract=c.pk))
+        assert resp.status_code == 200
+        assert not SupplierPayment.objects.exists()
+
+    def test_one_row_still_saves_as_it_always_did(self, admin_client, db):
+        """The ordinary case has not become a special case of the split one."""
+        c = _contract(db)
+        assert self._pay(admin_client, c,
+                         {"amount": "250", "method": "cash"}).status_code == 302
+        assert SupplierPayment.objects.get().amount == Decimal("250.00")

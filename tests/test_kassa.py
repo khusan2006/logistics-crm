@@ -1,4 +1,7 @@
+from datetime import timedelta
 from decimal import Decimal
+
+from django.utils import timezone
 
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
@@ -39,7 +42,7 @@ def test_cash_balance_nets_in_and_out(admin_client, db):
         shipment=shipment, date="2026-07-12", category="transport", amount=Decimal("100.00"), method="cash",
     )
 
-    resp = admin_client.get("/kassa/")
+    resp = admin_client.get("/kassa/?davr=all")
     assert resp.status_code == 200
     balances = resp.context["balances"]
     assert balances["cash"]["balance"] == Decimal("200.00")
@@ -57,7 +60,7 @@ def test_bank_payment_shows_under_bank_and_cash_unaffected(admin_client, db):
         customer=customer, date="2026-07-10", amount=Decimal("300.00"), method="transfer",
     )
 
-    resp = admin_client.get("/kassa/")
+    resp = admin_client.get("/kassa/?davr=all")
     balances = resp.context["balances"]
     assert balances["transfer"]["in"] == Decimal("300.00")
     assert balances["transfer"]["balance"] == Decimal("300.00")
@@ -84,7 +87,7 @@ def test_date_filter_excludes_out_of_range_payment(admin_client, db):
 
 
 def test_translator_forbidden(translator_client, db):
-    assert translator_client.get("/kassa/").status_code == 403
+    assert translator_client.get("/kassa/?davr=all").status_code == 403
 
 
 def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
@@ -103,7 +106,7 @@ def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
     SupplierPayment.objects.create(contract=c, date="2026-07-02",
                                    amount=Decimal("250"), amount_uzs=Decimal("3000000"),
                                    method="cash")                    # paid 250
-    resp = admin_client.get("/kassa/")
+    resp = admin_client.get("/kassa/?davr=all")
     assert resp.context["payable_total"] == Decimal("350.00")
     # each partner carries (dollar debt, so'm debt) so the screen can show either
     debts = {p.name: d for p, d in resp.context["partner_debts"]}
@@ -141,14 +144,14 @@ def test_kassa_income_ledger_paginates_at_20(admin_client, db):
         CustomerPayment.objects.create(
             customer=customer, date="2026-07-10", amount=Decimal("10.00"), method="cash")
 
-    resp = admin_client.get("/kassa/")
+    resp = admin_client.get("/kassa/?davr=all")
     page = resp.context["income_page"]
     assert page.paginator.per_page == 20
     assert len(page.object_list) == 20
     assert page.paginator.count == 25
     assert resp.context["net_in"] == Decimal("250.00")   # totals ignore paging
 
-    page2 = admin_client.get("/kassa/?ipage=2").context["income_page"]
+    page2 = admin_client.get("/kassa/?davr=all&ipage=2").context["income_page"]
     assert page2.number == 2
     assert len(page2.object_list) == 5
 
@@ -160,13 +163,13 @@ def test_kassa_outflow_ledger_paginates_at_20(admin_client, db):
         SupplierPayment.objects.create(
             contract=contract, date="2026-07-11", amount=Decimal("5.00"), method="cash")
 
-    resp = admin_client.get("/kassa/")
+    resp = admin_client.get("/kassa/?davr=all")
     page = resp.context["outflow_page"]
     assert page.paginator.per_page == 20
     assert len(page.object_list) == 20
     assert page.paginator.count == 25
 
-    page2 = admin_client.get("/kassa/?opage=2").context["outflow_page"]
+    page2 = admin_client.get("/kassa/?davr=all&opage=2").context["outflow_page"]
     assert page2.number == 2
     assert len(page2.object_list) == 5
 
@@ -181,11 +184,11 @@ def test_kassa_two_ledgers_page_independently(admin_client, db):
         SupplierPayment.objects.create(
             contract=contract, date="2026-07-11", amount=Decimal("5.00"), method="cash")
 
-    ctx = admin_client.get("/kassa/?ipage=2").context
+    ctx = admin_client.get("/kassa/?davr=all&ipage=2").context
     assert ctx["income_page"].number == 2
     assert ctx["outflow_page"].number == 1   # untouched
 
-    ctx = admin_client.get("/kassa/?ipage=2&opage=2").context
+    ctx = admin_client.get("/kassa/?davr=all&ipage=2&opage=2").context
     assert ctx["income_page"].number == 2
     assert ctx["outflow_page"].number == 2
 
@@ -198,7 +201,7 @@ class TestCashOwnership:
         customer = _customer()
         CustomerPayment.objects.create(customer=customer, date="2026-07-10",
                                        amount=Decimal("500.00"), method="cash")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["cash_total"] == Decimal("500.00")
         assert ctx["advance"] == Decimal("500.00")
         assert ctx["own_cash"] == Decimal("0.00")
@@ -216,7 +219,7 @@ class TestCashOwnership:
             method="cash")
         # allocation is its own step — creating a to'lov does not spend it
         allocate_customer_payment(payment)
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         # 300 of the 500 landed on the sotuv; 200 is still the mijoz's
         assert ctx["advance"] == Decimal("200.00")
         assert ctx["own_cash"] == ctx["cash_total"] - Decimal("200.00")
@@ -227,7 +230,7 @@ class TestCashOwnership:
         CustomerPayment.objects.create(customer=customer, date="2026-07-10",
                                        amount=Decimal("1000.00"), method="transfer",
                                        fee_percent=Decimal("2"))
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["advance"] == Decimal("980.00")
         assert ctx["cash_total"] == Decimal("980.00")
 
@@ -238,7 +241,7 @@ class TestCurrentStateTiles:
     invoice is a number that describes no actual thing."""
 
     def _tiles(self, admin_client):
-        return {t["label"]: t for t in admin_client.get("/kassa/").context["tiles"]}
+        return {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
 
     def _own(self, tile, currency=Currency.USD):
         """One currency's line off a split tile.
@@ -261,15 +264,17 @@ class TestCurrentStateTiles:
                                "Bojxonada avansimiz",
                                "Hamkorlarga qarzimiz"]
         for tile in tiles.values():
-            assert tile["note"], tile["label"]
+            # Kassada excepted: the hero is the card the page is opened for and says
+            # what it is by being the till, so it carries no explaining line at all.
+            assert tile["note"] or tile["label"] == "Kassada", tile["label"]
             assert tile["url"].startswith("/"), tile["label"]
         assert self._own(tiles["Kassada"]) == resp_cash(admin_client)
 
     def test_no_derived_total_is_published(self, admin_client, db):
         """Sof holat is gone: it summed things that are not the same kind of thing."""
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert "net_position" not in ctx
-        assert "Sof holat" not in admin_client.get("/kassa/").content.decode()
+        assert "Sof holat" not in admin_client.get("/kassa/?davr=all").content.decode()
 
     def test_stock_and_transit_tiles_carry_their_kg(self, admin_client, db):
         contract = _contract()
@@ -296,11 +301,15 @@ class TestCurrentStateTiles:
         assert self._own(tiles["Mijozlar qarzi"]) == Decimal("200.00")
         assert tiles["Mijozlar qarzi"]["meta"] == "2 ta mijozda"
 
-    def test_customer_advance_is_named_on_the_kassa_tile(self, admin_client, db):
+    def test_the_kassa_hero_states_nothing_but_the_money(self, admin_client, db):
+        """It used to carry "shundan mijoz avansi …" under the figure. The card is the
+        first thing on the page and the till is the one thing on it nobody needs told,
+        so the money itself gets the whole card and the qualifiers went."""
         customer = _customer()
         CustomerPayment.objects.create(customer=customer, date="2026-07-10",
                                        amount=Decimal("500.00"), method="cash")
-        assert "avansi" in self._tiles(admin_client)["Kassada"]["meta"]
+        hero = self._tiles(admin_client)["Kassada"]
+        assert (hero["meta"], hero["note"]) == ("", "")
 
     def test_prepaid_kelishuv_is_its_own_tile_not_a_smaller_qarz(self, admin_client, db):
         """The July bug: 5 kelishuv prepaid by $203 030.5 sat behind a $50 480
@@ -409,7 +418,7 @@ class TestCurrentStateTiles:
         assert all(t["split"] is not None for t in tiles.values())
         assert all("split_full" in t for t in tiles.values())
         assert dict(tiles["Logistlarda avansimiz"]["split"])[Currency.USD] == Decimal("1000.00")
-        assert "class=&quot;money-alt&quot;" not in admin_client.get("/kassa/").content.decode()
+        assert "class=&quot;money-alt&quot;" not in admin_client.get("/kassa/?davr=all").content.decode()
 
     def test_a_logist_funded_in_som_keeps_a_som_heap(self, admin_client, db):
         """A logist we send so'm to and who hands a driver dollars carries two heaps at
@@ -452,14 +461,14 @@ class TestCurrentStateTiles:
         assert tiles["Bojxonada avansimiz"]["split_full"] == [
             (Currency.USD, Decimal("0")), (Currency.UZS, Decimal("0"))]
         assert dict(tiles["Kassada"]["split_full"])[Currency.UZS] == Decimal("0")
-        assert "0 so&#x27;m" in admin_client.get("/kassa/").content.decode()
+        assert "0 so&#x27;m" in admin_client.get("/kassa/?davr=all").content.decode()
 
     def test_the_till_is_the_hero_and_the_rest_read_under_a_heading(self, admin_client, db):
         """Ten equal tiles ranked nothing — a debt that is usually zero pulled as hard
         as the money on hand. Kassada is the hero; every other tile sits in a group."""
         contract = _contract()
         _arrived_shipment(contract)
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["hero"]["label"] == "Kassada"
         assert ctx["hero"]["group"] is None
         # A set, not a list: the groups deliberately reorder — Mol comes first on the
@@ -472,11 +481,80 @@ class TestCurrentStateTiles:
             "Mol — tannarxda", "Boshqa qo'ldagi pulimiz", "Qarzlarimiz"]
 
 
+class TestTheKassaOpensOnBugun:
+    """Alone among the lists, the till lands on today rather than on everything.
+
+    "All the sotuvlar" is a question somebody asks; "all the money that ever moved"
+    is not — the kassa is opened to see the day, and starting on the whole history
+    meant filtering before the screen answered anything. Every other ro'yxat keeps
+    opening on Hammasi, so this is the one screen where an empty querystring is a
+    period and Hammasi has to be written down as ?davr=all."""
+
+    def _income(self, admin_client, qs=""):
+        return list(admin_client.get("/kassa/" + qs).context["income_page"].object_list)
+
+    def test_the_bare_url_shows_today_and_not_last_week(self, admin_client, db):
+        customer = _customer()
+        today = timezone.localdate()
+        CustomerPayment.objects.create(customer=customer, date=today,
+                                       amount=Decimal("500.00"), method="cash")
+        CustomerPayment.objects.create(customer=customer, date=today - timedelta(days=7),
+                                       amount=Decimal("900.00"), method="cash")
+        assert [r["amount"] for r in self._income(admin_client)] == [Decimal("500.00")]
+
+    def test_the_bar_says_bugun_rather_than_hammasi(self, admin_client, db):
+        bar = admin_client.get("/kassa/").context["daterange"]
+        assert bar["is_today"] is True
+        assert bar["is_all"] is False
+        # Its Hammasi has to SAY hammasi: an empty querystring is where it started.
+        assert bar["all_url"] == "/kassa/?davr=all"
+
+    def test_davr_all_is_the_way_back_to_everything(self, admin_client, db):
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("900.00"), method="cash")
+        assert self._income(admin_client) == []
+        assert len(self._income(admin_client, "?davr=all")) == 1
+
+    def test_a_named_period_beats_the_default(self, admin_client, db):
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("900.00"), method="cash")
+        rows = self._income(admin_client, "?from=2026-07-01&to=2026-07-31")
+        assert [r["amount"] for r in rows] == [Decimal("900.00")]
+
+    def test_the_excel_file_follows_the_same_default(self, admin_client, db):
+        """Otherwise the button on a screen showing bugun hands back the whole
+        history — the one thing every other Excel button on the app promises not to
+        do (see crm/_excel_button.html)."""
+        import openpyxl
+        from io import BytesIO
+        customer = _customer()
+        CustomerPayment.objects.create(customer=customer, date=timezone.localdate(),
+                                       amount=Decimal("500.00"), method="cash")
+        CustomerPayment.objects.create(customer=customer, date="2026-07-10",
+                                       amount=Decimal("900.00"), method="cash")
+        book = openpyxl.load_workbook(
+            BytesIO(admin_client.get("/kassa/export.xlsx").content))
+        assert book["Kirim"].max_row == 2          # header + the one row of today
+        book_all = openpyxl.load_workbook(
+            BytesIO(admin_client.get("/kassa/export.xlsx?davr=all").content))
+        assert book_all["Kirim"].max_row == 3
+
+    def test_no_other_list_picked_up_the_habit(self, admin_client, db):
+        """The default is the kassa's alone — a sotuvlar page that opened on bugun
+        would look empty most mornings."""
+        for url in ("/sales/", "/shipments/", "/customer-payments/",
+                    "/supplier-payments/", "/contracts/", "/audit/"):
+            bar = admin_client.get(url).context["daterange"]
+            assert bar["is_all"] is True, url
+
+
 class TestDaterangeBar:
     """The period control: one compact ‹ date › bar that opens a calendar, in place of
     preset tabs beside two bare date inputs beside a submit button."""
 
-    def _bar(self, admin_client, qs=""):
+    def _bar(self, admin_client, qs="?davr=all"):
         return admin_client.get("/kassa/" + qs).context["daterange"]
 
     def test_no_period_leaves_the_arrows_off(self, admin_client, db):
@@ -484,7 +562,7 @@ class TestDaterangeBar:
         bar = self._bar(admin_client)
         assert bar["is_all"] is True
         assert "prev_from" not in bar
-        html = admin_client.get("/kassa/").content.decode()
+        html = admin_client.get("/kassa/?davr=all").content.decode()
         assert "daterange--bare" in html
         assert ">Hammasi<" in html
 
@@ -530,7 +608,7 @@ class TestDaterangeBar:
 
 
 def resp_cash(admin_client):
-    return admin_client.get("/kassa/").context["cash_total"]
+    return admin_client.get("/kassa/?davr=all").context["cash_total"]
 
 
 class TestWaterfall:
@@ -549,7 +627,7 @@ class TestWaterfall:
         ShipmentExpense.objects.create(shipment=shipment, date="2026-07-12",
                                        category="customs", amount=Decimal("100.00"),
                                        method="cash")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         closing = ctx["waterfall"][-1]
         assert closing["label"] == "Qoldiq"
         assert closing["running"] == ctx["cash_total"]
@@ -573,7 +651,7 @@ class TestWaterfall:
         ShipmentExpense.objects.create(shipment=shipment, date="2026-07-12",
                                        category="transport", amount=Decimal("50.00"),
                                        method="cash")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         steps = [b for b in ctx["waterfall"] if b["kind"] != "total"]
         assert sum(b["amount"] for b in steps if b["kind"] == "in") == ctx["net_in"]
         assert -sum(b["amount"] for b in steps if b["kind"] == "out") == ctx["net_out"]
@@ -584,7 +662,7 @@ class TestWaterfall:
         CustomerPayment.objects.create(customer=customer, date="2026-07-10",
                                        amount=Decimal("1000.00"), method="transfer",
                                        fee_percent=Decimal("2"))
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert self._rows(ctx)["Mijozlardan"] == Decimal("980.00")
         assert "Bank foizi" not in self._rows(ctx)
         assert ctx["waterfall"][-1]["running"] == Decimal("980.00")
@@ -594,7 +672,7 @@ class TestWaterfall:
         SupplierPayment.objects.create(contract=contract, date="2026-07-11",
                                        amount=Decimal("1000.00"), method="transfer",
                                        fee_percent=Decimal("2"))
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert self._rows(ctx)["Bank foizi"] == Decimal("-20.00")
         assert ctx["waterfall"][-1]["running"] == Decimal("-1020.00")
 
@@ -612,7 +690,7 @@ class TestWaterfall:
 
     def test_unfiltered_opens_at_zero(self, admin_client, db):
         _customer()
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["waterfall"][0]["amount"] == Decimal("0")
 
     def test_bars_stay_inside_the_track(self, admin_client, db):
@@ -622,7 +700,7 @@ class TestWaterfall:
                                        amount=Decimal("500.00"), method="cash")
         SupplierPayment.objects.create(contract=contract, date="2026-07-11",
                                        amount=Decimal("900.00"), method="cash")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         for bar in ctx["waterfall"]:
             assert bar["left"] >= -0.001, bar["label"]
             assert bar["left"] + bar["width"] <= 100.001, bar["label"]
@@ -661,7 +739,7 @@ class TestLedgerColumns:
                                        amount_uzs=Decimal("2400000"),
                                        exchange_rate=Decimal("12000"),
                                        currency=Currency.UZS, method="cash")
-        ctx = admin_client.get("/kassa/").context
+        ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["income_split"] == [(Currency.USD, Decimal("100.00")),
                                        (Currency.UZS, Decimal("2400000.00"))]
         # The converted pair still exists for the Oqim waterfall — it just is not what
@@ -692,7 +770,7 @@ class TestLedgerColumns:
         allocate_customer_payment(crossing)
         assert crossing.crosses_currency is True
 
-        html = admin_client.get("/kassa/").content.decode()
+        html = admin_client.get("/kassa/?davr=all").content.decode()
         assert "Foiz / kurs" in html
         assert "12 500" in html.replace(" ", " ")   # the crossing row's kurs
 
@@ -767,3 +845,115 @@ class TestPaymentDetail:
         html = resp.content.decode()
         # Nothing on it yet, so the table says so rather than showing an empty grid.
         assert "hammasi avans" in html
+
+
+class TestASplitTolovReadsAsOnePayment:
+    """The kassa daftar draws a settlement as ONE line, whatever number of ways the
+    money moved.
+
+    It stays two rows everywhere money is counted — the safe and the bank went down
+    by different figures, the +/- totals add them separately, and the Excel file
+    lists both. Only the screen folds them, because two lines carrying the same sana
+    and the same name read as two payments to somebody who made one."""
+
+    def _pay(self, admin_client, *rows):
+        from conftest import supplier_payment_rows
+        contract = _contract()
+        _arrived_shipment(contract)
+        resp = admin_client.post("/supplier-payments/new/",
+                                 supplier_payment_rows(*rows, contract=contract.pk))
+        assert resp.status_code == 302
+        return contract
+
+    def _outflow(self, admin_client):
+        return list(admin_client.get("/kassa/?davr=all").context["outflow_page"])
+
+    def test_the_rows_of_one_settlement_share_a_group(self, admin_client, db):
+        self._pay(admin_client,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer"})
+        groups = {p.group for p in SupplierPayment.objects.all()}
+        assert len(groups) == 1 and None not in groups
+
+    def test_a_tolov_that_moved_one_way_is_not_a_group(self, admin_client, db):
+        """An id on it would make every screen ask a question with one answer."""
+        self._pay(admin_client, {"amount": "300", "method": "cash"})
+        assert SupplierPayment.objects.get().group is None
+
+    def test_the_daftar_draws_them_as_one_line(self, admin_client, db):
+        self._pay(admin_client,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer"})
+        rows = [r for r in self._outflow(admin_client) if r["kind"] == "supplier"]
+        assert len(rows) == 1
+        assert rows[0]["count"] == 2
+        assert [s["method_code"] for s in rows[0]["rows"]] == ["cash", "transfer"]
+
+    def test_the_line_says_it_is_one_tolov_paid_two_ways(self, admin_client, db):
+        self._pay(admin_client,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer"})
+        html = admin_client.get("/kassa/?davr=all").content.decode()
+        assert "bitta to'lov · 2 usul" in html
+
+    def test_the_totals_still_count_both_movements(self, admin_client, db):
+        """The fold is drawing, not arithmetic: the till lost 700, and the safe and
+        the bank lost their own halves of it."""
+        self._pay(admin_client,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer"})
+        ctx = admin_client.get("/kassa/?davr=all").context
+        assert ctx["net_out"] == Decimal("700.00")
+        assert ctx["balances"]["cash"]["out"] == Decimal("300.00")
+        assert ctx["balances"]["transfer"]["out"] == Decimal("400.00")
+
+    def test_the_excel_file_still_lists_every_movement(self, admin_client, db):
+        """A spreadsheet is read by filtering and summing columns, so it wants one
+        line per movement of money — the fold is for the eye, not for the file."""
+        import openpyxl
+        from io import BytesIO
+        self._pay(admin_client,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer"})
+        book = openpyxl.load_workbook(
+            BytesIO(admin_client.get("/kassa/export.xlsx?davr=all").content))
+        assert book["Chiqim"].max_row == 3          # header + both movements
+
+    def test_two_separate_tolovlar_are_not_folded_together(self, admin_client, db):
+        """Same kelishuv, same day, entered as two trips to the modal: two payments,
+        and the daftar has to keep saying so."""
+        from conftest import supplier_payment_rows
+        contract = _contract()
+        _arrived_shipment(contract)
+        for amount in ("300", "400"):
+            admin_client.post("/supplier-payments/new/",
+                              supplier_payment_rows({"amount": amount, "method": "cash"},
+                                                    contract=contract.pk))
+        rows = [r for r in self._outflow(admin_client) if r["kind"] == "supplier"]
+        assert len(rows) == 2
+        assert all(r["count"] == 1 for r in rows)
+
+    def test_the_bank_foiz_keeps_its_own_line(self, admin_client, db):
+        """A foiz is separate money leaving, not another way the same money left, so
+        it is not folded into the to'lov it came off."""
+        self._pay(admin_client,
+                  {"amount": "300", "method": "cash"},
+                  {"amount": "400", "method": "transfer", "fee_percent": "2",
+                   "fee_bearer": "company"})
+        kinds = [r["kind"] for r in self._outflow(admin_client)]
+        assert "fee_supplier" in kinds
+
+    def test_a_split_mijoz_tolov_folds_too(self, admin_client, db):
+        """The same fold on the way in — a mijoz paying part naqd and part by karta
+        made one to'lov."""
+        from conftest import payment_rows
+        customer = _customer()
+        resp = admin_client.post(
+            "/customer-payments/new/",
+            payment_rows({"amount": "500", "method": "cash"},
+                         {"amount": "300", "method": "card"},
+                         customer=customer.pk, date="2026-07-10"))
+        assert resp.status_code == 302
+        rows = list(admin_client.get("/kassa/?davr=all").context["income_page"])
+        assert len(rows) == 1 and rows[0]["count"] == 2
+        assert [s["method_code"] for s in rows[0]["rows"]] == ["cash", "card"]

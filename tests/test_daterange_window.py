@@ -22,7 +22,9 @@ from crm.models import (
     SupplierPayment,
 )
 
-# Every screen carrying the bar, and the key its rows arrive under.
+# Every screen carrying the bar, and the key its rows arrive under. The kassa is the
+# one screen that OPENS on a period — bugun — rather than on everything; see
+# `_kassa_date_window` for why the till is the exception.
 PAGES = [
     ("/kassa/", None),
     ("/sales/", "page"),
@@ -31,8 +33,10 @@ PAGES = [
     ("/audit/", "page"),
     ("/customer-payments/", "page"),
     ("/supplier-payments/", "page"),
+    ("/debts/", "page"),
     ("/reports/", None),
 ]
+OPENS_ON_A_PERIOD = {"/kassa/"}
 
 
 @pytest.mark.parametrize("url,_rows_key", PAGES)
@@ -41,8 +45,14 @@ def test_every_list_carries_the_same_bar(admin_client, db, url, _rows_key):
     screens and a calendar on others."""
     html = admin_client.get(url).content.decode()
     assert "daterange-bar" in html
-    # With no period at all the bar reads "Hammasi" and drops its arrows.
-    assert "daterange--bare" in html
+    if url in OPENS_ON_A_PERIOD:
+        # It landed on bugun, so it has a period and therefore its arrows.
+        assert "daterange--bare" not in html
+        # ...and Hammasi has to be spelled out, since "no period" is where it started.
+        assert "davr=all" in html
+    else:
+        # With no period at all the bar reads "Hammasi" and drops its arrows.
+        assert "daterange--bare" in html
 
     named = admin_client.get(url, {"from": "2026-07-01", "to": "2026-07-31"})
     assert named.status_code == 200
@@ -165,3 +175,33 @@ def test_the_arrows_keep_the_other_filters_and_drop_the_page_number(admin_client
     assert "from=2026-06-01" in bar["prev_url"] and "to=2026-06-30" in bar["prev_url"]
     # "Hammasi" removes the period rather than setting one that covers everything.
     assert "from=" not in bar["all_url"] and "to=" not in bar["all_url"]
+
+
+@pytest.mark.parametrize("url,_rows_key", PAGES)
+def test_the_bar_shares_one_row_with_the_search_box(admin_client, db, url, _rows_key):
+    """Search on the left, ‹ davr › on the right, one .listbar between them.
+
+    They used to be two stacked full-width bars — "which rows am I looking for" above
+    "what is this list set to" — which read as two unrelated toolbars and cost a row
+    of height above every table. The order in the markup is what puts the search
+    first; the bar is pushed to the right edge in CSS."""
+    html = admin_client.get(url).content.decode()
+    assert html.count('class="listbar"') == 1, url
+    # One row, and the search opens it: listbar ‹ searchbar ‹ davr bar.
+    assert (html.index('class="listbar"')
+            < html.index('class="searchbar')
+            < html.index('class="daterange-bar"')), url
+
+
+def test_the_kassa_keeps_hammasi_when_the_search_submits(admin_client, db):
+    """The kassa's search row carries ?davr=all as a hidden field: it opens on bugun,
+    so a form that dropped the marker would snap a searched-over-everything list back
+    to today the moment somebody typed."""
+    row = (admin_client.get("/kassa/?davr=all").content.decode()
+           .split('class="searchbar')[1].split("</form>")[0])
+    assert '<input type="hidden" name="davr" value="all">' in row
+    # On bugun there is nothing to carry — the dates say it.
+    plain = (admin_client.get("/kassa/").content.decode()
+             .split('class="searchbar')[1].split("</form>")[0])
+    assert 'name="davr"' not in plain
+    assert 'name="from"' in plain and 'name="to"' in plain

@@ -38,7 +38,7 @@ def _in(amount, method, currency="usd", day=10, customer=None, rate="12000"):
 
 def _methods(client):
     return {m["label"]: dict(m["split_full"])
-            for m in client.get("/kassa/").context["cash_by_method"]}
+            for m in client.get("/kassa/?davr=all").context["cash_by_method"]}
 
 
 class TestWhereTheMoneyIsHeld:
@@ -98,7 +98,9 @@ class TestWhereTheMoneyIsHeld:
 
 class TestKassaSearch:
     def _counts(self, client, **params):
-        resp = client.get("/kassa/", params)
+        # Searching is asked over ALL the money unless a test names a davr — the
+        # screen opens on bugun (see `_kassa_date_window`) and these rows are July's.
+        resp = client.get("/kassa/", {"davr": "all", **params})
         return (resp.context["income_page"].paginator.count,
                 resp.context["outflow_page"].paginator.count)
 
@@ -106,7 +108,7 @@ class TestKassaSearch:
         _in("1000", PayMethod.CASH, customer=Customer.objects.create(name="Alisher", phone="1"))
         _in("2000", PayMethod.CASH, customer=Customer.objects.create(name="Bekzod", phone="2"))
 
-        resp = admin_client.get("/kassa/", {"q": "alisher"})
+        resp = admin_client.get("/kassa/", {"davr": "all", "q": "alisher"})
         assert [r["title"] for r in resp.context["income_page"].object_list] == ["Alisher"]
 
     def test_search_reaches_both_daftar(self, admin_client, db):
@@ -156,27 +158,27 @@ class TestKassaSearch:
         _in("1000", PayMethod.CASH, customer=customer)
         _in("500", PayMethod.CASH, customer=Customer.objects.create(name="Bekzod", phone="2"))
 
-        resp = admin_client.get("/kassa/", {"q": "alisher"})
+        resp = admin_client.get("/kassa/", {"davr": "all", "q": "alisher"})
         assert dict(resp.context["income_split"])[Currency.USD] == Decimal("1000.00")
 
     def test_the_board_above_is_not_touched_by_the_search(self, admin_client, db):
         """Those tiles are the state of things today, not a slice of this list."""
         _in("1000", PayMethod.CASH)
-        searched = admin_client.get("/kassa/", {"q": "zzz"}).context
-        plain = admin_client.get("/kassa/").context
+        searched = admin_client.get("/kassa/", {"davr": "all", "q": "zzz"}).context
+        plain = admin_client.get("/kassa/?davr=all").context
         assert searched["cash_by_method"] == plain["cash_by_method"]
         assert [t["split"] for t in searched["tiles"]] == [t["split"] for t in plain["tiles"]]
 
     def test_nothing_found_says_what_was_looked_for(self, admin_client, db):
         _in("1000", PayMethod.CASH)
-        html = admin_client.get("/kassa/", {"q": "yoq-narsa"}).content.decode()
+        html = admin_client.get("/kassa/", {"davr": "all", "q": "yoq-narsa"}).content.decode()
         assert "kirim topilmadi" in html and "chiqim topilmadi" in html
 
     def test_the_excel_button_downloads_what_the_search_left(self, admin_client, db):
         _in("1000", PayMethod.CASH, customer=Customer.objects.create(name="Alisher", phone="1"))
         _in("500", PayMethod.CASH, customer=Customer.objects.create(name="Bekzod", phone="2"))
 
-        resp = admin_client.get("/kassa/export.xlsx", {"q": "alisher"})
+        resp = admin_client.get("/kassa/export.xlsx", {"davr": "all", "q": "alisher"})
         wb = openpyxl.load_workbook(BytesIO(resp.content))
         assert len(list(wb["Kirim"].iter_rows(min_row=2))) == 1
 
@@ -186,9 +188,9 @@ def test_the_avans_tiles_no_longer_claim_the_money_is_coming_back(admin_client, 
     next yuk. The heading says what is actually true of all four rows: the money is
     ours and it is somewhere else."""
     make_shipment(kg="400")
-    ctx = admin_client.get("/kassa/").context
+    ctx = admin_client.get("/kassa/?davr=all").context
     assert [g["title"] for g in ctx["tile_groups"]] == [
         "Mol — tannarxda", "Boshqa qo'ldagi pulimiz", "Qarzlarimiz"]
     labels = {t["label"] for t in ctx["tiles"]}
     assert {"Logistlarda avansimiz", "Bojxonada avansimiz"} <= labels
-    assert "Bizga qaytadigan pul" not in admin_client.get("/kassa/").content.decode()
+    assert "Bizga qaytadigan pul" not in admin_client.get("/kassa/?davr=all").content.decode()
