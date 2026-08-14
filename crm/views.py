@@ -1,3 +1,4 @@
+import re
 from datetime import date as _date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from urllib.parse import urlparse
@@ -8,7 +9,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
-from django.http import JsonResponse, QueryDict
+from django.http import Http404, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -19,6 +20,7 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .exports import xlsx_response
+from .fifo import apply_plan, blockers, place_one, replay, weighted_cost
 from .templatetags.crm_extras import som, usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, TruckPlanForm,
@@ -1333,7 +1335,7 @@ def ombor(request):
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
     lots = (arrived_lots()
-            .prefetch_related("shipment__expenses", "sales__returns")
+            .prefetch_related("shipment__expenses", "sale_lots__sale__returns")
             .order_by("shipment__arrived", "id"))
     if q:
         filters = (Q(contract_line__brand__icontains=q)
@@ -1362,6 +1364,12 @@ def ombor(request):
         if partner not in g["partners"]:
             g["partners"].append(partner)
     for g in groups:
+        # A finished lot is history: it holds nothing, cannot be sold from, and after
+        # a few months of arrivals it is most of the list. The kg it moved are still
+        # worth reading, so it is folded away rather than dropped — the row below the
+        # table opens them, and each one's own page carries the full hand-over.
+        g["open_lots"] = [lot for lot in g["lots"] if lot.available_kg > 0]
+        g["done_lots"] = [lot for lot in g["lots"] if lot.available_kg <= 0]
         # The so'm range is taken from the same lots rather than converting the
         # dollar range, so each end is stated at the kurs its own lot was booked at.
         costed = [(lot.landed_cost_per_kg, lot.landed_cost_per_kg_uzs) for lot in g["lots"]]
@@ -1382,6 +1390,199 @@ def ombor(request):
 
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {"page": page, "q": q})
+
+
+def brand_activity(brand, sales, lots):
+    """Everything that has happened to one marka, oldest first — kg in, kg out, and
+    every correction since.
+
+    Built from the audit trail rather than from the rows themselves, because the rows
+    only know where they ended up. "16 950 kg" is the answer to a question nobody
+    asked; what the operator needs is that it went in as 24 000 and was changed a day
+    later, and that a 5 040 kg sotuv was deleted twenty minutes after it was typed.
+
+    A sotuv that has since been DELETED is still part of the story — it held kg while
+    it existed and pushed FIFO around — so its entries are kept and marked. It can
+    only be recognised when its own creation line named this marka, which is also the
+    one place a renamed marka goes quiet: entries written under the old spelling
+    match nothing. Anything still in the database is found through its own row and is
+    unaffected."""
+    live = {s.pk: s for s in sales}
+    rows = list(AuditLog.objects.filter(target_type="Sotuv")
+                .select_related("user").order_by("created_at", "id"))
+    # Named once per lot rather than once per sotuv: `label` counts the truck's
+    # position in its kelishuv, and there are a dozen lots against fifty sotuvlar.
+    lot_label = {lot.pk: lot.label for lot in lots}
+
+    # A deleted sotuv leaves no row to ask, so its creation line is the only thing
+    # that can still place it on a marka.
+    known = set(live)
+    for row in rows:
+        if row.action == AuditLog.Action.CREATE and brand in row.summary:
+            known.add(row.target_id)
+
+    ship_ids = {lot.shipment_id for lot in lots}
+    events, running = [], {}
+    for row in rows:
+        if row.target_id not in known:
+            continue
+        before, after = _audit_change(row, brand, running.get(row.target_id))
+        sale = live.get(row.target_id)
+        events.append({
+            "at": row.created_at, "user": row.user, "kind": "sotuv",
+            "action": row.get_action_display(),
+            "is_delete": row.action == AuditLog.Action.DELETE,
+            "sale": sale, "sale_id": row.target_id,
+            "gone": sale is None,
+            "customer": sale.customer.name if sale else "",
+            # Which truck it sits on TODAY. A correction can move a sotuv between
+            # lots, so this is the current answer rather than the one that held at
+            # the moment of the entry — the trail records what was done, not where
+            # FIFO happened to put it that afternoon.
+            "lots": ([lot_label[sl.line_id] for sl in sale.lots.all()
+                      if sl.line_id in lot_label] if sale else []),
+            "summary": row.summary,
+            "before": before if after is not None and before != after else None,
+            "after": after,
+            # Down or up matters more than the figures: it is what the operator is
+            # scanning the list for.
+            "down": bool(before and after and after < before),
+            "up": bool(before and after and after > before),
+        })
+        if after is not None:
+            running[row.target_id] = after
+
+    for row in (AuditLog.objects.filter(target_type="Yuk", target_id__in=ship_ids)
+                .select_related("user")):
+        events.append({
+            "at": row.created_at, "user": row.user, "kind": "yuk",
+            "action": row.get_action_display(), "summary": row.summary,
+            "sale": None, "sale_id": None, "gone": False, "customer": "",
+            "lots": [], "before": None, "after": None, "down": False, "up": False,
+            "is_delete": row.action == AuditLog.Action.DELETE,
+        })
+
+    events.sort(key=lambda e: e["at"])
+    return events
+
+
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
+def brand_detail(request, brand):
+    """Everything about one marka in one place: what came in on which kelishuv, what
+    is left on each truck, everything that went out, and who is still waiting.
+
+    The ombor row opens the lots inline, which answers "what can I sell today". This
+    answers the other question — how this granula has moved overall — without making
+    the operator read it off four screens."""
+    lots = list(arrived_lots()
+                .filter(contract_line__brand=brand)
+                .prefetch_related("shipment__expenses", "sale_lots__sale__returns")
+                .order_by("shipment__arrived", "id"))
+    if not lots:
+        raise Http404("Bunday marka omborda yo'q")
+
+    sales = list(Sale.objects
+                 .filter(line__contract_line__brand=brand)
+                 .select_related("customer", "line__shipment__contract__partner",
+                                 "line__contract_line__contract")
+                 .prefetch_related("lots__line__shipment__contract", "returns",
+                                   "allocations")
+                 .order_by("-date", "-id"))
+
+    # Per kelishuv, because that is how the granula is bought: a marka arrives on
+    # several trucks of one kelishuv, and "how much of that deal is still on the
+    # shelf" is not answerable from the lot list without adding it up by hand.
+    deals = {}
+    for lot in lots:
+        contract = lot.contract_line.contract
+        d = deals.setdefault(contract.pk, {
+            "contract": contract, "trucks": 0,
+            "kirim": Decimal("0"), "sold": Decimal("0"), "left": Decimal("0")})
+        d["trucks"] += 1
+        d["kirim"] += lot.kg
+        d["sold"] += lot.sold_kg
+        d["left"] += lot.available_kg
+
+    brons = bron_queue(brand)
+    on_hand = sum((lot.available_kg for lot in lots), Decimal("0"))
+    costed = [(lot.landed_cost_per_kg, lot.landed_cost_per_kg_uzs) for lot in lots]
+    reserved = sum((r.remaining_kg for r in brons), Decimal("0"))
+    return render(request, "crm/brand_detail.html", {
+        "brand": brand,
+        "lots": lots,
+        "open_lots": [lot for lot in lots if lot.available_kg > 0],
+        "done_lots": [lot for lot in lots if lot.available_kg <= 0],
+        "deals": sorted(deals.values(), key=lambda d: d["contract"].code),
+        "sales": sales,
+        "brons": brons,
+        "partners": sorted({lot.shipment.contract.partner.name for lot in lots}),
+        "kirim": sum((lot.kg for lot in lots), Decimal("0")),
+        "sold": sum((lot.sold_kg for lot in lots), Decimal("0")),
+        "on_hand": on_hand,
+        "reserved": reserved,
+        "short": max(reserved - on_hand, Decimal("0")),
+        "cost_min": min(costed)[0], "cost_min_uzs": min(costed)[1],
+        "cost_max": max(costed)[0], "cost_max_uzs": max(costed)[1],
+        "revenue": sum((s.total for s in sales), Decimal("0")),
+        "revenue_uzs": sum((s.total_uzs for s in sales), Decimal("0")),
+        "profit": sum((s.profit for s in sales), Decimal("0")),
+        "profit_uzs": sum((s.profit_uzs for s in sales), Decimal("0")),
+        "customers": len({s.customer_id for s in sales}),
+        "activity": brand_activity(brand, sales, lots),
+    })
+
+
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
+def lot_detail(request, pk):
+    """One lot's whole life: what landed, and every kg that left it — when, to whom,
+    and at what narx.
+
+    The ombor answers "what is on the shelf"; this answers "where did it go", which
+    is the question a finished lot exists to be asked. Read off the slices, so a
+    sotuv that reached across two trucks shows here only the part that came off THIS
+    one, and says which other lots made up the rest."""
+    lot = get_object_or_404(
+        arrived_lots().select_related("shipment__contract__partner",
+                                      "contract_line__contract"), pk=pk)
+    rows = []
+    slices = (lot.sale_lots
+              .select_related("sale__customer")
+              .prefetch_related("sale__lots__line__shipment__contract__partner",
+                                "sale__returns")
+              .order_by("sale__date", "sale__id"))
+    for sl in slices:
+        sale = sl.sale
+        # The rest of the same hand-over. One trip to the counter can leave several
+        # rows — FIFO writes a Sale per lot, and a corrected sotuv can carry two
+        # slices of its own — so "the other trucks" has to be gathered across the
+        # whole group, not just this row. Without it a 1 400 kg hand-over reads here
+        # as a 400 kg one with no explanation of the rest.
+        elsewhere = {}
+        for part in sale.group_sales:
+            for other in part.lots.all():
+                if other.line_id == lot.pk:
+                    continue
+                seen = elsewhere.setdefault(other.line_id, [other.line, Decimal("0")])
+                seen[1] += other.kg
+        rows.append({
+            "sale": sale,
+            "kg": sl.kg,
+            "pinned": sl.pinned,
+            # THIS lot's share of the sotuv, in the currency it was agreed in. The
+            # sotuv's own total covers every truck it drew from and would be printed
+            # in full against each of them.
+            "value": (sl.kg * own_side(sale, sale.price, sale.price_uzs)
+                      ).quantize(Decimal("0.01")),
+            "split": [{"lot": l, "kg": kg} for l, kg in elsewhere.values()],
+            "restocked": sum((r.kg for r in sale.returns.all() if r.restock),
+                             Decimal("0")),
+        })
+    return render(request, "crm/lot_detail.html", {
+        "lot": lot,
+        "rows": rows,
+        "given_kg": sum((r["kg"] for r in rows), Decimal("0")),
+        "customers": len({r["sale"].customer_id for r in rows}),
+    })
 
 
 def _shipment_form_response(request, form, lines, title, invalid=False):
@@ -1416,6 +1617,47 @@ def shipment_create(request):
     return _shipment_form_response(request, form, lines, "Yangi yuk")
 
 
+#: What a yuk edit is worth naming afterwards. Anything else — a note, a phone
+#: number — moves nothing and would bury the fields that do.
+_SHIPMENT_WATCHED = (
+    ("sent", "Jo'natilgan"), ("eta", "Kutilgan sana"), ("arrived", "Kelgan sana"),
+    ("transport", "Transport"), ("container", "Konteyner"),
+    ("origin", "Qayerdan"), ("destination", "Qayerga"),
+)
+
+
+def _shipment_snapshot(shipment):
+    """The fields worth watching, plus every product row's kg — before and after."""
+    state = {name: getattr(shipment, name) for name, _ in _SHIPMENT_WATCHED}
+    state["_lines"] = {ln.contract_line_id: (ln.brand, ln.kg)
+                       for ln in shipment.lines.select_related("contract_line")}
+    return state
+
+
+def _shipment_changes(before, after):
+    """Plain-language list of what moved between two snapshots.
+
+    "Yuk tahrirlandi: 2102 kampaund · 24000 kg" repeated the yuk's current state and
+    never said what the edit DID — five identical lines in a row and no way to tell
+    whether a date, a truck or the kg had moved."""
+    out = []
+    for name, label in _SHIPMENT_WATCHED:
+        was, now = before.get(name), after.get(name)
+        if was != now:
+            out.append(f"{label}: {was or '—'} → {now or '—'}")
+    old_lines, new_lines = before["_lines"], after["_lines"]
+    for key, (brand, kg) in new_lines.items():
+        was = old_lines.get(key)
+        if was is None:
+            out.append(f"{brand} qo'shildi ({kg} kg)")
+        elif was[1] != kg:
+            out.append(f"{brand}: {was[1]} → {kg} kg")
+    for key, (brand, kg) in old_lines.items():
+        if key not in new_lines:
+            out.append(f"{brand} olib tashlandi ({kg} kg)")
+    return out
+
+
 @role_required(User.Role.ADMIN)
 def shipment_edit(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
@@ -1424,6 +1666,7 @@ def shipment_edit(request, pk):
     title = "Yukni tahrirlash"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
+            before = _shipment_snapshot(shipment)
             with transaction.atomic():
                 shipment = form.save(commit=False)
                 # The holat decides WHETHER a yuk has arrived; the date field only
@@ -1443,9 +1686,13 @@ def shipment_edit(request, pk):
                 shipment.save()
                 _save_lines(lines, shipment)
                 form.sync_driver_advance(shipment, request.user)
+            moved = _shipment_changes(before, _shipment_snapshot(shipment))
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
-                f"Yuk tahrirlandi: {shipment.brand_summary} · {shipment.kg} kg",
+                # Truncated rather than dropped: `summary` is 255 chars and an edit
+                # touching everything at once would otherwise silently lose its tail.
+                (f"Yuk tahrirlandi: {'; '.join(moved)}" if moved
+                 else "Yuk tahrirlandi (o'zgarish yo'q)")[:255],
             )
             messages.success(request, "Yuk yangilandi")
             return form_reload(request, reverse("shipment_list"))
@@ -2021,14 +2268,113 @@ def sale_create_lot(request, lot_id):
     return form_response(request, form, title)
 
 
+class _Rollback(Exception):
+    """Raised to unwind a dry run. Never escapes `shift_preview`."""
+
+
+def _typed_kg(raw):
+    """The kg box as the operator leaves it: grouped with NBSP, decimals after a
+    comma. None when it is not a number yet — the preview simply says nothing then
+    rather than arguing with somebody mid-keystroke."""
+    if raw is None:
+        return None
+    text = raw.replace(" ", "").replace(" ", "").replace(",", ".").strip()
+    try:
+        kg = Decimal(text)
+    except (ArithmeticError, ValueError):
+        return None
+    return kg if kg > 0 else None
+
+
+def sale_shift_plan(sale, new_kg):
+    """What changing this sotuv to `new_kg` would do to the marka's FIFO chain.
+
+    Runs the real thing and throws it away: the edit is saved, the marka replayed
+    and the transaction rolled back, so the preview cannot drift from what saving
+    actually does — the alternative is a second, parallel implementation of the
+    replay whose only job is to agree with the first one.
+
+    Returns a dict the template renders, with `verdict` one of:
+      shift  — every sotuv after this one is on FIFO order, so the chain can move
+      show   — some are not; moving them would overwrite an assignment that did not
+               come from FIFO, so they are named instead
+      short  — the kg do not exist on this marka at all
+    """
+    brand = sale.line.contract_line.brand
+    before = replay(brand)
+    stuck = blockers(before, sale)
+
+    rows, short, moved_total = [], [], Decimal("0")
+    try:
+        with transaction.atomic():
+            Sale.objects.filter(pk=sale.pk).update(kg=new_kg)
+            fresh = Sale.objects.get(pk=sale.pk)
+            fresh.sync_lot()
+            after = replay(brand)
+            costs_before = {s.pk: s.cost_price for s in before.sales}
+            for other in after.sales:
+                slices = after.placements[other.pk]
+                was = costs_before.get(other.pk)
+                now = weighted_cost(slices)
+                if was is None or now is None or was == now:
+                    continue
+                delta = ((was - now) * other.kg).quantize(Decimal("0.01"))
+                moved_total += delta
+                rows.append({
+                    "sale": other,
+                    "is_edited": other.pk == sale.pk,
+                    "from_lot": other.line,
+                    # One label per lot it lands on, each with the kg it takes —
+                    # a sotuv reaching across two trucks is exactly the case where
+                    # "which truck" stops being obvious.
+                    "to_lots": [{"lot": lot, "kg": kg} for lot, kg in slices],
+                    "cost_before": was,
+                    "cost_after": now,
+                    # The sign rides outside the figure: `usd` puts the symbol first
+                    # and would render a drop as "$-504".
+                    "down": delta < 0,
+                    "size": abs(delta),
+                })
+            short = [(s, kg) for s, kg in after.short]
+            raise _Rollback
+    except _Rollback:
+        pass
+
+    verdict = "short" if short else ("show" if stuck else "shift")
+    return {
+        "sale": sale, "new_kg": new_kg, "brand": brand, "verdict": verdict,
+        "rows": rows, "blocked": stuck, "short": short,
+        "total_down": moved_total < 0, "total_size": abs(moved_total),
+    }
+
+
+@role_required(User.Role.ADMIN)
+def sale_shift_preview(request, pk):
+    """Live preview under the kg box: what shifts, what does not, and why."""
+    sale = get_object_or_404(
+        Sale.objects.select_related("line__contract_line", "customer"), pk=pk)
+    new_kg = _typed_kg(request.GET.get("kg"))
+    if new_kg is None or new_kg == sale.kg:
+        return render(request, "crm/_sale_shift.html", {"plan": None})
+    return render(request, "crm/_sale_shift.html",
+                  {"plan": sale_shift_plan(sale, new_kg)})
+
+
 @role_required(User.Role.ADMIN)
 def sale_edit(request, pk):
     sale = get_object_or_404(Sale, pk=pk)
     previous_customer_id = sale.customer_id
     form = SaleForm(request.POST or None, instance=sale)
     title = "Sotuvni tahrirlash"
+    shift_url = reverse("sale_shift_preview", args=[sale.pk])
     if request.method == "POST":
         if form.is_valid():
+            # Asked BEFORE the edit lands: whether the chain may move is a fact about
+            # the sotuvlar behind this one as they stand now, and saving first would
+            # be asking about a chain the edit has already disturbed.
+            brand = sale.line.contract_line.brand
+            may_shift = not blockers(replay(brand), sale)
+            previous_kg = Sale.objects.values_list("kg", flat=True).get(pk=sale.pk)
             # The bron this sotuv drew from is holding kg that are about to change
             # (or move to another mijoz). Put them back before the edit lands, then
             # draw again from whatever the sotuv now is — releasing afterwards would
@@ -2058,14 +2404,38 @@ def sale_edit(request, pk):
                 previous = Customer.objects.filter(pk=previous_customer_id).first()
                 if previous:
                     reconcile_customer_allocations(previous)
+            # The kg moved, so FIFO's answer for this marka moved with it. Re-run it
+            # when the chain behind this sotuv is FIFO's to re-run; otherwise place
+            # only this sotuv, which still has to land on lots that really hold it
+            # but leaves everybody else's assignment alone.
+            if may_shift:
+                shifted = apply_plan(replay(brand))
+                spread = [pk for pk in shifted if pk != sale.pk]
+            else:
+                place_one(sale)
+                spread = []
+
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Sotuv", sale.pk,
-                f"Sotuv tahrirlandi: {sale.kg} kg · {sale.customer.name}",
+                f"Sotuv tahrirlandi: {previous_kg} kg → {sale.kg} kg · "
+                f"{sale.customer.name}"
+                + (f" · {len(spread)} ta sotuvning loti siljidi" if spread else ""),
             )
-            messages.success(request, "Sotuv yangilandi")
+            if spread:
+                messages.success(
+                    request, f"Sotuv yangilandi · {len(spread)} ta sotuvning loti "
+                             f"va tannarxi FIFO bo'yicha qayta hisoblandi")
+            elif not may_shift:
+                messages.success(
+                    request, "Sotuv yangilandi · keyingi sotuvlar FIFO tartibida "
+                             "emas, shuning uchun ular tegilmadi")
+            else:
+                messages.success(request, "Sotuv yangilandi")
             return form_reload(request, reverse("sale_list"))
-        return form_response(request, form, title, invalid=True)
-    return form_response(request, form, title)
+        return form_response(request, form, title, invalid=True,
+                             extra_context={"shift_preview_url": shift_url})
+    return form_response(request, form, title,
+                         extra_context={"shift_preview_url": shift_url})
 
 
 @role_required(User.Role.ADMIN)
@@ -2097,6 +2467,100 @@ def sale_delete(request, pk):
     )
 
 
+#: The kg an audit line is talking about. Every Sotuv summary leads with it —
+#: "Yangi sotuv (FIFO): 24000 kg …", "Sotuv tahrirlandi: 16950 kg · …" — and an edit
+#: written since the arrow was added carries both sides.
+_AUDIT_KG = re.compile(r"(\d[\d\s.,]*)\s*kg")
+
+
+def _to_kg(raw):
+    try:
+        return Decimal(raw.replace(" ", "").replace(",", "").rstrip("."))
+    except ArithmeticError:
+        return None
+
+
+def _audit_kg(summary):
+    """The kg figures an audit line mentions, in the order it mentions them."""
+    return [kg for kg in (_to_kg(raw) for raw in _AUDIT_KG.findall(summary))
+            if kg is not None]
+
+
+def _audit_kg_of(summary, brand):
+    """The kg this line gives for one MARKA, when it names several.
+
+    One trip to the counter can carry three products — "990 kg 2102 campaund,
+    1000 kg 2102 repak, 23000 kg 7000 repak" — and reading the first and last figures
+    off that turns one purchase into a change from 990 to 23 000. The figure that
+    belongs to a marka is the one written immediately before it."""
+    found = re.search(r"(\d[\d\s.,]*)\s*kg\s+" + re.escape(brand), summary)
+    if found:
+        return _to_kg(found.group(1))
+    figures = _audit_kg(summary)
+    return figures[0] if figures else None
+
+
+def _audit_change(row, brand, running):
+    """(before, after) for one audit line, or (None, after) when nothing changed.
+
+    Only an UPDATE is a change. A creation line states what was entered and a
+    deletion states what was removed — drawing an arrow on either invents a movement
+    that never happened, which is exactly the misreading this page exists to end."""
+    if row.action == AuditLog.Action.UPDATE:
+        figures = _audit_kg(row.summary)
+        # An edit written since both sides were recorded says so itself; an older one
+        # gives only where it landed, and the running value supplies the before.
+        before = figures[0] if len(figures) > 1 else running
+        after = figures[-1] if figures else None
+        return (before if after is not None and before != after else None), after
+    return None, _audit_kg_of(row.summary, brand)
+
+
+def sale_history(sale):
+    """This sotuv's trail, oldest first: what it was entered as and every change since.
+
+    Read across the whole hand-over, not just this row. A sotuv typed once and split
+    FIFO across two lots writes ONE audit line, against whichever row was created
+    first — so a row that came second has no creation entry of its own and would look
+    like it appeared from nowhere.
+
+    The kg are pulled out of the summary text rather than from a column, because
+    there is no column: the trail records a sentence. Older edits recorded only the
+    value they set, so the "before" of an early change is the value the line before
+    it left behind — which is exactly why the path has to be read in order rather
+    than one row at a time."""
+    # Its own pk always, whatever the group says. A sotuv is the subject of its own
+    # history, and leaning on the group alone would blank the page whenever the
+    # grouping is missing rather than showing the one trail there certainly is.
+    ids = {sale.pk} | {s.pk for s in sale.group_sales}
+    brand = sale.line.contract_line.brand
+    rows = list(AuditLog.objects
+                .filter(target_type="Sotuv", target_id__in=ids)
+                .select_related("user")
+                .order_by("created_at", "id"))
+    trail, running = [], None
+    for row in rows:
+        before, after = _audit_change(row, brand, running)
+        trail.append({
+            "at": row.created_at,
+            "user": row.user,
+            "action": row.get_action_display(),
+            "is_create": row.action == AuditLog.Action.CREATE,
+            "is_delete": row.action == AuditLog.Action.DELETE,
+            "summary": row.summary,
+            "target_id": row.target_id,
+            "before": before,
+            "after": after,
+            # A creation line covers the whole hand-over; the row it names is one
+            # slice of it, so the kg there is the trip's, not this row's.
+            "whole_trip": (row.action == AuditLog.Action.CREATE
+                           and after is not None and after != sale.kg),
+        })
+        if after is not None:
+            running = after
+    return trail
+
+
 @role_required(User.Role.ADMIN)
 def sale_detail(request, pk):
     sale = get_object_or_404(
@@ -2109,6 +2573,7 @@ def sale_detail(request, pk):
         "group_kg": sum((s.kg for s in group), Decimal("0")),
         "group_total": sum((s.total for s in group), Decimal("0")),
         "group_total_uzs": sum((s.total_uzs for s in group), Decimal("0")),
+        "history": sale_history(sale),
     })
 
 

@@ -15,6 +15,7 @@ from .models import (
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate,
 )
+from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .templatetags.crm_extras import rate, som, usd
 
@@ -1458,11 +1459,16 @@ class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
         if line and line.arrived is None:
             self.add_error("line", "Faqat kelgan (arrived) lotdan sotish mumkin")
         if line and line.arrived is not None and kg is not None and kg > 0:
-            available = line.available_kg
-            if self.instance.pk and self.instance.line_id == line.pk:
-                available += self.instance.kg
+            # Measured against the MARKA, not against this one lot. The same granula
+            # sits in several lots at once, and after fifty sotuvlar the lot a sotuv
+            # happens to be attached to is almost always empty — checking it refused
+            # every correction to an old sotuv while the ombor was full of the stuff.
+            # Where the extra kg come from is the replay's problem, not the form's.
+            available = brand_available_kg(line.contract_line.brand,
+                                           excluding=self.instance)
             if kg > available:
-                self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+                self.add_error("kg", f"Bu markadan omborda {_clean_number(available)} "
+                                     f"kg bor — undan oshmasligi kerak")
         return cleaned
 
 

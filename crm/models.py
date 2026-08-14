@@ -1161,6 +1161,27 @@ class Shipment(models.Model):
         verbose_name_plural = "Yuklar"
 
     @property
+    def order_in_contract(self):
+        """Which truck of its kelishuv this is — the 2 in "2-yuk".
+
+        Counted, not stored: a yuk carries no number of its own, and the operator
+        names them by the order they went out. Ordered by `sent` with the id behind
+        it, so two trucks dispatched the same day still come out in a stable order
+        and one not yet sent sorts last rather than first."""
+        rows = list(Shipment.objects
+                    .filter(contract_id=self.contract_id)
+                    .values_list("pk", "sent"))
+        rows.sort(key=lambda r: (r[1] is None, r[1], r[0]))
+        return [pk for pk, _ in rows].index(self.pk) + 1
+
+    @property
+    def label(self):
+        """How a yuk is named out loud: "vazifadon-3 · 2-yuk". A bare "#17" says
+        nothing about whose truck it was — which is the only thing that helps when
+        the question is why a sotuv sits on this lot rather than that one."""
+        return f"{self.contract.code} · {self.order_in_contract}-yuk"
+
+    @property
     def has_qr(self):
         """Whether this load's driver is carrying a QR kod. Green in the yuklar
         table; every load without one is yellow, since "no QR" is itself the fact
@@ -1363,6 +1384,12 @@ class ShipmentLine(MoneyEntry):
         return self.contract_line.brand
 
     @property
+    def label(self):
+        """The lot named the way the ombor talks about it — "vazifadon-3 · 2-yuk"
+        — rather than by its row id."""
+        return self.shipment.label
+
+    @property
     def arrived(self):
         return self.shipment.arrived
 
@@ -1428,14 +1455,25 @@ class ShipmentLine(MoneyEntry):
 
     @property
     def sold_kg(self):
-        return sum((s.kg for s in self.sales.all()), Decimal("0"))
+        """Read off the slices rather than off `sales`: a sotuv that reached across
+        a lot boundary leaves only PART of its kg here, and counting the whole sotuv
+        against its first lot would empty that lot twice over."""
+        return sum((sl.kg for sl in self.sale_lots.all()), Decimal("0"))
 
     @property
     def returned_kg(self):
-        # kg flowed back into this lot by restocked returns on its sales
+        """kg flowed back into this lot by restocked returns.
+
+        A qaytarish is recorded against the sotuv, not against a lot, so when the
+        sotuv spans two lots the kg go back in the proportion they came out. Exact
+        whenever a sotuv sits on one lot, which is the ordinary case."""
         total = Decimal("0")
-        for s in self.sales.all():
-            total += sum((r.kg for r in s.returns.all() if r.restock), Decimal("0"))
+        for sl in self.sale_lots.all():
+            sale = sl.sale
+            restocked = sum((r.kg for r in sale.returns.all() if r.restock),
+                            Decimal("0"))
+            if restocked and sale.kg:
+                total += restocked * sl.kg / sale.kg
         return total
 
     @property
@@ -1789,7 +1827,7 @@ def stock_value():
     yet, what it cost us is."""
     total = total_uzs = kg = Decimal("0")
     for lot in arrived_lots().prefetch_related(
-            "sales__returns", "shipment__expenses",
+            "sale_lots__sale__returns", "shipment__expenses",
             "contract_line__contract__supplier_payments",
             "contract_line__contract__lines"):
         left = lot.kg - lot.sold_kg + lot.returned_kg
@@ -2082,10 +2120,24 @@ class Sale(MoneyEntry):
 
     @property
     def cost_price(self):
-        """1 kg tan narxi — the lot's live landed cost (goods + freight + vositachi),
-        read fresh every time rather than frozen at sale, so cost of goods always
-        reflects the latest expenses and hamkor payments."""
-        return self.line.landed_cost_per_kg
+        """1 kg tan narxi — the live landed cost (goods + freight + vositachi) of the
+        lots this sotuv drew from, read fresh every time rather than frozen at sale,
+        so cost of goods always reflects the latest expenses and hamkor payments.
+
+        kg-weighted when the sotuv reached across a lot boundary: 5 000 kg off a
+        cheap truck and 1 000 off a dearer one cost what they cost, and billing the
+        whole sotuv at either lot's narx would misstate the foyda in one direction
+        or the other. One slice — the ordinary case — reduces to that lot's tannarx."""
+        slices = list(self.lots.all())
+        kg = sum((sl.kg for sl in slices), Decimal("0"))
+        if kg <= 0:
+            # No slice yet: an unsaved sotuv, or one being read mid-construction.
+            return self.line.landed_cost_per_kg
+        if len(slices) == 1:
+            return slices[0].line.landed_cost_per_kg
+        total = sum((sl.line.landed_cost_per_kg * sl.kg for sl in slices),
+                    Decimal("0"))
+        return (total / kg).quantize(Decimal("0.0001"))
 
     @property
     def cost_price_uzs(self):
@@ -2181,7 +2233,28 @@ class Sale(MoneyEntry):
         now", which is what the sale date says."""
         if self.debt_deadline is None:
             self.debt_deadline = self.date
-        return super().save(*args, **kwargs)
+        result = super().save(*args, **kwargs)
+        self.sync_lot()
+        return result
+
+    def sync_lot(self):
+        """Keep the single-slice case in step with `line` and `kg`, so every caller
+        that just creates or edits a Sale gets a correct slice without knowing the
+        table exists.
+
+        A sotuv already spanning two lots is left alone: those slices are a replay's
+        work and only a replay may rewrite them. Its kg no longer add up until the
+        replay runs, which is why the edit flow replays before it saves."""
+        slices = list(self.lots.all())
+        if len(slices) > 1:
+            return
+        if not slices:
+            SaleLot.objects.create(sale=self, line_id=self.line_id, kg=self.kg)
+            return
+        one = slices[0]
+        if one.line_id != self.line_id or one.kg != self.kg:
+            one.line_id, one.kg = self.line_id, self.kg
+            one.save(update_fields=["line", "kg"])
 
     @property
     def is_overdue(self):
@@ -2209,6 +2282,51 @@ class Sale(MoneyEntry):
 
     def __str__(self):
         return f"Sotuv #{self.pk} · {self.customer} · {self.kg} kg"
+
+
+class SaleLot(models.Model):
+    """One slice of a sotuv against one lot: how many of its kg are costed to which
+    truck. Usually one row; two when the sotuv had to reach across a lot boundary.
+
+    Split out of `Sale` because a sotuv is two facts glued together. What the mijoz
+    took — kg, narx, qarz — is history and never moves. Which lot it is billed to is
+    FIFO's ANSWER, and that answer changes the moment an earlier sotuv is corrected:
+    the lot empties sooner and everything behind it shifts down the chain.
+
+    Re-costing therefore has to rewrite rows, and it must not be these:
+    `PaymentAllocation` and `Return` both hang off a `Sale`, and the allocation's
+    summa is stored rather than sliced precisely so a so'm sotuv settled by a so'm
+    to'lov lands on zero exactly. Splitting a paid Sale would re-derive those figures
+    on every replay and reintroduce the tiyin the stored column exists to prevent.
+    So a shift rewrites SaleLot and leaves Sale alone, and to'lovlar cannot be
+    disturbed by a correction they have nothing to do with.
+
+    `Sale.line` stays as the first slice's lot — every existing query, form and
+    template reads it — and the two are kept in step by whatever writes the slices.
+    """
+
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="lots",
+                             verbose_name="Sotuv")
+    line = models.ForeignKey(ShipmentLine, on_delete=models.PROTECT,
+                             related_name="sale_lots", verbose_name="Lot")
+    kg = models.DecimalField("Kg", max_digits=12, decimal_places=3)
+    # A lot the operator CHOSE — the Sotish button inside a marka in the ombor picks
+    # the dearer lot on purpose (see `sale_create_lot`), and a replay that moved it
+    # would silently bill the sotuv to a lot nobody asked for. FIFO's own slices are
+    # free to move; these are not.
+    pinned = models.BooleanField("Lot qo'lda tanlangan", default=False)
+
+    class Meta:
+        ordering = ["sale_id", "id"]
+        verbose_name = "Sotuv loti"
+        verbose_name_plural = "Sotuv lotlari"
+
+    @property
+    def landed_cost_per_kg(self):
+        return self.line.landed_cost_per_kg
+
+    def __str__(self):
+        return f"Sotuv #{self.sale_id} · lot #{self.line_id} · {self.kg} kg"
 
 
 class Return(MoneyEntry):

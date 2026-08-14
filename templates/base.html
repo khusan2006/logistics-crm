@@ -1257,6 +1257,45 @@
     enhance(document);
   })();
 
+  // FIFO shift preview ([data-shift-preview]): correcting an old sotuv's kg empties
+  // its lot sooner and pushes every sotuv behind it onto different lots. The server
+  // dry-runs that and renders the result here while the kg is being typed, so the
+  // operator sees which sotuvlar move — or why they cannot — before saving.
+  (function () {
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-shift-preview]').forEach(function (box) {
+        if (box.dataset.shiftReady) { return; }
+        box.dataset.shiftReady = '1';
+        var form = box.closest('form');
+        var kg = form && form.querySelector('[name="kg"]');
+        if (!kg) { return; }
+        var timer = null;
+        var seq = 0;
+        function refresh() {
+          // The kg box is money-formatted, so what is in it is "16 050" or "16050,5".
+          // Sent raw and parsed server-side — the preview must read exactly what the
+          // form will later submit, not a second guess at the same string.
+          var mine = ++seq;
+          var url = box.getAttribute('data-shift-preview') +
+                    '?kg=' + encodeURIComponent(kg.value || '');
+          fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (html) {
+              // A slower earlier request must not overwrite a newer answer.
+              if (mine === seq) { box.innerHTML = html; }
+            })
+            .catch(function () { /* preview is advisory — never block the form */ });
+        }
+        kg.addEventListener('input', function () {
+          clearTimeout(timer);
+          timer = setTimeout(refresh, 350);
+        });
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
   // Inline quick-add (data-quick-add-url): a "+ <label>" button next to a select
   // opens a small name/phone panel, POSTs to the quick-create endpoint, then adds
   // and selects the new record without leaving the form. Used for the sale form's

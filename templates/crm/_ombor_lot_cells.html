@@ -1,0 +1,28 @@
+{% load crm_extras %}
+{% comment %}
+One lot's cells, shared by the open list and the folded-away finished one so the two
+cannot drift apart. Expects `lot`; the caller owns the <tr>.
+
+The lot number opens the lot's own page — what landed and where every kg went. That
+page is not a skladchi's, so for them it is plain text: a link that 403s reads as a
+broken page rather than as a limit, same as the kelishuv kod does for a tarjimon.
+{% endcomment %}
+<td>{% if user.is_admin_role %}<a class="load-id" href="{% url 'lot_detail' lot.pk %}" title="Lot tarixi">#{{ lot.pk }}</a>
+    {% else %}<span class="load-id">#{{ lot.pk }}</span>{% endif %}</td>
+<td>{{ lot.shipment.contract.code }}</td>
+<td>{{ lot.shipment.contract.partner.name }}</td>
+<td>{{ lot.arrived }}</td>
+<td class="num">{{ lot.kg|floatformat:"-3" }}</td>
+<td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
+<td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
+{% if user.is_admin_role %}
+<td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>
+<td class="row-actions">
+  {% if lot.available_kg > 0 %}
+  <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal title="Shu lotdan sotish">Sotish</a>
+  <a class="btn btn-sm btn-ghost" href="{% url 'reservation_create' %}?lot={{ lot.pk }}" data-modal>Bron</a>
+  {% else %}
+  <a class="btn btn-sm btn-ghost" href="{% url 'lot_detail' lot.pk %}">Tarix</a>
+  {% endif %}
+</td>
+{% endif %}

@@ -1,0 +1,100 @@
+{% load crm_extras %}
+{% comment %}
+What changing the kg does to the rest of the marka, shown under the kg box while it
+is being typed. Rendered from a dry run of the real replay, so what it promises is
+what saving does.
+
+Three shapes, because three different things can be true. The chain can move; the
+chain cannot move because somebody assigned a lot by hand or typed a sotuv in days
+late, and overwriting that would be guessing; or the kg do not exist at all, which
+no re-costing can fix.
+
+Lots are named, never numbered. "#17" tells the operator nothing about whose truck
+it was, and whose truck it was is the whole question when a sotuv has to be argued
+about — so every lot reads as "vazifadon-3 · 2-yuk" with the day it landed.
+{% endcomment %}
+{% if plan %}
+<div class="stacked" style="margin-top: 10px;">
+
+  {% if plan.verdict == "short" %}
+    <label class="muted" style="display:block; margin-bottom:6px;">
+      Omborda yetarli emas
+    </label>
+    <p class="field-hint" style="margin:0 0 8px;">
+      {% for sale, kg in plan.short %}
+        <strong>{{ kg|floatformat:"-3" }} kg</strong> yetishmaydi — bu marka
+        ({{ plan.brand }}) bo'yicha shuncha kg umuman kelmagan.
+      {% endfor %}
+      Demak yo yukning kelgan miqdori, yo boshqa bir sotuvning kg si noto'g'ri.
+    </p>
+
+  {% elif plan.verdict == "show" %}
+    <label class="muted" style="display:block; margin-bottom:6px;">
+      Avtomatik siljitib bo'lmaydi
+    </label>
+    <p class="field-hint" style="margin:0 0 8px;">
+      Bu sotuvdan keyingi {{ plan.blocked|length }} ta sotuv FIFO tartibida emas —
+      loti qo'lda tanlangan yoki keyinroq kiritilgan bo'lishi mumkin. Ularni
+      avtomatik ko'chirish qo'yilgan tanlovni bekor qilib yuboradi, shuning uchun
+      avval shularni ko'rib chiqing.
+    </p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Sotuv</th><th>Kg</th><th>Qaysi yukdan</th></tr>
+        {% for s in plan.blocked %}
+        <tr>
+          <td><a href="{% url 'sale_detail' s.pk %}" target="_blank">#{{ s.pk }}</a>
+              <div class="muted">{{ s.customer.name }}</div>
+              <div class="muted">{{ s.date|date:"d.m.y" }}</div></td>
+          <td class="num">{{ s.kg|floatformat:"-3" }}</td>
+          {# the kelishuv kod already carries the hamkor's name, so it is not repeated #}
+          <td>{{ s.line.label }}
+              <div class="muted">keldi {{ s.line.arrived|date:"d.m.y" }}</div></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+
+  {% else %}
+    <label class="muted" style="display:block; margin-bottom:6px;">
+      {% if plan.rows %}
+        Saqlansa, {{ plan.rows|length }} ta sotuvning yuki va tannarxi o'zgaradi
+      {% else %}
+        Saqlansa, boshqa sotuvlarga ta'sir qilmaydi
+      {% endif %}
+    </label>
+    {% if plan.rows %}
+    <div class="table-wrap">
+      <table>
+        <tr><th>Sotuv</th><th>Qaysi yukdan</th><th>Foyda</th></tr>
+        {% for row in plan.rows %}
+        <tr{% if row.is_edited %} class="row-accent"{% endif %}>
+          <td>#{{ row.sale.pk }}{% if row.is_edited %} · shu sotuv{% endif %}
+              <div class="muted">{{ row.sale.customer.name }}</div>
+              <div class="muted">{{ row.sale.date|date:"d.m.y" }}</div></td>
+          <td>
+            <div class="muted">{{ row.from_lot.label }} <span aria-hidden="true">↓</span></div>
+            {% for t in row.to_lots %}
+            <div>{{ t.lot.label }}
+              {% if row.to_lots|length > 1 %}
+              <span class="muted">— {{ t.kg|floatformat:"-3" }} kg</span>
+              {% endif %}
+            </div>
+            {% endfor %}
+            <div class="muted">{% rate row.cost_before %} → {% rate row.cost_after %}</div>
+          </td>
+          <td class="num">{% if row.down %}−{% else %}+{% endif %}{{ row.size|usd }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    <p class="field-hint" style="margin:8px 0 0;">
+      Jami foyda {% if plan.total_down %}kamayadi{% else %}ortadi{% endif %}:
+      <strong>{{ plan.total_size|usd }}</strong>.
+      Mijozlarning qarziga ta'sir qilmaydi — faqat tannarx va foyda o'zgaradi.
+    </p>
+    {% endif %}
+  {% endif %}
+
+</div>
+{% endif %}

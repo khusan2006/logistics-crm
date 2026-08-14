@@ -164,4 +164,42 @@ found by scrolling Sotuvlar.
   </p>
 </div>
 
+{% comment %}
+The kg this sotuv has been through, in order. A figure corrected months ago is only
+readable as a path — "24 000 kiritildi, keyin 16 950 ga o'zgartirildi" — and a single
+current number says nothing about how it got there.
+
+Read across the whole hand-over: a sotuv split FIFO across two lots writes one line
+against whichever row was created first, so a row that came second has no entry of
+its own and would otherwise look like it appeared from nowhere.
+{% endcomment %}
+<div class="card">
+  <h3 style="margin-top: 0;">Tarix</h3>
+  {% if history %}
+  <div class="table-wrap">
+    <table>
+      <tr><th>Sana</th><th>Amal</th><th>Kg</th><th>Kim</th><th>Tafsilot</th></tr>
+      {% for h in history %}
+      <tr>
+        <td>{{ h.at|date:"d.m.y H:i" }}</td>
+        <td>{{ h.action }}</td>
+        <td>
+          {% if h.before %}<span class="muted">{{ h.before|floatformat:"-3" }}</span> →
+          <strong>{{ h.after|floatformat:"-3" }}</strong>
+          {% elif h.after %}<strong>{{ h.after|floatformat:"-3" }}</strong>
+          {% else %}<span class="muted">—</span>{% endif %}
+          {% if h.whole_trip %}<div class="muted">butun sotuv</div>{% endif %}
+        </td>
+        <td>{{ h.user.username|default:"—" }}</td>
+        <td class="muted">{{ h.summary }}
+          {% if h.target_id != sale.pk %}<div>sotuv #{{ h.target_id }}</div>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Audit yozuvi yo'q.</p>
+  {% endif %}
+</div>
+
 {% endblock %}
