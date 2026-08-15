@@ -1276,6 +1276,22 @@ def _stock_brand_choices():
     ]
 
 
+def _customer_phone_field(field):
+    """Put the telefon beside the ism in a mijoz picker.
+
+    Two mijoz sharing a name is ordinary — a family, or the same person entered
+    twice — and the ism on its own leaves the operator guessing which row is the
+    one standing at the counter. The raqam is what they have in front of them, so
+    it is what tells the two apart without closing the modal to go and look.
+
+    Not `customer_option_label`: that one carries the ostatka, which is the figure
+    a to'lov is taken against. A sotuv is not being taken against anything yet, and
+    a qarz on the option there would read as a price."""
+    field.label_from_instance = (
+        lambda customer: f"{customer.name} · {customer.phone}"
+        if customer.phone else customer.name)
+
+
 class SaleLineForm(forms.Form):
     """One marka on a sotuv.
 
@@ -1385,6 +1401,7 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["currency"].widget.attrs["data-money-currency"] = ""
+        _customer_phone_field(self.fields["customer"])
 
 
 class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
@@ -1412,6 +1429,7 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["lot"].queryset = arrived_lots()
+        _customer_phone_field(self.fields["customer"])
         # No marka picker here — the lot decided it — so the Brondan ushlansin box
         # carries the brand itself for the JS that shows or hides it.
         lot = self.initial.get("lot") or self.data.get("lot")
@@ -1450,6 +1468,7 @@ class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["line"].queryset = arrived_lots()
+        _customer_phone_field(self.fields["customer"])
 
     def clean(self):
         cleaned = super().clean()

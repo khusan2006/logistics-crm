@@ -888,28 +888,39 @@
       if (intPart === '') { intPart = '0'; }
       return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + dec;
     }
-    function digitsBefore(str, caret) {
+    // Putting the caret back after a reformat, by what the operator TYPED — the
+    // digits AND the decimal separator, never the grouping spaces, which are ours
+    // to move. Counted from the RIGHT: what is left of the caret is where format()
+    // adds and removes characters the operator did not type, so anchoring there
+    // drifts, while the tail past the caret is untouched by all of it.
+    //
+    // Counting digits only, from the left, is what put the caret on the wrong side
+    // of a just-typed dot — "34." rewound to "34|." because both strings still held
+    // two digits, so the next key landed in the whole part and 34.5 was entered as
+    // 345. Anchoring from the left would fix the dot and still misplace ".5", where
+    // format() prepends a 0 the operator never pressed. A comma counts as typed as
+    // well: it is the same key on this keyboard, and toNumeric turns it into the
+    // dot that the formatted value is then scanned for.
+    function isTyped(ch) { return (ch >= '0' && ch <= '9') || ch === '.' || ch === ','; }
+    function typedAfter(str, caret) {
       var n = 0;
-      for (var i = 0; i < caret && i < str.length; i++) { if (str[i] >= '0' && str[i] <= '9') { n++; } }
+      for (var i = caret; i < str.length; i++) { if (isTyped(str[i])) { n++; } }
       return n;
     }
-    function caretForDigits(str, count) {
-      if (count <= 0) {
-        for (var i = 0; i < str.length; i++) { if (str[i] >= '0' && str[i] <= '9') { return i; } }
-        return str.length;
-      }
+    function caretWithTypedAfter(str, count) {
+      if (count <= 0) { return str.length; }
       var seen = 0;
-      for (var j = 0; j < str.length; j++) {
-        if (str[j] >= '0' && str[j] <= '9') { seen++; if (seen === count) { return j + 1; } }
+      for (var i = str.length - 1; i >= 0; i--) {
+        if (isTyped(str[i])) { seen++; if (seen === count) { return i; } }
       }
-      return str.length;
+      return 0;
     }
     function reformat(el) {
       var caret = el.selectionStart;
-      var before = caret == null ? null : digitsBefore(el.value, caret);
+      var tail = caret == null ? null : typedAfter(el.value, caret);
       el.value = format(el.value);
-      if (before != null) {
-        var pos = caretForDigits(el.value, before);
+      if (tail != null) {
+        var pos = caretWithTypedAfter(el.value, tail);
         try { el.setSelectionRange(pos, pos); } catch (e) {}
       }
     }
