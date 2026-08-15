@@ -329,3 +329,58 @@ def test_the_mijozlar_list_links_the_name_to_that_mijoz_page(admin_client, db):
     customer = _customer()
     html = admin_client.get("/customers/").content.decode()
     assert f'href="/debts/{customer.pk}/">{customer.name}</a>' in html
+
+
+def _paid_off_som_sale(customer, deadline="2026-07-20"):
+    """A so'm sotuv settled in full by a so'm to'lov, whose DOLLAR twin does not land
+    on zero — the shape every so'm sotuv takes once the two roundings differ (Sale#38
+    and #39 in the live book are exactly this).
+
+    1 000 kg at 25 000 so'm is 25 mln; the per-kg dollar narx rounds up at the fourth
+    decimal, the to'lov's dollar twin rounds down at the second, so the converted
+    column keeps 0.07 that nobody owes."""
+    from crm.models import Currency
+
+    sale = Sale.objects.create(
+        customer=customer, line=_lot(), kg=Decimal("1000"),
+        price=Decimal("2.0834"), price_uzs=Decimal("25000"),
+        currency=Currency.UZS, exchange_rate=Decimal("12000"),
+        date="2026-07-10", debt_deadline=deadline)
+    return sale
+
+
+def test_a_som_sotuv_paid_in_som_is_not_late(admin_client, db):
+    """Muddat is read in the currency the sotuv was agreed in, the same way `is_paid`
+    is. Read off the converted column instead, a settled so'm sotuv carries a tiyin of
+    dollar remainder for as long as the kurs has moved since — and wore a "muddati
+    o'tgan" badge for ever."""
+    customer = _customer(name="So'm Mijoz")
+    sale = _paid_off_som_sale(customer)
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "uzs", "amount": "25000000", "exchange_rate": "12000"},
+        customer=customer, date="2026-07-11"))
+
+    assert sale.remaining_own == Decimal("0")
+    assert sale.remaining > 0            # the converted column really does drift
+    assert sale.is_paid
+    assert not sale.is_overdue
+    assert not sale.is_due
+
+
+def test_a_paid_som_sotuv_adds_nothing_to_the_qarzlar_counts(admin_client, db):
+    """The mijoz is on Qarzlar for a real dollar qarz; the settled so'm sotuv beside
+    it must not inflate the kechikkan count or claim the earliest muddat, which is
+    what decides who is chased first."""
+    customer = _customer(name="Ikki Valyuta")
+    _paid_off_som_sale(customer, deadline="2026-06-01")            # settled, oldest
+    _sale(customer, _lot(), "1000", "1.60", "2026-07-17",
+          debt_deadline="2099-01-01")                              # $1 600, not due yet
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"currency": "uzs", "amount": "25000000", "exchange_rate": "12000"},
+        customer=customer, date="2026-07-11"))
+
+    rows = admin_client.get("/debts/").context["page"].object_list
+    row = next(r for r in rows if r["customer"].name == "Ikki Valyuta")
+    assert row["overdue_count"] == 0
+    assert row["due_count"] == 0
+    assert row["earliest_due"] is None

@@ -50,7 +50,8 @@ from .models import (
     customs_positions, logist_positions, payable_by_currency, supplier_paid_by_currency,
     customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
-    kassa_cash_by_currency, kassa_cash_by_method, own_side, partner_positions,
+    kassa_cash_by_currency, kassa_cash_by_method, kassa_row_sets,
+    own_side, partner_positions,
     partner_positions_by_currency,
     reconcile_customer_allocations, stock_value_by_currency, transit_value,
     transit_value_by_currency, trim_sale_allocations,
@@ -68,6 +69,23 @@ def _bar_pct(part, whole):
     if not whole:
         return 0
     return min(100, max(0, int(Decimal(part) * 100 / Decimal(whole))))
+
+
+#: What a sotuv has to have loaded before anybody asks it for a foyda. Tannarx is
+#: LIVE (see `ShipmentLine.landed_cost_per_kg`), so one `sale.profit` reaches the
+#: lot, its yuk's xarajatlar, the kelishuv's kg and its hamkor to'lovlari — five
+#: queries per sotuv on a page that asks every one of them. Named once because three
+#: screens ask the same question: the doska, its oylik jadvali and Hisobotlar.
+PRICED_SALE_RELATED = ("line__shipment", "line__contract_line__contract")
+PRICED_SALE_PREFETCH = ("returns", "line__shipment__expenses", "line__shipment__lines",
+                        "line__contract_line__contract__lines",
+                        "line__contract_line__contract__supplier_payments")
+
+
+def priced_sales(queryset=None):
+    """`queryset` (or every sotuv) with the rows a foyda needs already loaded."""
+    base = Sale.objects.all() if queryset is None else queryset
+    return base.select_related(*PRICED_SALE_RELATED).prefetch_related(*PRICED_SALE_PREFETCH)
 
 
 def dashboard(request):
@@ -174,8 +192,15 @@ def dashboard(request):
     customer_debt_split, _debtors = customer_receivable_by_currency()
     # Foyda stays a converted pair on purpose: it is measured against the landed
     # cost, and a tannarx blends a dollar mol with a so'm transport bill by design.
-    sales_profit_total = sum((s.profit for s in Sale.objects.all()), Decimal("0"))
-    sales_profit_total_uzs = sum((s.profit_uzs for s in Sale.objects.all()), Decimal("0"))
+    #
+    # One walk for both columns: `profit_uzs` IS `profit` at the sotuv's own kurs, so
+    # a second loop asked every sotuv the identical question — and `priced_sales` is
+    # what keeps that question from costing five queries a row.
+    sales_profit_total = sales_profit_total_uzs = Decimal("0")
+    for sale in priced_sales():
+        profit = sale.profit
+        sales_profit_total += profit
+        sales_profit_total_uzs += sale.in_som(profit)
 
     return render(request, "crm/dashboard.html", {
         "total_kg": total_kg, "shipped_kg": shipped_kg, "arrived_kg": arrived_kg,
@@ -222,12 +247,16 @@ def _monthly_rows(limit=12):
             row["value"] += shipment.goods_value
             row["value_uzs"] += shipment.goods_value_uzs
 
-    for sale in Sale.objects.prefetch_related("returns"):
+    # `profit_uzs` is the same figure at the sotuv's own kurs, so it is derived rather
+    # than computed a second time; `priced_sales` is what stops each month row's foyda
+    # from costing a handful of queries per sotuv.
+    for sale in priced_sales():
         row = bucket(sale.date)
+        profit = sale.profit
         row["sales"] += sale.net_total
-        row["profit"] += sale.profit
+        row["profit"] += profit
         row["sales_uzs"] += sale.net_total_uzs
-        row["profit_uzs"] += sale.profit_uzs
+        row["profit_uzs"] += sale.in_som(profit)
 
     return sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
 
@@ -2685,8 +2714,11 @@ def _filter_debts(request):
         due = [s.debt_deadline for s in c.sales.all() if s.is_due]
         earliest_due = min(due) if due else None
         if window_from or window_to:
+            # Unpaid in the currency it was agreed in — the same measure `is_due`
+            # above uses, so the davr and the muddat badge cannot disagree about
+            # which sotuvlar are still open.
             muddats = [s.debt_deadline for s in c.sales.all()
-                       if s.remaining > 0 and s.debt_deadline is not None]
+                       if s.remaining_own > 0 and s.debt_deadline is not None]
             if not any((window_from is None or muddat >= window_from)
                        and (window_to is None or muddat <= window_to)
                        for muddat in muddats):
@@ -3198,26 +3230,23 @@ def kassa(request):
     def _kapital_uzs(qs):
         return sum((k.signed_amount_uzs for k in qs), Decimal("0"))
 
+    # Every row that has moved the till, read out of the database once and then asked
+    # all three of this page's questions — the heaps per currency, the same heaps by
+    # usul, and the converted pair below. Each of the three used to fetch them itself.
+    till_rows = kassa_row_sets()
+
     # Joriy holat (all-time, filter-independent): money physically in the till.
     # ShipmentExpense.total_out is already zero for a logist-funded row, so the
-    # whole queryset can be summed: the money left when we topped the logist up,
+    # whole list can be summed: the money left when we topped the logist up,
     # and LogistPayment below is where that shows.
     #
     # The converted pair is still what the Oqim waterfall closes on — it has to be,
     # since the waterfall is a single running line and cannot be two. The tiles
     # above it read the per-currency figures instead; see the `split` note there.
-    cash_total = (_in(CustomerPayment.objects.all())
-                  + _kapital(Kapital.objects.all())
-                  - _out(SupplierPayment.objects.all())
-                  - _out(ShipmentExpense.objects.all())
-                  - _out(LogistPayment.objects.all())
-                  - _out(CustomsPayment.objects.all()))
-    cash_total_uzs = (_in_uzs(CustomerPayment.objects.all())
-                      + _kapital_uzs(Kapital.objects.all())
-                      - _out_uzs(SupplierPayment.objects.all())
-                      - _out_uzs(ShipmentExpense.objects.all())
-                      - _out_uzs(LogistPayment.objects.all())
-                      - _out_uzs(CustomsPayment.objects.all()))
+    cash_total = (_in(till_rows["incoming"]) + _kapital(till_rows["kapital"])
+                  - _out(till_rows["outgoing"]))
+    cash_total_uzs = (_in_uzs(till_rows["incoming"]) + _kapital_uzs(till_rows["kapital"])
+                      - _out_uzs(till_rows["outgoing"]))
 
     # Not all of the till is ours. Money a mijoz has handed over that sits on no
     # sotuv is held, not earned — cancel the order and it goes back out.
@@ -3226,7 +3255,7 @@ def kassa(request):
 
     # The same two facts as heaps rather than as one sum converted twice: so'm in
     # the safe is not dollars in the safe.
-    cash_split = kassa_cash_by_currency()
+    cash_split = kassa_cash_by_currency(till_rows)
 
     # Pozitsiya: what the cash figure MEANS. Cash alone reads as a disaster while
     # the money is sitting in trucks and mijoz qarzi; these are the lines that say
@@ -3343,25 +3372,29 @@ def kassa(request):
     logist_pays, customs_pays = window["logist_pays"], window["customs_pays"]
     kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
 
+    # Sliced in Python, not with `.filter(method=…)`: these querysets are walked in
+    # full anyway (the ledgers below are built from them), and narrowing one again
+    # sends the same period back to the database once per usul.
+    def _method(rows, value):
+        return [r for r in rows if r.method == value]
+
+    period_in, period_kapital_in = list(cust_pays), list(kapital_in)
+    period_kapital_out = list(kapital_out)
+    period_out = [*sup_pays, *expenses, *logist_pays, *customs_pays]
+
     balances = {}
     net_in = net_out = Decimal("0")
     net_in_uzs = net_out_uzs = Decimal("0")
     for value, label in PayMethod.choices:
-        m_in = (_in(cust_pays.filter(method=value))
-                + _kapital(kapital_in.filter(method=value)))
-        m_out = (_out(sup_pays.filter(method=value))
-                 + _out(expenses.filter(method=value))
-                 + _out(logist_pays.filter(method=value))
-                 + _out(customs_pays.filter(method=value))
+        m_in = (_in(_method(period_in, value))
+                + _kapital(_method(period_kapital_in, value)))
+        m_out = (_out(_method(period_out, value))
                  # Already negative, so it is subtracted to land as an outflow.
-                 - _kapital(kapital_out.filter(method=value)))
-        m_in_uzs = (_in_uzs(cust_pays.filter(method=value))
-                    + _kapital_uzs(kapital_in.filter(method=value)))
-        m_out_uzs = (_out_uzs(sup_pays.filter(method=value))
-                     + _out_uzs(expenses.filter(method=value))
-                     + _out_uzs(logist_pays.filter(method=value))
-                     + _out_uzs(customs_pays.filter(method=value))
-                     - _kapital_uzs(kapital_out.filter(method=value)))
+                 - _kapital(_method(period_kapital_out, value)))
+        m_in_uzs = (_in_uzs(_method(period_in, value))
+                    + _kapital_uzs(_method(period_kapital_in, value)))
+        m_out_uzs = (_out_uzs(_method(period_out, value))
+                     - _kapital_uzs(_method(period_kapital_out, value)))
         balances[value] = {"label": label, "in": m_in, "out": m_out,
                            "balance": m_in - m_out, "in_uzs": m_in_uzs,
                            "out_uzs": m_out_uzs, "balance_uzs": m_in_uzs - m_out_uzs}
@@ -3490,7 +3523,7 @@ def kassa(request):
         # Where the till's money is actually held. The hero answers "how much have we
         # got"; this answers "how much of it can I hand over right now", and cash in
         # the safe, money on a card and a bank balance are three different answers.
-        "cash_by_method": kassa_cash_by_method(),
+        "cash_by_method": kassa_cash_by_method(till_rows),
         "q": q,
         "income_split": income_split, "outflow_split": outflow_split,
         "waterfall": waterfall, "zero_line": zero_line,
@@ -3797,8 +3830,17 @@ def reports(request):
     mijoz_qarzi, _debtors = customer_receivable_by_currency()
     # Foyda stays a converted pair: it is measured against the landed cost, and a
     # tannarx blends a dollar mol with a so'm transport bill by design.
-    profit_total = sum((s.profit for s in sales), Decimal("0"))
-    profit_total_uzs = sum((s.profit_uzs for s in sales), Decimal("0"))
+    #
+    # One walk for both columns, over the filtered rows with everything a foyda needs
+    # already loaded. Kept as its own name rather than folded into `_report_querysets`:
+    # that queryset is narrowed again per mijoz below, and a prefetch on a queryset
+    # that gets re-filtered is paid for once per narrowing.
+    report_sales = priced_sales(sales)
+    profit_total = profit_total_uzs = Decimal("0")
+    for sale in report_sales:
+        profit = sale.profit
+        profit_total += profit
+        profit_total_uzs += sale.in_som(profit)
     # `legs` prefetched on this narrow slice only — the table names the transport on
     # the load now, and the wider `shipments` above is walked by figures that never
     # touch a leg.
@@ -3824,19 +3866,33 @@ def reports(request):
     partner_rows.sort(key=lambda r: max([a for _c, a in r["qarz"]] or [Decimal("0")]),
                       reverse=True)
 
-    # Per-customer table
+    # Per-customer table. The two filtered sets are bucketed by mijoz in one pass
+    # rather than re-queried per row: `sales.filter(customer=…)` inside the loop sent
+    # the same narrowed period back to the database once per mijoz, and the qarz
+    # column then walks that mijoz's whole history again — which is what the prefetch
+    # on `Customer` below is for.
+    sales_by_customer = {}
+    # The copy the foyda loop above already walked — same rows, already in memory,
+    # and with `returns` prefetched, which is what a net figure asks each sotuv for.
+    for sale in report_sales:
+        sales_by_customer.setdefault(sale.customer_id, []).append(sale)
+    pays_by_customer = {}
+    for payment in cust_pays:
+        pays_by_customer.setdefault(payment.customer_id, []).append(payment)
+
     customer_rows = []
-    customer_ids = sales.values_list("customer_id", flat=True).distinct()
-    for customer in Customer.objects.filter(pk__in=customer_ids):
-        c_sales = sales.filter(customer=customer)
+    customers = (Customer.objects.filter(pk__in=sales_by_customer)
+                 .prefetch_related("sales__returns", "sales__allocations",
+                                   "customer_payments__allocations"))
+    for customer in customers:
         # net (post-returns) so the row reconciles with the net-based qarz column
         owed = [(currency, amount)
                 for currency, amount in customer_balance_by_currency(customer)
                 if amount > 0]
         customer_rows.append({
             "customer": customer,
-            "sotildi": customer_sales_by_currency(c_sales),
-            "tolandi": customer_paid_by_currency(cust_pays.filter(customer=customer)),
+            "sotildi": customer_sales_by_currency(sales_by_customer[customer.pk]),
+            "tolandi": customer_paid_by_currency(pays_by_customer.get(customer.pk, [])),
             "qarz": owed,
         })
     customer_rows.sort(key=lambda r: max([a for _c, a in r["qarz"]] or [Decimal("0")]),

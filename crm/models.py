@@ -1693,7 +1693,28 @@ def customer_receivable_total():
     return total, total_uzs, count
 
 
-def kassa_cash_by_currency():
+def kassa_row_sets():
+    """Every row that has moved the till, read out of the database ONCE.
+
+    The kassa asks the same rows three different questions on every load — the heaps
+    per currency, the same heaps split by usul, and the converted pair the page still
+    carries — and each used to walk the five money tables itself. Fifteen scans for
+    one screen, all of them returning the same rows.
+
+    Handed round as plain lists rather than querysets on purpose: a queryset narrowed
+    again (`.filter(method=…)`) goes back to the database, which is exactly the trip
+    being avoided, so a caller that wants a slice takes it in Python."""
+    return {
+        "incoming": list(CustomerPayment.objects.all()),
+        # Signed by direction, so it joins the inflow side whichever way it went — a
+        # ta'sischi taking money out is a negative kirim, not a fifth kind of chiqim.
+        "kapital": list(Kapital.objects.all()),
+        "outgoing": [*SupplierPayment.objects.all(), *ShipmentExpense.objects.all(),
+                     *LogistPayment.objects.all(), *CustomsPayment.objects.all()],
+    }
+
+
+def kassa_cash_by_currency(rows=None):
     """What is physically in the till, each pile in its OWN currency.
 
     Kirim minus chiqim, counted on one side only: a to'lov that arrived in so'm put
@@ -1705,25 +1726,26 @@ def kassa_cash_by_currency():
     Unlike a qarz, the two piles are not two obligations — they are two heaps of
     cash, and nothing stops them being exchanged. What is refused is doing it
     silently, at a kurs nobody chose, in the one figure the operator checks against
-    what is actually in the safe."""
+    what is actually in the safe.
+
+    `rows` is `kassa_row_sets()` already loaded by a caller that needs the same rows
+    for something else; left out, this reads them itself."""
+    if rows is None:
+        rows = kassa_row_sets()
     entries = []
-    for payment in CustomerPayment.objects.all():
+    for payment in rows["incoming"]:
         entries.append((payment.currency,
                         own_side(payment, payment.net_amount, payment.net_amount_uzs)))
-    # Already signed by direction, so it joins the inflow side whichever way it went —
-    # a ta'sischi taking money out is a negative kirim, not a fifth kind of chiqim.
-    for entry in Kapital.objects.all():
+    for entry in rows["kapital"]:
         entries.append((entry.currency,
                         own_side(entry, entry.signed_amount, entry.signed_amount_uzs)))
-    for rows in (SupplierPayment.objects.all(), ShipmentExpense.objects.all(),
-                 LogistPayment.objects.all(), CustomsPayment.objects.all()):
-        for row in rows:
-            entries.append((row.currency,
-                            -own_side(row, row.total_out, row.total_out_uzs)))
+    for row in rows["outgoing"]:
+        entries.append((row.currency,
+                        -own_side(row, row.total_out, row.total_out_uzs)))
     return _by_currency(entries)
 
 
-def kassa_cash_by_method():
+def kassa_cash_by_method(rows=None):
     """The till split by WHERE it is held: naqd, kartada, bank o'tkazmasida — each in
     its own currency.
 
@@ -1736,24 +1758,27 @@ def kassa_cash_by_method():
     Same arithmetic as `kassa_cash_by_currency` (kirim minus chiqim, each row counted
     on its own side only) — this only keeps the method a row moved by. Every method is
     returned even when empty, because an operator checking the safe against the screen
-    needs to see the zero rather than wonder where the line went."""
+    needs to see the zero rather than wonder where the line went.
+
+    Takes the same already-loaded `rows` as its neighbour above, so the pair of them
+    is one pass over the money tables rather than two."""
+    if rows is None:
+        rows = kassa_row_sets()
     totals = {}
 
     def add(method, currency, amount):
         totals.setdefault(method, []).append((currency, amount))
 
-    for payment in CustomerPayment.objects.all():
+    for payment in rows["incoming"]:
         add(payment.method, payment.currency,
             own_side(payment, payment.net_amount, payment.net_amount_uzs))
     # Already signed by direction, so it joins the inflow side whichever way it went.
-    for entry in Kapital.objects.all():
+    for entry in rows["kapital"]:
         add(entry.method, entry.currency,
             own_side(entry, entry.signed_amount, entry.signed_amount_uzs))
-    for rows in (SupplierPayment.objects.all(), ShipmentExpense.objects.all(),
-                 LogistPayment.objects.all(), CustomsPayment.objects.all()):
-        for row in rows:
-            add(row.method, row.currency,
-                -own_side(row, row.total_out, row.total_out_uzs))
+    for row in rows["outgoing"]:
+        add(row.method, row.currency,
+            -own_side(row, row.total_out, row.total_out_uzs))
 
     rows = []
     for code, label in PayMethod.choices:
@@ -2311,9 +2336,13 @@ class Sale(MoneyEntry):
 
     @property
     def paid(self):
+        """Summed in Python, like its so'm twin above: aggregate() always goes back to
+        the database and ignores a prefetched `allocations`, so every screen that asks
+        a sotuv whether it is paid — Qarzlar, Sotuvlar, the muddat badge — paid a query
+        per row for a figure already in memory."""
         if not hasattr(self, "allocations"):  # relation lands in Task 4
             return Decimal("0")
-        return self.allocations.aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        return sum((a.amount for a in self.allocations.all()), Decimal("0"))
 
     @property
     def remaining(self):
@@ -2354,7 +2383,11 @@ class Sale(MoneyEntry):
 
     @property
     def is_overdue(self):
-        return (self.remaining > 0 and self.debt_deadline is not None
+        """Unpaid IN ITS OWN CURRENCY and past its muddat — the same measure
+        `is_paid` uses, and for the same reason: a so'm sotuv settled in so'm keeps
+        a tiyin of dollar remainder for as long as the kurs has moved since, so the
+        converted column called a paid-off sotuv late for ever."""
+        return (self.remaining_own > 0 and self.debt_deadline is not None
                 and self.debt_deadline < timezone.localdate())
 
     @property
@@ -2362,7 +2395,7 @@ class Sale(MoneyEntry):
         """The muddat has ARRIVED — today or earlier — and the sotuv is unpaid. The
         superset of `is_overdue`, which is only the days already past: a sotuv due
         today is not late yet, but it is what the operator has to chase today."""
-        return (self.remaining > 0 and self.debt_deadline is not None
+        return (self.remaining_own > 0 and self.debt_deadline is not None
                 and self.debt_deadline <= timezone.localdate())
 
     @property
