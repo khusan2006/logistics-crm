@@ -812,6 +812,34 @@ class TestLedgerColumns:
         assert payment.allocated_own == Decimal("490.00")
         assert payment.unspent_own == Decimal("0")
 
+    def test_a_foiz_WE_carry_still_credits_the_mijoz_in_full(self, admin_client, db):
+        """The other way round: "Kompaniyadan ushlansin" means the mijoz is credited
+        everything they sent and we are the ones short the cut. Qarzga ta'sir is what
+        came off their qarz — 500 — even though only 490 reached the kassa.
+
+        Read off `net_amount` instead, the column said 480: the foiz taken off a
+        second time, against a mijoz who had already been credited it."""
+        from crm.models import allocate_customer_payment
+        contract = _contract()
+        lot = _arrived_shipment(contract).lines.first()
+        customer = _customer()
+        sale = self._sale(customer, lot, kg="1000", price="1.00")   # owes $1 000
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-20", amount=Decimal("500"),
+            amount_uzs=Decimal("6000000"), exchange_rate=Decimal("12000"),
+            currency=Currency.USD, method="transfer", fee_percent=Decimal("2"),
+            fee_bearer="company")
+        allocate_customer_payment(payment)
+
+        assert payment.net_amount == Decimal("490.00")           # what reached us
+        assert payment.settled_amount == Decimal("500.00")       # what they are credited
+        assert payment.allocated_own == Decimal("500.00")        # what came off the qarz
+        assert payment.unspent_own == Decimal("0")
+        assert sale.remaining_own == Decimal("500.00")           # 1 000 − 500
+        # The card cannot say the to'lov cleared less than the sotuv says it did.
+        assert (payment.allocated_own + payment.unspent_own
+                == payment.settled_amount_own)
+
 
 class TestPaymentDetail:
     def test_it_lists_the_sotuvlar_the_tolov_paid_down(self, admin_client, db):

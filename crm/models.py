@@ -2632,9 +2632,16 @@ class CustomerPayment(CashEntry):
     def allocated_pair(self):
         """(usd, uzs) of this to'lov that is sitting on sotuvlar rather than waiting
         as an avans. Read as the parent minus its unspent remainder so both sides
-        stay exact — the rule every derived pair here follows."""
+        stay exact — the rule every derived pair here follows.
+
+        The parent is `settled_amount`, the pot an allocation is actually drawn from,
+        and not `net_amount`. The two are the same figure until WE carry the bank's
+        cut; then the mijoz is credited everything they sent while only the net
+        arrived, and mixing the two pools reported a to'lov that cleared 1 000 of
+        qarz as having cleared 980 — the 20 counted against a mijoz who had already
+        been credited it."""
         unspent, unspent_uzs = unspent_payment_pair(self)
-        return self.net_amount - unspent, self.net_amount_uzs - unspent_uzs
+        return self.settled_amount - unspent, self.settled_amount_uzs - unspent_uzs
 
     @property
     def allocated_own(self):
