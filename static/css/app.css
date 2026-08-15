@@ -1565,8 +1565,11 @@ ul.errorlist li::before { content: "⚠ "; }
 .daterange-pop {
   position: absolute;
   top: calc(100% + 8px);
-  /* Left-aligned: the control sits at the start of the kassa's filter row, and a
-     popover anchored right hung off past it. */
+  /* Anchored to the control's left edge, then nudged back into the window by the
+     script when there is not 320px of room to the right of it — which is the usual
+     case now that the bar sits at the END of the row it shares with the search box.
+     Right-anchoring instead only moves the problem to the other edge on the screens
+     where the bar is not right-aligned. */
   left: 0;
   z-index: 60;
   width: 320px;

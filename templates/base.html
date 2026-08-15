@@ -2047,12 +2047,27 @@
       if (toEl) { toEl.value = disp(selEnd || selStart); }
     }
 
+    // The popover hangs off the control's LEFT edge (see .daterange-pop), and the bar
+    // it hangs from sits at the right of its row — so on a narrow window, or simply
+    // with no arrows and no Hammasi link beside it to push the control leftwards, the
+    // calendar ran off the right of the screen and the Tanlash button went with it.
+    // Nudged back by however much it overshot, the same way `is-up` answers the
+    // bottom edge. Never past the left edge: shifted further than there IS room, the
+    // calendar would only fall off the other side.
+    var EDGE = 8;
+    function fitPop() {
+      pop.style.left = '';
+      var box = pop.getBoundingClientRect();
+      var over = box.right - (document.documentElement.clientWidth - EDGE);
+      if (over > 0) { pop.style.left = '-' + Math.min(over, Math.max(0, box.left - EDGE)) + 'px'; }
+    }
     function openPop() {
       render();
       pop.classList.remove('is-up');
       pop.hidden = false;
       root.classList.add('is-open');
       trigger.setAttribute('aria-expanded', 'true');
+      fitPop();
       if (pop.getBoundingClientRect().bottom > window.innerHeight - 8) { pop.classList.add('is-up'); }
     }
     function closePop() { pop.hidden = true; root.classList.remove('is-open'); trigger.setAttribute('aria-expanded', 'false'); }
@@ -2186,6 +2201,10 @@
 
     document.addEventListener('click', function () { if (!pop.hidden) { closePop(); } });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) { closePop(); } });
+    // The room to the right changes with the window, and the nudge was measured
+    // against the old one — a calendar left open across a resize would otherwise sit
+    // wherever it was put.
+    window.addEventListener('resize', function () { if (!pop.hidden) { fitPop(); } });
   })();
 
 </script>
