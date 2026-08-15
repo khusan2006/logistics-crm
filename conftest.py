@@ -27,8 +27,13 @@ def make_contract(partner=None, brand="LLDPE", kg="1000", price="1.00",
         partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     fields = {"created": "2026-07-01"}
     fields.update(kw)
+    # Nechta mashina lives on the product now, not the header — a kelishuv's own
+    # figure is the sum of its rows. Callers still pass it as a kelishuv-level
+    # number because that is what these single-product fixtures mean by it.
+    planned_trucks = fields.pop("planned_trucks", None)
     contract = Contract.objects.create(partner=partner, **fields)
-    line = {"kg": Decimal(str(kg)), "price": Decimal(str(price))}
+    line = {"kg": Decimal(str(kg)), "price": Decimal(str(price)),
+            "planned_trucks": planned_trucks}
     if price_uzs is not None:
         line["price_uzs"] = Decimal(str(price_uzs))
     ContractLine.objects.create(contract=contract, brand=brand, **line)

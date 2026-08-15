@@ -87,7 +87,6 @@ def _reopen(client, contract):
     assert resp.status_code == 200
     data = {}
     _bound_values(resp.context["form"], data)
-    _bound_values(resp.context["lines_after"], data)
     _bound_values(resp.context["lines"].management_form, data)
     for form in resp.context["lines"].forms:
         _bound_values(form, data)

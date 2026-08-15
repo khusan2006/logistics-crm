@@ -14,6 +14,12 @@ class User(AbstractUser):
 
     role = models.CharField("Rol", max_length=12, choices=Role.choices, default=Role.TRANSLATOR)
     phone = models.CharField("Telefon", max_length=30, blank=True)
+    # Kelishuv pk's, in the order this user dragged the dashboard's Kelishuvlar
+    # bajarilishi card into. Per user rather than shared: which deal someone wants
+    # at the top of their own screen is a reading preference, and one person's
+    # drag should not rearrange everyone else's dashboard. A kelishuv missing from
+    # the list keeps its automatic rank — see crm.views.dashboard.
+    dashboard_contract_order = models.JSONField(default=list, blank=True, editable=False)
 
     @property
     def is_admin_role(self):

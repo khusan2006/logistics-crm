@@ -1698,7 +1698,116 @@ ul.errorlist li::before { content: "⚠ "; }
 .cprog-trucks.muted { font-weight: 600; color: var(--text-faint); }
 .cprog-bar { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
 .cprog-key { font-size: 11.5px; color: var(--text-faint); }
+/* The marka a Yuk/To'lov pair belongs to, on its own line above them. Above
+   rather than in the bars' 38px key column: "7000 campaund" does not fit there,
+   and the two bars under one heading is what says they are the same product. */
+.cprog-marka {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cprog-marka-name { overflow-wrap: anywhere; }
+.cprog-marka-trucks {
+  font-weight: 600;
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Sits under the To'lov bar, aligned with the figure it qualifies. Its own line
+   rather than a suffix on that figure: the bars are read down a narrow column,
+   and lengthening the value squeezes every track in the card. */
+.cprog-note {
+  margin-top: -2px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Unassigned money is a to-do, not a statistic — it reads as one until someone
+   opens those to'lovlar and says which marka they bought. */
+.cprog-note--warn { color: var(--warning); text-align: left; }
 .xf-row:hover .cprog-name { color: var(--accent); }
+
+/* The grip that reorders the card. It is offset into the card's left padding so
+   the bars stay where they were — a column of handles that pushed every row in
+   would cost the chart width it needs more than the handle does. */
+/* The whole row is the handle — hunting a 20px grip to move a row is work the
+   row itself can do. The grip stays as the thing that SAYS so (and as the touch
+   and keyboard handle); a press anywhere else becomes a drag only once the
+   pointer has travelled, so the row still opens Kelishuvlar on a click. */
+.cprog-row { display: flex; align-items: center; gap: 4px; cursor: grab; }
+.cprog-row > .cprog { flex: 1; min-width: 0; cursor: inherit; }
+.cprog-grip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 34px;
+  margin-left: -12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+  /* Without this a touch drag scrolls the page instead of moving the row. */
+  touch-action: none;
+}
+.cprog-grip svg { width: 15px; height: 15px; }
+.cprogs:hover .cprog-grip, .cprog-grip:focus-visible { opacity: 1; }
+.cprog-grip:hover { color: var(--text); background: var(--surface-hover); }
+.cprog-grip:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+
+/* A touch device has no hover to reveal the handle with, so it is simply always
+   there — and big enough to be hit with a thumb. */
+@media (hover: none) {
+  .cprog-grip { opacity: 1; width: 28px; margin-left: -14px; }
+}
+
+/* A row being dragged is lifted OUT of the column — taken out of flow, floated
+   under the pointer over a slot that holds its place — and the rows it passes
+   slide aside rather than snapping. Both halves matter: without the lift the row
+   only teleports between positions, and without the slide the whole column jumps
+   every time it crosses a midpoint. `.cprogs` is the containing block for the
+   lifted row, so it stays with the card when the page scrolls under it. */
+.cprogs { position: relative; }
+.cprog-row.is-dragging {
+  position: absolute;
+  z-index: 5;
+  padding: 8px 10px;
+  margin: -8px -10px;         /* cancels the padding, so nothing shifts on lift */
+  /* The width JS pins is the row's own, before the padding above — under the
+     global border-box the bars would give that padding back out of the content
+     and the row would visibly narrow the instant it was picked up. */
+  box-sizing: content-box;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  cursor: grabbing;
+  will-change: transform;
+}
+.cprog-row.is-dragging .cprog-grip { opacity: 1; cursor: grabbing; color: var(--accent); }
+/* The gap the row left behind. */
+.cprog-slot {
+  border-radius: var(--r-lg);
+  background: var(--surface-hover);
+}
+/* Nothing under the pointer should look clickable while a row is in the air, and
+   dragging across the card must not paint it blue with a text selection. */
+.cprogs.is-reordering .cprog { pointer-events: none; }
+.cprogs.is-reordering { cursor: grabbing; user-select: none; }
+.cprog-row.is-dragging, .cprog-row.is-dragging .cprog { cursor: grabbing; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cprog-row { transition: none !important; }
+}
 
 /* ============================================================
    Flash messages
@@ -2376,6 +2485,12 @@ form.stacked .lineset-field[hidden] { display: none; }
   .lineset:not(.lineset--money) .lineset-field--kg { grid-column: 1; grid-row: 2; }
   .lineset:not(.lineset--money) .lineset-field--currency { grid-column: 2; grid-row: 2; }
   .lineset:not(.lineset--money) .lineset-field--price { grid-column: 3; grid-row: 2; }
+  /* Nechta mashina, on the kelishuv's product rows. It takes the slot the
+     Valyuta picker used to hold — that picker is gone from these rows (a product
+     is priced in its kelishuv's currency), and the two never appear together. */
+  .lineset:not(.lineset--money) .lineset-field--planned_trucks {
+    grid-column: 2; grid-row: 2;
+  }
   .lineset:not(.lineset--money) .lineset-field--rm { grid-column: 4; grid-row: 2; }
   .lineset:not(.lineset--money) .lineset-field--exchange_rate {
     grid-column: 1 / 3;

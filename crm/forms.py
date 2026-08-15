@@ -635,23 +635,6 @@ def customer_option_label(customer):
     return " · ".join([customer.name, *parts])
 
 
-class TruckPlanForm(forms.ModelForm):
-    """Just the planned truck count. Separate from ContractForm so the template can
-    render it after the Mahsulotlar rows — the main form is emitted above them."""
-
-    class Meta:
-        model = Contract
-        fields = ["planned_trucks"]
-        widgets = {"planned_trucks": forms.NumberInput(
-            attrs={"min": "1", "placeholder": "Masalan: 2"})}
-
-    def clean_planned_trucks(self):
-        count = self.cleaned_data.get("planned_trucks")
-        if count is not None and count < 1:
-            raise forms.ValidationError("Kamida 1 bo'lishi kerak")
-        return count
-
-
 class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
     """One "Mahsulot" row on the kelishuv form.
 
@@ -662,7 +645,7 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
 
     class Meta:
         model = ContractLine
-        fields = ["brand", "kg", "price"]
+        fields = ["brand", "kg", "price", "planned_trucks"]
         widgets = {
             "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
             "kg": forms.NumberInput(attrs={"placeholder": "0"}),
@@ -672,6 +655,11 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
             # it live from this attribute while the operator is still picking.
             "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "0.0000",
                                               "data-currency-label": "1 kg narxi"}),
+            # Per product, not per kelishuv: it used to be one box under the rows,
+            # which could not say which marka of a two-marka kelishuv still owed a
+            # truck. Optional — the target is often not known when the agreement
+            # is signed.
+            "planned_trucks": forms.NumberInput(attrs={"min": "1", "placeholder": "—"}),
         }
 
     def __init__(self, *args, currency=None, **kwargs):
@@ -697,6 +685,12 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         if price is not None and price <= 0:
             raise forms.ValidationError("Narx musbat bo'lishi kerak")
         return price
+
+    def clean_planned_trucks(self):
+        count = self.cleaned_data.get("planned_trucks")
+        if count is not None and count < 1:
+            raise forms.ValidationError("Kamida 1 bo'lishi kerak")
+        return count
 
     def clean(self):
         # Seeded before the mixin converts: it reads both out of cleaned_data, and
@@ -1175,11 +1169,16 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
 
     class Meta:
         model = SupplierPayment
-        fields = ["contract", "date", "currency", "amount", "exchange_rate",
-                  "commission_percent", "method", "fee_percent", "fee_bearer", "note"]
+        fields = ["contract", "contract_line", "date", "currency", "amount",
+                  "exchange_rate", "commission_percent", "method", "fee_percent",
+                  "fee_bearer", "note"]
         widgets = {
             "date": date_widget(),
-            "contract": ContractChoiceSelect(attrs={"data-contract-currency": ""}),
+            # data-contract-source as well as -currency: the product list below is
+            # every kelishuv's products at once, and this is what narrows it.
+            "contract": ContractChoiceSelect(attrs={"data-contract-currency": "",
+                                                    "data-contract-source": ""}),
+            "contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""}),
             "commission_percent": forms.NumberInput(attrs={
                 "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
                 "placeholder": "0"}),
@@ -1206,6 +1205,24 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         # down, and it is the ceiling the form will check the entry against.
         self.fields["contract"].label_from_instance = (
             lambda c: contract_option_label(c, payable=True))
+
+        # Which product the money is against. Every selectable kelishuv's products
+        # are listed at once and the form's JS drops the ones belonging to other
+        # kelishuvlar — the same no-AJAX arrangement the yuk form uses. `clean`
+        # re-checks the pairing, because the client is not the authority on it.
+        self.fields["contract_line"].queryset = (
+            ContractLine.objects.filter(contract__in=self.fields["contract"].queryset)
+            .select_related("contract").order_by("contract_id", "position", "id"))
+        self.fields["contract_line"].label_from_instance = (
+            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
+        # A prompt, not an option. It read "Butun kelishuv" at first, which named a
+        # choice `clean` then refused — on a kelishuv with two markalar the money
+        # went to one of them, and a to'lov the operator declined to attribute is
+        # one nobody can attribute later either. A single-product kelishuv never
+        # sees this: the form fills that one in for them (and the JS preselects it).
+        self.fields["contract_line"].empty_label = "Mahsulotni tanlang"
+        self.fields["contract_line"].help_text = (
+            "Pul qaysi mahsulot uchun ketganini belgilang")
 
     def clean_commission_percent(self):
         percent = self.cleaned_data.get("commission_percent")
@@ -1235,6 +1252,23 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
                 self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
         cleaned = super().clean()
         contract, amount = cleaned.get("contract"), cleaned.get("amount")
+
+        # Which product the money is for. The client-side filter is a convenience,
+        # not the authority — a stale page or a hand-built POST can still pair a
+        # product with someone else's kelishuv.
+        line = cleaned.get("contract_line")
+        if line is not None and contract is not None and line.contract_id != contract.pk:
+            self.add_error("contract_line", "Bu mahsulot tanlangan kelishuvda yo'q")
+        elif contract is not None:
+            lines = list(contract.lines.all())
+            if len(lines) == 1:
+                # Nothing to choose: one product IS the kelishuv, so the operator is
+                # not asked and the to'lov still records which marka it bought.
+                cleaned["contract_line"] = lines[0]
+            elif line is None and len(lines) > 1:
+                self.add_error("contract_line",
+                               "Qaysi mahsulot uchun to'lanayotganini tanlang")
+
         # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
         # kelishuv's value, not the goods shipped so far. The cap is on what the
         # hamkor RECEIVES — the middleman's cut rides on top and is not part of it.

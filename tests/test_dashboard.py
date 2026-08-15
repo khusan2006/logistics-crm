@@ -159,9 +159,9 @@ def test_truck_plan_totals_per_hamkor(admin_client, db):
     a = make_contract(partner=pars, kg="9000")
     b = make_contract(partner=pars, kg="9000")
     c = make_contract(partner=arya, kg="9000")
-    Contract.objects.filter(pk=a.pk).update(planned_trucks=3)
-    Contract.objects.filter(pk=b.pk).update(planned_trucks=2)
-    Contract.objects.filter(pk=c.pk).update(planned_trucks=1)
+    ContractLine.objects.filter(contract=a).update(planned_trucks=3)
+    ContractLine.objects.filter(contract=b).update(planned_trucks=2)
+    ContractLine.objects.filter(contract=c).update(planned_trucks=1)
     make_shipment(contract=a, kg="100")                 # 3 dan 1 tasi ketdi
 
     resp = admin_client.get("/")
@@ -171,7 +171,7 @@ def test_truck_plan_totals_per_hamkor(admin_client, db):
 
 def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, db):
     done = make_contract(kg="9000")
-    Contract.objects.filter(pk=done.pk).update(planned_trucks=1)
+    ContractLine.objects.filter(contract=done).update(planned_trucks=1)
     make_shipment(contract=done, kg="100")          # rejasi bajarildi
     make_contract(kg="9000")                        # rejasi yo'q
 
@@ -223,6 +223,120 @@ def test_progress_chart_measures_yuk_and_tolov_apart(admin_client, db):
     assert row["pay_pct"] == 10
 
 
+def test_a_two_marka_kelishuv_gets_a_yuk_bar_each(admin_client, db):
+    """Summed into one bar the markalar hide each other: half the kg delivered
+    reads as a kelishuv half done when it can be one marka finished and the other
+    untouched — and it is the untouched one that still needs a truck."""
+    contract = make_contract(brand="7000 campaund", kg="120000", price="1.00",
+                             planned_trucks=10)
+    ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                kg=Decimal("120000"), price=Decimal("1.00"))
+    # Only the second marka has moved at all.
+    make_shipment(contract=contract, kg="24000",
+                  contract_line=contract.lines.get(brand="209 campaund"))
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert [(ln["brand"], ln["pct"]) for ln in row["lines"]] == [
+        ("7000 campaund", 0), ("209 campaund", 20)]
+    # The combined figure is what would have been shown instead — and it says 10%
+    # about a marka that has not started.
+    assert row["kg_pct"] == 10
+
+    # Thousands are grouped with an NBSP, so it is unpicked before comparing.
+    html = admin_client.get("/").content.decode().replace("\u00a0", " ")
+    assert "7000 campaund" in html and "209 campaund" in html
+    assert "0 / 120 000 kg" in html and "24 000 / 120 000 kg" in html
+
+
+def test_a_two_marka_kelishuv_splits_the_tolov_too(admin_client, db):
+    """One gold bar across both could not say a kelishuv is square on one marka
+    and untouched on the other — which is exactly what it is here."""
+    contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
+    second = ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                         kg=Decimal("1000"), price=Decimal("1.00"))
+    SupplierPayment.objects.create(contract=contract, contract_line=second,
+                                   amount=Decimal("1000"), date="2026-07-05")
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert [(ln["brand"], ln["paid"], ln["due"], ln["pay_pct"]) for ln in row["lines"]] == [
+        ("7000 campaund", Decimal("0"), Decimal("1000.00"), 0),
+        ("209 campaund", Decimal("1000"), Decimal("1000.00"), 100)]
+    # Combined, the same kelishuv reads half paid — true, and useless for deciding
+    # which marka the hamkor is still owed for.
+    assert row["pay_pct"] == 50
+    assert row["unassigned_paid"] == Decimal("0")
+
+
+def test_money_paid_before_the_marka_was_asked_for_shows_as_unassigned(admin_client, db):
+    """Every to'lov entered before a to'lov could name a marka names none. Folded
+    into either bar it would credit a marka nobody said it bought; left out, the
+    gold bars would read as nothing paid on a kelishuv six figures into its life."""
+    contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
+    ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                kg=Decimal("1000"), price=Decimal("1.00"))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("600"),
+                                   date="2026-07-05")          # names no marka
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert [ln["paid"] for ln in row["lines"]] == [Decimal("0"), Decimal("0")]
+    assert row["unassigned_paid"] == Decimal("600")
+    # The parts and the unassigned remainder add back to the kelishuv's own figure.
+    assert sum(ln["paid"] for ln in row["lines"]) + row["unassigned_paid"] == row["paid"]
+    assert "taqsimlanmagan" in admin_client.get("/").content.decode().lower()
+
+
+def test_a_one_marka_kelishuv_keeps_the_single_yuk_bar(admin_client, db):
+    """Splitting a kelishuv with nothing to split would just draw the same bar
+    twice, under a heading that already names the marka."""
+    contract = make_contract(brand="2102 repak", kg="1000", price="1.00")
+    make_shipment(contract=contract, kg="250")
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert row["lines"] == [] and row["kg_pct"] == 25
+    assert "2102 repak" in admin_client.get("/").content.decode()
+
+
+def test_the_tolov_bar_says_how_many_yuklar_the_money_covers(admin_client, db):
+    """"$96 400 of $288 000" is a share of a figure nobody thinks in. The question
+    asked of a hamkor is which TRUCKS are settled, so the bar says that too —
+    oldest truck first, the way the debt is actually worked off."""
+    contract = make_contract(kg="3000", price="1.00")
+    for day in (5, 6, 7):
+        make_shipment(contract=contract, kg="1000", sent=date(2026, 7, day))
+    # Two trucks' worth and a bit: $2 000 covers the first two outright, and the
+    # $500 sitting in the third is an avans against it, not a truck paid for.
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
+                                   date="2026-07-08")
+
+    assert contract.trucks_paid_for == (2, 3)
+    row = admin_client.get("/").context["contracts"][0]
+    assert (row["trucks_paid"], row["trucks_sent"]) == (2, 3)
+    assert "2 / 3 yuk to'langan" in admin_client.get("/").content.decode()
+
+
+def test_the_oldest_truck_is_the_one_paid_off_first(admin_client, db):
+    """Entry order is not delivery order — a truck entered later can have left
+    earlier, and it is the one settled first."""
+    contract = make_contract(kg="2000", price="1.00")
+    make_shipment(contract=contract, kg="1000", sent=date(2026, 7, 20))
+    make_shipment(contract=contract, kg="1000", sent=date(2026, 7, 5))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("1000"),
+                                   date="2026-07-21")
+
+    assert contract.trucks_paid_for == (1, 2)
+
+
+def test_an_avans_with_no_truck_yet_covers_nothing(admin_client, db):
+    """Money can run ahead of the goods. It has still bought no yuk, and the line
+    stays off the card entirely while there is no truck to count."""
+    contract = make_contract(kg="1000", price="1.00")
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("900"),
+                                   date="2026-07-08")
+
+    assert contract.trucks_paid_for == (0, 0)
+    assert "yuk to'langan" not in admin_client.get("/").content.decode()
+
+
 def test_progress_chart_bar_never_runs_past_its_track(admin_client, db):
     """Avans mol ketishidan oldin to'lansa foiz 100 dan oshib ketardi — chiziq
     kartadan chiqib ketmasin."""
@@ -241,6 +355,69 @@ def test_progress_chart_says_when_it_is_showing_a_subset(admin_client, db):
     assert resp.context["contracts_shown"] == 8
     assert resp.context["contracts_total"] == 10
     assert "10 tadan 8 tasi" in resp.content.decode()
+
+
+def test_the_card_is_read_in_the_order_it_was_dragged_into(admin_client, db):
+    """Trucks-still-to-send is a default, not a verdict: the kelishuv being
+    watched is dragged to the top and stays there."""
+    behind = make_contract(brand="Ko'p qolgan", kg="9000", price="1.00", planned_trucks=5)
+    make_shipment(contract=behind, kg="100")
+    watched = make_contract(brand="Kuzatilayotgan", kg="9000", price="1.00", planned_trucks=2)
+    make_shipment(contract=watched, kg="100")
+
+    assert [r["contract"].pk for r in admin_client.get("/").context["contracts"]] \
+        == [behind.pk, watched.pk]
+
+    resp = admin_client.post("/dashboard/contract-order/",
+                             {"order": f"{watched.pk},{behind.pk}"})
+    assert resp.status_code == 200
+    assert [r["contract"].pk for r in admin_client.get("/").context["contracts"]] \
+        == [watched.pk, behind.pk]
+
+
+def test_a_kelishuv_nobody_dragged_keeps_its_automatic_rank(admin_client, db):
+    """Dragging one row must not scramble the rest. An undragged kelishuv holds
+    the ranking it had and falls in behind the ones that were placed by hand —
+    which is what lets a NEW kelishuv appear without the order being redone."""
+    first = make_contract(brand="Bir", kg="9000", price="1.00", planned_trucks=5)
+    make_shipment(contract=first, kg="100")
+    second = make_contract(brand="Ikki", kg="9000", price="1.00", planned_trucks=3)
+    make_shipment(contract=second, kg="100")
+
+    admin_client.post("/dashboard/contract-order/", {"order": str(second.pk)})
+
+    fresh = make_contract(brand="Yangi", kg="9000", price="1.00", planned_trucks=9)
+    make_shipment(contract=fresh, kg="100")
+    shown = [r["contract"].pk for r in admin_client.get("/").context["contracts"]]
+    # The dragged one leads; the other two follow in trucks-left order.
+    assert shown == [second.pk, fresh.pk, first.pk]
+
+
+def test_dragging_does_not_demote_the_kelishuvlar_below_the_fold(admin_client, admin_user, db):
+    """The card shows eight, so a drop posts eight pk's — the ranking of the ones
+    the user never saw has to survive it."""
+    made = [make_contract(brand=f"K{i}", kg="1000", price="1.00") for i in range(10)]
+    admin_client.post("/dashboard/contract-order/",
+                      {"order": ",".join(str(c.pk) for c in reversed(made))})
+
+    top_two = made[-1].pk, made[-2].pk
+    admin_client.post("/dashboard/contract-order/", {"order": f"{top_two[1]},{top_two[0]}"})
+
+    admin_user.refresh_from_db()
+    saved = admin_user.dashboard_contract_order
+    assert saved[:2] == [top_two[1], top_two[0]]
+    assert sorted(saved) == sorted(c.pk for c in made)      # nobody dropped off
+
+
+def test_a_junk_order_is_refused(admin_client, db):
+    make_contract(kg="1000", price="1.00")
+    assert admin_client.post("/dashboard/contract-order/",
+                             {"order": "3,not-a-pk"}).status_code == 400
+
+
+def test_only_an_admin_can_reorder_the_card(translator_client, db):
+    assert translator_client.post("/dashboard/contract-order/",
+                                  {"order": "1"}).status_code in (302, 403)
 
 
 def test_monthly_sent_counts_every_load_with_a_date_in_that_month(admin_client, db):

@@ -467,3 +467,87 @@ class TestKelishuvOptionShowsWhatIsLeftToPay:
         label = next(l for l in labels if l.startswith(c.code))
         assert "jami 100 kg" in label
         assert "to'lash" not in label
+
+
+def _two_marka_contract():
+    """A kelishuv covering two markalar, both fully shipped so either can be paid."""
+    contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
+    second = ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                         kg=Decimal("1000"), price=Decimal("1.00"))
+    make_shipment(contract=contract, kg="1000")
+    make_shipment(contract=contract, kg="1000", contract_line=second)
+    return contract, contract.lines.get(brand="7000 campaund"), second
+
+
+def test_a_multi_marka_tolov_must_name_the_product(admin_client, db):
+    """"Paid $96 400 of $288 000" said nothing about WHICH marka the money went
+    to, and a kelishuv covering two of them is two deliveries sharing a piece of
+    paper."""
+    contract, first, _second = _two_marka_contract()
+    payload = {"contract": contract.pk, "date": "2026-07-02", "currency": "usd",
+               "amount": "100", "exchange_rate": "12000", "commission_percent": "",
+               "method": "cash", "note": ""}
+
+    resp = admin_client.post("/supplier-payments/new/", payload)
+    assert resp.status_code == 200 and not SupplierPayment.objects.exists()
+    assert "contract_line" in resp.context["form"].errors
+
+    resp = admin_client.post("/supplier-payments/new/",
+                             {**payload, "contract_line": first.pk})
+    assert resp.status_code == 302
+    assert SupplierPayment.objects.get().contract_line_id == first.pk
+
+
+def test_a_one_marka_kelishuv_fills_the_product_in_by_itself(admin_client, db):
+    """Nothing to choose: one product IS the kelishuv, so the operator is not asked
+    and the to'lov still records which marka it bought."""
+    contract = _contract(db)
+    resp = admin_client.post("/supplier-payments/new/", {
+        "contract": contract.pk, "date": "2026-07-02", "currency": "usd",
+        "amount": "100", "exchange_rate": "12000", "commission_percent": "",
+        "method": "cash", "note": "",
+    })
+    assert resp.status_code == 302
+    assert SupplierPayment.objects.get().contract_line_id == contract.lines.get().pk
+
+
+def test_a_product_from_another_kelishuv_is_refused(admin_client, db):
+    """The client-side filter is a convenience, not the authority — a stale page
+    can still post a product that belongs to somebody else's kelishuv."""
+    contract, _first, _second = _two_marka_contract()
+    stranger = make_contract(brand="Boshqa", kg="1000", price="1.00")
+
+    resp = admin_client.post("/supplier-payments/new/", {
+        "contract": contract.pk, "contract_line": stranger.lines.get().pk,
+        "date": "2026-07-02", "currency": "usd", "amount": "100",
+        "exchange_rate": "12000", "commission_percent": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 200 and not SupplierPayment.objects.exists()
+    assert "contract_line" in resp.context["form"].errors
+
+
+def test_the_qarz_is_still_settled_per_kelishuv(admin_client, db):
+    """Naming the product records where the money went; it does not split what is
+    owed. The ceiling this form checks is still the whole kelishuv's."""
+    contract, first, _second = _two_marka_contract()
+    # 1 500 is more than the 1 000 this marka is worth, and inside the 2 000 the
+    # kelishuv is worth — so it is accepted, as it was before the field existed.
+    resp = admin_client.post("/supplier-payments/new/", {
+        "contract": contract.pk, "contract_line": first.pk, "date": "2026-07-02",
+        "currency": "usd", "amount": "1500", "exchange_rate": "12000",
+        "commission_percent": "", "method": "cash", "note": "",
+    })
+    assert resp.status_code == 302
+    assert contract.paid_total == Decimal("1500")
+
+
+def test_the_product_box_offers_no_whole_kelishuv_escape(db):
+    """It read "Butun kelishuv" at first — a choice `clean` then refused, so the
+    box named an option the form would not accept. On a kelishuv with two markalar
+    the money went to one of them, and a to'lov nobody attributes on the day is one
+    nobody can attribute later either."""
+    from crm.forms import SupplierPaymentForm
+    make_contract(kg="1000", price="1.00")
+    field = SupplierPaymentForm().fields["contract_line"]
+    assert field.empty_label == "Mahsulotni tanlang"
+    assert "Butun kelishuv" not in [str(label) for _value, label in field.choices]

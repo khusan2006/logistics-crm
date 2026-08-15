@@ -283,6 +283,26 @@ def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db)
     assert len(groups) == 1 and groups[0]["contract"].pk == c.pk
 
 
+def test_a_hamkor_kelishuvlari_run_consecutively(admin_client, db):
+    """A hamkor's kelishuvlar sit in one block. Ordered by recency alone they
+    interleaved, so reading everything going to one hamkor meant hunting the same
+    name down a page it appeared on several separate times."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="T")
+    sobir = Partner.objects.create(name="Sobir", phone="2", city="T")
+    # Struck alternately, so recency alone would give Sobir/Pars/Sobir/Pars.
+    for partner in (pars, sobir, pars, sobir):
+        contract = Contract.objects.create(partner=partner, created="2026-07-01")
+        ContractLine.objects.create(contract=contract, brand="LLDPE",
+                                    kg=Decimal("1000"), price=Decimal("1.00"))
+        make_shipment(contract=contract, kg="100")
+
+    partners = [g["contract"].partner_id
+                for g in admin_client.get("/shipments/").context["groups"]]
+    assert len(partners) == 4
+    # Two blocks of two, and Sobir leads on the strength of the newest kelishuv.
+    assert partners == [sobir.pk, sobir.pk, pars.pk, pars.pk]
+
+
 def test_arrived_loads_are_hidden_until_hammasi(admin_client, db):
     """Yetib kelgan yuklar faol ro'yxatda ko'rinmaydi, Hammasi da esa ko'rinadi."""
     c = _contract(kg="2000")
@@ -542,7 +562,7 @@ def test_progress_bar_only_appears_when_a_truck_plan_exists(admin_client, db):
     make_shipment(contract=c, kg="100")
     assert "kelishuv-progress" not in admin_client.get("/shipments/").content.decode()
 
-    Contract.objects.filter(pk=c.pk).update(planned_trucks=2)
+    ContractLine.objects.filter(contract=c).update(planned_trucks=2)
     html = admin_client.get("/shipments/").content.decode()
     assert "kelishuv-progress" in html and ">1/2<" in html
 

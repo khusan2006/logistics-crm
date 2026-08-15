@@ -293,7 +293,7 @@ def test_resaving_a_som_kelishuv_unchanged_moves_nothing(admin_client):
     assert _side(before["debt_split"], Currency.UZS) == Decimal("15000000.00")
 
     _resave(admin_client, f"/contracts/{line.contract_id}/edit/",
-            extra_forms=("lines_after",), formsets=("lines",))
+            formsets=("lines",))
 
     line.refresh_from_db()
     assert (line.price, line.price_uzs) == (Decimal("1.2500"), Decimal("15000.00"))

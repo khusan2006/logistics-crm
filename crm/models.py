@@ -529,11 +529,6 @@ class Contract(models.Model):
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
     code_number = models.PositiveIntegerField(editable=False)
     created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
-    # How many trucks the kelishuv is expected to take. Optional: it is often not
-    # known when the agreement is signed, and old kelishuvlar never had it.
-    planned_trucks = models.PositiveIntegerField(
-        "Nechta mashina", null=True, blank=True,
-        help_text="Kelishuv bo'yicha rejalashtirilgan mashinalar soni")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, blank=True, related_name="contracts",
@@ -703,9 +698,61 @@ class Contract(models.Model):
         return self.shipped_value - self.paid_total
 
     @property
+    def planned_trucks(self):
+        """How many trucks the kelishuv is expected to take — the sum of what its
+        products each plan.
+
+        The target used to be a field on the kelishuv, typed once for the whole
+        agreement. It is asked per MAHSULOT now, because that is the unit trucks
+        are actually booked against: a kelishuv for two markalar is two delivery
+        schedules sharing a piece of paper, and one number across both could not
+        say which of them still owed a truck.
+
+        None, not 0, when no product sets one — the bar shows a count with no
+        total rather than pretending to a target of nothing."""
+        counts = [ln.planned_trucks for ln in self.lines.all() if ln.planned_trucks]
+        return sum(counts) if counts else None
+
+    @property
+    def trucks_paid_for(self):
+        """(covered, sent) — how many of the yuklar already sent the money paid so
+        far covers.
+
+        A to'lov is not booked against a particular truck, so "which one did this
+        pay for" has no stored answer. It is read the way the debt is actually
+        worked off: oldest truck first, each covered in full before the next
+        starts, which is the order a hamkor settles in.
+
+        WHOLE trucks only. Money part-way through the next one is an avans
+        against it, not a truck paid for — rounding it up would report a load as
+        settled while the hamkor is still owed for it.
+
+        In the kelishuv's own currency on both sides. Comparing a so'm to'lov
+        against a dollar truck at today's kurs would move the count every time
+        the market did."""
+        paid = self.paid_total_own
+        # Oldest first. A truck with no sent date has not left yet, so it queues
+        # behind the ones that have rather than sorting to the front as NULL.
+        trucks = sorted(self.shipments.all(),
+                        key=lambda s: (s.sent is None, s.sent, s.pk))
+        covered = 0
+        for truck in trucks:
+            value = own_side(self, truck.goods_value, truck.goods_value_uzs)
+            if paid < value:
+                break
+            paid -= value
+            covered += 1
+        return covered, len(trucks)
+
+    @property
     def truck_progress(self):
         """(sent, planned) for the Yuklar progress bar. `planned` is None when the
-        kelishuv never set a target, so the bar shows a count without a total."""
+        kelishuv never set a target, so the bar shows a count without a total.
+
+        `sent` counts TRUCKS, so a truck carrying both markalar counts once here
+        while counting under each product in `ContractLine.truck_progress` — it
+        really did carry both. The two therefore need not add up, and the per-
+        product figures are the ones to read when they disagree."""
         return self.shipments.count(), self.planned_trucks
 
     @property
@@ -740,6 +787,18 @@ class Contract(models.Model):
     @property
     def shipped_value_own(self):
         return self._own(self.shipped_value, self.shipped_value_uzs)
+
+    @property
+    def unassigned_paid_own(self):
+        """Money paid on this kelishuv that names no product, in its own currency.
+
+        Every to'lov entered before a to'lov could name one lands here, so on a
+        multi-marka kelishuv it is what stops the per-marka bars from reading as
+        though nothing had been paid at all. It empties as the old to'lovlar are
+        edited and given a marka."""
+        assigned = sum((self._own(ln.paid_total, ln.paid_total_uzs)
+                        for ln in self.lines.all()), Decimal("0"))
+        return self.paid_total_own - assigned
 
     @property
     def payable_left_own(self):
@@ -789,6 +848,11 @@ class ContractLine(MoneyEntry):
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
                                     decimal_places=2, default=0)
+    # How many trucks THIS product is expected to take. Optional: it is often not
+    # known when the agreement is signed, and old kelishuvlar never had it.
+    planned_trucks = models.PositiveIntegerField(
+        "Nechta mashina", null=True, blank=True,
+        help_text="Shu mahsulot uchun rejalashtirilgan mashinalar soni")
     position = models.PositiveIntegerField(default=0, editable=False)
 
     class Meta:
@@ -825,6 +889,37 @@ class ContractLine(MoneyEntry):
     @property
     def remaining_kg(self):
         return self.kg - self.shipped_kg
+
+    @property
+    def truck_progress(self):
+        """(sent, planned) for this product alone.
+
+        Trucks, not rows: a yuk that carries this marka twice is still one truck.
+        And a truck carrying TWO markalar counts under each of them — it really
+        did carry both — so these can add past the kelishuv's own truck count,
+        the same way Yuk holatlari counts a two-marka yuk under both."""
+        sent = len({sl.shipment_id for sl in self.shipment_lines.all()})
+        return sent, self.planned_trucks
+
+    @property
+    def paid_total(self):
+        """What has been paid against THIS product.
+
+        Credited, not gross — the same figure the kelishuv's own `paid_total`
+        sums, so a kelishuv's products and its unassigned money add back up to
+        it exactly.
+
+        A to'lov that names no product counts here for nobody. Every to'lov
+        entered before the field existed is one of those, and they are the
+        kelishuv's `unassigned_paid` — guessing which marka they bought would be
+        inventing a fact, so they are shown as unassigned until someone says."""
+        return sum((p.credited_amount for p in self.supplier_payments.all()),
+                   Decimal("0"))
+
+    @property
+    def paid_total_uzs(self):
+        return sum((p.credited_amount_uzs for p in self.supplier_payments.all()),
+                   Decimal("0"))
 
     @property
     def shipped_value(self):
@@ -896,6 +991,27 @@ class SupplierPayment(CashEntry):
 
     contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
                                  related_name="supplier_payments", verbose_name="Kelishuv")
+    # WHICH product of the kelishuv the money is against. A kelishuv covering two
+    # markalar is two deliveries sharing a piece of paper, and "paid $96 400 of
+    # $288 000" said nothing about which of them the money went to.
+    #
+    # Nullable, and it stays that way: every to'lov entered before this field
+    # existed names no product, and guessing one for them would be inventing a
+    # fact. Blank therefore means "nobody has said yet", and those rows surface on
+    # the dashboard as `unassigned_paid` until someone opens them and does.
+    #
+    # Nothing NEW can be left blank, though — the form refuses a to'lov on a
+    # multi-product kelishuv that names no marka, and fills the marka in by itself
+    # when the kelishuv has only one. Blank is a fact about the past, not a choice
+    # on offer.
+    #
+    # The qarz is still settled per KELISHUV, not per product: the ceiling this
+    # form checks against, `payable_left_own`, and everything partner_positions()
+    # reports are unchanged. This field records where the money went; it does not
+    # yet split what is owed.
+    contract_line = models.ForeignKey(
+        ContractLine, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="supplier_payments", verbose_name="Mahsulot")
     date = models.DateField("Sana", default=timezone.localdate)
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
     amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,

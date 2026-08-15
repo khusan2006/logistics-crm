@@ -23,7 +23,7 @@ from .exports import xlsx_response
 from .fifo import apply_plan, blockers, place_one, replay, weighted_cost
 from .templatetags.crm_extras import som, usd
 from .forms import (
-    ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, TruckPlanForm,
+    ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm,
     CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
@@ -77,8 +77,11 @@ def dashboard(request):
                  .prefetch_related("lines__contract_line", "legs"))
     # Prefetched here rather than per figure below: the chart reads every kelishuv's
     # lines, payments and yuklar, which is three queries per row without this.
+    # `shipments__lines__contract_line` for trucks_paid_for: it prices every truck
+    # on every kelishuv, which is a query per line without it.
     contracts = (Contract.objects.select_related("partner")
-                 .prefetch_related("shipments", "lines__shipment_lines",
+                 .prefetch_related("shipments__lines__contract_line",
+                                   "lines__shipment_lines", "lines__supplier_payments",
                                    "supplier_payments"))
     total_kg = ContractLine.objects.aggregate(s=Sum("kg"))["s"] or 0
     shipped_kg = ShipmentLine.objects.aggregate(s=Sum("kg"))["s"] or 0
@@ -149,9 +152,37 @@ def dashboard(request):
         if contract.is_settled:
             continue
         sent, planned = contract.truck_progress
+        # A kelishuv covering two markalar gets a Yuk bar EACH. Summed into one
+        # bar they hide each other: 96 000 of 240 000 kg reads as a kelishuv
+        # a third of the way through when it can just as easily be one marka
+        # finished and the other untouched — and it is the untouched one that
+        # needs a truck. Only worth the extra lines when there is more than one;
+        # a single-marka kelishuv would just be the same bar twice.
+        lines = list(contract.lines.all())
+        trucks_paid, trucks_sent = contract.trucks_paid_for
         chart_contracts.append({
             "contract": contract,
             "sent": sent, "planned": planned,
+            # Each marka carries its own mashina figure too, now that the target is
+            # set per product — without it the count the operator typed against
+            # this row would have nowhere on the page to be read back. And its own
+            # to'lov, now that a to'lov names the product it bought: a kelishuv
+            # can be square on one marka and untouched on the other, which one
+            # gold bar across both could not say.
+            "lines": [{"brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
+                       "pct": _bar_pct(ln.shipped_kg, ln.kg),
+                       "sent": ln.truck_progress[0], "planned": ln.planned_trucks,
+                       "paid": contract._own(ln.paid_total, ln.paid_total_uzs),
+                       "due": contract._own(ln.expected_value, ln.expected_value_uzs),
+                       "pay_pct": _bar_pct(
+                           contract._own(ln.paid_total, ln.paid_total_uzs),
+                           contract._own(ln.expected_value, ln.expected_value_uzs))}
+                      for ln in lines] if len(lines) > 1 else [],
+            # What was paid before a to'lov could name a marka. Shown as its own
+            # row rather than folded into one of them: nobody has said which it
+            # bought, and the per-marka bars would otherwise read as $0 paid on a
+            # kelishuv that has had six figures against it.
+            "unassigned_paid": contract.unassigned_paid_own if len(lines) > 1 else 0,
             # `planned` is None on a kelishuv that never set a target, so it has no
             # trucks-left to sort on and lands at the bottom with a count and no total.
             "trucks_left": planned - sent if planned else 0,
@@ -159,10 +190,22 @@ def dashboard(request):
             "kg_pct": _bar_pct(contract.shipped_kg, contract.kg),
             "paid": contract.paid_total_own, "due": contract.expected_value_own,
             "pay_pct": _bar_pct(contract.paid_total_own, contract.expected_value_own),
+            # What the money has actually bought: "$96 400 of $288 000" is a share
+            # of a figure nobody thinks in, while "1 of 4 yuk paid for" is the
+            # question being asked of a hamkor — which trucks are settled.
+            "trucks_paid": trucks_paid, "trucks_sent": trucks_sent,
         })
     contracts_total = len(chart_contracts)
     # Most trucks still to send first — the same reading as Yuboriladigan mashinalar.
     chart_contracts.sort(key=lambda r: (r["trucks_left"], r["sent"]), reverse=True)
+    # Then whatever the user dragged this card into. A second, stable pass rather
+    # than one combined key: a kelishuv nobody has dragged has no position of its
+    # own, and this way it keeps the automatic rank above and simply falls in
+    # behind the ones that do. So the card survives a new kelishuv appearing or a
+    # dragged one settling without the manual order having to be rebuilt.
+    manual_rank = {pk: i for i, pk in enumerate(request.user.dashboard_contract_order)}
+    chart_contracts.sort(
+        key=lambda r: manual_rank.get(r["contract"].pk, len(manual_rank)))
     chart_contracts = chart_contracts[:CHART_LIMIT]
 
     arrived_lots = shipments.filter(arrived__isnull=False)
@@ -185,6 +228,30 @@ def dashboard(request):
         "sales_profit_total": sales_profit_total,
         "monthly": _monthly_rows(),
     })
+
+
+@role_required(User.Role.ADMIN)
+@require_POST
+def dashboard_contract_order(request):
+    """Save the order the user dragged Kelishuvlar bajarilishi into.
+
+    The card shows the top 8, so what comes back is a slice of the ranking, not
+    all of it — the pk's the user did NOT see keep the positions they already had
+    and are appended behind the new ones. Dragging one row must not silently
+    demote the kelishuvlar that were ranked below the fold."""
+    try:
+        dragged = [int(pk) for pk in request.POST.get("order", "").split(",") if pk]
+    except ValueError:
+        return JsonResponse({"error": "Noto'g'ri tartib"}, status=400)
+
+    seen = set(dragged)
+    kept = [pk for pk in request.user.dashboard_contract_order if pk not in seen]
+    # Bounded so a stale or hostile client can't grow the column without limit;
+    # a ranking longer than the kelishuvlar that exist says nothing anyway.
+    order = (dragged + kept)[:200]
+    request.user.dashboard_contract_order = order
+    request.user.save(update_fields=["dashboard_contract_order"])
+    return JsonResponse({"ok": True})
 
 
 def _monthly_rows(limit=12):
@@ -638,13 +705,11 @@ def contract_create(request):
     lines = ContractLineFormSet(
         request.POST or None,
         form_kwargs={"currency": contract_currency(request.POST or None)})
-    plan = TruckPlanForm(request.POST or None)
     if request.method == "POST":
-        if form.is_valid() and lines.is_valid() and plan.is_valid():
+        if form.is_valid() and lines.is_valid():
             with transaction.atomic():
                 contract = form.save(commit=False)
                 contract.created_by = request.user
-                contract.planned_trucks = plan.cleaned_data["planned_trucks"]
                 contract.save()
                 _save_lines(lines, contract)
             AuditLog.record(
@@ -653,15 +718,16 @@ def contract_create(request):
             )
             messages.success(request, "Kelishuv qo'shildi")
             return form_success(request, reverse("contract_list"))
-        return _contract_form_response(request, form, lines, plan, "Yangi kelishuv",
+        return _contract_form_response(request, form, lines, "Yangi kelishuv",
                                        invalid=True)
-    return _contract_form_response(request, form, lines, plan, "Yangi kelishuv")
+    return _contract_form_response(request, form, lines, "Yangi kelishuv")
 
 
-def _contract_form_response(request, form, lines, plan, title, invalid=False):
+def _contract_form_response(request, form, lines, title, invalid=False):
+    # Nechta mashina used to be a lone box rendered after the rows (`lines_after`);
+    # it is a column of the rows themselves now, so there is nothing left to append.
     return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar",
-                                        "lines_after": plan})
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
 
 
 @role_required(User.Role.ADMIN)
@@ -671,13 +737,11 @@ def contract_edit(request, pk):
     lines = ContractLineFormSet(
         request.POST or None, instance=contract,
         form_kwargs={"currency": contract_currency(request.POST or None, contract)})
-    plan = TruckPlanForm(request.POST or None, instance=contract)
     title = "Kelishuvni tahrirlash"
     if request.method == "POST":
-        if form.is_valid() and lines.is_valid() and plan.is_valid():
+        if form.is_valid() and lines.is_valid():
             with transaction.atomic():
                 form.save()
-                plan.save()
                 _save_lines(lines, contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
@@ -685,8 +749,8 @@ def contract_edit(request, pk):
             )
             messages.success(request, "Kelishuv yangilandi")
             return form_reload(request, reverse("contract_list"))
-        return _contract_form_response(request, form, lines, plan, title, invalid=True)
-    return _contract_form_response(request, form, lines, plan, title)
+        return _contract_form_response(request, form, lines, title, invalid=True)
+    return _contract_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN)
@@ -734,7 +798,12 @@ def supplier_payment_list(request):
     if sort not in {key for key, *_ in SUPPLIER_PAYMENT_SORTS}:
         sort = SUPPLIER_PAYMENT_SORT_DEFAULT
 
-    payments = SupplierPayment.objects.select_related("contract__partner")
+    # `lines` as well as the row's own marka: the table names the product only on a
+    # multi-product kelishuv, and asking how many it has is a query per row without
+    # this. `brand_summary` reads the same relation.
+    payments = (SupplierPayment.objects
+                .select_related("contract__partner", "contract_line")
+                .prefetch_related("contract__lines"))
     contract_id = request.GET.get("contract")
     if contract_id and contract_id.isdigit():
         payments = payments.filter(contract_id=contract_id)
@@ -1270,12 +1339,11 @@ def shipment_list(request):
         if s.is_overdue:
             overdue_count += 1
 
-    # Group under the kelishuv (newest contract first, newest load first inside —
-    # same recency feel as the flat list had). Built from every row, before any
-    # paging: a kelishuv is the unit this page is read in.
+    # Group under the kelishuv (newest load first inside). Built from every row,
+    # before any paging: a kelishuv is the unit this page is read in.
     groups = []
     by_contract = {}
-    for s in sorted(shipments, key=lambda s: -s.contract_id):
+    for s in shipments:
         g = by_contract.get(s.contract_id)
         if g is None:
             g = by_contract[s.contract_id] = {"contract": s.contract, "shipments": []}
@@ -1283,6 +1351,22 @@ def shipment_list(request):
         g["shipments"].append(s)
     for g in groups:
         g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
+
+    # Then keep each HAMKOR whole. Ordering the kelishuvlar by recency alone
+    # interleaved them — one partner's kelishuv, then another's, then the first
+    # partner's again — so reading everything going to one hamkor meant hunting
+    # the same name down a page it appeared on four separate times.
+    #
+    # A hamkor takes the position of their newest kelishuv rather than an
+    # alphabetical slot, so the page still opens on the most recent work; inside
+    # the block the kelishuvlar stay newest-first, as before.
+    newest_by_partner = {}
+    for g in groups:
+        partner_id = g["contract"].partner_id
+        newest_by_partner[partner_id] = max(
+            newest_by_partner.get(partner_id, 0), g["contract"].pk)
+    groups.sort(key=lambda g: (-newest_by_partner[g["contract"].partner_id],
+                               -g["contract"].pk))
 
     # Hammasi can grow without bound, so page it — by KELISHUV, not by yuk. Paging
     # the flat list cut a kelishuv wherever its 20th load happened to fall, leaving

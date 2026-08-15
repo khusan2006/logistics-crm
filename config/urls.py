@@ -10,6 +10,8 @@ urlpatterns = [
     path("login/", accounts_views.LoginView.as_view(), name="login"),
     path("logout/", auth_views.LogoutView.as_view(), name="logout"),
     path("", crm_views.dashboard, name="dashboard"),
+    path("dashboard/contract-order/", crm_views.dashboard_contract_order,
+         name="dashboard_contract_order"),
     path("audit/", crm_views.audit_list, name="audit_list"),
     path("partners/", crm_views.partner_list, name="partner_list"),
     path("partners/new/", crm_views.partner_create, name="partner_create"),
