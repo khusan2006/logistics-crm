@@ -224,3 +224,30 @@ def rate_range_both(usd_min, usd_max, som_min=None, som_max=None):
         return _pair(dollars, spread.replace(",", NBSP))
     except (TypeError, ValueError, ArithmeticError):
         return "—"
+
+
+@register.simple_tag
+def page_range(page, on_each_side=2, on_ends=1):
+    """The page numbers to draw around the current one, with `None` marking a gap.
+
+    Django's `get_elided_page_range` already does the windowing — 1 … 6 7 [8] 9 10
+    … 42 — but it signals a gap with the lazily-translated `Paginator.ELLIPSIS`
+    string, which a template can't compare against cheaply. Swapping it for `None`
+    lets the partial branch on truthiness: a page number is never falsy."""
+    paginator = page.paginator
+    numbers = paginator.get_elided_page_range(
+        page.number, on_each_side=on_each_side, on_ends=on_ends
+    )
+    return [None if n == paginator.ELLIPSIS else n for n in numbers]
+
+
+@register.simple_tag(takes_context=True)
+def page_url(context, number, param="page"):
+    """Current query string with `param` swapped to `number`.
+
+    `{% querystring %}` would do this, except its keys have to be literals — and
+    kassa paginates two tables on one page, under `ipage` and `opage`. Taking the
+    parameter name as an argument is what lets one partial serve both."""
+    query = context["request"].GET.copy()
+    query[param] = number
+    return f"?{query.urlencode()}"

@@ -117,13 +117,7 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
       {% empty %}<tr><td colspan="6" class="muted">Bu davrda kirim yo'q.</td></tr>{% endfor %}
     </table>
     </div>
-    {% if income_page.has_other_pages %}
-    <div class="pagination">
-      {% if income_page.has_previous %}<a class="btn btn-ghost" href="{% querystring ipage=income_page.previous_page_number %}">Oldingi</a>{% endif %}
-      <span class="muted">{{ income_page.number }} / {{ income_page.paginator.num_pages }} · {{ income_page.paginator.count }} ta</span>
-      {% if income_page.has_next %}<a class="btn btn-ghost" href="{% querystring ipage=income_page.next_page_number %}">Keyingi</a>{% endif %}
-    </div>
-    {% endif %}
+    {% include "crm/_pagination.html" with page=income_page label="kirim" param="ipage" %}
   </div>
 
   {# ── Chiqim: hamkor to'lovlari + yuk xarajatlari ── #}
@@ -171,13 +165,7 @@ so'm. Omborda is that, and so is a logist's hisob, which is kept in dollars.
       {% empty %}<tr><td colspan="6" class="muted">Bu davrda chiqim yo'q.</td></tr>{% endfor %}
     </table>
     </div>
-    {% if outflow_page.has_other_pages %}
-    <div class="pagination">
-      {% if outflow_page.has_previous %}<a class="btn btn-ghost" href="{% querystring opage=outflow_page.previous_page_number %}">Oldingi</a>{% endif %}
-      <span class="muted">{{ outflow_page.number }} / {{ outflow_page.paginator.num_pages }} · {{ outflow_page.paginator.count }} ta</span>
-      {% if outflow_page.has_next %}<a class="btn btn-ghost" href="{% querystring opage=outflow_page.next_page_number %}">Keyingi</a>{% endif %}
-    </div>
-    {% endif %}
+    {% include "crm/_pagination.html" with page=outflow_page label="chiqim" param="opage" %}
   </div>
 </div>
 

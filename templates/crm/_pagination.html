@@ -1,16 +1,43 @@
 {% comment %}
 Shared list pagination control. Include with a `page` (Django Page object) in
-context; optionally pass a `label` for the count noun:
+context; optionally pass a `label` for the count noun, and a `param` when the
+page number rides a query parameter other than `page`:
 
     {% include "crm/_pagination.html" with label="yuk" %}
+    {% include "crm/_pagination.html" with label="kirim" param="ipage" %}
 
-{% querystring %} (Django 6) rebuilds the current query string with page= swapped
-in, so every active filter, sort and search term is carried to the next page.
+`page_url` rebuilds the current query string with the page swapped in, so every
+active filter, sort and search term is carried to the page that's clicked.
 {% endcomment %}
+{% load crm_extras %}
 {% if page.has_other_pages %}
-<div class="pagination">
-  {% if page.has_previous %}<a class="btn btn-ghost" href="{% querystring page=page.previous_page_number %}">Oldingi</a>{% endif %}
-  <span class="muted">{{ page.number }} / {{ page.paginator.num_pages }} · {{ page.paginator.count }} ta{% if label %} {{ label }}{% endif %}</span>
-  {% if page.has_next %}<a class="btn btn-ghost" href="{% querystring page=page.next_page_number %}">Keyingi</a>{% endif %}
-</div>
+{% firstof param "page" as page_param %}
+<nav class="pagination" aria-label="Sahifalar">
+  {% if page.has_previous %}
+  <a class="btn btn-ghost page-step" href="{% page_url page.previous_page_number page_param %}" rel="prev">Oldingi</a>
+  {% else %}
+  <span class="btn btn-ghost page-step" aria-disabled="true">Oldingi</span>
+  {% endif %}
+
+  <span class="page-nums">
+    {% page_range page as numbers %}
+    {% for n in numbers %}
+      {% if not n %}
+      <span class="page-gap" aria-hidden="true">…</span>
+      {% elif n == page.number %}
+      <span class="page-num is-current" aria-current="page">{{ n }}</span>
+      {% else %}
+      <a class="page-num" href="{% page_url n page_param %}" aria-label="{{ n }}-sahifa">{{ n }}</a>
+      {% endif %}
+    {% endfor %}
+  </span>
+
+  {% if page.has_next %}
+  <a class="btn btn-ghost page-step" href="{% page_url page.next_page_number page_param %}" rel="next">Keyingi</a>
+  {% else %}
+  <span class="btn btn-ghost page-step" aria-disabled="true">Keyingi</span>
+  {% endif %}
+
+  <span class="muted page-count">{{ page.paginator.count }} ta{% if label %} {{ label }}{% endif %}</span>
+</nav>
 {% endif %}

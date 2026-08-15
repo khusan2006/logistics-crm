@@ -1828,9 +1828,66 @@ ul.errorlist li::before { content: "⚠ "; }
   margin-top: 16px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 8px 14px;
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* The count sits last but reads as an aside, so it is pushed away from the
+   controls rather than crowding the final page number. */
+.page-count { margin-left: auto; }
+
+.page-nums { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+.page-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.page-num:hover { background: var(--surface-hover); color: var(--text); }
+.page-num:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+
+.page-num.is-current {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  cursor: default;
+}
+
+.page-gap {
+  min-width: 18px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Oldingi/Keyingi stay in place at the ends of the run instead of vanishing on
+   the first and last page — a control that disappears shifts every number
+   under the cursor by one button width. */
+.page-step[aria-disabled="true"] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+@media (max-width: 560px) {
+  /* Numbers are the point on a phone; the word buttons are the first to go.
+     The widest run — 1 … 6 7 [8] 9 10 … 42 — is nine cells, so they shrink far
+     enough to stay on one line rather than wrapping into a second row. */
+  .page-step { display: none; }
+  .page-count { margin-left: 0; flex-basis: 100%; }
+  .page-nums { gap: 2px; }
+  .page-num { min-width: 30px; padding: 0 4px; }
+  .page-gap { min-width: 12px; }
 }
 
 /* ============================================================

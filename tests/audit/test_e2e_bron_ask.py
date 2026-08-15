@@ -80,7 +80,12 @@ def _asked(page):
 
 def _pick(page, customer=None, brand=None):
     if customer is not None:
-        page.select_option("[name=customer]", label=customer)
+        # The mijoz option reads "Ism · telefon" now, and select_option's label= is
+        # an exact match — so find the option by the ism it starts with and pick it
+        # by its value. Matching the ism alone keeps this test about the bron
+        # question rather than about how an option happens to be labelled.
+        option = page.locator("[name=customer] option", has_text=customer).first
+        page.select_option("[name=customer]", value=option.get_attribute("value"))
     if brand is not None:
         page.select_option("[name=lines-0-brand]", value=brand)
     page.wait_for_timeout(250)
