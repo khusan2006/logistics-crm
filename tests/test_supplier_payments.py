@@ -585,3 +585,91 @@ class TestASplitPayment:
         assert self._pay(admin_client, c,
                          {"amount": "250", "method": "cash"}).status_code == 302
         assert SupplierPayment.objects.get().amount == Decimal("250.00")
+
+
+class TestTheHamkorCarriesTheBankFoiz:
+    """"Hamkordan ushlansin": the perechisleniya foizi comes out of the transfer, so
+    the hamkor receives less than was sent and their qarz falls by what arrived.
+
+    The ceiling has to be read the same way. Measured against the summa TYPED, a
+    kelishuv paid in full stayed short by exactly the foiz, and the to'lov that would
+    have closed it was refused for overshooting a figure it did not overshoot — a qarz
+    that shrank towards zero for ever without reaching it."""
+
+    def _pay(self, client, contract, amount, date="2026-07-02", **extra):
+        return client.post("/supplier-payments/new/", supplier_payment_rows(
+            {"currency": "usd", "amount": amount, "exchange_rate": "12000",
+             "method": "transfer", "fee_percent": "2", "fee_bearer": "counterparty",
+             **extra}, contract=contract.pk, date=date))
+
+    def test_the_qarz_falls_by_what_reached_them(self, admin_client, db):
+        c = _contract(db)                                   # $1 000, all shipped
+        assert self._pay(admin_client, c, "1000").status_code == 302
+        payment = SupplierPayment.objects.get()
+        assert payment.amount == Decimal("1000.00")         # what left us
+        assert payment.credited_amount == Decimal("980.00")  # what reached them
+        assert c.payable_left_own == Decimal("20.00")
+
+    def test_the_to_lov_that_lands_it_on_zero_is_accepted(self, admin_client, db):
+        """$20.41 sent is $20.00 received, which is exactly the qoldiq. The old
+        ceiling compared the 20.41 against the 20.00 and refused it."""
+        c = _contract(db)
+        self._pay(admin_client, c, "1000")
+        assert self._pay(admin_client, c, "20.41", date="2026-07-03").status_code == 302
+        assert c.payable_left_own == Decimal("0.00")
+        assert c.is_settled
+
+    def test_paying_past_the_kelishuv_is_still_refused(self, admin_client, db):
+        """The ceiling moved, it did not come off: $21 sent credits $20.58, which is
+        58 cents more than the hamkor is owed."""
+        c = _contract(db)
+        self._pay(admin_client, c, "1000")
+        resp = self._pay(admin_client, c, "21", date="2026-07-03")
+        assert resp.status_code == 200
+        assert SupplierPayment.objects.count() == 1
+
+    def test_editing_a_to_lov_weighs_it_by_what_it_credited(self, admin_client, db):
+        """The row being edited comes off the kelishuv before the new figure is
+        checked — by what it CREDITED, not by what it said. Raised to the $1 020.41
+        that reaches them as $1 000, the one to'lov settles the kelishuv on its own."""
+        c = _contract(db)
+        self._pay(admin_client, c, "1000")
+        payment = SupplierPayment.objects.get()
+        resp = admin_client.post(f"/supplier-payments/{payment.pk}/edit/", {
+            "contract": c.pk, "date": "2026-07-02", "currency": "usd",
+            "amount": "1020.41", "exchange_rate": "12000", "commission_percent": "",
+            "method": "transfer", "fee_percent": "2", "fee_bearer": "counterparty",
+            "note": ""})
+        assert resp.status_code == 302
+        payment.refresh_from_db()
+        assert payment.credited_amount == Decimal("1000.00")   # 1020.41 − 2%
+        assert c.payable_left_own == Decimal("0.00")
+
+    def test_an_edit_cannot_take_the_kelishuv_past_its_value(self, admin_client, db):
+        c = _contract(db)
+        self._pay(admin_client, c, "1000")
+        payment = SupplierPayment.objects.get()
+        resp = admin_client.post(f"/supplier-payments/{payment.pk}/edit/", {
+            "contract": c.pk, "date": "2026-07-02", "currency": "usd",
+            "amount": "1100", "exchange_rate": "12000", "commission_percent": "",
+            "method": "transfer", "fee_percent": "2", "fee_bearer": "counterparty",
+            "note": ""})
+        assert resp.status_code == 200                         # 1100 − 2% = 1078 > 1000
+        payment.refresh_from_db()
+        assert payment.amount == Decimal("1000.00")            # unchanged
+
+    def test_the_split_ceiling_counts_each_half_by_what_it_credits(self, admin_client, db):
+        """Only the bank half loses a foiz. $500 naqd and $510.20 by perechisleniya
+        credit 500 + 500 — a kelishuv's worth of money, in two ways. Crediting the
+        pair as one figure would take the foiz off the naqd half too and leave the
+        kelishuv $10 short."""
+        c = _contract(db)
+        resp = admin_client.post("/supplier-payments/new/", supplier_payment_rows(
+            {"currency": "usd", "amount": "500", "exchange_rate": "12000",
+             "method": "cash", "fee_percent": "2", "fee_bearer": "counterparty"},
+            {"currency": "usd", "amount": "510.20", "exchange_rate": "12000",
+             "method": "transfer", "fee_percent": "2", "fee_bearer": "counterparty"},
+            contract=c.pk, date="2026-07-02"))
+        assert resp.status_code == 302
+        assert c.payable_left_own == Decimal("0.00")
+        assert c.is_settled

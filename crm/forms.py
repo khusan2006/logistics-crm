@@ -1208,6 +1208,31 @@ class ShipmentLegForm(forms.ModelForm):
         return cleaned
 
 
+def credited_to_partner(data, contract):
+    """What a hamkor to'lov being typed would actually CREDIT the kelishuv with, in the
+    kelishuv's own currency.
+
+    Not the same figure as the summa typed. A perechisleniya foizi carried by the
+    hamkor comes out of the transfer, so 1 000 sent at 2% reaches them as 980 and 980
+    is what their qarz falls by (`SupplierPayment.credited_amount`) — while the
+    vositachi cut rides on top and never shortens what they get.
+
+    The ceiling has to be measured on THIS and not on the typed summa, or the two
+    disagree by exactly the foiz: a $1 000 kelishuv paid in full stays $20 short,
+    and the $20.41 that would land it on zero is refused for overshooting a figure
+    it does not overshoot. Rebuilt through an unsaved row rather than re-deriving
+    the foiz here, so the form and the model can never hold two opinions about what
+    the hamkor received."""
+    row = SupplierPayment(
+        amount=data.get("amount") or Decimal("0"),
+        amount_uzs=data.get("amount_uzs") or Decimal("0"),
+        exchange_rate=data.get("exchange_rate") or LEGACY_RATE,
+        method=data.get("method") or "",
+        fee_percent=data.get("fee_percent") or Decimal("0"),
+        fee_bearer=data.get("fee_bearer") or "")
+    return row.credited_amount_uzs if contract.is_som else row.credited_amount
+
+
 class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
     """A to'lov against one kelishuv.
 
@@ -1278,18 +1303,23 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         contract, amount = cleaned.get("contract"), cleaned.get("amount")
         # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
         # kelishuv's value, not the goods shipped so far. The cap is on what the
-        # hamkor RECEIVES — the middleman's cut rides on top and is not part of it.
+        # hamkor RECEIVES — the middleman's cut rides on top and is not part of it,
+        # and a bank foiz they carry comes out of it (see `credited_to_partner`).
         #
         # Measured in the KELISHUV's currency, not the dollar column: a so'm kelishuv
         # paid off in so'm still leaves a dollar remainder whenever the kurs has moved
         # since it was struck, and the form would go on demanding money that is not
         # owed. The to'lov's own converted value is what settles it.
         if contract and amount is not None and not self.errors:
-            paid = cleaned.get("amount_uzs") if contract.is_som else amount
+            paid = credited_to_partner(cleaned, contract)
             left = contract.payable_left_own
+            # Editing this same to'lov: what it already credited comes back off the
+            # kelishuv first, or the row would be weighed against a qoldiq it is
+            # itself part of. Its CREDITED figure, the one `payable_left_own` took
+            # away — adding back the gross would leave the ceiling a foiz too loose.
             if self.instance.pk and self.instance.contract_id == contract.pk:
-                left += (self.instance.amount_uzs if contract.is_som
-                         else self.instance.amount)
+                left += (self.instance.credited_amount_uzs if contract.is_som
+                         else self.instance.credited_amount)
             if paid is not None and paid > left:
                 shown = som(left) if contract.is_som else usd(left)
                 self.add_error(
@@ -1872,7 +1902,11 @@ class BaseSupplierPaymentFormSet(BaseSplitPaymentFormSet):
     Per row it would let two halves through that only overshoot together: $6 000 naqd
     and $6 000 bank are each under a $10 000 kelishuv and are $2 000 over it as the
     one payment they are. The single-row form checks the same thing (see
-    `SupplierPaymentForm.clean`); this is that check with the rows added up first."""
+    `SupplierPaymentForm.clean`); this is that check with the rows added up first.
+
+    Each row is weighed by what it CREDITS rather than by what it says, which is why
+    the halves are converted one at a time: only the bank half loses a foiz, so
+    crediting the pair as one figure would take the foiz off the naqd half too."""
 
     contract = None
 
@@ -1881,9 +1915,8 @@ class BaseSupplierPaymentFormSet(BaseSplitPaymentFormSet):
         if any(self.errors) or self.non_form_errors() or self.contract is None:
             return
         contract = self.contract
-        paid = sum(((form.cleaned_data.get("amount_uzs") if contract.is_som
-                     else form.cleaned_data.get("amount")) or Decimal("0"))
-                   for form in self.kept_forms())
+        paid = sum((credited_to_partner(form.cleaned_data, contract)
+                    for form in self.kept_forms()), Decimal("0"))
         left = contract.payable_left_own
         if paid > left:
             shown = som(left) if contract.is_som else usd(left)
