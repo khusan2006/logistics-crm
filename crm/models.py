@@ -1711,6 +1711,10 @@ def kassa_row_sets():
         "kapital": list(Kapital.objects.all()),
         "outgoing": [*SupplierPayment.objects.all(), *ShipmentExpense.objects.all(),
                      *LogistPayment.objects.all(), *CustomsPayment.objects.all()],
+        # Its own side, deliberately neither of the other two: a konvertatsiya is not
+        # money arriving or leaving, so nothing that counts kirim or chiqim may pick
+        # it up. It only ever moves one heap into another.
+        "exchange": list(Konvertatsiya.objects.all()),
     }
 
 
@@ -1742,6 +1746,13 @@ def kassa_cash_by_currency(rows=None):
     for row in rows["outgoing"]:
         entries.append((row.currency,
                         -own_side(row, row.total_out, row.total_out_uzs)))
+    # One heap emptying into another: a minus and a plus that cancel in a total and
+    # move the piles apart, which is the whole point of recording it. Dollars sold
+    # for so'm leave the dollar heap in full and land in the so'm one in full — the
+    # kurs is already spent in the two figures and is never applied again here.
+    for row in rows.get("exchange", ()):
+        entries.append((row.from_currency, -row.from_amount))
+        entries.append((row.to_currency, row.to_amount))
     return _by_currency(entries)
 
 
@@ -1779,6 +1790,13 @@ def kassa_cash_by_method(rows=None):
     for row in rows["outgoing"]:
         add(row.method, row.currency,
             -own_side(row, row.total_out, row.total_out_uzs))
+    # The row this split exists for. Naqd dollar sold for so'm on a karta is the one
+    # movement that changes NOTHING about how much the business has and everything
+    # about which of these three cards it is sitting on — counted on both ends here,
+    # and on neither in any kirim/chiqim figure.
+    for row in rows.get("exchange", ()):
+        add(row.from_method, row.from_currency, -row.from_amount)
+        add(row.to_method, row.to_currency, row.to_amount)
 
     rows = []
     for code, label in PayMethod.choices:
@@ -2539,6 +2557,123 @@ class Kapital(CashEntry):
 
     def __str__(self):
         return f"Kapital {self.get_kind_display().lower()} · {self.amount}$ ({self.date})"
+
+
+class Konvertatsiya(models.Model):
+    """Money moving from one heap of the kassa into another — naqd so'm sold for naqd
+    dollars, cash walked into the bank, a card balance drawn out over the counter.
+
+    Neither a kirim nor a chiqim: nothing entered the business and nothing left it,
+    which is why this row stays out of both daftar and out of every kirim/chiqim
+    total. What it does change is WHERE the money is — and the till is drawn as three
+    usul in two valyuta, so without a row like this the screen and the safe stop
+    agreeing the first time somebody changes money.
+
+    BOTH sides are typed, never one derived from the other. An exchange happens at a
+    kurs somebody negotiated that morning, and even a same-currency move can lose a
+    foiz on the way (naqd walked onto a karta). Recording what LEFT and what ARRIVED
+    is the deal that actually happened; the kurs is read back off the pair.
+
+    Universal on purpose — any usul to any usul, any valyuta to any valyuta. The one
+    combination refused is the one that moves nothing: same usul AND same valyuta.
+    """
+
+    date = models.DateField("Sana", default=timezone.localdate)
+    from_method = models.CharField("Qayerdan", max_length=8, choices=PayMethod.choices,
+                                   default=PayMethod.CASH)
+    from_currency = models.CharField("Qaysi valyutadan", max_length=3,
+                                     choices=Currency.choices, default=Currency.UZS)
+    from_amount = models.DecimalField("Chiqdi", max_digits=18, decimal_places=2)
+    to_method = models.CharField("Qayerga", max_length=8, choices=PayMethod.choices,
+                                 default=PayMethod.CASH)
+    to_currency = models.CharField("Qaysi valyutaga", max_length=3,
+                                   choices=Currency.choices, default=Currency.USD)
+    to_amount = models.DecimalField("Tushdi", max_digits=18, decimal_places=2)
+    # Filled in by save() from the two sides whenever they are in different money —
+    # the kurs of THIS deal, not the day's. On a same-currency move there is no cross
+    # rate to read, so the last one anybody typed stands in: it is only used to give
+    # the row's twin column a value, never to decide what the operator handed over.
+    exchange_rate = models.DecimalField("Dollar kursi (1$ = so'm)", max_digits=12,
+                                        decimal_places=2, default=LEGACY_RATE)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="konvertatsiyalar",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Konvertatsiya"
+        verbose_name_plural = "Konvertatsiyalar"
+
+    @property
+    def crosses_currency(self):
+        """Whether the money changed shape as well as place — which is exactly when
+        the kurs column is worth printing."""
+        return self.from_currency != self.to_currency
+
+    @property
+    def deal_rate(self):
+        """So'm per dollar as THIS exchange struck it — the so'm side over the dollar
+        side, or None when both ends are the same money and there is no rate to read.
+
+        Never the day's kurs: what the operator got for their dollars is the only
+        rate this row can honestly print."""
+        if not self.crosses_currency:
+            return None
+        soms, dollars = ((self.from_amount, self.to_amount)
+                         if self.from_currency == Currency.UZS
+                         else (self.to_amount, self.from_amount))
+        if not dollars:
+            return None
+        return (soms / dollars).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def _pair(self, amount, currency):
+        """One side as the (dollar, so'm) pair every stored figure in the app carries.
+
+        A crossing row IS its own pair — one side was handed over in dollars and the
+        other in so'm, so both columns are figures somebody actually counted, and the
+        blended totals see the exchange as the non-event it is. Only a same-currency
+        move has a twin to derive, and it derives it at the stored kurs."""
+        if self.crosses_currency:
+            return ((self.from_amount, self.to_amount)
+                    if self.from_currency == Currency.USD
+                    else (self.to_amount, self.from_amount))
+        return convert_pair(amount, currency, self.exchange_rate)
+
+    @property
+    def from_pair(self):
+        return self._pair(self.from_amount, self.from_currency)
+
+    @property
+    def to_pair(self):
+        return self._pair(self.to_amount, self.to_currency)
+
+    @property
+    def net_pair(self):
+        """(dollar, so'm) the till's BLENDED pair moves by — zero whenever the money
+        only changed shape, and the cost of the operation when it did not.
+
+        A million so'm that arrives on a karta as 990 000 lost 10 000 on the way; the
+        heaps below show both halves of the move in full, and this is the only figure
+        that says the business is 10 000 poorer for it."""
+        (from_usd, from_uzs), (to_usd, to_uzs) = self.from_pair, self.to_pair
+        return to_usd - from_usd, to_uzs - from_uzs
+
+    def save(self, *args, **kwargs):
+        # The kurs is the deal's own whenever there is one to read, so a row written
+        # by hand in a shell or a test carries the same rate the form would have
+        # stored. A same-currency row keeps whatever it was given.
+        rate = self.deal_rate
+        if rate:
+            self.exchange_rate = rate
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (f"{self.get_from_method_display()} "
+                f"{self.get_from_currency_display()} → "
+                f"{self.get_to_method_display()} "
+                f"{self.get_to_currency_display()} ({self.date})")
 
 
 class CustomerPayment(CashEntry):

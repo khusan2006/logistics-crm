@@ -120,15 +120,19 @@ class TestTheKassaScreen:
     def _ctx(self, client):
         return client.get("/kassa/?davr=all").context
 
-    def _tiles(self, client):
-        return {t["label"]: t for t in self._ctx(client)["tiles"]}
+    def _hero(self, client):
+        return self._ctx(client)["hero"]
 
-    def test_kapital_is_not_a_tile(self, admin_client, db):
-        """A tile answers "where is money sitting right now". Kapital is not a place
-        money sits, it is where some of it came from — it reads in the kirim daftar
-        below, and the tile list must not grow."""
+    def test_kapital_is_not_a_card_of_its_own(self, admin_client, db):
+        """The card above the daftar answers "where is money sitting right now".
+        Kapital is not a place money sits, it is where some of it came from — it reads
+        in the kirim daftar below and nowhere else."""
         _kapital("50000")
-        assert "Kapital" not in self._tiles(admin_client)
+        ctx = self._ctx(admin_client)
+        assert ctx["hero"]["label"] == "Kassada"
+        # It counts inside the till figure and it reads in the kirim daftar. There is
+        # no third place on the page for it to appear as a fact of its own.
+        assert [r["kind"] for r in ctx["income_page"].object_list] == ["kapital"]
 
     def test_the_hero_card_carries_no_explaining_lines(self, admin_client, db):
         """The Kassada card is the one the page is opened for, so it is label and the
@@ -138,9 +142,8 @@ class TestTheKassaScreen:
         _kapital("50000")
         CustomerPayment.objects.create(customer=_customer(), date="2026-07-02",
                                        amount=Decimal("500.00"), method="cash")
-        hero = self._tiles(admin_client)["Kassada"]
-        assert hero["meta"] == ""
-        assert hero["note"] == ""
+        hero = self._hero(admin_client)
+        assert "meta" not in hero and "note" not in hero
 
     def test_the_hero_figure_includes_it(self, admin_client, db):
         _kapital("50000")
@@ -188,8 +191,7 @@ class TestTheKassaScreen:
         assert [r["amount"] for r in ctx["income_page"].object_list] == [
             Decimal("10000.00")]
         # The hero is all-time on purpose — the till holds what it holds.
-        tiles = {t["label"]: t for t in ctx["tiles"]}
-        assert dict(tiles["Kassada"]["split"])["usd"] == Decimal("60000.00")
+        assert dict(ctx["hero"]["split"])["usd"] == Decimal("60000.00")
 
 
 class TestTheForm:

@@ -6,6 +6,8 @@
 <a class="fab" href="{% url 'customer_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>Kirim (mijozdan)</a>
 <a class="fab fab--muted" href="{% url 'supplier_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Chiqim (hamkorga)</a>
 <a class="fab fab--muted" href="{% url 'kapital_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Kapital</a>
+{# Two arrows swapping places: the money is not going anywhere, it is changing shape. #}
+<a class="fab fab--muted" href="{% url 'konvertatsiya_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>Konvertatsiya</a>
 {% endblock %}
 {% block content %}
 
@@ -79,37 +81,12 @@ violet bank would read as good and bad news rather than as two places.
 </a>
 
 {% comment %}
-The three boards below wear the same KPI clothes as the hero's columns and as the
-dashboard: an icon chip in the group's own colour, the heading beside it, and the
-faint glow that marks a card as a summary rather than a table. Violet is the mol we
-are holding, green the money that is ours and coming back, red what goes out — the
-tones the app already uses for exactly those three things.
+The Hozirgi holat board that used to sit here — Omborda, Yo'lda, Mijozlar qarzi and
+the six avans/qarz rows under three headings — is gone. Every one of those figures is
+the subject of a screen of its own, which is where it is read and acted on, and none
+of them is what somebody opens the kassa to find out. What is left above is the till
+itself and, below, the three daftar that say how it got that way.
 {% endcomment %}
-<div class="kgroups">
-  {% for g in tile_groups %}
-  <div class="kgroup kgroup--{{ g.tone }}">
-    <div class="kgroup-head">
-      <span class="kgroup-icon">
-        {% if g.key == "mol" %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-        {% elif g.key == "back" %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-        {% else %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l10 18H2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>{% endif %}
-      </span>
-      <span class="kgroup-title">{{ g.title }}</span>
-    </div>
-    {% for t in g.tiles %}
-    <a class="krow krow--{{ t.tone }}" href="{{ t.url }}" title="{{ t.note }}">
-      <span class="krow-label">{{ t.label }}{% if t.meta %}<span class="krow-meta">{{ t.meta }}</span>{% endif %}</span>
-      <span class="krow-nums">
-        {% for currency, amount in t.split_full %}
-        <span class="krow-num{% if not amount %} krow-num--nil{% endif %}">{% money_in amount currency %}</span>
-        {% endfor %}
-      </span>
-    </a>
-    {% endfor %}
-  </div>
-  {% endfor %}
-</div>
-
 {% comment %}
 One box over BOTH daftar below — kim/nima uchun, turi, usuli, sanasi and the sum
 itself. Money is remembered as a fragment ("bojxona", a hamkor's name, 28 800), and
@@ -280,6 +257,73 @@ unrelated toolbars and pushed the daftar a row further down every screen.
     {% endif %}
   </div>
 </div>
+
+{% comment %}
+Konvertatsiya: money that changed heaps inside the kassa rather than entering or
+leaving it — naqd so'm sold for dollars, cash walked into the bank, a karta drawn out
+over the counter.
+
+Its own table, deliberately NOT a pair of lines in the two daftar above: one exchange
+would appear as a kirim AND a chiqim and add money to both totals that never crossed
+the door. Read as a pair on one line — what left one heap, what arrived in the other,
+at what kurs — which is the only way the row means anything.
+
+Full width and below them, because it is the rarest of the three and the two daftar
+are what the page is opened for. Drawn only when the davr holds one: an empty third
+table on every visit is furniture, not information — the Konvertatsiya button above
+is what says the feature exists.
+{% endcomment %}
+{% if exchange_page.object_list %}
+<div class="card" style="margin-top:18px;margin-bottom:0;">
+  <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+    <h2 style="margin:0;">Konvertatsiya</h2>
+    <span class="muted">{{ exchange_count }} ta</span>
+  </div>
+  <p class="field-hint" style="margin:2px 0 8px;">Kassa ichida pulning bir joydan ikkinchisiga o'tishi — kirim ham, chiqim ham emas.</p>
+  <div class="table-wrap">
+  <table class="ledger-table">
+    <tr>
+      <th>Sana</th>
+      <th>Qayerdan</th>
+      <th class="num">Chiqdi</th>
+      <th>Qayerga</th>
+      <th class="num">Tushdi</th>
+      <th class="num">Kurs</th>
+      <th>Izoh</th>
+      <th></th>
+    </tr>
+    {% for r in exchange_page %}
+    <tr>
+      <td>{{ r.date|date:"d.m.Y" }}</td>
+      <td>{% include "crm/_method_badge.html" with code=r.from_code label=r.from_label %}</td>
+      {% comment %}
+      The two sides wear the daftar's own colours: what left the heap reads like a
+      chiqim, what landed like a kirim, even though the business is neither poorer nor
+      richer for it.
+      {% endcomment %}
+      <td class="num amt-out"><strong>−{% money_in r.from_amount r.from_currency %}</strong></td>
+      <td>{% include "crm/_method_badge.html" with code=r.to_code label=r.to_label %}</td>
+      <td class="num amt-in"><strong>+{% money_in r.to_amount r.to_currency %}</strong></td>
+      {# Printed only where it was struck — a so'm-to-so'm move has no kurs to show. #}
+      <td class="num muted">{% if r.crossed %}{{ r.rate|floatformat:"0g" }}{% else %}—{% endif %}</td>
+      <td class="muted">{{ r.obj.note|default:"" }}</td>
+      <td class="row-actions">
+        <a class="icon-action act-edit" href="{{ r.edit_url }}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+        <a class="icon-action danger" href="{{ r.delete_url }}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% if exchange_page.has_other_pages %}
+  <div class="pagination">
+    {% if exchange_page.has_previous %}<a class="btn btn-ghost" href="{% querystring kpage=exchange_page.previous_page_number %}">Oldingi</a>{% endif %}
+    <span class="muted">{{ exchange_page.number }} / {{ exchange_page.paginator.num_pages }} · {{ exchange_page.paginator.count }} ta</span>
+    {% if exchange_page.has_next %}<a class="btn btn-ghost" href="{% querystring kpage=exchange_page.next_page_number %}">Keyingi</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
 
 {% comment %}
 The per-hamkor breakdown used to be a third table down here, repeating a figure

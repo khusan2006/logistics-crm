@@ -1224,6 +1224,134 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
+  // Konvertatsiya: the second sum fills itself in.
+  //
+  // Whatever the operator types, the box they have not touched works itself out:
+  //   • same valyuta (naqd so'm → kartaga so'm) — the same figure, copied across.
+  //     Nothing is converted, so retyping the identical nine digits is pure work.
+  //   • different valyuta — the kurs does the sum, in whichever direction. The
+  //     operator knows the rate before they know the second figure ("bugun 12 700
+  //     dan"), and on a same-currency move there is no rate at all, so the box goes.
+  //
+  // A CALCULATOR and nothing more. Every box stays editable, because a valyutachi
+  // rounds and a karta takes its foiz: type your own figure and it is never
+  // overwritten — the kurs restates itself around it instead. What the server stores
+  // is what the two sums say (Konvertatsiya.save), so the kurs the row reports can
+  // never drift from the money it actually moved.
+  //
+  // Fields are marked server-side with data-swap-* (KonvertatsiyaForm).
+  (function () {
+    function num(el) {
+      if (!el) { return 0; }
+      return parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')) || 0;
+    }
+    // Grouped the way every figure on these screens is printed — space thousands,
+    // a comma being the decimal mark elsewhere in the app. So'm carry no tiyin;
+    // dollars keep cents but never padded zeros.
+    function put(el, value, currency) {
+      if (!isFinite(value) || value <= 0) { return; }
+      var text = currency === 'uzs' ? String(Math.round(value))
+                                    : String(Math.round(value * 100) / 100);
+      var dot = text.indexOf('.');
+      var whole = dot === -1 ? text : text.slice(0, dot);
+      el.value = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (dot === -1 ? '' : text.slice(dot));
+    }
+    // A box we filled in may be filled in again; one the operator typed is theirs and
+    // is left alone for good (until they empty it again).
+    function fill(box, value, currency) {
+      put(box.to, value, currency);
+      box.to.dataset.swapAuto = '1';
+    }
+    function ours(box) {
+      return !box.to.value || box.to.dataset.swapAuto === '1';
+    }
+    function parts(el) {
+      var form = el.closest('form');
+      if (!form) { return null; }
+      var box = {
+        rate: form.querySelector('[data-swap-rate]'),
+        from: form.querySelector('[data-swap-from]'),
+        to: form.querySelector('[data-swap-to]'),
+        fromCur: form.querySelector('[data-swap-from-currency]'),
+        toCur: form.querySelector('[data-swap-to-currency]')
+      };
+      return box.rate && box.from && box.to && box.fromCur && box.toCur ? box : null;
+    }
+    function crosses(box) {
+      return box.fromCur.value !== box.toCur.value;
+    }
+    // A same-currency move strikes no kurs at all, so the box has nothing to ask for
+    // and goes away rather than sitting there inviting a number that changes nothing.
+    function toggle(box) {
+      var row = box.rate.closest('p') || box.rate;
+      row.hidden = !crosses(box);
+      if (row.hidden) { box.rate.value = ''; }
+    }
+    // Which way the rate multiplies: so'm ÷ kurs = dollars, dollars × kurs = so'm.
+    function convert(amount, from, rate) {
+      return from === 'uzs' ? amount / rate : amount * rate;
+    }
+    function restate(box) {
+      var out = num(box.from), got = num(box.to);
+      if (out <= 0 || got <= 0 || !crosses(box)) { return; }
+      var soms = box.fromCur.value === 'uzs' ? out : got;
+      var dollars = box.fromCur.value === 'uzs' ? got : out;
+      if (dollars > 0) { put(box.rate, soms / dollars, 'uzs'); }
+    }
+    // The one rule, wherever it is called from: fill the box we own, and where we
+    // cannot (the operator typed their own figure), make the kurs agree with it.
+    function sync(box) {
+      toggle(box);
+      var out = num(box.from);
+      if (!crosses(box)) {
+        if (ours(box) && out > 0) { fill(box, out, box.toCur.value); }
+        return;
+      }
+      var rate = num(box.rate);
+      if (ours(box) && out > 0 && rate > 0) { fill(box, convert(out, box.fromCur.value, rate), box.toCur.value); }
+      else { restate(box); }
+    }
+    document.addEventListener('input', function (e) {
+      if (!e.target.matches) { return; }
+      if (e.target.matches('[data-swap-from]')) {
+        var box = parts(e.target);
+        if (box) { sync(box); }
+        return;
+      }
+      // Typing a kurs IS the instruction to work the other side out from it, so it
+      // takes the box back even when the operator had typed one.
+      if (e.target.matches('[data-swap-rate]')) {
+        var byRate = parts(e.target);
+        if (!byRate) { return; }
+        var rate = num(byRate.rate), out = num(byRate.from);
+        if (rate > 0 && out > 0) { fill(byRate, convert(out, byRate.fromCur.value, rate), byRate.toCur.value); }
+        return;
+      }
+      if (e.target.matches('[data-swap-to]')) {
+        var typed = parts(e.target);
+        delete e.target.dataset.swapAuto;
+        if (typed) { restate(typed); }
+      }
+    });
+    document.addEventListener('change', function (e) {
+      if (!e.target.matches) { return; }
+      if (!e.target.matches('[data-swap-from-currency], [data-swap-to-currency]')) { return; }
+      var box = parts(e.target);
+      if (box) { sync(box); }
+    });
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-swap-rate]').forEach(function (el) {
+        var box = parts(el);
+        // An edit form opens on figures somebody already entered: they are not ours
+        // to overwrite, so only the kurs box is placed.
+        if (box) { toggle(box); }
+      });
+    }
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
   // Perechisleniya foizi is only charged on a transfer, so the field appears only
   // when that method is picked — leaving it on show for naqd invites a fee that
   // the server would then ignore (see CashEntry.fee_amount).

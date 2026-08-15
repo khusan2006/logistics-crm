@@ -27,7 +27,7 @@ from .forms import (
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm, ReturnForm,
     CustomsAgentForm, CustomsPaymentForm,
-    ExpenseGridForm, KapitalForm, LogistForm, LogistPaymentForm,
+    ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
     ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
@@ -37,7 +37,7 @@ from .forms import (
     KapitalFormSet, KapitalTargetForm,
 )
 from .models import (
-    AuditLog, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
+    AuditLog, CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya,
     Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
@@ -52,9 +52,8 @@ from .models import (
     customer_receivable_by_currency, customer_receivable_total, fifo_lots,
     kassa_cash_by_currency, kassa_cash_by_method, kassa_row_sets,
     own_side, partner_positions,
-    partner_positions_by_currency,
-    reconcile_customer_allocations, stock_value_by_currency, transit_value,
-    transit_value_by_currency, trim_sale_allocations,
+    reconcile_customer_allocations, transit_value,
+    trim_sale_allocations,
     unspent_payment_amount, uzs_slice,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
@@ -2821,27 +2820,6 @@ WATERFALL_EXPENSE_GROUPS = [
 ]
 WATERFALL_EXPENSE_OTHER = "Boshqa xarajatlar"
 
-#: The Hozirgi holat groups, in reading order, keyed by each tile's `group`. Ten
-#: tiles of equal size ranked nothing: Kassada — the figure somebody checks every
-#: morning — sat the same size as Bojxonaga qarzimiz, which is usually zero. The
-#: kassa figure is the hero now and the rest answer one question each: where the mol
-#: is, what is coming back to us, what we owe.
-# "Bizga qaytadigan pul" was wrong about three of the four rows under it: an avans at a
-# hamkor, a logist or a bojxonachi is not coming back as cash — it gets spent on the
-# next yuk. What all four DO have in common is that the money is ours and it is
-# somewhere else, which is what the heading says now.
-# The three headings the kassa board reads under, and the colour each card wears.
-# The tone is the semantic one the app already uses everywhere: mol is stock we are
-# holding (violet, like every other "goods" figure), `back` is money that is ours and
-# is coming back (green), `owed` is money going out (red). The key is what picks the
-# card's icon in the template — kept there, beside every other inline svg, rather than
-# as markup smuggled through the view.
-TILE_GROUPS = [
-    ("mol", "Mol — tannarxda", "violet"),
-    ("back", "Boshqa qo'ldagi pulimiz", "green"),
-    ("owed", "Qarzlarimiz", "red"),
-]
-
 
 def _typed_decimal(raw):
     """A number as the operator's field hands it over, or None if it is not one.
@@ -2945,10 +2923,13 @@ def _ledger_search(rows, q):
             row["title"], row["method"], LEDGER_KINDS.get(row["kind"], ""),
             row["date"].strftime("%d.%m.%Y"),
         ]).casefold()
+        # A daftar row moved ONE sum and carries it as the stored pair; a
+        # konvertatsiya moved two, in two different currencies, and neither is the
+        # other's twin — so a row may name the figures it should be found by.
+        figures = row.get("figures") or (row["amount"], row["amount_uzs"])
         if needle in text:
             found.append(row)
-        elif digits and any(digits in _digits(row[side])
-                            for side in ("amount", "amount_uzs")):
+        elif digits and any(digits in _digits(figure) for figure in figures):
             found.append(row)
     return found
 
@@ -2986,7 +2967,47 @@ def _kassa_window(request):
         # where a "+" gets typed for a "−".
         "kapital_in": kapital_rows.filter(kind=KapitalKind.IN),
         "kapital_out": kapital_rows.filter(kind=KapitalKind.OUT),
+        # In the window like everything else, and in NEITHER daftar: a konvertatsiya
+        # is money changing heaps, so counting it as kirim or chiqim would report
+        # money arriving and leaving that never crossed the door.
+        "exchanges": _range(Konvertatsiya.objects.all()),
     }
+
+
+def _konvertatsiya_rows(window):
+    """The davr's konvertatsiyalar, newest first — one row per exchange.
+
+    Its own list rather than a pair of lines in the two daftar: booked there, one
+    exchange would show up as a kirim AND a chiqim and inflate both totals with money
+    that never entered or left the business. What a reader wants from it is the pair
+    read together — what left one heap, what arrived in the other, at what kurs — so
+    it gets a table shaped like that question.
+
+    Same dict shape as a ledger row where the two overlap (`kind`, `date`, `title`,
+    `method`), which is what lets the one search box narrow this table too."""
+    rows = []
+    for k in window["exchanges"]:
+        movement = f"{k.get_from_method_display()} → {k.get_to_method_display()}"
+        rows.append({
+            "kind": "exchange", "pk": k.pk, "date": k.date, "obj": k,
+            "title": movement + (f" · {k.note}" if k.note else ""),
+            "method": movement,
+            "from_code": k.from_method, "from_label": k.get_from_method_display(),
+            "from_amount": k.from_amount, "from_currency": k.from_currency,
+            "to_code": k.to_method, "to_label": k.get_to_method_display(),
+            "to_amount": k.to_amount, "to_currency": k.to_currency,
+            # Printed only when the money changed currency: on a so'm-to-so'm move
+            # the stored kurs was inherited and decides nothing, the same rule the
+            # daftar apply to their own Kurs column.
+            "crossed": k.crosses_currency, "rate": k.deal_rate,
+            # Both sums are searchable — the operator remembers whichever side of the
+            # deal they typed, and neither is a conversion of the other.
+            "figures": (k.from_amount, k.to_amount),
+            "edit_url": reverse("konvertatsiya_edit", args=[k.pk]),
+            "delete_url": reverse("konvertatsiya_delete", args=[k.pk]),
+        })
+    rows.sort(key=lambda r: (r["date"], r["pk"]), reverse=True)
+    return rows
 
 
 def _kassa_ledger_rows(window):
@@ -3196,11 +3217,13 @@ def _ledger_blocks(rows):
 
 @role_required(User.Role.ADMIN)
 def kassa(request):
-    """The till, client-crm style: a current-state hero (Kassadagi pul + what we
-    owe hamkorlar), per-method USD balances for the selected period, and two
-    Excel-like ledgers side by side — Kirim (customer payments) and Chiqim
-    (supplier payments + shipment expenses). Purely derived; ?from&to narrows
-    the period section, the hero is all-time.
+    """The till: a current-state card (what is in the kassa, split by naqd / karta /
+    bank), two Excel-like ledgers side by side — Kirim (mijoz to'lovlari + kapital)
+    and Chiqim (hamkor to'lovlari + yuk xarajatlari) — and under them the davr's
+    konvertatsiyalar, the money that only changed heaps.
+
+    Purely derived. ?from&to narrows the three tables; the card is all-time, because
+    the till holds what it holds whatever period you are reading.
 
     Unlike every other list this one opens on BUGUN rather than on hammasi — see
     `_kassa_date_window`."""
@@ -3243,10 +3266,18 @@ def kassa(request):
     # The converted pair is still what the Oqim waterfall closes on — it has to be,
     # since the waterfall is a single running line and cannot be two. The tiles
     # above it read the per-currency figures instead; see the `split` note there.
+    #
+    # A konvertatsiya nets to zero in this pair whenever the money only changed shape
+    # — dollars sold for so'm are the same money in another currency — so what
+    # survives here is what the move COST, the foiz a karta or a bank took on the way
+    # across. The per-currency heaps below move by both of its sides in full.
+    def _exchange(index):
+        return sum((row.net_pair[index] for row in till_rows["exchange"]), Decimal("0"))
+
     cash_total = (_in(till_rows["incoming"]) + _kapital(till_rows["kapital"])
-                  - _out(till_rows["outgoing"]))
+                  - _out(till_rows["outgoing"]) + _exchange(0))
     cash_total_uzs = (_in_uzs(till_rows["incoming"]) + _kapital_uzs(till_rows["kapital"])
-                      - _out_uzs(till_rows["outgoing"]))
+                      - _out_uzs(till_rows["outgoing"]) + _exchange(1))
 
     # Not all of the till is ours. Money a mijoz has handed over that sits on no
     # sotuv is held, not earned — cancel the order and it goes back out.
@@ -3257,115 +3288,28 @@ def kassa(request):
     # the safe is not dollars in the safe.
     cash_split = kassa_cash_by_currency(till_rows)
 
-    # Pozitsiya: what the cash figure MEANS. Cash alone reads as a disaster while
-    # the money is sitting in trucks and mijoz qarzi; these are the lines that say
-    # where it went. Current-state, so the date filter does not touch them.
-    receivable, debtors = customer_receivable_by_currency()
-    hamkor = partner_positions_by_currency()
-    logist_held, logist_owed = logist_positions()
-    customs_held, customs_owed = customs_positions()
-    stock, stock_kg = stock_value_by_currency()
-    transit, transit_kg, transit_loads = transit_value_by_currency()
-    # A board of current facts, not a balance sheet. Each tile is one place money
-    # or goods is sitting RIGHT NOW, says so in plain words, and carries the second
-    # fact that makes it actionable — how many kg, how many mijoz, how many yuk.
-    # Nothing is summed across tiles: adding cash to granula to somebody else's debt
-    # produces a number that describes no actual thing.
+    # The one card the page is opened for: the money that is in the till, drawn as
+    # the three places it is held (`cash_by_method` below).
     #
-    # `split` is what makes a tile read per-currency: a list of (currency, amount)
-    # drawn as one line each, never added up. Cash and every obligation carry one —
-    # a dollar debt and a so'm debt are two debts, and the till holds two heaps.
-    # `amount`/`amount_uzs` is the older converted pair, and the tiles still on it
-    # are the ones whose figure is a COST: a kg has one landed cost even though the
-    # mol was bought in dollars and the transport paid in so'm, which is the one
-    # place currencies are deliberately blended (tests/test_cost_blends_currencies.py).
+    # The Hozirgi holat board that used to sit under it is gone — nine tiles reading
+    # Omborda, Yo'lda, Mijozlar qarzi, three avanslar and three qarzlar. Every one of
+    # those figures is the subject of a screen of its own, which is where it is acted
+    # on, and none of them is what somebody opens the kassa to find out. They also
+    # cost a full scan of the mol, sotuv, kelishuv, logist and bojxona tables on
+    # every single load of the busiest page in the app.
     #
-    # `group` is which of the TILE_GROUPS headings a tile reads under; the Kassada
-    # tile carries none because it is the hero above them.
-    tiles = [
-        # The hero carries no note and no meta: it is the card the page is opened for,
-        # and a line saying "hozir qo'lda va hisobda turgan pul" above the till only
-        # pushed the three heaps down. Every other tile keeps its note — those DO need
-        # saying, because "Hamkorlarda avansimiz" is not self-evident the way the
-        # kassa is.
-        {"label": "Kassada", "split": cash_split, "group": None,
-         "note": "", "tone": "cash", "meta": "",
-         "url": reverse("customer_payment_list")},
-        {"label": "Mijozlar qarzi", "split": receivable, "group": "back",
-         "note": "mol berilgan, puli hali olinmagan", "tone": "in",
-         "meta": f"{debtors} ta mijozda" if debtors else "",
-         "url": reverse("debt_list")},
-        # A split like Yo'lda now: a so'm kelishuv's mol is counted in so'm. It used to
-        # be one blended dollar figure — the last thing on this page that restated
-        # somebody's so'm as dollars.
-        {"label": "Omborda", "split": stock, "group": "mol",
-         "note": "kelgan, hali sotilmagan mol — tannarxda", "tone": "in",
-         "meta": f"{_kg(stock_kg)} kg", "url": reverse("ombor")},
-        {"label": "Yo'lda", "split": transit, "group": "mol",
-         "note": "jo'natilgan, hali yetib kelmagan mol", "tone": "in",
-         "meta": f"{_kg(transit_kg)} kg · {transit_loads} ta yuk",
-         "url": reverse("shipment_list")},
-        {"label": "Hamkorlarda avansimiz", "split": hamkor["prepaid"], "tone": "in",
-         "note": "yuk kelishidan oldin to'lab qo'yganimiz", "group": "back",
-         "meta": f"{hamkor['contracts']} ta kelishuvda" if hamkor["contracts"] else "",
-         "url": reverse("contract_list")},
-        # A split like every other holder now. It was a blended dollar figure while a
-        # logist's hisob was assumed to be dollars-only; they are funded in so'm too,
-        # and that assumption hid a so'm gap entirely (see Logist.balance_by_currency).
-        # Named "avansimiz", like the hamkor row above: the money is ours and it is in
-        # their hands, but it is spent on our next yuk rather than handed back.
-        {"label": "Logistlarda avansimiz", "split": logist_held, "group": "back",
-         "note": "haydovchilarga berish uchun yuborilgan, hali sarflanmagan",
-         "tone": "in", "meta": "", "url": reverse("logist_list")},
-        {"label": "Bojxonada avansimiz", "split": customs_held, "group": "back",
-         "note": "yuklarni rasmiylashtirish uchun oldindan yuborilgan",
-         "tone": "in", "meta": "", "url": reverse("customs_list")},
-        {"label": "Hamkorlarga qarzimiz", "split": hamkor["owed"], "tone": "out",
-         "note": "kelgan yuk uchun hali to'lamaganimiz", "group": "owed",
-         "meta": f"{hamkor['partners']} ta hamkorga" if hamkor["partners"] else "",
-         "url": reverse("supplier_payment_list")},
-    ]
-    # A logist who fronted their own cash is a debt we owe, and a debt nobody can
-    # see is one nobody pays. Appended only when it exists: unlike every other tile
-    # this one is usually zero, and a permanently empty tile is noise, not a fact.
-    #
-    # Still a converted pair: a logist's hisob is kept in dollars whatever they hand
-    # a driver, so there is no per-currency split to draw yet.
-    if logist_owed:
-        tiles.append({
-            "label": "Logistlarga qarzimiz", "split": logist_owed,
-            "tone": "out", "meta": "",
-            "note": "o'z pulidan haydovchiga bergani", "group": "owed",
-            "url": reverse("logist_list") + "?state=owed"})
-    # Same rule for the bojxonachi who cleared a truck out of his own pocket because
-    # what we sent ran short — usually zero, so it appears only when it is not.
-    if customs_owed:
-        tiles.append({
-            "label": "Bojxonaga qarzimiz", "split": customs_owed, "group": "owed",
-            "tone": "out", "meta": "", "note": "o'z pulidan yukni rasmiylashtirgani",
-            "url": reverse("customs_list") + "?state=owed"})
-
-    # `split_full` is what the page DRAWS: both currency lines, with an empty side
-    # spelled out as a zero instead of left off. `split` itself keeps dropping the
-    # sides that net to zero — it answers "which currencies does this hold at all",
-    # and the reports and tests read it that way.
-    #
-    # Every tile carries a split now. The last two that did not — the ombor and a
-    # logist's hisob — were blended dollar figures on the assumption that mol is
-    # bought and drivers are paid in dollars; both are done in so'm too.
-    for tile in tiles:
-        totals = dict(tile["split"])
-        tile["split_full"] = [(currency, totals.get(currency, Decimal("0")))
-                              for currency in (Currency.USD, Currency.UZS)]
-
-    # The flat `tiles` list stays exactly as it was — it is what every kassa test
-    # reads and what says which facts the board holds. `hero`/`tile_groups` are the
-    # same dicts arranged for the page.
-    hero = tiles[0]
-    tile_groups = [{"key": key, "title": title, "tone": tone,
-                    "tiles": [t for t in tiles if t["group"] == key]}
-                   for key, title, tone in TILE_GROUPS]
-    tile_groups = [g for g in tile_groups if g["tiles"]]
+    # `split_full` is what the card DRAWS: both currency lines, with an empty side
+    # spelled out as a zero rather than left off — the figure is checked against what
+    # is actually in the safe, and a missing line reads as "not counted" instead of
+    # "none". `split` itself drops the sides that net to zero; it answers "which
+    # currencies does the till hold at all", and the reports read it that way.
+    held = dict(cash_split)
+    hero = {
+        "label": "Kassada", "split": cash_split, "tone": "cash",
+        "split_full": [(currency, held.get(currency, Decimal("0")))
+                       for currency in (Currency.USD, Currency.UZS)],
+        "url": reverse("customer_payment_list"),
+    }
 
     window = _kassa_window(request)
     cust_pays, sup_pays, expenses = window["cust_pays"], window["sup_pays"], window["expenses"]
@@ -3404,6 +3348,7 @@ def kassa(request):
         net_out_uzs += m_out_uzs
 
     income_rows, outflow_rows = _kassa_ledger_rows(window)
+    exchange_rows = _konvertatsiya_rows(window)
     # One box over both daftar, applied to the rows rather than in SQL: a kassa row is
     # assembled in Python out of six different models, so there is no queryset to ask.
     # The lists are a period's worth of rows, not a table, so walking them is cheap.
@@ -3411,6 +3356,9 @@ def kassa(request):
     if q:
         income_rows = _ledger_search(income_rows, q)
         outflow_rows = _ledger_search(outflow_rows, q)
+        # The same box over the third table: an exchange is remembered as "naqd", as
+        # "karta", or as one of its two sums — exactly like a daftar row.
+        exchange_rows = _ledger_search(exchange_rows, q)
 
     # The ledger headline in the currency each row was booked in, not a dollar figure
     # with its so'm twin beneath: restating a so'm to'lov in dollars prints a number
@@ -3433,6 +3381,9 @@ def kassa(request):
     # because that is what the reader is scrolling through.
     income_page = Paginator(_ledger_blocks(income_rows), 20).get_page(request.GET.get("ipage"))
     outflow_page = Paginator(_ledger_blocks(outflow_rows), 20).get_page(request.GET.get("opage"))
+    # A third page counter of its own (?kpage), for the same reason the other two have
+    # one each: paging the konvertatsiyalar must not scroll the daftar back to the top.
+    exchange_page = Paginator(exchange_rows, 20).get_page(request.GET.get("kpage"))
 
     # What we owe hamkorlar RIGHT NOW (not date-filtered — a current-state figure):
     # per contract the debt accrues per shipped truck (shipped value − paid).
@@ -3519,12 +3470,13 @@ def kassa(request):
         "cash_total": cash_total, "cash_total_uzs": cash_total_uzs,
         "advance": advance, "advance_uzs": advance_uzs,
         "own_cash": own_cash, "own_cash_uzs": own_cash_uzs,
-        "tiles": tiles, "hero": hero, "tile_groups": tile_groups,
+        "hero": hero,
         # Where the till's money is actually held. The hero answers "how much have we
         # got"; this answers "how much of it can I hand over right now", and cash in
         # the safe, money on a card and a bank balance are three different answers.
         "cash_by_method": kassa_cash_by_method(till_rows),
         "q": q,
+        "exchange_page": exchange_page, "exchange_count": len(exchange_rows),
         "income_split": income_split, "outflow_split": outflow_split,
         "waterfall": waterfall, "zero_line": zero_line,
         "balances": balances, "net_in": net_in, "net_out": net_out,
@@ -4076,13 +4028,35 @@ def _ledger_table(rows):
     return headers, table, {"Kurs": "#,##0", "Foiz %": PERCENT}
 
 
+def _konvertatsiya_table(rows):
+    """The konvertatsiya list as the screen prints it — both sides on one line.
+
+    Four money columns rather than two: what left and what arrived are different
+    figures in different currencies, and a file that folded them into one "summa"
+    would answer neither question."""
+    headers = ["Sana", "Qayerdan", "Valyuta", "Chiqdi", "Qayerga", "Valyuta",
+               "Tushdi", "Kurs", "Izoh"]
+    currencies = dict(Currency.choices)
+    table = (
+        [r["date"], r["from_label"], currencies.get(r["from_currency"], ""),
+         r["from_amount"], r["to_label"], currencies.get(r["to_currency"], ""),
+         r["to_amount"],
+         # Same rule as the daftar: a kurs is printed only where it was struck, and
+         # a same-currency move struck none.
+         r["rate"] if r["crossed"] else None,
+         r["obj"].note]
+        for r in rows
+    )
+    return headers, table, {"Kurs": "#,##0"}
+
+
 # How each ledger row reads in the export — the same words the badges on the page use.
 LEDGER_KINDS = {
     "customer": "Mijoz to'lovi", "kapital": "Kapital", "supplier": "Hamkor to'lovi",
     "commission": "Vositachi", "fee": "Perechisleniya foizi",
     "fee_logist": "Perechisleniya foizi", "fee_customs": "Perechisleniya foizi",
     "fee_expense": "Perechisleniya foizi", "logist": "Logistga", "customs": "Bojxona",
-    "expense": "Yuk xarajati",
+    "expense": "Yuk xarajati", "exchange": "Konvertatsiya",
 }
 
 
@@ -4171,21 +4145,31 @@ def audit_list_export(request):
 
 @role_required(User.Role.ADMIN)
 def kassa_export(request):
-    """Both ledgers in one workbook — Kirim and Chiqim as separate tabs.
+    """The whole kassa page in one workbook — Kirim, Chiqim and Konvertatsiya as
+    separate tabs.
 
     They are read against each other, so they belong in one file the reader opens
-    once rather than two downloads to line up by hand."""
-    income_rows, outflow_rows = _kassa_ledger_rows(_kassa_window(request))
+    once rather than three downloads to line up by hand."""
+    window = _kassa_window(request)
+    income_rows, outflow_rows = _kassa_ledger_rows(window)
+    exchange_rows = _konvertatsiya_rows(window)
     # Same rule as every other Excel button: the file is what the screen was showing,
     # so the search narrows it too.
     q = request.GET.get("q", "").strip()
     if q:
         income_rows = _ledger_search(income_rows, q)
         outflow_rows = _ledger_search(outflow_rows, q)
+        exchange_rows = _ledger_search(exchange_rows, q)
     sheets = []
     for title, rows in (("Kirim", income_rows), ("Chiqim", outflow_rows)):
         headers, table, formats = _ledger_table(rows)
         sheets.append((title, headers, table, formats))
+    # Its own tab, and only when the davr holds one: the two daftar are what this file
+    # is opened for, and an empty third sheet on every download is a question mark
+    # where there is no question.
+    if exchange_rows:
+        headers, table, formats = _konvertatsiya_table(exchange_rows)
+        sheets.append(("Konvertatsiya", headers, table, formats))
     return xlsx_book_response("kassa.xlsx", sheets)
 
 
@@ -4537,6 +4521,75 @@ def kapital_delete(request, pk):
     return render_confirm(
         request, "Kapitalni o'chirish",
         f"“{_kapital_label(entry)}” yozuvi o'chiriladi.",
+        "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="kassa")
+
+
+# ── Konvertatsiya ────────────────────────────────────────────────────────────────
+#
+# Money changing heaps inside the kassa: naqd so'm sold for dollars, cash walked into
+# the bank, a karta drawn out over the counter. Not a to'lov to anybody — see the
+# model — so it books nothing against a mijoz, a hamkor or a yuk, and it lives on the
+# kassa page beside the two daftar rather than inside them.
+
+
+def _konvertatsiya_label(entry):
+    """One exchange in the words it happened in — "Naqd 12 000 000 so'm → Naqd $1 000".
+
+    Both sides always, because either one alone is half a fact: an audit line saying
+    "$1 000" cannot tell the reader whether that money arrived or left."""
+    return (f"{entry.get_from_method_display()} "
+            f"{_money_line([(entry.from_currency, entry.from_amount)])} → "
+            f"{entry.get_to_method_display()} "
+            f"{_money_line([(entry.to_currency, entry.to_amount)])}")
+
+
+@role_required(User.Role.ADMIN)
+def konvertatsiya_create(request):
+    form = KonvertatsiyaForm(request.POST or None)
+    title = "Konvertatsiya"
+    if request.method == "POST":
+        if form.is_valid():
+            entry = form.save(commit=False)
+            entry.created_by = request.user
+            entry.save()
+            AuditLog.record(request.user, AuditLog.Action.PAYMENT, "Konvertatsiya",
+                            entry.pk, f"Konvertatsiya: {_konvertatsiya_label(entry)}")
+            messages.success(request, "Konvertatsiya qo'shildi")
+            return form_success(request, reverse("kassa"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def konvertatsiya_edit(request, pk):
+    entry = get_object_or_404(Konvertatsiya, pk=pk)
+    form = KonvertatsiyaForm(request.POST or None, instance=entry)
+    title = "Konvertatsiyani tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(request.user, AuditLog.Action.UPDATE, "Konvertatsiya",
+                            entry.pk,
+                            f"Konvertatsiya tahrirlandi: {_konvertatsiya_label(entry)}")
+            messages.success(request, "Konvertatsiya yangilandi")
+            return form_reload(request, reverse("kassa"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def konvertatsiya_delete(request, pk):
+    entry = get_object_or_404(Konvertatsiya, pk=pk)
+    if request.method == "POST":
+        label = _konvertatsiya_label(entry)
+        entry.delete()
+        AuditLog.record(request.user, AuditLog.Action.DELETE, "Konvertatsiya", pk,
+                        f"Konvertatsiya o'chirildi: {label}")
+        messages.success(request, "Konvertatsiya o'chirildi")
+        return form_reload(request, reverse("kassa"))
+    return render_confirm(
+        request, "Konvertatsiyani o'chirish",
+        f"“{_konvertatsiya_label(entry)}” yozuvi o'chiriladi — pul o'z joyiga qaytadi.",
         "Ha, o'chirish", confirm_class="btn-danger", cancel_url_name="kassa")
 
 

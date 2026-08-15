@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
-    CustomsAgent, CustomsPayment, Kapital, KapitalKind, Logist,
+    CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
     LogistPayment, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
@@ -2693,6 +2693,93 @@ class KapitalForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
             self.cleaned_data["exchange_rate"] = (
                 self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
         return super().clean()
+
+
+class KonvertatsiyaForm(GroupedFieldsMixin, forms.ModelForm):
+    """Money changed from one heap of the kassa into another.
+
+    Two boxed halves — what LEFT and what ARRIVED — because that is how the operator
+    does it at the counter: they hand over a figure and they get a figure back, and
+    the kurs is whatever those two say it was. Nothing on this form is derived from
+    anything else on it, so every combination works the same way: naqd so'm into naqd
+    dollar, naqd into a karta, a bank balance into cash, so'm to so'm.
+
+    Deliberately NOT built on `MoneyEntryFormMixin`. That mixin converts ONE typed
+    sum into its twin at a kurs, which is the wrong shape here: this row has two real
+    figures in two places and neither is a conversion of the other.
+
+    The kurs box between the two halves is a CALCULATOR, not the record. Type it with
+    either sum and the other one fills itself in, which is how the operator thinks
+    about it ("bugun 12 700 dan") — and then it can be corrected by hand, because a
+    valyutachi rounds and what actually changed hands is the pair of sums, not the
+    rate. What gets stored is what the two sums say (Konvertatsiya.save), so the kurs
+    the row reports can never disagree with the money it moved.
+    """
+
+    field_groups = [
+        ("Qayerdan chiqdi", ["from_method", "from_currency", "from_amount"]),
+        ("Qayerga tushdi", ["to_method", "to_currency", "to_amount"]),
+    ]
+
+    class Meta:
+        model = Konvertatsiya
+        # The kurs sits BETWEEN the two halves, where it belongs in the sentence the
+        # form is asking: this much left, at this rate, that much arrived.
+        fields = ["date", "from_method", "from_currency", "from_amount",
+                  "exchange_rate", "to_method", "to_currency", "to_amount", "note"]
+        widgets = {"date": date_widget(),
+                   "note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+        labels = {"exchange_rate": "Kurs (1$ = so'm)"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        no_future_date(self.fields["date"])
+        for name in ("from_amount", "to_amount", "exchange_rate"):
+            _group_thousands(self.fields[name])
+        self.fields["from_amount"].help_text = "Kassadan ayriladigan summa"
+        self.fields["to_amount"].help_text = "Kassaga qo'shiladigan summa"
+        # Not required, and not the record: left blank the two sums still say what the
+        # kurs was, and on a same-currency move there is no rate to ask for at all
+        # (the JS hides the box for exactly that case).
+        self.fields["exchange_rate"].required = False
+        self.fields["exchange_rate"].help_text = (
+            "Yozsangiz ikkinchi summa o'zi hisoblanadi — keyin uni qo'lda "
+            "to'g'rilasa ham bo'ladi")
+        # What the JS needs to do that sum, marked here beside the fields it belongs
+        # to rather than hunted for by name in the template.
+        self.fields["exchange_rate"].widget.attrs["data-swap-rate"] = ""
+        self.fields["from_amount"].widget.attrs["data-swap-from"] = ""
+        self.fields["to_amount"].widget.attrs["data-swap-to"] = ""
+        self.fields["from_currency"].widget.attrs["data-swap-from-currency"] = ""
+        self.fields["to_currency"].widget.attrs["data-swap-to-currency"] = ""
+
+    def _positive(self, name):
+        amount = self.cleaned_data.get(name)
+        if amount is not None and amount <= 0:
+            self.add_error(name, "Summa musbat bo'lishi kerak")
+        return amount
+
+    def clean(self):
+        cleaned = super().clean()
+        self._positive("from_amount")
+        self._positive("to_amount")
+        # A move from a heap to itself takes money out and puts the same money back:
+        # it changes nothing, and saved it would only clutter the daftar with a row
+        # that means "nothing happened". Almost always a half-filled form.
+        if (cleaned.get("from_method") == cleaned.get("to_method")
+                and cleaned.get("from_currency") == cleaned.get("to_currency")):
+            raise forms.ValidationError(
+                "Pul o'zi turgan joyning o'ziga o'tkazilmaydi — usul yoki valyuta "
+                "boshqa bo'lishi kerak.")
+        # A blank kurs is the ordinary case, not an error: on a crossing row the two
+        # sums restate it on save anyway, and on a same-currency move there was never
+        # a rate to strike — the column still needs a value to give the row's twin
+        # figure one, so it inherits (an edit keeps its own, a new row takes the last
+        # one anybody typed).
+        if not cleaned.get("exchange_rate") or cleaned["exchange_rate"] <= 0:
+            cleaned["exchange_rate"] = (self.instance.exchange_rate if self.instance.pk
+                                        else latest_exchange_rate())
+        return cleaned
 
 
 class CustomsAgentForm(forms.ModelForm):

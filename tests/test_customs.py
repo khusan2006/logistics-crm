@@ -225,13 +225,14 @@ class TestTheTwoHeapsAreNeverAdded:
         assert pks("/customs/loads/?state=left") == [shipment.pk]
         assert pks("/customs/loads/?state=over") == [shipment.pk]
 
-    def test_the_kassa_tile_carries_both_lines(self, admin_client, db):
+    def test_the_position_carries_both_lines(self, admin_client, db):
+        from crm.models import customs_positions
         agent = _agent()
         _send(agent, "40000000")
         _send_usd(agent, "4000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
-        assert dict(tiles["Bojxonada avansimiz"]["split"]) == {
-            "usd": Decimal("4000.00"), "uzs": Decimal("40000000.00")}
+        held, _owed = customs_positions()
+        assert dict(held) == {"usd": Decimal("4000.00"),
+                              "uzs": Decimal("40000000.00")}
 
 
 class TestPerLoadReconciliation:
@@ -877,22 +878,22 @@ class TestCustomsScreens:
         assert "Bojxonaga oldindan yuborilgan" in html
         assert agent.name in html                       # the "Kim to'ladi" column
 
-    def test_kassa_carries_a_bojxonada_tile(self, admin_client, db):
+    def test_the_money_sent_ahead_shows_on_the_bojxona_screen(self, admin_client, db):
         _send(_agent(), "40000000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
-        assert dict(tiles["Bojxonada avansimiz"]["split"])["uzs"] == Decimal("40000000.00")
-        assert tiles["Bojxonada avansimiz"]["url"] == "/customs/"
+        page = admin_client.get("/customs/")
+        assert dict(page.context["held"])["uzs"] == Decimal("40000000.00")
 
-    def test_a_bojxonachi_we_owe_gets_a_tile_only_when_owed(self, admin_client, db):
+    def test_a_bojxonachi_we_owe_is_only_listed_when_owed(self, admin_client, db):
+        from crm.models import customs_positions
         _send(_agent(), "40000000")
-        labels = [t["label"] for t in admin_client.get("/kassa/?davr=all").context["tiles"]]
-        assert "Bojxonaga qarzimiz" not in labels
+        assert customs_positions()[1] == []
+        assert admin_client.get("/customs/?state=owed").context["page"].object_list == []
 
         _cleared(_shipment(), _agent("Qarzdor"), "8000000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
-        # Positive, like every other qarzimiz tile — see the logist tile's twin test.
-        assert dict(tiles["Bojxonaga qarzimiz"]["split"])["uzs"] == Decimal("8000000.00")
-        assert tiles["Bojxonaga qarzimiz"]["url"].endswith("?state=owed")
+        # Positive, like every other qarzimiz figure — see the logist's twin test.
+        assert dict(customs_positions()[1])["uzs"] == Decimal("8000000.00")
+        owed = admin_client.get("/customs/?state=owed").context["page"]
+        assert [a.name for a in owed] == ["Qarzdor"]
 
     def test_the_modals_render_every_field_they_ask_for(self, admin_client, db):
         """A form whose template blows up 500s only when somebody opens it, which is

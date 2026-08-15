@@ -231,13 +231,12 @@ class TestLogistScreens:
         rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
         assert [r["kind"] for r in rows] == ["in"]
 
-    def test_kassa_carries_a_logistlarda_tile(self, admin_client, db):
+    def test_the_money_they_are_holding_is_read_on_their_own_screen(self, admin_client, db):
         logist = _logist()
         _send(logist, "10000")
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
         from crm.models import Currency
-        assert tiles["Logistlarda avansimiz"]["split"] == [(Currency.USD, Decimal("10000.00"))]
-        assert tiles["Logistlarda avansimiz"]["url"] == "/logists/"
+        assert admin_client.get("/logists/").context["held"] == [
+            (Currency.USD, Decimal("10000.00"))]
 
     def test_a_logist_with_money_behind_them_cannot_be_deleted(self, admin_client, db):
         logist = _logist()
@@ -259,22 +258,25 @@ class TestLogistScreens:
         assert translator_client.get("/logist-payments/new/").status_code == 403
 
 
-class TestOwedLogistIsVisibleOnTheKassa:
-    def test_a_logist_who_fronted_cash_gets_a_tile(self, admin_client, db):
+class TestALogistWhoFrontedTheirOwnCash:
+    """A debt nobody can see is a debt nobody pays."""
+
+    def test_it_is_counted_as_money_we_owe(self, admin_client, db):
         logist = _logist()
         _advance(_shipment(logist), logist, "800")      # no funding sent first
-        tiles = {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
-        # Positive, like every other qarzimiz tile: the "out" tone is what says the
-        # money is leaving, not a minus sign on one tile out of three.
-        from crm.models import Currency
-        assert tiles["Logistlarga qarzimiz"]["split"] == [(Currency.USD, Decimal("800.00"))]
-        assert tiles["Logistlarga qarzimiz"]["url"].endswith("?state=owed")
+        from crm.models import Currency, logist_positions
+        # Positive, like every other qarzimiz figure: which direction it goes is said
+        # by the side it is on, not by a minus sign on one figure out of three.
+        assert logist_positions()[1] == [(Currency.USD, Decimal("800.00"))]
+        owed = admin_client.get("/logists/?state=owed").context["page"]
+        assert [row.name for row in owed] == [logist.name]
 
-    def test_no_empty_tile_when_nobody_is_owed(self, admin_client, db):
+    def test_nobody_is_owed_when_the_money_went_out_first(self, admin_client, db):
+        from crm.models import Currency, logist_positions
         _send(_logist(), "5000")
-        labels = [t["label"] for t in admin_client.get("/kassa/?davr=all").context["tiles"]]
-        assert "Logistlarda avansimiz" in labels
-        assert "Logistlarga qarzimiz" not in labels
+        held, owed = logist_positions()
+        assert held == [(Currency.USD, Decimal("5000.00"))]
+        assert owed == []
 
 
 class TestDriverAdvanceOnDispatch:

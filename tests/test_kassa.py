@@ -111,7 +111,6 @@ def test_kassa_shows_partner_payables_from_shipped_trucks(admin_client, db):
     # each partner carries (dollar debt, so'm debt) so the screen can show either
     debts = {p.name: d for p, d in resp.context["partner_debts"]}
     assert debts == {"Pars": (Decimal("350.00"), Decimal("4200000.00"))}
-    assert "Hamkorlarga qarzimiz" in resp.content.decode()
 
 
 def test_kassa_kirim_chiqim_ledgers_and_cash_hero(admin_client, db):
@@ -235,71 +234,58 @@ class TestCashOwnership:
         assert ctx["cash_total"] == Decimal("980.00")
 
 
-class TestCurrentStateTiles:
-    """Hozirgi holat is a board of facts — one tile per place money or goods sits.
-    Nothing is summed across them: cash plus granula plus somebody else's unpaid
-    invoice is a number that describes no actual thing."""
+class TestTheTillCard:
+    """What is left on the kassa above the daftar: the till itself, drawn as the
+    heaps it is actually held in.
 
-    def _tiles(self, admin_client):
-        return {t["label"]: t for t in admin_client.get("/kassa/?davr=all").context["tiles"]}
+    The Hozirgi holat board that used to sit under it — Omborda, Yo'lda, Mijozlar
+    qarzi, three avanslar and three qarzlar — is gone. Every one of those figures is
+    the subject of a screen of its own, and none of them is what somebody opens the
+    kassa to find out. The arithmetic behind them is still guarded, one class down."""
+
+    def _hero(self, admin_client):
+        return admin_client.get("/kassa/?davr=all").context["hero"]
 
     def _own(self, tile, currency=Currency.USD):
-        """One currency's line off a split tile.
+        """One currency's line off a split.
 
         A split drops the sides that net to zero, so a missing side is not missing
         data — it is the answer, and it is zero."""
         return dict(tile["split"]).get(currency, Decimal("0"))
 
-    def test_every_tile_states_a_current_fact_and_links_somewhere(self, admin_client, db):
-        contract = _contract()
-        shipment = _arrived_shipment(contract)
+    def test_the_till_is_the_card_and_it_links_somewhere(self, admin_client, db):
         customer = _customer()
         CustomerPayment.objects.create(customer=customer, date="2026-07-10",
                                        amount=Decimal("500.00"), method="cash")
+        hero = self._hero(admin_client)
+        assert hero["label"] == "Kassada"
+        assert hero["url"].startswith("/")
+        assert self._own(hero) == resp_cash(admin_client)
+
+    def test_the_board_of_positions_is_no_longer_drawn(self, admin_client, db):
+        """Nine tiles of somebody else's business above the daftar, each answering a
+        question the page was not opened to ask — and each costing a full scan of the
+        mol, sotuv, kelishuv, logist and bojxona tables on every load."""
+        contract = _contract()
+        _arrived_shipment(contract)
         SupplierPayment.objects.create(contract=contract, date="2026-07-11",
                                        amount=Decimal("200.00"), method="cash")
-        tiles = self._tiles(admin_client)
-        assert list(tiles) == ["Kassada", "Mijozlar qarzi", "Omborda", "Yo'lda",
-                               "Hamkorlarda avansimiz", "Logistlarda avansimiz",
-                               "Bojxonada avansimiz",
-                               "Hamkorlarga qarzimiz"]
-        for tile in tiles.values():
-            # Kassada excepted: the hero is the card the page is opened for and says
-            # what it is by being the till, so it carries no explaining line at all.
-            assert tile["note"] or tile["label"] == "Kassada", tile["label"]
-            assert tile["url"].startswith("/"), tile["label"]
-        assert self._own(tiles["Kassada"]) == resp_cash(admin_client)
+        ctx = admin_client.get("/kassa/?davr=all")
+        html = ctx.content.decode()
+        assert "tile_groups" not in ctx.context
+        # The cards themselves, then the labels that were only ever on them. "Omborda"
+        # and "Yo'lda" are deliberately not in this list: both are ordinary words that
+        # the sotuv modal in base.html uses for its own reasons.
+        assert "kgroup" not in html
+        for gone in ("Hamkorlarga qarzimiz", "Mijozlar qarzi", "Mol — tannarxda",
+                     "Hamkorlarda avansimiz", "Bojxonada avansimiz"):
+            assert gone not in html, gone
 
     def test_no_derived_total_is_published(self, admin_client, db):
         """Sof holat is gone: it summed things that are not the same kind of thing."""
         ctx = admin_client.get("/kassa/?davr=all").context
         assert "net_position" not in ctx
         assert "Sof holat" not in admin_client.get("/kassa/?davr=all").content.decode()
-
-    def test_stock_and_transit_tiles_carry_their_kg(self, admin_client, db):
-        contract = _contract()
-        _arrived_shipment(contract)                       # 500 kg arrived
-        moving = Shipment.objects.create(
-            contract=contract, status=ShipmentStatus.objects.exclude(is_arrival=True).first(),
-            sent="2026-07-20", eta="2026-08-01")
-        ShipmentLine.objects.create(shipment=moving, contract_line=contract.lines.first(),
-                                    kg=Decimal("300"))
-        tiles = self._tiles(admin_client)
-        assert "500 kg" in tiles["Omborda"]["meta"]
-        assert "300 kg" in tiles["Yo'lda"]["meta"]
-        assert "1 ta yuk" in tiles["Yo'lda"]["meta"]
-
-    def test_debtor_count_rides_with_the_receivable(self, admin_client, db):
-        from crm.models import Sale
-        contract = _contract()
-        shipment = _arrived_shipment(contract)
-        for name in ("Bir", "Ikki"):
-            Sale.objects.create(customer=_customer(name), line=shipment.lines.first(),
-                                kg=Decimal("100"), price=Decimal("1.00"),
-                                price_uzs=Decimal("12000"), date="2026-07-17")
-        tiles = self._tiles(admin_client)
-        assert self._own(tiles["Mijozlar qarzi"]) == Decimal("200.00")
-        assert tiles["Mijozlar qarzi"]["meta"] == "2 ta mijozda"
 
     def test_the_kassa_hero_states_nothing_but_the_money(self, admin_client, db):
         """It used to carry "shundan mijoz avansi …" under the figure. The card is the
@@ -308,29 +294,8 @@ class TestCurrentStateTiles:
         customer = _customer()
         CustomerPayment.objects.create(customer=customer, date="2026-07-10",
                                        amount=Decimal("500.00"), method="cash")
-        hero = self._tiles(admin_client)["Kassada"]
-        assert (hero["meta"], hero["note"]) == ("", "")
-
-    def test_prepaid_kelishuv_is_its_own_tile_not_a_smaller_qarz(self, admin_client, db):
-        """The July bug: 5 kelishuv prepaid by $203 030.5 sat behind a $50 480
-        payable because only positive debts were counted."""
-        contract = _contract()              # 1000 kg @ $1, nothing shipped yet
-        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
-                                       amount=Decimal("600.00"), method="cash")
-        tiles = self._tiles(admin_client)
-        assert self._own(tiles["Hamkorlarda avansimiz"]) == Decimal("600.00")
-        assert tiles["Hamkorlarda avansimiz"]["meta"] == "1 ta kelishuvda"
-        assert tiles["Hamkorlarga qarzimiz"]["split"] == []
-
-    def test_both_hamkor_directions_can_be_non_zero_at_once(self, admin_client, db):
-        owing = _contract("Qarzdor")
-        _arrived_shipment(owing)                       # 500 kg shipped, nothing paid
-        prepaid = _contract("Avansli")
-        SupplierPayment.objects.create(contract=prepaid, date="2026-07-11",
-                                       amount=Decimal("300.00"), method="cash")
-        tiles = self._tiles(admin_client)
-        assert self._own(tiles["Hamkorlarga qarzimiz"]) == Decimal("500.00")
-        assert self._own(tiles["Hamkorlarda avansimiz"]) == Decimal("300.00")
+        hero = self._hero(admin_client)
+        assert "meta" not in hero and "note" not in hero
 
     def test_the_till_counts_each_row_on_one_side_only(self, admin_client, db):
         """The bug this tile was split to kill: the pair beside it sums BOTH stored
@@ -348,13 +313,89 @@ class TestCurrentStateTiles:
             amount_uzs=Decimal("2500000"), exchange_rate=Decimal("12500"),
             currency=Currency.UZS, method="cash")
 
-        till = self._tiles(admin_client)["Kassada"]
+        till = self._hero(admin_client)
         assert self._own(till, Currency.USD) == Decimal("1000.00")
         assert self._own(till, Currency.UZS) == Decimal("2500000.00")
         # The dollar row's twin is 12.5 mln; if it leaked in, the so'm side would be 15.
         assert self._own(till, Currency.UZS) != Decimal("15000000.00")
 
-    def test_a_hamkor_owed_in_both_currencies_reads_as_two_debts(self, admin_client, db):
+    def test_an_empty_currency_side_is_drawn_as_a_zero(self, admin_client, db):
+        """A missing currency line read as missing DATA. Both sides are drawn now, and
+        a side that holds nothing says so: "0 so'm" beside a dollar figure."""
+        CustomerPayment.objects.create(customer=_customer(), date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        hero = self._hero(admin_client)
+        assert dict(hero["split_full"])[Currency.UZS] == Decimal("0")
+        assert "0 so&#x27;m" in admin_client.get("/kassa/?davr=all").content.decode()
+
+    def test_the_page_publishes_no_blended_figure(self, admin_client, db):
+        """Every figure the kassa draws is in the currency it was counted in. The
+        alternate-currency line that used to sit under a sum restated it at a kurs
+        nobody on the page chose."""
+        _arrived_shipment(_contract())
+        CustomerPayment.objects.create(customer=_customer(), date="2026-07-10",
+                                       amount=Decimal("500.00"), method="cash")
+        assert "class=&quot;money-alt&quot;" not in admin_client.get(
+            "/kassa/?davr=all").content.decode()
+
+
+class TestThePositionsBehindTheTill:
+    """The figures the Hozirgi holat board used to publish.
+
+    The board is gone from the kassa — each of these is read on the screen it belongs
+    to — but the arithmetic is the same arithmetic, and it is the arithmetic these
+    tests were always about. They ask the model helpers directly now."""
+
+    def test_the_ombor_and_the_road_carry_their_kg(self, db):
+        from crm.models import stock_value_by_currency, transit_value_by_currency
+        contract = _contract()
+        _arrived_shipment(contract)                       # 500 kg arrived
+        moving = Shipment.objects.create(
+            contract=contract, status=ShipmentStatus.objects.exclude(is_arrival=True).first(),
+            sent="2026-07-20", eta="2026-08-01")
+        ShipmentLine.objects.create(shipment=moving, contract_line=contract.lines.first(),
+                                    kg=Decimal("300"))
+        _stock, stock_kg = stock_value_by_currency()
+        _transit, transit_kg, transit_loads = transit_value_by_currency()
+        assert stock_kg == Decimal("500.000")
+        assert (transit_kg, transit_loads) == (Decimal("300.000"), 1)
+
+    def test_the_debtor_count_rides_with_the_receivable(self, db):
+        from crm.models import Sale, customer_receivable_by_currency
+        contract = _contract()
+        shipment = _arrived_shipment(contract)
+        for name in ("Bir", "Ikki"):
+            Sale.objects.create(customer=_customer(name), line=shipment.lines.first(),
+                                kg=Decimal("100"), price=Decimal("1.00"),
+                                price_uzs=Decimal("12000"), date="2026-07-17")
+        receivable, debtors = customer_receivable_by_currency()
+        assert dict(receivable)[Currency.USD] == Decimal("200.00")
+        assert debtors == 2
+
+    def test_prepaid_kelishuv_is_its_own_figure_not_a_smaller_qarz(self, db):
+        """The July bug: 5 kelishuv prepaid by $203 030.5 sat behind a $50 480
+        payable because only positive debts were counted."""
+        from crm.models import partner_positions_by_currency
+        contract = _contract()              # 1000 kg @ $1, nothing shipped yet
+        SupplierPayment.objects.create(contract=contract, date="2026-07-11",
+                                       amount=Decimal("600.00"), method="cash")
+        hamkor = partner_positions_by_currency()
+        assert dict(hamkor["prepaid"])[Currency.USD] == Decimal("600.00")
+        assert hamkor["contracts"] == 1
+        assert hamkor["owed"] == []
+
+    def test_both_hamkor_directions_can_be_non_zero_at_once(self, db):
+        from crm.models import partner_positions_by_currency
+        owing = _contract("Qarzdor")
+        _arrived_shipment(owing)                       # 500 kg shipped, nothing paid
+        prepaid = _contract("Avansli")
+        SupplierPayment.objects.create(contract=prepaid, date="2026-07-11",
+                                       amount=Decimal("300.00"), method="cash")
+        hamkor = partner_positions_by_currency()
+        assert dict(hamkor["owed"])[Currency.USD] == Decimal("500.00")
+        assert dict(hamkor["prepaid"])[Currency.USD] == Decimal("300.00")
+
+    def test_a_hamkor_owed_in_both_currencies_reads_as_two_debts(self, db):
         """Never one converted total: the two kelishuv were struck at different
         kurslar and settled in different money, so they stay two figures."""
         dollars = _contract("Dollarli")
@@ -369,17 +410,18 @@ class TestCurrentStateTiles:
         line.save()
         _arrived_shipment(sums)                        # 500 kg @ 12 500 so'm
 
-        owed = dict(self._tiles(admin_client)["Hamkorlarga qarzimiz"]["split"])
+        from crm.models import partner_positions_by_currency
+        owed = dict(partner_positions_by_currency()["owed"])
         assert owed[Currency.USD] == Decimal("500.00")
         assert owed[Currency.UZS] == Decimal("6250000.00")
 
-    def test_the_ombor_counts_each_lot_in_its_kelishuv_currency(self, admin_client, db):
+    def test_the_ombor_counts_each_lot_in_its_kelishuv_currency(self, db):
         """A so'm kelishuv's mol was bought in so'm, so the ombor counts it in so'm.
 
-        It used to be one blended dollar figure — the last thing on this board that
+        It used to be one blended dollar figure — the last thing on the board that
         restated somebody's so'm as dollars. A dollar lot must not leak onto the so'm
         side and a so'm lot must not leak onto the dollar one."""
-        from crm.models import stock_value
+        from crm.models import stock_value, stock_value_by_currency
         dollars = _contract("Pars")                              # 500 kg @ $1
         _arrived_shipment(dollars)
         sums = _contract("Turon")
@@ -395,37 +437,19 @@ class TestCurrentStateTiles:
         lot.exchange_rate = Decimal("12500")
         lot.save(update_fields=["exchange_rate"])
 
-        split = dict(self._tiles(admin_client)["Omborda"]["split"])
+        split = dict(stock_value_by_currency()[0])
         assert split[Currency.USD] == Decimal("500.00")
         assert split[Currency.UZS] == Decimal("6250000.00")
         # The blended pair still exists for the reports and for profit — it is simply
-        # not what the board publishes. Its dollar side counts BOTH lots.
+        # not what the per-currency figure publishes. Its dollar side counts BOTH lots.
         assert stock_value()[0] == Decimal("1000.00")
 
-    def test_every_tile_is_a_split_so_nothing_is_a_conversion(self, admin_client, db):
-        """The board holds no blended figure at all any more. The last two were the
-        ombor (mol is bought in so'm too) and a logist's hisob (logistlar are funded in
-        so'm too), and both were dollar figures with the other currency folded in at a
-        kurs nobody chose."""
-        from crm.models import Logist, LogistPayment
-        _arrived_shipment(_contract())
-        logist = Logist.objects.create(name="ABBOS", phone="1")
-        LogistPayment.objects.create(logist=logist, date="2026-07-10",
-                                     amount=Decimal("1000.00"),
-                                     amount_uzs=Decimal("12000000"),
-                                     exchange_rate=Decimal("12000"), method="cash")
-        tiles = self._tiles(admin_client)
-        assert all(t["split"] is not None for t in tiles.values())
-        assert all("split_full" in t for t in tiles.values())
-        assert dict(tiles["Logistlarda avansimiz"]["split"])[Currency.USD] == Decimal("1000.00")
-        assert "class=&quot;money-alt&quot;" not in admin_client.get("/kassa/?davr=all").content.decode()
-
-    def test_a_logist_funded_in_som_keeps_a_som_heap(self, admin_client, db):
+    def test_a_logist_funded_in_som_keeps_a_som_heap(self, db):
         """A logist we send so'm to and who hands a driver dollars carries two heaps at
         once, and both are real: the dollar side goes negative (they fronted it) while
         the so'm side is still ours to get back. The old dollar-only hisob converted
         the so'm in and reported one number — and if that number happened to land on
-        zero, both tiles dropped the logist entirely."""
+        zero, the logist disappeared from both sides entirely."""
         from crm.models import Logist, LogistPayment, logist_positions
         logist = Logist.objects.create(name="ABBOS", phone="1")
         LogistPayment.objects.create(logist=logist, date="2026-07-10",
@@ -444,41 +468,14 @@ class TestCurrentStateTiles:
         held, owed = logist_positions()
         assert held == [(Currency.UZS, Decimal("12000000.00"))]
         assert owed == [(Currency.USD, Decimal("400.00"))]
-        tiles = self._tiles(admin_client)
-        assert dict(tiles["Logistlarda avansimiz"]["split"]) == {Currency.UZS: Decimal("12000000.00")}
-        assert dict(tiles["Logistlarga qarzimiz"]["split"]) == {Currency.USD: Decimal("400.00")}
 
-    def test_an_empty_currency_side_is_drawn_as_a_zero(self, admin_client, db):
-        """A missing currency line read as missing DATA. Both sides are drawn now, and
-        a side that holds nothing says so: "0 so'm" beside a dollar figure."""
-        contract = _contract()                              # a dollar kelishuv
-        _arrived_shipment(contract)
-        CustomerPayment.objects.create(customer=_customer(), date="2026-07-10",
-                                       amount=Decimal("500.00"), method="cash")
-        tiles = self._tiles(admin_client)
-        # Nothing has been sent to a bojxonachi, so both sides of that one are empty.
-        assert tiles["Bojxonada avansimiz"]["split"] == []
-        assert tiles["Bojxonada avansimiz"]["split_full"] == [
-            (Currency.USD, Decimal("0")), (Currency.UZS, Decimal("0"))]
-        assert dict(tiles["Kassada"]["split_full"])[Currency.UZS] == Decimal("0")
-        assert "0 so&#x27;m" in admin_client.get("/kassa/?davr=all").content.decode()
-
-    def test_the_till_is_the_hero_and_the_rest_read_under_a_heading(self, admin_client, db):
-        """Ten equal tiles ranked nothing — a debt that is usually zero pulled as hard
-        as the money on hand. Kassada is the hero; every other tile sits in a group."""
-        contract = _contract()
-        _arrived_shipment(contract)
-        ctx = admin_client.get("/kassa/?davr=all").context
-        assert ctx["hero"]["label"] == "Kassada"
-        assert ctx["hero"]["group"] is None
-        # A set, not a list: the groups deliberately reorder — Mol comes first on the
-        # page while the flat list still leads with Mijozlar qarzi. What matters is
-        # that nothing falls between the groups and nothing is drawn twice.
-        grouped = [t["label"] for g in ctx["tile_groups"] for t in g["tiles"]]
-        assert len(grouped) == len(set(grouped))
-        assert set(grouped) == {t["label"] for t in ctx["tiles"]} - {"Kassada"}
-        assert [g["title"] for g in ctx["tile_groups"]] == [
-            "Mol — tannarxda", "Boshqa qo'ldagi pulimiz", "Qarzlarimiz"]
+    def test_an_empty_side_is_an_answer_rather_than_a_gap(self, db):
+        """A split drops what nets to zero — it says which currencies the thing holds
+        at all — and nothing has been sent to a bojxonachi here."""
+        from crm.models import customs_positions
+        _arrived_shipment(_contract())
+        held, owed = customs_positions()
+        assert (held, owed) == ([], [])
 
 
 class TestTheKassaOpensOnBugun:

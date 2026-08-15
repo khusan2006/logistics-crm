@@ -161,13 +161,13 @@ class TestKassaSearch:
         resp = admin_client.get("/kassa/", {"davr": "all", "q": "alisher"})
         assert dict(resp.context["income_split"])[Currency.USD] == Decimal("1000.00")
 
-    def test_the_board_above_is_not_touched_by_the_search(self, admin_client, db):
-        """Those tiles are the state of things today, not a slice of this list."""
+    def test_the_till_above_is_not_touched_by_the_search(self, admin_client, db):
+        """The card is the state of the till today, not a slice of this list."""
         _in("1000", PayMethod.CASH)
         searched = admin_client.get("/kassa/", {"davr": "all", "q": "zzz"}).context
         plain = admin_client.get("/kassa/?davr=all").context
         assert searched["cash_by_method"] == plain["cash_by_method"]
-        assert [t["split"] for t in searched["tiles"]] == [t["split"] for t in plain["tiles"]]
+        assert searched["hero"]["split"] == plain["hero"]["split"]
 
     def test_nothing_found_says_what_was_looked_for(self, admin_client, db):
         _in("1000", PayMethod.CASH)
@@ -183,14 +183,15 @@ class TestKassaSearch:
         assert len(list(wb["Kirim"].iter_rows(min_row=2))) == 1
 
 
-def test_the_avans_tiles_no_longer_claim_the_money_is_coming_back(admin_client, db):
-    """An avans at a logist or a bojxonachi is not handed back — it is spent on the
-    next yuk. The heading says what is actually true of all four rows: the money is
-    ours and it is somewhere else."""
+def test_the_page_holds_the_till_and_the_daftar_and_nothing_else(admin_client, db):
+    """The board of avanslar, qarzlar and mol that used to sit between them is gone —
+    each of those figures is read on the screen it is acted on. What the kassa says
+    now is where the money is and what moved it."""
     make_shipment(kg="400")
     ctx = admin_client.get("/kassa/?davr=all").context
-    assert [g["title"] for g in ctx["tile_groups"]] == [
-        "Mol — tannarxda", "Boshqa qo'ldagi pulimiz", "Qarzlarimiz"]
-    labels = {t["label"] for t in ctx["tiles"]}
-    assert {"Logistlarda avansimiz", "Bojxonada avansimiz"} <= labels
-    assert "Bizga qaytadigan pul" not in admin_client.get("/kassa/?davr=all").content.decode()
+    assert ctx["hero"]["label"] == "Kassada"
+    assert {"tiles", "tile_groups"} & set(ctx.keys()) == set()
+    html = admin_client.get("/kassa/?davr=all").content.decode()
+    for gone in ("Logistlarda avansimiz", "Bojxonada avansimiz",
+                 "Bizga qaytadigan pul", "Boshqa qo'ldagi pulimiz"):
+        assert gone not in html, gone
