@@ -200,6 +200,15 @@ class CashEntry(MoneyEntry):
     #: has always ridden on top, so the other side received the full figure.
     default_fee_bearer = FeeBearer.COMPANY
 
+    #: The answers that describe the SETTLEMENT rather than the way the money moved:
+    #: whose it was, what it was for, when. A split to'lov asks these once in its
+    #: header and stamps every row with them, so they must agree across a `group` —
+    #: two rows of one payment cannot have bought different markalar or landed on
+    #: different days. Editing reopens a single row and shows the same boxes, which
+    #: is where they could drift apart; `_sync_settlement` carries a correction back
+    #: across the rest. Empty means the model is never entered as a split.
+    settlement_fields = ()
+
     class Meta:
         abstract = True
 
@@ -1152,6 +1161,9 @@ class SupplierPayment(CashEntry):
         """The middleman's cut, on top of what the hamkor receives."""
         return (self.amount * self.commission_percent / 100).quantize(Decimal("0.01"))
 
+    #: Which kelishuv, which of its markalar, and when — see CashEntry.
+    settlement_fields = ("contract", "contract_line", "date")
+
     @property
     def credited_amount(self):
         """What the hamkor is credited — the figure their qarz falls by.
@@ -1214,6 +1226,9 @@ class LogistPayment(HeldFloat, CashEntry):
     #: (ShipmentForm.sync_driver_advance), so the balance is a dollar figure.
     float_currency = Currency.USD
 
+    #: Which logist was topped up, and when — see CashEntry.
+    settlement_fields = ("logist", "date")
+
     logist = models.ForeignKey(Logist, on_delete=models.PROTECT,
                                related_name="payments", verbose_name="Logist")
     date = models.DateField("Sana", default=timezone.localdate)
@@ -1252,6 +1267,9 @@ class CustomsPayment(HeldFloat, CashEntry):
 
     agent = models.ForeignKey(CustomsAgent, on_delete=models.PROTECT,
                               related_name="payments", verbose_name="Bojxonachi")
+    #: Which bojxonachi, against which yuk, and when — see CashEntry.
+    settlement_fields = ("agent", "shipment", "date")
+
     # PROTECT rather than CASCADE: deleting a yuk must not silently swallow money
     # that really left the kassa for it.
     shipment = models.ForeignKey("Shipment", on_delete=models.PROTECT, null=True,
@@ -2816,6 +2834,9 @@ class Kapital(CashEntry):
     #: business are one pocket — so the form never asks, and the row nets.
     default_fee_bearer = FeeBearer.COUNTERPARTY
 
+    #: Which way the ta'sischi's money moved, and when — see CashEntry.
+    settlement_fields = ("kind", "date")
+
     @property
     def is_out(self):
         return self.kind == KapitalKind.OUT
@@ -3018,6 +3039,9 @@ class CustomerPayment(CashEntry):
     #: Money coming IN has always been the sender's loss: 1000 sent by
     #: perechisleniya at 2% paid off 980 of their qarz.
     default_fee_bearer = FeeBearer.COUNTERPARTY
+
+    #: Whose money, when, and which of their qarzlar it is aimed at — see CashEntry.
+    settlement_fields = ("customer", "date", "target_currency")
 
     @property
     def net_amount(self):

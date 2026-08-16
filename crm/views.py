@@ -1139,6 +1139,9 @@ def supplier_payment_edit(request, pk):
     if request.method == "POST":
         if form.is_valid():
             form.save()
+            # Kelishuv, marka va sana butun to'lovga tegishli — bir qatorda
+            # to'g'rilangani qolganlariga ham yoziladi (`_sync_settlement`).
+            _sync_settlement(payment)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Hamkor to'lovi", payment.pk,
                 f"To'lov tahrirlandi: {payment.amount}$ · kelishuv #{payment.contract_id}",
@@ -1363,6 +1366,41 @@ def customer_payment_create(request):
     return respond()
 
 
+def _sync_settlement(payment):
+    """Carry a corrected settlement answer back across the rest of its rows.
+
+    A split to'lov is entered once and stored as several rows: the header asks which
+    kelishuv, which marka, what sana, and every row is stamped with that answer
+    (`_save_split_rows`). Editing runs the other way round — the form reopens ONE
+    row and shows those same boxes — so changing one there left the rows of a single
+    payment disagreeing about which delivery they paid for, which is a state the
+    entry form refuses outright. The doska then split one settlement across two
+    markalar's bars, with nothing on screen saying anybody had asked for that.
+
+    So the correction travels: fixing a row fixes the settlement. The other way out —
+    hiding the boxes once a row belongs to a group — would leave a to'lov attributed
+    to the wrong marka with no way to put it right at all.
+
+    `update()` rather than save(): these are the header's own columns and carry no
+    per-row consequences of their own. Where they DO have one (a mijoz to'lov's
+    allocations follow its customer) the caller re-runs it on the rows returned.
+
+    Returns the sibling rows it changed, already carrying the new values."""
+    fields = getattr(type(payment), "settlement_fields", ())
+    if payment.group is None or not fields:
+        return []
+    siblings = list(type(payment).objects
+                    .filter(group=payment.group).exclude(pk=payment.pk))
+    if not siblings:
+        return []
+    values = {name: getattr(payment, name) for name in fields}
+    (type(payment).objects.filter(pk__in=[s.pk for s in siblings]).update(**values))
+    for sibling in siblings:
+        for name, value in values.items():
+            setattr(sibling, name, value)
+    return siblings
+
+
 def _save_split_rows(rows, user, **shared):
     """Write the rows of one split payment, all of them or none.
 
@@ -1430,6 +1468,12 @@ def customer_payment_edit(request, pk):
             payment = form.save()
             payment.allocations.all().delete()
             allocate_customer_payment(payment)
+            # Mijoz, sana va qaysi qarz — butun to'lovniki. Qatorlar ko'chgach
+            # ularning taqsimoti eski mijozning sotuvlarida osilib qolmasligi uchun
+            # qayta yoyiladi.
+            for sibling in _sync_settlement(payment):
+                sibling.allocations.all().delete()
+                allocate_customer_payment(sibling)
             # Re-spreading THIS to'lov can leave a sotuv it used to cover short while
             # another to'lov's avans sits unspent; the sweep pairs the two back up.
             # Run it for the previous mijoz too when the edit moved the to'lov away
@@ -5150,6 +5194,9 @@ def logist_payment_edit(request, pk):
     if request.method == "POST":
         if form.is_valid():
             form.save()
+            # Sarlavha javoblari butun to'lovga tegishli — bir
+            # qatorda to'g'rilangani qolganlariga ham yoziladi.
+            _sync_settlement(payment)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Logistga to'lov", payment.pk,
                 f"Logistga to'lov tahrirlandi: {payment.amount}$ · {payment.logist.name}")
@@ -5226,6 +5273,9 @@ def kapital_edit(request, pk):
     if request.method == "POST":
         if form.is_valid():
             form.save()
+            # Sarlavha javoblari butun to'lovga tegishli — bir
+            # qatorda to'g'rilangani qolganlariga ham yoziladi.
+            _sync_settlement(entry)
             AuditLog.record(request.user, AuditLog.Action.UPDATE, "Kapital", entry.pk,
                             f"Kapital tahrirlandi: {_kapital_label(entry)}")
             messages.success(request, "Kapital yangilandi")
@@ -5578,6 +5628,9 @@ def customs_payment_edit(request, pk):
     if request.method == "POST":
         if form.is_valid():
             form.save()
+            # Sarlavha javoblari butun to'lovga tegishli — bir
+            # qatorda to'g'rilangani qolganlariga ham yoziladi.
+            _sync_settlement(payment)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Bojxonaga to'lov", payment.pk,
                 f"Bojxonaga to'lov tahrirlandi: {_payment_label(payment)}")
