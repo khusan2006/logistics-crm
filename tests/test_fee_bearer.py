@@ -137,15 +137,34 @@ def test_a_naqd_row_has_no_cut_for_anybody_to_carry():
 
 
 def test_the_form_offers_the_choice_named_after_the_other_side(admin_client):
-    """Each screen names the counterparty it is actually facing."""
-    from crm.forms import (CustomerPaymentForm, LogistPaymentForm,
-                           SupplierPaymentForm)
+    """Each screen that still ASKS names the counterparty it is actually facing."""
+    from crm.forms import CustomerPaymentForm, LogistPaymentForm
 
     labels = {form: dict(form().fields["fee_bearer"].choices)[FeeBearer.COUNTERPARTY]
-              for form in (SupplierPaymentForm, CustomerPaymentForm, LogistPaymentForm)}
-    assert labels[SupplierPaymentForm] == "Hamkordan ushlansin"
+              for form in (CustomerPaymentForm, LogistPaymentForm)}
     assert labels[CustomerPaymentForm] == "Mijozdan ushlansin"
     assert labels[LogistPaymentForm] == "Logistdan ushlansin"
     # and each opens on the way its own kind of row has always behaved
-    assert SupplierPaymentForm().initial["fee_bearer"] == FeeBearer.COMPANY
     assert CustomerPaymentForm().initial["fee_bearer"] == FeeBearer.COUNTERPARTY
+
+
+def test_a_hamkor_tolov_never_asks_who_carries_the_bank_cut(admin_client):
+    """Money going out to a hamkor: the cut is always ours, so the form does not ask.
+
+    The hamkor is owed a figure and has to RECEIVE that figure — the foiz rides on
+    top of it. Offered as a choice, the other answer credited them less than we sent
+    and left the kelishuv short by exactly the foiz."""
+    from crm.forms import SupplierPaymentForm, SupplierPaymentRowForm
+
+    for form in (SupplierPaymentForm, SupplierPaymentRowForm):
+        assert "fee_bearer" not in form().fields, form.__name__
+        # The bank still takes its cut — only who eats it stopped being a question.
+        assert "fee_percent" in form().fields, form.__name__
+
+    # A row saved without one reads as company-borne, which is what makes the
+    # hamkor's qarz fall by the whole summa we sent.
+    payment = SupplierPayment(amount=Decimal("1000"), method="transfer",
+                              fee_percent=Decimal("2"))
+    assert payment.fee_on_company
+    assert payment.credited_amount == Decimal("1000")
+    assert payment.total_out == Decimal("1020.00")

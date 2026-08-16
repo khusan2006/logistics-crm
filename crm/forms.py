@@ -1221,24 +1221,20 @@ def credited_to_partner(data, contract):
     """What a hamkor to'lov being typed would actually CREDIT the kelishuv with, in the
     kelishuv's own currency.
 
-    Not the same figure as the summa typed. A perechisleniya foizi carried by the
-    hamkor comes out of the transfer, so 1 000 sent at 2% reaches them as 980 and 980
-    is what their qarz falls by (`SupplierPayment.credited_amount`) — while the
-    vositachi cut rides on top and never shortens what they get.
+    Neither the bank's foiz nor the vositachi cut shortens it: both ride on top of
+    what we send, so a hamkor paid 1 000 is credited 1 000 and the kassa is out the
+    extra (`SupplierPayment.credited_amount`, `total_out`).
 
-    The ceiling has to be measured on THIS and not on the typed summa, or the two
-    disagree by exactly the foiz: a $1 000 kelishuv paid in full stays $20 short,
-    and the $20.41 that would land it on zero is refused for overshooting a figure
-    it does not overshoot. Rebuilt through an unsaved row rather than re-deriving
-    the foiz here, so the form and the model can never hold two opinions about what
-    the hamkor received."""
+    Still routed through an unsaved row rather than returning the typed summa
+    outright, so the form and the model can never hold two opinions about what the
+    hamkor received — whatever that rule turns out to be, this reads it from the one
+    place that states it."""
     row = SupplierPayment(
         amount=data.get("amount") or Decimal("0"),
         amount_uzs=data.get("amount_uzs") or Decimal("0"),
         exchange_rate=data.get("exchange_rate") or LEGACY_RATE,
         method=data.get("method") or "",
-        fee_percent=data.get("fee_percent") or Decimal("0"),
-        fee_bearer=data.get("fee_bearer") or "")
+        fee_percent=data.get("fee_percent") or Decimal("0"))
     return row.credited_amount_uzs if contract.is_som else row.credited_amount
 
 
@@ -1253,12 +1249,20 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
     A rate entered that way is then frozen: the to'lov keeps the kurs it was made at
     however the market moves afterwards, so a kelishuv that was square last week
     cannot re-open itself this week. Correcting it is a deliberate edit of the
-    to'lov, not something that happens on its own."""
+    to'lov, not something that happens on its own.
+
+    `fee_bearer` is deliberately absent from the fields, the same way `KapitalForm`
+    leaves it out. On money going out to a hamkor the bank's cut is always ours: the
+    hamkor is owed a figure and has to receive that figure, so the foiz rides on top
+    and the kassa is out the extra. Asking per to'lov offered an answer that is not
+    ours to give — and picking the other one credited the hamkor less than we sent,
+    which is what left kelishuvlar short by the foiz. A blank `fee_bearer` means
+    exactly this via `CashEntry.default_fee_bearer`."""
 
     class Meta:
         model = SupplierPayment
         fields = ["contract", "date", "currency", "amount", "exchange_rate",
-                  "commission_percent", "method", "fee_percent", "fee_bearer", "note"]
+                  "commission_percent", "method", "fee_percent", "note"]
         widgets = {
             "date": date_widget(),
             "contract": ContractChoiceSelect(attrs={"data-contract-currency": ""}),
@@ -1267,8 +1271,6 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
                 "placeholder": "0"}),
         }
         labels = {"amount": "Hamkor oladigan summa"}
-
-    fee_counterparty = "Hamkordan ushlansin"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1869,17 +1871,24 @@ class SupplierPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
     The vositachi foizi rides on the ROW, not on the header, for the same reason the
     bank foiz does: a payment sent half in cash by hand and half through a vositachi's
     account paid a cut on one half and nothing on the other, and a single shared box
-    could only say one of those two things."""
+    could only say one of those two things.
 
-    fee_counterparty = "Hamkordan ushlansin"
-    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
-                   "commission_percent", "exchange_rate", "note"]
+    No `fee_bearer` here either, for the reason `SupplierPaymentForm` gives: on money
+    going out to a hamkor the bank's cut is always ours."""
+
+    # Vositachi before perechisleniya: the two foiz share a line (see the
+    # `:has(.lineset-field--commission_percent)` rules), and the bank one is the half
+    # that disappears on a naqd row. Leading with the field that is always there
+    # keeps the survivor on the left rather than stranded in the right-hand column
+    # with a gap beside it.
+    field_order = ["amount", "currency", "method", "commission_percent",
+                   "fee_percent", "exchange_rate", "note"]
 
     class Meta:
         model = SupplierPayment
         # No kelishuv, no sana: both are shared, so the header asks once.
         fields = ["currency", "amount", "exchange_rate", "commission_percent",
-                  "method", "fee_percent", "fee_bearer", "note"]
+                  "method", "fee_percent", "note"]
         widgets = {
             "commission_percent": forms.NumberInput(attrs={
                 "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
