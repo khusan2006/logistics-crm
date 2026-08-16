@@ -1290,6 +1290,35 @@ input[type=number], input[type=date], input[type=tel], select, textarea {
   color: var(--text);
   transition: border-color 0.12s, box-shadow 0.12s;
 }
+/* The browser's own select arrow is pinned to the border edge and ignores padding,
+   so it sits hard against the frame and reads as part of it rather than as a
+   control. Drawing our own is the only way to say where it goes — and it is the
+   same chevron, stroke and weight the icons elsewhere use, so the pickers stop
+   looking like the one control the app did not draw.
+
+   The colour is baked into the data URI (a background image cannot read a custom
+   property), which is why the dark theme restates it below. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2359626f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  background-size: 13px 13px;
+}
+html[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2397a1b5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+/* The compact pickers keep the browser's arrow. They are read at a glance in a
+   table rather than filled in like a form field, and at 11px in an 86px box there
+   is no room to inset a chevron and still fit the word. */
+select.status-select, select.xmini, select.xpayer,
+.xcell-more select, .searchbar select {
+  appearance: auto;
+  -webkit-appearance: auto;
+  background-image: none;
+}
 input::placeholder, textarea::placeholder { color: var(--text-faint); }
 input:focus, select:focus, textarea:focus {
   outline: none;
