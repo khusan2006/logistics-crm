@@ -80,9 +80,17 @@ def _bar_pct(part, whole):
 #: queries per sotuv on a page that asks every one of them. Named once because three
 #: screens ask the same question: the doska, its oylik jadvali and Hisobotlar.
 PRICED_SALE_RELATED = ("line__shipment", "line__contract_line__contract")
-PRICED_SALE_PREFETCH = ("returns", "line__shipment__expenses", "line__shipment__lines",
-                        "line__contract_line__contract__lines",
-                        "line__contract_line__contract__supplier_payments")
+PRICED_SALE_PREFETCH = (
+    "returns",
+    # Through the SLICES, not through `sale.line`: a sotuv that reached across a lot
+    # boundary is costed kg-weighted off each lot it drew from (`Sale.cost_price`),
+    # so the tannarx of every slice's own yuk and kelishuv is what has to be loaded.
+    # Left pointing at `line__…` this prefetched a path the foyda no longer walks —
+    # every figure still came out right, at ten queries a sotuv instead of none.
+    "lots__line__shipment__expenses", "lots__line__shipment__lines",
+    "lots__line__contract_line__contract__lines",
+    "lots__line__contract_line__contract__supplier_payments",
+)
 
 
 def priced_sales(queryset=None):
@@ -2512,8 +2520,14 @@ def _filter_sales(request):
     export ends up "showing a different figure" from the list it was taken from."""
     q = request.GET.get("q", "").strip()
     date_from, date_to = _date_window(request)
+    # Both the list and its Excel print a tannarx and a foyda per row, and each of
+    # those reaches through the sotuv's slices into their yuklar and kelishuvlar —
+    # so the same rows the doska loads are loaded here (`PRICED_SALE_PREFETCH`).
+    # Named once rather than spelled again: this is the second screen to go quietly
+    # to ten queries a sotuv when that path moved under it.
     sales = Sale.objects.select_related(
-        "customer", "line__contract_line", "line__shipment__contract__partner")
+        "customer", "line__contract_line", "line__shipment__contract__partner"
+    ).prefetch_related(*PRICED_SALE_PREFETCH)
     if q:
         filters = (Q(customer__name__icontains=q) | Q(line__contract_line__brand__icontains=q))
         if q.isdigit():
