@@ -2796,3 +2796,26 @@ form.stacked .lineset-field--fee_bearer label {
 }
 .fieldgroup > legend + * { clear: both; }
 .fieldgroup > p:last-child { margin-bottom: 10px; }
+
+/* A form whose two halves mean opposite things says so in colour, before either
+   legend is read. The same two the kassa daftar already uses for the same two
+   ideas — what left a heap is drawn like a chiqim, what arrived like a kirim (see
+   .amt-out / .amt-in) — so the Konvertatsiya modal and the row it writes are
+   recognisably one event.
+
+   Mixed INTO the surface rather than laid over it as a flat tint: that way the
+   wash follows whichever theme is on, and the text keeps the contrast it has
+   everywhere else instead of a light-theme colour being carried into the dark. */
+.fieldgroup--out, .fieldgroup--in { border-left-width: 3px; }
+.fieldgroup--out {
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
+  border-left-color: var(--danger);
+}
+.fieldgroup--in {
+  background: color-mix(in srgb, var(--success) 7%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--success) 22%, var(--border));
+  border-left-color: var(--success);
+}
+.fieldgroup--out > legend { color: var(--danger); }
+.fieldgroup--in > legend { color: var(--success); }

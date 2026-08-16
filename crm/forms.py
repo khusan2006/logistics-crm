@@ -87,17 +87,26 @@ class GroupedFieldsMixin:
     change to how every form looks."""
 
     #: [(legend, [field names])] — grouped where they first appear, in field order.
+    #: An optional third element names the tone the box is drawn in
+    #: (`fieldgroup--<tone>` in the CSS), for a form whose halves mean opposite
+    #: things and should say so before the legend is read.
     field_groups = []
 
+    def _declared_groups(self):
+        """`field_groups` with the optional tone filled in, so nothing below has to
+        care which of the two shapes a form wrote."""
+        return [(g[0], g[1], g[2] if len(g) > 2 else "") for g in self.field_groups]
+
     def rendered_fields(self):
-        groups = {names[0]: (legend, names) for legend, names in self.field_groups}
-        grouped = {name for _, names in self.field_groups for name in names}
+        declared = self._declared_groups()
+        groups = {names[0]: (legend, names, tone) for legend, names, tone in declared}
+        grouped = {name for _, names, _ in declared for name in names}
         items = []
         for field in self.visible_fields():
             if field.name in groups:
-                legend, names = groups[field.name]
+                legend, names, tone = groups[field.name]
                 items.append({
-                    "group": True, "legend": legend,
+                    "group": True, "legend": legend, "tone": tone,
                     # `self[name]` not `field`: the group lists names, and pulling
                     # each bound field by name keeps them in the legend's order
                     # rather than the form's, and survives a missing one.
@@ -2716,9 +2725,13 @@ class KonvertatsiyaForm(GroupedFieldsMixin, forms.ModelForm):
     the row reports can never disagree with the money it moved.
     """
 
+    # Toned the way the daftar already draws these two ideas — what leaves a heap
+    # reads like a chiqim, what lands like a kirim — so the modal and the row it
+    # produces are recognisably the same event, and the operator can tell the halves
+    # apart at a glance instead of reading two near-identical legends.
     field_groups = [
-        ("Qayerdan chiqdi", ["from_method", "from_currency", "from_amount"]),
-        ("Qayerga tushdi", ["to_method", "to_currency", "to_amount"]),
+        ("Qayerdan chiqdi", ["from_method", "from_currency", "from_amount"], "out"),
+        ("Qayerga tushdi", ["to_method", "to_currency", "to_amount"], "in"),
     ]
 
     class Meta:

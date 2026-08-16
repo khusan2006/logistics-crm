@@ -21,7 +21,7 @@ every ungrouped form in the app rendered zero fields and saved nothing.
 {% if not form.rendered_fields %}{{ form.as_p }}{% else %}
 {% for item in form.rendered_fields %}
   {% if item.group %}
-  <fieldset class="fieldgroup">
+  <fieldset class="fieldgroup{% if item.tone %} fieldgroup--{{ item.tone }}{% endif %}">
     <legend>{{ item.legend }}</legend>
     {% for field in item.fields %}
     <p>

@@ -1337,7 +1337,21 @@
       if (!e.target.matches) { return; }
       if (!e.target.matches('[data-swap-from-currency], [data-swap-to-currency]')) { return; }
       var box = parts(e.target);
-      if (box) { sync(box); }
+      if (!box) { return; }
+      // "Tushdi" is a figure IN the valyuta it arrived in, so changing that valyuta
+      // leaves behind a sum counted in money nobody handed over — 83.33 dollars
+      // sitting there as 83.33 so'm. It stops being the operator's figure to keep,
+      // and the box goes back to the calculator.
+      //
+      // Which is also what makes the same-currency move copy again: a hand-typed
+      // figure is never overwritten, so an operator who typed one while the row was
+      // still crossing found the box stuck on the old money afterwards — typing a
+      // new "Chiqdi" filled in nothing, and naqd 1 000 000 offered to arrive as 80.
+      if (e.target.matches('[data-swap-to-currency]')) {
+        box.to.value = '';
+        delete box.to.dataset.swapAuto;
+      }
+      sync(box);
     });
     function enhance(root) {
       (root || document).querySelectorAll('[data-swap-rate]').forEach(function (el) {
