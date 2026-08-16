@@ -1024,22 +1024,25 @@ class ContractLine(MoneyEntry):
 
     @property
     def paid_total(self):
-        """What has been paid against THIS product.
+        """What has actually landed on THIS product.
 
-        Credited, not gross — the same figure the kelishuv's own `paid_total`
-        sums, so a kelishuv's products and its unassigned money add back up to
-        it exactly.
+        Read off the SLICES, not off the to'lovlar that named this marka
+        (`SupplierPaymentAllocation`). A to'lov is not one product's: 7 000 sent
+        against a marka owing 5 000 bought this one and the next, and counting the
+        whole of it here would say a product was paid twice what it costs while its
+        neighbour looked untouched.
 
-        A to'lov that names no product counts here for nobody. Every to'lov
-        entered before the field existed is one of those, and they are the
-        kelishuv's `unassigned_paid` — guessing which marka they bought would be
-        inventing a fact, so they are shown as unassigned until someone says."""
-        return sum((p.credited_amount for p in self.supplier_payments.all()),
-                   Decimal("0"))
+        Credited, not gross — the bank's foiz rides on top of what the hamkor
+        receives, so it was never theirs to be credited with.
+
+        A to'lov that no product could take counts here for nobody: it is the
+        hamkor's avans (`partner_advance_total`), and guessing which marka it will
+        end up buying would be inventing a fact."""
+        return sum((s.amount for s in self.supplier_allocations.all()), Decimal("0"))
 
     @property
     def paid_total_uzs(self):
-        return sum((p.credited_amount_uzs for p in self.supplier_payments.all()),
+        return sum((s.amount_uzs for s in self.supplier_allocations.all()),
                    Decimal("0"))
 
     @property
@@ -1207,8 +1210,66 @@ class SupplierPayment(CashEntry):
         so'm settles it at face value and converts nothing."""
         return self.currency != self.contract.currency
 
+    def save(self, *args, **kwargs):
+        """Place the money as well as record it.
+
+        Same reasoning as `Sale.save` calling `sync_lot`: every caller that just
+        creates or edits a to'lov gets it spread across the kelishuv's products
+        without having to know the slice table exists. A row saved from a script, a
+        fixture or a future screen is placed exactly like one typed into the modal —
+        and a to'lov that sits on no product at all is a figure that shows up in the
+        kelishuv's total while every marka under it reads zero.
+
+        Only THIS to'lov is placed. Lowering one frees room the others could use, so
+        an edit or a delete has to re-answer the whole kelishuv —
+        `reconcile_supplier_allocations`, which the views call."""
+        result = super().save(*args, **kwargs)
+        allocate_supplier_payment(self)
+        return result
+
     def __str__(self):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
+
+
+class SupplierPaymentAllocation(models.Model):
+    """One slice of a hamkor to'lov applied to one product of a kelishuv.
+
+    The mirror of `PaymentAllocation` on the outgoing side, and it exists for the
+    same reason: money and the thing it pays for are not one to one. A to'lov aimed
+    at a marka owing 5 000 but sent as 7 000 has bought two things, and a single
+    `contract_line` column on the row could only name one of them — so the extra
+    2 000 either overpaid a product it did not buy or vanished from the per-marka
+    picture entirely.
+
+    `contract_line` on the to'lov stays: it is what the operator SAID the money was
+    for, the point the spread starts from. These rows are where it actually landed.
+    """
+
+    payment = models.ForeignKey(SupplierPayment, on_delete=models.CASCADE,
+                                related_name="allocations", verbose_name="To'lov")
+    line = models.ForeignKey(ContractLine, on_delete=models.CASCADE,
+                             related_name="supplier_allocations",
+                             verbose_name="Mahsulot")
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    # Stored rather than sliced off the parent, for the reason PaymentAllocation
+    # gives: both columns have a reader that must be exact, and a so'm kelishuv paid
+    # in so'm has to land on zero rather than a tiyin away from it.
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def in_currency(self, currency):
+        """This slice as read by one side of it — the kelishuv asks in the currency
+        it was struck in, the to'lov in the one the money left in."""
+        return self.amount_uzs if currency == Currency.UZS else self.amount
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Hamkor to'lovi taqsimoti"
+        verbose_name_plural = "Hamkor to'lovi taqsimotlari"
+
+    def __str__(self):
+        return f"{self.payment_id} → {self.line_id}: {self.amount}$"
 
 
 class LogistPayment(HeldFloat, CashEntry):
@@ -3372,6 +3433,210 @@ def reconcile_customer_allocations(customer):
                 unspent -= _place(payment, sale, take, unspent)
                 if unspent <= 0:
                     break
+
+
+# ── Hamkor to'lovining taqsimoti ────────────────────────────────────────────────
+#
+# The outgoing mirror of everything above. One kelishuv covers two or three markalar
+# and the money does not arrive one marka at a time: a to'lov aimed at a product
+# owing 5 000 is sent as 7 000, and a zaklad is handed over before anybody knows
+# which product it will end up buying.
+#
+# Everything is measured in the KELISHUV's own currency. Unlike the mijoz side there
+# is no per-row target to reconcile — a kelishuv is struck in one currency and every
+# one of its products is priced in it, so the pool converts once and the rest is
+# arithmetic in a single money.
+
+
+def supplier_allocation_pair(payment, spent_own):
+    """Both columns of a slice worth `spent_own` of a hamkor to'lov.
+
+    A FRACTION of the parent rather than a conversion, for the reason
+    `allocation_pair` gives on the incoming side: the slices of one to'lov then add
+    up to exactly that to'lov on both sides, so one spent in full leaves nothing
+    behind and a product covered in full lands on zero."""
+    contract = payment.contract
+    total_own = own_side(contract, payment.credited_amount, payment.credited_amount_uzs)
+    if not total_own:
+        return Decimal("0"), Decimal("0")
+    share = Decimal(spent_own) / total_own
+    return ((payment.credited_amount * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            (payment.credited_amount_uzs * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _line_capacity(line, contract, taken):
+    """What this product can still absorb, in the kelishuv's currency.
+
+    Measured against `expected_value` — what the product will really cost, trucks
+    already sent at the price they went at plus the rest at the agreed narx — and
+    NOT against what has shipped so far. Paying a hamkor before their truck leaves is
+    ordinary here, and a ceiling of "goods delivered" would refuse the zaklad this
+    whole arrangement exists to record."""
+    total = own_side(contract, line.expected_value, line.expected_value_uzs)
+    return total - taken.get(line.pk, Decimal("0"))
+
+
+def _supplier_taken(contract, exclude_payment=None):
+    """What every product of a kelishuv already has on it, by line id — the other
+    to'lovlar's slices, in the kelishuv's currency."""
+    taken = {}
+    slices = (SupplierPaymentAllocation.objects
+              .filter(line__contract=contract)
+              .select_related("payment"))
+    if exclude_payment is not None:
+        slices = slices.exclude(payment_id=exclude_payment.pk)
+    for row in slices:
+        taken[row.line_id] = (taken.get(row.line_id, Decimal("0"))
+                              + row.in_currency(contract.currency))
+    return taken
+
+
+def _truck_weights(lines):
+    """Each product's share of a zaklad, by MASHINA count.
+
+    The kelishuv owner's rule: 10 000 handed over on a kelishuv running five trucks
+    of one marka and five of another splits 5 000 / 5 000, and an uneven plan splits
+    in that same proportion. The plan is what counts where one was set and the trucks
+    actually sent where it was not — the same "plan or sent" reading the doska's
+    counters use, so the split does not change shape depending on a field nobody
+    filled in.
+
+    Returns None when there is nothing to weigh by (no plan, no trucks): then the
+    money simply runs the kelishuv in order, which is what it did before."""
+    weights = {}
+    for line in lines:
+        sent, planned = line.truck_progress
+        weights[line.pk] = Decimal(planned or sent or 0)
+    return weights if sum(weights.values()) > 0 else None
+
+
+def allocate_supplier_payment(payment):
+    """Spread one hamkor to'lov across the kelishuv's products; hand back what no
+    product could take.
+
+    Two ways in, one way out:
+
+    * The to'lov NAMES a marka — it starts there and runs FORWARD through the
+      kelishuv in its own order, then round to the ones before it. Pay 7 000 against
+      a marka owing 5 000 and the extra 2 000 lands on the next product rather than
+      overpaying the one that was named. Wrapping matters: money must find every
+      product that is still owed before it is called an avans.
+
+    * The to'lov names none — a zaklad — and it splits by mashina count
+      (`_truck_weights`). A product that cannot take its whole share (already
+      covered) passes the rest on, and the leftovers then run the kelishuv in order
+      rather than being lost.
+
+    Whatever is left over stays unallocated. That is the hamkor's avans and it
+    belongs to the HAMKOR, not to this kelishuv — they can spend it on another one
+    (`partner_advance_total`), which is how the incoming side treats a mijoz's avans
+    too.
+
+    Re-runnable: it clears this to'lov's own slices first, so calling it again after
+    an edit, a new truck or another to'lov re-answers the question from scratch
+    rather than stacking a second set on top."""
+    contract = payment.contract
+    with transaction.atomic():
+        payment.allocations.all().delete()
+        pool = own_side(contract, payment.credited_amount, payment.credited_amount_uzs)
+        if pool <= 0:
+            return Decimal("0")
+        lines = list(contract.lines.all())
+        if not lines:
+            return pool
+        taken = _supplier_taken(contract, exclude_payment=payment)
+        # Accumulated, then written once per product at the end: a share that lands in
+        # two passes — its slice of the zaklad and again from the leftovers — is still
+        # one answer about one product, and two rows saying so read as two payments.
+        placed = {}
+
+        def place(line, want):
+            """Put `want` on one product, capped by what it can still absorb."""
+            nonlocal pool
+            take = min(want, _line_capacity(line, contract, taken), pool)
+            if take <= 0:
+                return
+            placed[line] = placed.get(line, Decimal("0")) + take
+            taken[line.pk] = taken.get(line.pk, Decimal("0")) + take
+            pool -= take
+
+        named = payment.contract_line
+        if named is None:
+            weights = _truck_weights(lines)
+            if weights:
+                # Sized off the pool as it arrived, not as it drains: each product's
+                # share is its share of the whole zaklad, and what one cannot take
+                # falls through to the run below rather than inflating the next.
+                whole = pool
+                for line in lines:
+                    share = (whole * weights[line.pk]
+                             / sum(weights.values())).quantize(Decimal("0.01"),
+                                                               rounding=ROUND_HALF_UP)
+                    place(line, share)
+            order = lines
+        else:
+            start = next((i for i, ln in enumerate(lines) if ln.pk == named.pk), 0)
+            order = lines[start:] + lines[:start]
+
+        for line in order:
+            if pool <= 0:
+                break
+            place(line, pool)
+
+        for line, amount in placed.items():
+            slice_usd, slice_uzs = supplier_allocation_pair(payment, amount)
+            SupplierPaymentAllocation.objects.create(
+                payment=payment, line=line, amount=slice_usd, amount_uzs=slice_uzs)
+        return pool
+
+
+def unspent_supplier_payment_pair(payment):
+    """(usd, uzs) of a hamkor to'lov that sits on no product yet.
+
+    Both columns straight off the parent minus its slices, so each side is exact —
+    the same rule `unspent_payment_pair` follows on the incoming side. The pool is
+    `credited_amount`: the bank's foiz rides on top of what the hamkor receives, so
+    it never was theirs to be credited with."""
+    slices = list(payment.allocations.all())
+    return (payment.credited_amount - sum((s.amount for s in slices), Decimal("0")),
+            payment.credited_amount_uzs - sum((s.amount_uzs for s in slices), Decimal("0")))
+
+
+def unspent_supplier_payment_amount(payment):
+    """The avans part of one hamkor to'lov, in the kelishuv's own currency."""
+    return own_side(payment.contract, *unspent_supplier_payment_pair(payment))
+
+
+def partner_advance_total(partner):
+    """(usd, uzs) a hamkor is holding of ours that no product has claimed yet.
+
+    Read across ALL of their kelishuvlar, because that is whose money it is. A zaklad
+    handed over on one kelishuv is credit with that hamkor, and they carry it to the
+    next one — the same way a mijoz's avans is the mijoz's rather than one sotuv's."""
+    total = total_uzs = Decimal("0")
+    payments = (SupplierPayment.objects.filter(contract__partner=partner)
+                .select_related("contract").prefetch_related("allocations"))
+    for payment in payments:
+        usd, uzs = unspent_supplier_payment_pair(payment)
+        if own_side(payment.contract, usd, uzs) > 0:
+            total += usd
+            total_uzs += uzs
+    return total, total_uzs
+
+
+def reconcile_supplier_allocations(contract):
+    """Re-answer the whole kelishuv: every to'lov placed again, oldest first.
+
+    Needed because a slice is an answer to a question that keeps moving. A new truck
+    raises what a product costs, an edited to'lov changes what there is to spread,
+    and a deleted one frees the products it was sitting on — after any of those the
+    stored slices are yesterday's answer. Oldest first so the result does not depend
+    on the order the rows happen to come back in."""
+    with transaction.atomic():
+        for payment in (contract.supplier_payments
+                        .select_related("contract", "contract_line")
+                        .order_by("date", "pk")):
+            allocate_supplier_payment(payment)
 
 
 def apply_customer_advance(sale):

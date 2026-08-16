@@ -56,7 +56,7 @@ from .models import (
     customer_receivable_by_currency, fifo_lots,
     kassa_cash_by_currency, kassa_cash_by_method, kassa_row_sets,
     own_side,
-    reconcile_customer_allocations,
+    reconcile_customer_allocations, reconcile_supplier_allocations,
     trim_sale_allocations,
     uzs_slice,
 )
@@ -1142,6 +1142,10 @@ def supplier_payment_edit(request, pk):
             # Kelishuv, marka va sana butun to'lovga tegishli — bir qatorda
             # to'g'rilangani qolganlariga ham yoziladi (`_sync_settlement`).
             _sync_settlement(payment)
+            # Bu to'lov kamaysa yoki boshqa markaga ko'chsa, u egallab turgan joy
+            # bo'shaydi — kelishuvning qolgan to'lovlari o'sha joyni olishi mumkin,
+            # shuning uchun butun kelishuv qaytadan taqsimlanadi.
+            reconcile_supplier_allocations(payment.contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Hamkor to'lovi", payment.pk,
                 f"To'lov tahrirlandi: {payment.amount}$ · kelishuv #{payment.contract_id}",
@@ -1157,7 +1161,12 @@ def supplier_payment_delete(request, pk):
     payment = get_object_or_404(SupplierPayment, pk=pk)
     if request.method == "POST":
         amount, contract_id = payment.amount, payment.contract_id
+        contract = payment.contract
         payment.delete()
+        # O'chgan to'lov turgan mahsulotlar bo'shadi — qolgan to'lovlar o'sha joyni
+        # to'ldirishi mumkin, aks holda mahsulot to'lanmagan bo'lib ko'rinadi-yu,
+        # puli hamkor avansida osilib qoladi.
+        reconcile_supplier_allocations(contract)
         AuditLog.record(
             request.user, AuditLog.Action.DELETE, "Hamkor to'lovi", pk,
             f"To'lov o'chirildi: {amount}$ · kelishuv #{contract_id}",

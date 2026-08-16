@@ -351,10 +351,12 @@ def test_a_kelishuv_with_no_plan_counts_against_the_trucks_it_has_sent(admin_cli
     assert "/ None" not in html
 
 
-def test_money_paid_before_the_marka_was_asked_for_shows_as_unassigned(admin_client, db):
-    """Every to'lov entered before a to'lov could name a marka names none. Folded
-    into either bar it would credit a marka nobody said it bought; left out, the
-    gold bars would read as nothing paid on a kelishuv six figures into its life."""
+def test_a_tolov_naming_no_marka_is_spread_across_the_products(admin_client, db):
+    """A to'lov that names no marka is a zaklad, and a zaklad buys the kelishuv's
+    products rather than sitting outside them: it splits by mashina count where
+    there is a plan to split by, and otherwise runs the kelishuv in order
+    (`allocate_supplier_payment`). Left out of both bars, a kelishuv six figures
+    into its life read as nothing paid."""
     contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
     ContractLine.objects.create(contract=contract, brand="209 campaund",
                                 kg=Decimal("1000"), price=Decimal("1.00"))
@@ -362,10 +364,29 @@ def test_money_paid_before_the_marka_was_asked_for_shows_as_unassigned(admin_cli
                                    date="2026-07-05")          # names no marka
 
     row = admin_client.get("/").context["contracts"][0]
-    assert [ln["paid"] for ln in row["lines"]] == [Decimal("0"), Decimal("0")]
-    assert row["unassigned_paid"] == Decimal("600")
-    # The parts and the unassigned remainder add back to the kelishuv's own figure.
+    # No truck plan on either product, so there is nothing to weigh by: the money
+    # runs the kelishuv in its own order and stops when it is spent.
+    assert [ln["paid"] for ln in row["lines"]] == [Decimal("600"), Decimal("0")]
+    # Nothing is left over — every som of it found a product to buy.
+    assert row["unassigned_paid"] == Decimal("0")
+    # The parts and whatever no product could take add back to the kelishuv's own
+    # figure, however the money was placed.
     assert sum(ln["paid"] for ln in row["lines"]) + row["unassigned_paid"] == row["paid"]
+
+
+def test_what_no_product_can_take_is_still_shown_as_unassigned(admin_client, db):
+    """The hamkor's avans: money past what the whole kelishuv costs belongs to the
+    hamkor rather than to any marka, and the card says so instead of quietly
+    crediting the last product with it."""
+    contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
+    ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                kg=Decimal("1000"), price=Decimal("1.00"))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
+                                   date="2026-07-05")          # 500 past the lot
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert [ln["paid"] for ln in row["lines"]] == [Decimal("1000"), Decimal("1000")]
+    assert row["unassigned_paid"] == Decimal("500")
     assert "taqsimlanmagan" in admin_client.get("/").content.decode().lower()
 
 
