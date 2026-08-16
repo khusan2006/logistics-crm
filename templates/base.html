@@ -1385,16 +1385,16 @@
       // the answer is moot, and blanking it would throw away the operator's pick if
       // they switch usul back.
       //
-      // A RadioSelect renders as a <div> of its own carrying the field's auto id,
-      // with the caption stranded in the <p> before it — so both have to move, and
-      // the id is what ties one radio back to the group it belongs to.
+      // The whole FIELD goes, caption and radios in one move. A RadioSelect renders
+      // as a bare <div> of its own inside the field's wrapper, and hiding that <div>
+      // did neither half of the job: the caption beside it stayed standing over
+      // nothing, and the <div> itself carries a `display:flex` that outranks the UA
+      // rule for [hidden], so it never went away either. The wrapper has a matching
+      // [hidden] rule (.lineset-field[hidden]) and holds both parts.
       var bearerEl = root.querySelector('[data-fee-bearer]');
       if (bearerEl) {
-        var group = document.getElementById(bearerEl.id.replace(/_\d+$/, ''))
-                 || bearerEl.closest('.lineset-field') || bearerEl;
+        var group = bearerEl.closest('.lineset-field') || bearerEl.closest('p') || bearerEl;
         group.hidden = !isTransfer;
-        var caption = group.previousElementSibling;
-        if (caption && caption.querySelector('label')) { caption.hidden = !isTransfer; }
       }
     }
     function enhance(root) {

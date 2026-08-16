@@ -121,8 +121,17 @@ def test_the_fee_bearer_radios_sit_beside_their_own_words(page, live_server, wor
     """Regression: `.lineset-field input { width: 100% }` is right for every text box
     in a money row and catastrophic for a radio — the dot stretched to the full width
     of its column and shoved its own label off the end, so the pair read as four
-    stray items rather than two choices. A radio is ~13px wide, never 100."""
+    stray items rather than two choices. A radio is ~13px wide, never 100.
+
+    Measured with the usul on perechisleniya, because that is the only time the
+    question exists: a naqd row pays no bank foiz, so there is no cut for anybody to
+    carry and the whole field — caption and radios together — is away."""
     _open(page, live_server, world)
+    field = page.locator(".lineset-field--fee_bearer")
+    assert field.is_hidden(), "naqd to'lovda komissiya savoli chiqmasligi kerak"
+    page.select_option("[name='form-0-method']", "transfer")
+    page.wait_for_timeout(250)
+    assert field.is_visible(), "perechisleniyada komissiya savoli chiqishi kerak"
     radios = page.locator(".lineset-field--fee_bearer input[type=radio]")
     assert radios.count() == 2
     for i in range(2):
