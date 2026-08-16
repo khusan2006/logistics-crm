@@ -2505,8 +2505,9 @@ class Kapital(CashEntry):
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
     amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
                                      default=0)
+    # Naqd, the same as every to'lov form in the app.
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
-                              default=PayMethod.TRANSFER)
+                              default=PayMethod.CASH)
     note = models.CharField("Izoh", max_length=255, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="kapital_entries",
