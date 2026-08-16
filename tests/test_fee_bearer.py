@@ -1,12 +1,16 @@
-"""Bank foizini kim ko'taradi — the choice, on both directions of the money.
+"""Bank foizini kim ko'taradi — whose side of the ledger absorbs the bank's cut.
 
-The bank takes its cut either way; that is not a decision anybody makes. What IS a
-decision is whose side of the ledger absorbs it, and until now each kind of row had
-that answer hard-coded: money coming in was always the sender's loss, money going out
-always rode on top of ours. Both are still the default, so nothing already booked
-moves — a blank `fee_bearer` reads as "the way this kind of row has always behaved".
+The bank takes it either way; that is not a decision anybody makes. What the models
+still carry is who is out of pocket for it, and a blank `fee_bearer` reads as "the way
+this kind of row has always behaved" — so nothing already booked moves.
 
-The pair to hold in mind is that the CASH never changes with the choice, only who is
+Only ONE direction is still a question the screens ask. Money going OUT — hamkor,
+logist, bojxona — is always ours to carry: they have to receive the figure we said we
+were sending, so the foiz rides on top and those forms stopped asking. Money coming IN
+from a mijoz is the sender's loss by default, and that one is still a per-to'lov
+choice.
+
+The pair to hold in mind is that the CASH never changes with the answer, only who is
 credited: a 2% cut on 1 000 means 980 crosses the wire whoever pays for it.
 """
 from decimal import Decimal
@@ -137,26 +141,30 @@ def test_a_naqd_row_has_no_cut_for_anybody_to_carry():
 
 
 def test_the_form_offers_the_choice_named_after_the_other_side(admin_client):
-    """Each screen that still ASKS names the counterparty it is actually facing."""
-    from crm.forms import CustomerPaymentForm, LogistPaymentForm
+    """The one screen that still ASKS names the counterparty it is facing."""
+    from crm.forms import CustomerPaymentForm
 
-    labels = {form: dict(form().fields["fee_bearer"].choices)[FeeBearer.COUNTERPARTY]
-              for form in (CustomerPaymentForm, LogistPaymentForm)}
-    assert labels[CustomerPaymentForm] == "Mijozdan ushlansin"
-    assert labels[LogistPaymentForm] == "Logistdan ushlansin"
-    # and each opens on the way its own kind of row has always behaved
+    choices = dict(CustomerPaymentForm().fields["fee_bearer"].choices)
+    assert choices[FeeBearer.COUNTERPARTY] == "Mijozdan ushlansin"
+    # and it opens on the way a mijoz to'lov has always behaved
     assert CustomerPaymentForm().initial["fee_bearer"] == FeeBearer.COUNTERPARTY
 
 
-def test_a_hamkor_tolov_never_asks_who_carries_the_bank_cut(admin_client):
-    """Money going out to a hamkor: the cut is always ours, so the form does not ask.
+def test_money_going_out_never_asks_who_carries_the_bank_cut(admin_client):
+    """Hamkor, logist, bojxona: the cut is ours, so none of those forms ask.
 
-    The hamkor is owed a figure and has to RECEIVE that figure — the foiz rides on
-    top of it. Offered as a choice, the other answer credited them less than we sent
-    and left the kelishuv short by exactly the foiz."""
-    from crm.forms import SupplierPaymentForm, SupplierPaymentRowForm
+    Each of them has to RECEIVE the figure we said we were sending — a hamkor is
+    owed it, a logist and a bojxonachi are about to spend it on our load — so the
+    foiz rides on top. Offered as a choice, the other answer credited them less than
+    we sent and left every kelishuv paid by perechisleniya short by exactly the
+    foiz."""
+    from crm.forms import (CustomsPaymentForm, CustomsPaymentRowForm,
+                           LogistPaymentForm, LogistPaymentRowForm,
+                           SupplierPaymentForm, SupplierPaymentRowForm)
 
-    for form in (SupplierPaymentForm, SupplierPaymentRowForm):
+    for form in (SupplierPaymentForm, SupplierPaymentRowForm,
+                 LogistPaymentForm, LogistPaymentRowForm,
+                 CustomsPaymentForm, CustomsPaymentRowForm):
         assert "fee_bearer" not in form().fields, form.__name__
         # The bank still takes its cut — only who eats it stopped being a question.
         assert "fee_percent" in form().fields, form.__name__
@@ -168,3 +176,9 @@ def test_a_hamkor_tolov_never_asks_who_carries_the_bank_cut(admin_client):
     assert payment.fee_on_company
     assert payment.credited_amount == Decimal("1000")
     assert payment.total_out == Decimal("1020.00")
+
+    # And a logist top-up funds the float in full for the same reason.
+    topup = LogistPayment(amount=Decimal("1000"), method="transfer",
+                          fee_percent=Decimal("2"))
+    assert topup.net_amount == Decimal("1000")
+    assert topup.total_out == Decimal("1020.00")

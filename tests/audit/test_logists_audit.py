@@ -366,12 +366,11 @@ def test_a_dollar_only_logist_publishes_no_som_gap_at_all(admin_client, db):
 
 
 def test_a_bank_foiz_is_charged_to_exactly_one_side(admin_client, db):
-    """The cut comes off ONE decision, not both ends of it.
+    """The cut comes off ONE side, not both ends of it.
 
-    Carried by us (the default, and how every existing top-up was booked), the
-    logist is funded the whole 1 000 and the kassa is out 1 020. Carried by the
-    logist, 1 000 leaves the kassa and 980 of it reaches them. It used to do both at
-    once — funded 980 while costing 1 020 — which billed the same 20 twice."""
+    It is ours: the logist is funded the whole 1 000 and the kassa is out 1 020. The
+    figure used to be taken off both at once — funded 980 while costing 1 020 —
+    which billed the same 20 twice."""
     logist = _logist()
     ours = _send(admin_client, logist, amount="1000", method="transfer",
                  fee_percent="2", exchange_rate="12000")
@@ -380,11 +379,19 @@ def test_a_bank_foiz_is_charged_to_exactly_one_side(admin_client, db):
     assert ours.total_out == Decimal("1020.00")            # what the kassa lost
     assert logist.received_total == Decimal("1000.00")
 
-    theirs = _send(admin_client, logist, amount="1000", method="transfer",
-                   fee_percent="2", exchange_rate="12000",
-                   fee_bearer="counterparty", date="2026-07-11")
-    assert theirs.net_amount == Decimal("980.00")          # what reached them
-    assert theirs.total_out == Decimal("1000.00")          # what the kassa lost
+
+def test_the_foiz_cannot_be_pushed_onto_the_logist_through_the_post(admin_client, db):
+    """The form stopped asking whose the cut is (see `LogistPaymentForm`), so a
+    hand-made POST still carrying the old answer changes nothing. Otherwise the rule
+    would hold only as far as the browser, and the figure that gets saved is the one
+    place it matters."""
+    logist = _logist()
+    row = _send(admin_client, logist, amount="1000", method="transfer",
+                fee_percent="2", exchange_rate="12000", fee_bearer="counterparty")
+    assert row.fee_bearer == ""
+    assert row.fee_on_company
+    assert row.net_amount == Decimal("1000.00")            # funded in full anyway
+    assert row.total_out == Decimal("1020.00")
 
 
 def test_the_kassa_loses_the_top_up_and_the_foiz_and_nothing_else(admin_client, db):

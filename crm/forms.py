@@ -1962,17 +1962,18 @@ class LogistPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
                            MoneyEntryFormMixin, forms.ModelForm):
     """One way a logist top-up left us. The balance it lands in is kept in dollars
     (see `LogistPaymentForm`), so a dollar row crosses nothing and asks for no kurs
-    while a so'm one does."""
+    while a so'm one does.
 
-    fee_counterparty = "Logistdan ushlansin"
+    No `fee_bearer` here either — the bank's cut on money going out is ours."""
+
     float_currency = Currency.USD
-    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
+    field_order = ["amount", "currency", "method", "fee_percent",
                    "exchange_rate", "note"]
 
     class Meta:
         model = LogistPayment
         fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
-                  "fee_bearer", "note"]
+                  "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
         labels = {"amount": "Yuboriladigan summa"}
 
@@ -2013,16 +2014,17 @@ class CustomsPaymentRowForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Mode
     """One way money reached a bojxonachi. Nothing here ever crosses a currency — a
     bojxonachi holds a dollar heap and a so'm heap rather than one float — so no kurs
     is ever demanded and the row simply inherits one for the kassa's other column,
-    exactly as the single-row form does."""
+    exactly as the single-row form does.
 
-    fee_counterparty = "Bojxonachidan ushlansin"
-    field_order = ["amount", "currency", "method", "fee_percent", "fee_bearer",
+    No `fee_bearer` here either — the bank's cut on money going out is ours."""
+
+    field_order = ["amount", "currency", "method", "fee_percent",
                    "exchange_rate", "note"]
 
     class Meta:
         model = CustomsPayment
         fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
-                  "fee_bearer", "note"]
+                  "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
         labels = {"amount": "Yuboriladigan summa"}
 
@@ -2629,16 +2631,20 @@ class LogistPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelFor
     (ShipmentForm.sync_driver_advance), so the balance is a dollar figure. A dollar
     top-up therefore crosses nothing and asks for no kurs, exactly as a kelishuv paid
     in its own currency does; a so'm top-up does convert into that float, so there the
-    rate is what decides how much the logist ends up holding."""
+    rate is what decides how much the logist ends up holding.
+
+    No `fee_bearer`, for the reason `SupplierPaymentForm` gives: on money going OUT
+    the bank's cut is always ours. The logist has to end up holding the figure we
+    said we were sending, so the foiz rides on top of it and the kassa is out the
+    extra."""
 
     #: The currency the logist's balance is kept in — see the class docstring.
     float_currency = Currency.USD
-    fee_counterparty = "Logistdan ushlansin"
 
     class Meta:
         model = LogistPayment
         fields = ["logist", "date", "currency", "amount", "exchange_rate",
-                  "method", "fee_percent", "fee_bearer", "note"]
+                  "method", "fee_percent", "note"]
         widgets = {"date": date_widget()}
         labels = {"amount": "Yuboriladigan summa"}
 
@@ -2831,14 +2837,17 @@ class CustomsPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelFo
     so a so'm to'lov lands in the so'm heap and a dollar one in the dollar heap, and
     nothing ever crosses. The row still gets a rate — both money columns have to
     hold something for the kassa's converted total — but it is inherited, exactly as
-    a kelishuv paid in its own currency inherits one."""
+    a kelishuv paid in its own currency inherits one.
 
-    fee_counterparty = "Bojxonachidan ushlansin"
+    No `fee_bearer`, for the reason `SupplierPaymentForm` gives: on money going OUT
+    the bank's cut is always ours. The bojxonachi has to end up holding the figure
+    we said we were sending — they are about to spend it on our truck — so the foiz
+    rides on top of it and the kassa is out the extra."""
 
     class Meta:
         model = CustomsPayment
         fields = ["agent", "shipment", "date", "currency", "amount", "exchange_rate",
-                  "method", "fee_percent", "fee_bearer", "note"]
+                  "method", "fee_percent", "note"]
         widgets = {"date": date_widget()}
         labels = {"amount": "Yuboriladigan summa"}
         help_texts = {
