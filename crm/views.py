@@ -66,6 +66,28 @@ def _bar_pct(part, whole):
     return min(100, max(0, int(Decimal(part) * 100 / Decimal(whole))))
 
 
+def _chart_line(contract, ln):
+    """One marka's row in the Kelishuvlar bajarilishi card: a Yuk bar and a To'lov
+    bar, each carrying its own mashina count.
+
+    Built here rather than inline so every figure is read once. `trucks_paid_for`
+    prices each of this marka's trucks to answer, and asking it twice — once per
+    half of the pair it returns — walks the same loads again."""
+    paid = contract._own(ln.paid_total, ln.paid_total_uzs)
+    due = contract._own(ln.expected_value, ln.expected_value_uzs)
+    trucks_paid, trucks_sent = ln.trucks_paid_for
+    return {
+        "brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
+        "pct": _bar_pct(ln.shipped_kg, ln.kg),
+        "sent": ln.truck_progress[0], "planned": ln.planned_trucks,
+        # The mashina figures ride INSIDE the bars now, so each bar needs its own:
+        # trucks GONE against the Yuk bar, trucks PAID FOR against the To'lov one.
+        # Two different questions, which is what earns them the second label.
+        "trucks_paid": trucks_paid, "trucks_sent": trucks_sent,
+        "paid": paid, "due": due, "pay_pct": _bar_pct(paid, due),
+    }
+
+
 def dashboard(request):
     if not request.user.is_admin_role:
         # Everyone lands on the first page their role can actually open. A skladchi
@@ -78,10 +100,14 @@ def dashboard(request):
     # Prefetched here rather than per figure below: the chart reads every kelishuv's
     # lines, payments and yuklar, which is three queries per row without this.
     # `shipments__lines__contract_line` for trucks_paid_for: it prices every truck
-    # on every kelishuv, which is a query per line without it.
+    # on every kelishuv, which is a query per line without it. The `lines__` twin
+    # is for ContractLine.trucks_paid_for, which prices and dates the same loads
+    # from the marka's side — `__shipment` because it settles them oldest first.
     contracts = (Contract.objects.select_related("partner")
                  .prefetch_related("shipments__lines__contract_line",
-                                   "lines__shipment_lines", "lines__supplier_payments",
+                                   "lines__shipment_lines__shipment",
+                                   "lines__shipment_lines__contract_line",
+                                   "lines__supplier_payments",
                                    "supplier_payments"))
     total_kg = ContractLine.objects.aggregate(s=Sum("kg"))["s"] or 0
     shipped_kg = ShipmentLine.objects.aggregate(s=Sum("kg"))["s"] or 0
@@ -169,14 +195,7 @@ def dashboard(request):
             # to'lov, now that a to'lov names the product it bought: a kelishuv
             # can be square on one marka and untouched on the other, which one
             # gold bar across both could not say.
-            "lines": [{"brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
-                       "pct": _bar_pct(ln.shipped_kg, ln.kg),
-                       "sent": ln.truck_progress[0], "planned": ln.planned_trucks,
-                       "paid": contract._own(ln.paid_total, ln.paid_total_uzs),
-                       "due": contract._own(ln.expected_value, ln.expected_value_uzs),
-                       "pay_pct": _bar_pct(
-                           contract._own(ln.paid_total, ln.paid_total_uzs),
-                           contract._own(ln.expected_value, ln.expected_value_uzs))}
+            "lines": [_chart_line(contract, ln)
                       for ln in lines] if len(lines) > 1 else [],
             # What was paid before a to'lov could name a marka. Shown as its own
             # row rather than folded into one of them: nobody has said which it

@@ -267,6 +267,53 @@ def test_a_two_marka_kelishuv_splits_the_tolov_too(admin_client, db):
     assert row["unassigned_paid"] == Decimal("0")
 
 
+def test_each_marka_counts_the_yuklar_its_own_money_covers(admin_client, db):
+    """The gold bar carries a to'langan count now, and on a kelishuv with markalar
+    it has to be the marka's own: a hamkor settled in full on one product and paid
+    nothing on the other is exactly the case the kelishuv-wide figure cannot tell
+    apart. Only the money that NAMED the marka counts, against that marka's share
+    of each yuk."""
+    contract = make_contract(brand="7000 campaund", kg="2000", price="1.00")
+    second = ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                         kg=Decimal("2000"), price=Decimal("1.00"))
+    first = contract.lines.get(brand="7000 campaund")
+    for day in (5, 6):
+        make_shipment(contract=contract, kg="1000", contract_line=first,
+                      sent=date(2026, 7, day))
+    make_shipment(contract=contract, kg="1000", contract_line=second,
+                  sent=date(2026, 7, 7))
+    # Named 209 campaund, so it settles that marka's one truck and none of the
+    # two sitting unpaid under 7000 campaund.
+    SupplierPayment.objects.create(contract=contract, contract_line=second,
+                                   amount=Decimal("1000"), date="2026-07-08")
+
+    assert first.trucks_paid_for == (0, 2) and second.trucks_paid_for == (1, 1)
+    row = admin_client.get("/").context["contracts"][0]
+    assert [(ln["brand"], ln["trucks_paid"], ln["trucks_sent"]) for ln in row["lines"]] == [
+        ("7000 campaund", 0, 2), ("209 campaund", 1, 1)]
+    html = admin_client.get("/").content.decode()
+    assert "0 / 2 to'langan" in html and "1 / 1 to'langan" in html
+    # And the kelishuv-wide note goes: it agrees with neither bar above it while
+    # looking exactly like the fractions inside them.
+    assert "yuk to'langan" not in html
+
+
+def test_the_marka_bars_carry_their_own_mashina_count(admin_client, db):
+    """The count used to sit on a heading above the pair, where it could only ever
+    speak for the Yuk bar. In the bar it belongs to, each says its own thing."""
+    contract = make_contract(brand="7000 campaund", kg="2000", price="1.00",
+                             planned_trucks=4)
+    ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                kg=Decimal("2000"), price=Decimal("1.00"),
+                                planned_trucks=3)
+    make_shipment(contract=contract, kg="1000",
+                  contract_line=contract.lines.get(brand="7000 campaund"))
+
+    html = admin_client.get("/").content.decode()
+    assert "1 / 4 mashina" in html and "0 / 3 mashina" in html
+    assert 'class="cprog-marka-trucks"' not in html
+
+
 def test_money_paid_before_the_marka_was_asked_for_shows_as_unassigned(admin_client, db):
     """Every to'lov entered before a to'lov could name a marka names none. Folded
     into either bar it would credit a marka nobody said it bought; left out, the
@@ -303,15 +350,61 @@ def test_the_tolov_bar_says_how_many_yuklar_the_money_covers(admin_client, db):
     contract = make_contract(kg="3000", price="1.00")
     for day in (5, 6, 7):
         make_shipment(contract=contract, kg="1000", sent=date(2026, 7, day))
-    # Two trucks' worth and a bit: $2 000 covers the first two outright, and the
-    # $500 sitting in the third is an avans against it, not a truck paid for.
+    # Two trucks' worth and a half: $2 000 covers the first two outright, and the
+    # $500 sitting in the third is half of that truck — counted as the half it is.
     SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
                                    date="2026-07-08")
 
-    assert contract.trucks_paid_for == (2, 3)
+    assert contract.trucks_paid_for == (Decimal("2.5"), 3)
     row = admin_client.get("/").context["contracts"][0]
-    assert (row["trucks_paid"], row["trucks_sent"]) == (2, 3)
-    assert "2 / 3 yuk to'langan" in admin_client.get("/").content.decode()
+    assert (row["trucks_paid"], row["trucks_sent"]) == (Decimal("2.5"), 3)
+    html = admin_client.get("/").content.decode()
+    # Twice inside the gold bar — the label is written a second time so it can
+    # turn white where the fill reaches it — and once more on the note below,
+    # which a kelishuv with a single mahsulot keeps.
+    assert html.count("2,5 / 3 to'langan") == 2
+    assert "2,5 / 3 yuk to'langan" in html
+
+
+def test_a_part_paid_truck_is_never_rounded_up_into_a_whole_one(admin_client, db):
+    """The partial is the point, but it must not overshoot into a load the hamkor
+    is still owed for. $1 990 of two $1 000 trucks is 1,9 — never 2, which would
+    say the second one is settled when $10 of it is not."""
+    contract = make_contract(kg="2000", price="1.00")
+    for day in (5, 6):
+        make_shipment(contract=contract, kg="1000", sent=date(2026, 7, day))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("1990"),
+                                   date="2026-07-08")
+
+    assert contract.trucks_paid_for == (Decimal("1.9"), 2)
+    assert "1,9 / 2 to'langan" in admin_client.get("/").content.decode()
+
+
+def test_a_trailing_zero_is_never_printed_on_a_whole_count(admin_client, db):
+    """Every truck paid for reads "2 / 2", not "2,0 / 2" — the same rule the kg
+    and money figures on this card follow."""
+    # A third truck's worth of kg still to send, so the kelishuv is not settled
+    # and stays on the card — the chart only carries business still in flight.
+    contract = make_contract(kg="3000", price="1.00")
+    for day in (5, 6):
+        make_shipment(contract=contract, kg="1000", sent=date(2026, 7, day))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("2000"),
+                                   date="2026-07-08")
+
+    html = admin_client.get("/").content.decode()
+    assert "2 / 2 to'langan" in html and "2,0 / 2" not in html
+
+
+def test_money_past_the_last_truck_counts_for_no_truck(admin_client, db):
+    """An avans running past everything sent is not a fraction of a truck that
+    does not exist — the count stops at what has actually left."""
+    contract = make_contract(kg="3000", price="1.00")
+    make_shipment(contract=contract, kg="1000", sent=date(2026, 7, 5))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
+                                   date="2026-07-08")
+
+    assert contract.trucks_paid_for == (Decimal("1"), 1)
+    assert "1 / 1 to'langan" in admin_client.get("/").content.decode()
 
 
 def test_the_oldest_truck_is_the_one_paid_off_first(admin_client, db):
@@ -334,7 +427,10 @@ def test_an_avans_with_no_truck_yet_covers_nothing(admin_client, db):
                                    date="2026-07-08")
 
     assert contract.trucks_paid_for == (0, 0)
-    assert "yuk to'langan" not in admin_client.get("/").content.decode()
+    html = admin_client.get("/").content.decode()
+    # Neither the note nor the label inside the gold bar — "0 / 0" is what an
+    # unguarded one of either would print.
+    assert "yuk to'langan" not in html and "0 / 0 to'langan" not in html
 
 
 def test_progress_chart_bar_never_runs_past_its_track(admin_client, db):

@@ -1,4 +1,4 @@
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -67,6 +67,36 @@ def own_side(row, usd_value, uzs_value):
     in full never leaves the unfinished list. Costs are the one deliberate exception —
     see ShipmentLine.landed_cost_per_kg."""
     return uzs_value if row.is_som else usd_value
+
+
+def _trucks_covered(paid, trucks):
+    """How many yuklar `paid` covers, oldest truck first — the shared half of
+    `Contract.trucks_paid_for` and its per-marka twin on ContractLine.
+
+    `trucks` is (sort_key, value) pairs, each already priced in the money's own
+    currency; the caller decides what a truck is worth, since a marka pays only
+    for its share of a load carrying two.
+
+    The answer carries the PART of the next truck the money reaches into —
+    "0,2 / 2" rather than "0 / 2", which called a fifth of a truck nothing. It
+    is only ever rounded DOWN, and to one decimal: a truck shown as a whole is a
+    truck the hamkor is no longer owed for, so 1,96 must read as 1,9 and never
+    as 2. Money running past the last truck is an avans and counts for no
+    truck at all — the figure stops at `len(trucks)`."""
+    covered = Decimal("0")
+    for _key, value in sorted(trucks, key=lambda t: t[0]):
+        if value <= 0:
+            # Nothing is owed on it, so no payment is needed to cover it.
+            covered += 1
+            continue
+        if paid <= 0:
+            break
+        if paid < value:
+            covered += paid / value
+            break
+        paid -= value
+        covered += 1
+    return covered.quantize(Decimal("0.1"), rounding=ROUND_DOWN)
 
 
 class MoneyEntry(models.Model):
@@ -723,26 +753,19 @@ class Contract(models.Model):
         worked off: oldest truck first, each covered in full before the next
         starts, which is the order a hamkor settles in.
 
-        WHOLE trucks only. Money part-way through the next one is an avans
-        against it, not a truck paid for — rounding it up would report a load as
-        settled while the hamkor is still owed for it.
+        `covered` is FRACTIONAL — money part-way through a truck shows as the
+        part it is, never rounded up into a load the hamkor is still owed for.
+        See `_trucks_covered`.
 
         In the kelishuv's own currency on both sides. Comparing a so'm to'lov
         against a dollar truck at today's kurs would move the count every time
         the market did."""
-        paid = self.paid_total_own
-        # Oldest first. A truck with no sent date has not left yet, so it queues
-        # behind the ones that have rather than sorting to the front as NULL.
-        trucks = sorted(self.shipments.all(),
-                        key=lambda s: (s.sent is None, s.sent, s.pk))
-        covered = 0
-        for truck in trucks:
-            value = own_side(self, truck.goods_value, truck.goods_value_uzs)
-            if paid < value:
-                break
-            paid -= value
-            covered += 1
-        return covered, len(trucks)
+        # A truck with no sent date has not left yet, so it queues behind the
+        # ones that have rather than sorting to the front as NULL.
+        trucks = [((truck.sent is None, truck.sent, truck.pk),
+                   own_side(self, truck.goods_value, truck.goods_value_uzs))
+                  for truck in self.shipments.all()]
+        return _trucks_covered(self.paid_total_own, trucks), len(trucks)
 
     @property
     def truck_progress(self):
@@ -900,6 +923,28 @@ class ContractLine(MoneyEntry):
         the same way Yuk holatlari counts a two-marka yuk under both."""
         sent = len({sl.shipment_id for sl in self.shipment_lines.all()})
         return sent, self.planned_trucks
+
+    @property
+    def trucks_paid_for(self):
+        """(covered, sent) for THIS product alone — the per-marka twin of
+        `Contract.trucks_paid_for`, and it follows the same rule: oldest truck
+        first, in the kelishuv's own currency, the part of a truck the money
+        reaches into counted as the part it is.
+
+        Both sides are narrowed to this marka. The money is what named it — the
+        kelishuv's unassigned to'lovlar bought nobody's trucks and cannot settle
+        one here. The trucks are this marka's SHARE of each yuk: a truck carrying
+        two markalar is covered here once this one's slice of it is paid, whatever
+        is still owed on the other. That is why these need not add up to the
+        kelishuv's own count, the same way the truck counts don't."""
+        paid = own_side(self.contract, self.paid_total, self.paid_total_uzs)
+        shares = {}
+        for sl in self.shipment_lines.all():
+            value = own_side(self.contract, sl.goods_value, sl.goods_value_uzs)
+            shares[sl.shipment] = shares.get(sl.shipment, Decimal("0")) + value
+        trucks = [((truck.sent is None, truck.sent, truck.pk), value)
+                  for truck, value in shares.items()]
+        return _trucks_covered(paid, trucks), len(trucks)
 
     @property
     def paid_total(self):

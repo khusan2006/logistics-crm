@@ -40,6 +40,12 @@
   --violet: #6d3bd4;
   --violet-soft: #ece3fb;
 
+  /* Ink for text sitting ON a filled block of the colour beside it — the mashina
+     count inside a progress bar. Both fills are dark enough here for white; the
+     dark theme lightens the gold and has to flip. */
+  --on-accent: #ffffff;
+  --on-warning: #ffffff;
+
   /* Row flags — solid fills for the yuklar table's left bar, NOT the semantic
      tokens above. Those are tuned to stay legible as TEXT on a light surface, which
      is why --warning is a dark mustard; as a 3px bar read from across the room it
@@ -98,6 +104,11 @@ html[data-theme="dark"] {
   --danger-soft: #321B1A;
   --violet: #b191f7;
   --violet-soft: #2b2440;
+
+  /* The gold is a bright yellow here, not the olive of the light theme — white
+     on it is barely there, so the ink flips to near-black. */
+  --on-accent: #ffffff;
+  --on-warning: #241d00;
 
   --flag-late: #FF5A57;
   --flag-noqr: #FFCE2E;
@@ -1677,7 +1688,10 @@ ul.errorlist li::before { content: "⚠ "; }
 .hbars { display: flex; flex-direction: column; gap: 15px; }
 .hbar-row { display: grid; grid-template-columns: minmax(96px, 1.2fr) 1.6fr auto; align-items: center; gap: 12px; }
 .hbar-label { font-size: 13px; font-weight: 500; color: var(--text); overflow-wrap: anywhere; }
-.hbar-track { height: 9px; background: var(--surface-2); border-radius: var(--r-pill); overflow: hidden; }
+/* --bar-ink rides on the TRACK, not the fill: the label that reads it is the
+   fill's sibling, painted over it, so it cannot inherit from the fill itself. */
+.hbar-track { height: 9px; background: var(--surface-2); border-radius: var(--r-pill); overflow: hidden; --bar-ink: var(--on-accent); }
+.hbar-track--gold { --bar-ink: var(--on-warning); }
 .hbar-fill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: width 0.35s ease; }
 .hbar-fill--gold { background: var(--warning); }
 .hbar-fill--danger { background: var(--danger); }
@@ -1704,19 +1718,50 @@ ul.errorlist li::before { content: "⚠ "; }
 .cprog-marka {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
   margin-top: 3px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
 }
 .cprog-marka-name { overflow-wrap: anywhere; }
-.cprog-marka-trucks {
+/* The mashina count, centred in the bar it belongs to. The tracks in this card
+   are taller than the ones in Top mahsulotlar for exactly this reason — 9px holds
+   no text. Only here: the other cards' bars carry no label and would just look fat.
+
+   The label is written twice, and BOTH copies span the whole track and centre
+   across it, so they land on precisely the same letters. The `--on` copy is
+   painted over the fill and clipped to it, so the text changes colour exactly
+   where the fill's edge crosses it. One label in a single colour would be
+   unreadable at one end of the range or the other.
+
+   Clipped with clip-path rather than by nesting it inside the fill: a copy
+   living inside a 20%-wide fill would centre on that 20%, not on the track, and
+   the two would no longer line up. The two copies must stay identical in text
+   and in every metric below — a different font-size on either and the letters
+   drift apart. */
+.cprog-bar .hbar-track { position: relative; height: 19px; }
+/* One number, two uses — the fill's width and the clip are the same --p, set on
+   the track by the template. */
+.cprog-bar .hbar-fill { width: var(--p, 0%); }
+.hbar-tag {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
   font-weight: 600;
-  color: var(--text-faint);
   white-space: nowrap;
+  color: var(--text-faint);
   font-variant-numeric: tabular-nums;
+  /* The whole row is a link; the label must not eat the hover or the click. */
+  pointer-events: none;
+}
+/* Painted over the fill and cut back to its width, so only the part of the label
+   the fill has reached shows in the fill's own ink — see --on-warning. */
+.hbar-tag--on {
+  color: var(--bar-ink);
+  clip-path: inset(0 calc(100% - var(--p, 0%)) 0 0);
 }
 /* Sits under the To'lov bar, aligned with the figure it qualifies. Its own line
    rather than a suffix on that figure: the bars are read down a narrow column,

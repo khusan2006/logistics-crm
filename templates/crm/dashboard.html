@@ -145,30 +145,63 @@
         one gold bar cannot say that a kelishuv is square on one marka and
         untouched on the other.
         {% endcomment %}
+        {% comment %}
+        The mashina count rides INSIDE its bar rather than on a line of its own
+        above the pair. Each bar then answers with its own trucks — the Yuk bar
+        how many have gone, the To'lov bar how many are paid for — where the one
+        heading above them could only ever say the first, and said it a whole row
+        away from the bar it belonged to.
+
+        The label is written TWICE, both copies centred across the WHOLE track and
+        so exactly on top of each other: the muted one under the fill, the inked
+        one over it and clipped to the fill's width. As the fill grows the text
+        turns colour through it, which is the only way one centred label reads at
+        both 0% and 100%.
+
+        The fill's width lives in --p on the track, because the clip is derived
+        from it — one number, two uses, no chance of them disagreeing. Order in
+        the DOM is load-bearing: muted, fill, inked. See .hbar-tag, and keep the
+        two copies identical or they will not line up.
+        {% endcomment %}
         {% for line in row.lines %}
         <div class="cprog-marka">
           <span class="cprog-marka-name">{{ line.brand }}</span>
-          {% if line.planned %}<span class="cprog-marka-trucks">{{ line.sent }} / {{ line.planned }} mashina</span>{% endif %}
         </div>
         <div class="cprog-bar">
           <span class="cprog-key">Yuk</span>
-          <div class="hbar-track"><div class="hbar-fill" style="width:{{ line.pct }}%"></div></div>
+          <div class="hbar-track" style="--p:{{ line.pct }}%">
+            {% if line.planned %}<span class="hbar-tag">{{ line.sent }} / {{ line.planned }} mashina</span>{% endif %}
+            <div class="hbar-fill"></div>
+            {% if line.planned %}<span class="hbar-tag hbar-tag--on">{{ line.sent }} / {{ line.planned }} mashina</span>{% endif %}
+          </div>
           <span class="hbar-value">{{ line.shipped_kg|floatformat:"0g" }} / {{ line.kg|floatformat:"0g" }} kg</span>
         </div>
         <div class="cprog-bar">
           <span class="cprog-key">To'lov</span>
-          <div class="hbar-track"><div class="hbar-fill hbar-fill--gold" style="width:{{ line.pay_pct }}%"></div></div>
+          <div class="hbar-track hbar-track--gold" style="--p:{{ line.pay_pct }}%">
+            {% if line.trucks_sent %}<span class="hbar-tag">{{ line.trucks_paid|floatformat:"-1" }} / {{ line.trucks_sent }} to'langan</span>{% endif %}
+            <div class="hbar-fill hbar-fill--gold"></div>
+            {% if line.trucks_sent %}<span class="hbar-tag hbar-tag--on">{{ line.trucks_paid|floatformat:"-1" }} / {{ line.trucks_sent }} to'langan</span>{% endif %}
+          </div>
           <span class="hbar-value">{% money_progress_in line.paid line.due row.contract.currency %}</span>
         </div>
         {% empty %}
         <div class="cprog-bar">
           <span class="cprog-key">Yuk</span>
-          <div class="hbar-track"><div class="hbar-fill" style="width:{{ row.kg_pct }}%"></div></div>
+          <div class="hbar-track" style="--p:{{ row.kg_pct }}%">
+            {% if row.planned %}<span class="hbar-tag">{{ row.sent }} / {{ row.planned }} mashina</span>{% endif %}
+            <div class="hbar-fill"></div>
+            {% if row.planned %}<span class="hbar-tag hbar-tag--on">{{ row.sent }} / {{ row.planned }} mashina</span>{% endif %}
+          </div>
           <span class="hbar-value">{{ row.shipped_kg|floatformat:"0g" }} / {{ row.kg|floatformat:"0g" }} kg</span>
         </div>
         <div class="cprog-bar">
           <span class="cprog-key">To'lov</span>
-          <div class="hbar-track"><div class="hbar-fill hbar-fill--gold" style="width:{{ row.pay_pct }}%"></div></div>
+          <div class="hbar-track hbar-track--gold" style="--p:{{ row.pay_pct }}%">
+            {% if row.trucks_sent %}<span class="hbar-tag">{{ row.trucks_paid|floatformat:"-1" }} / {{ row.trucks_sent }} to'langan</span>{% endif %}
+            <div class="hbar-fill hbar-fill--gold"></div>
+            {% if row.trucks_sent %}<span class="hbar-tag hbar-tag--on">{{ row.trucks_paid|floatformat:"-1" }} / {{ row.trucks_sent }} to'langan</span>{% endif %}
+          </div>
           <span class="hbar-value">{% money_progress_in row.paid row.due row.contract.currency %}</span>
         </div>
         {% endfor %}
@@ -185,14 +218,17 @@
         </div>
         {% endif %}
         {% comment %}
-        What the money has bought, on its own line rather than tacked onto the
-        figure beside it: the head already reads "2 / 5 mashina" (sent of planned)
-        and a second fraction on the same line would be read as the same kind of
-        thing. It is not — this one counts the yuklar the to'lov covers, oldest
-        truck first, whole trucks only. See Contract.trucks_paid_for.
+        What the money has bought, spelled out under the bar: oldest truck first,
+        the part of a truck the money reaches into counted as the part it is.
+        See Contract.trucks_paid_for.
+
+        A kelishuv with markalar drops it. Its gold bars have gone per-marka and
+        each already carries its own to'langan count, so a kelishuv-wide fraction
+        under them is a THIRD kind of fraction on the block — one that agrees with
+        none of the ones above it and is read as though it should.
         {% endcomment %}
-        {% if row.trucks_sent %}
-        <div class="cprog-note">{{ row.trucks_paid }} / {{ row.trucks_sent }} yuk to'langan</div>
+        {% if not row.lines and row.trucks_sent %}
+        <div class="cprog-note">{{ row.trucks_paid|floatformat:"-1" }} / {{ row.trucks_sent }} yuk to'langan</div>
         {% endif %}
       </a>
       </div>
