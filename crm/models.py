@@ -2166,10 +2166,20 @@ STOCK_COST_PREFETCH = (
     # Through the slices, not through `sales`: a sotuv that reached across a lot
     # boundary leaves only part of its kg here, which is what `ShipmentLine.sold_kg`
     # and `returned_kg` now read.
-    "sale_lots__sale__returns", "shipment__expenses",
+    "sale_lots__sale__returns",
+    # Freight per kg divides the truck's xarajatlar by the truck's WHOLE kg, so the
+    # other products riding with it are part of the sum (`Shipment.expense_per_kg`).
+    "shipment__expenses", "shipment__lines",
+    # The vositachi cut per kg divides what the kelishuv has accrued by its whole
+    # agreed kg (`Contract.commission_per_kg`).
     "contract_line__contract__supplier_payments",
     "contract_line__contract__lines",
 )
+
+#: The lot's own kelishuv and its hamkor, for screens that NAME them. `arrived_lots`
+#: already joins the truck's side; a lot's contract is reached the other way, through
+#: `contract_line`, and left alone it is two queries per row.
+STOCK_LOT_RELATED = ("contract_line__contract__partner",)
 
 
 def stock_value():

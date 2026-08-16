@@ -1,11 +1,10 @@
 import re
 from datetime import date as _date, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
@@ -45,7 +44,8 @@ from .models import (
     Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation,
     PayMethod, Reservation, Return, Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
-    ShipmentLine, ShipmentStatus, SupplierPayment, allocate_customer_payment,
+    ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
+    SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
     _by_currency, bron_queue, commission_total, contract_value_by_currency,
     convert_pair,
@@ -53,12 +53,12 @@ from .models import (
     draw_down_bron, release_bron,
     customs_positions, logist_positions, payable_by_currency, supplier_paid_by_currency,
     customer_advance_total, customer_balance_by_currency,
-    customer_receivable_by_currency, customer_receivable_total, fifo_lots,
+    customer_receivable_by_currency, fifo_lots,
     kassa_cash_by_currency, kassa_cash_by_method, kassa_row_sets,
-    own_side, partner_positions,
-    reconcile_customer_allocations, transit_value,
+    own_side,
+    reconcile_customer_allocations,
     trim_sale_allocations,
-    unspent_payment_amount, uzs_slice,
+    uzs_slice,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
 
@@ -157,8 +157,14 @@ def dashboard(request):
         return redirect("ombor" if request.user.is_skladchi else "shipment_list")
     # `legs` for the kechikkan table: it names the transport carrying the load NOW,
     # which is the active leg's, and reading that per row is a query per row.
+    # `lines__sale_lots__sale__returns` for the ombor qoldiq below: what is left on a
+    # lot is its kg less what was sold off it plus what came back, and both of those
+    # are read through the sotuv's SLICES now (`ShipmentLine.sold_kg`). Without it
+    # this one figure walked every lot, every slice and every qaytarish one row at a
+    # time — two thirds of the doska's queries for a single number.
     shipments = (Shipment.objects.select_related("contract__partner", "status")
-                 .prefetch_related("lines__contract_line", "legs"))
+                 .prefetch_related("lines__contract_line", "legs",
+                                   "lines__sale_lots__sale__returns"))
     # Prefetched here rather than per figure below: the chart reads every kelishuv's
     # lines, payments and yuklar, which is three queries per row without this.
     # `shipments__lines__contract_line` for trucks_paid_for: it prices every truck
@@ -1752,8 +1758,13 @@ def _ombor_groups(request):
     Excel button."""
     q = request.GET.get("q", "").strip()
     # Oldest arrival first — the FIFO consumption order sales draw from.
+    # Every lot prints a tannarx, and a tannarx reaches into the truck's xarajatlar
+    # AND the kelishuv's to'lovlar (`ShipmentLine.landed_cost_per_kg`). Loaded here
+    # in one go: left to itself the page asked four questions per lot and answered
+    # them 132 times over.
     lots = (arrived_lots()
-            .prefetch_related("shipment__expenses", "sale_lots__sale__returns")
+            .select_related(*STOCK_LOT_RELATED)
+            .prefetch_related(*STOCK_COST_PREFETCH)
             .order_by("shipment__arrived", "id"))
     if q:
         filters = (Q(contract_line__brand__icontains=q)
@@ -1893,7 +1904,8 @@ def brand_detail(request, brand):
     the operator read it off four screens."""
     lots = list(arrived_lots()
                 .filter(contract_line__brand=brand)
-                .prefetch_related("shipment__expenses", "sale_lots__sale__returns")
+                .select_related(*STOCK_LOT_RELATED)
+                .prefetch_related(*STOCK_COST_PREFETCH)
                 .order_by("shipment__arrived", "id"))
     if not lots:
         raise Http404("Bunday marka omborda yo'q")
