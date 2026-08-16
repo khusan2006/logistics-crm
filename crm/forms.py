@@ -1311,7 +1311,8 @@ def _stock_brand_choices():
 
 
 def _customer_phone_field(field):
-    """Put the telefon beside the ism in a mijoz picker.
+    """Put the telefon beside the ism in a mijoz picker, and take the "---------"
+    off the empty row.
 
     Two mijoz sharing a name is ordinary — a family, or the same person entered
     twice — and the ism on its own leaves the operator guessing which row is the
@@ -1320,10 +1321,45 @@ def _customer_phone_field(field):
 
     Not `customer_option_label`: that one carries the ostatka, which is the figure
     a to'lov is taken against. A sotuv is not being taken against anything yet, and
-    a qarz on the option there would read as a price."""
+    a qarz on the option there would read as a price.
+
+    empty_label "" and not None: None DELETES the empty row, which would leave the
+    first mijoz on the list selected on a form nobody has touched — a sotuv booked
+    against whoever sorts first. Blank keeps the row, so the field is still empty
+    until someone picks, and the searchable picker skips a value-less, label-less
+    option by design — so the dashes stop showing as the box's own content and the
+    data-placeholder shows through instead."""
+    field.empty_label = ""
     field.label_from_instance = (
         lambda customer: f"{customer.name} · {customer.phone}"
         if customer.phone else customer.name)
+
+
+def _customer_picker_widget():
+    """The mijoz <select> on the sotuv forms: searchable, with an inline quick-add.
+
+    The list runs to hundreds of names and a native select can only be scrolled,
+    so finding one meant hunting an alphabetical wall. `data-combobox` turns it
+    into the same type-to-filter picker the Mijoz filters on Mijoz to'lovlari and
+    Bronlar already use — and it filters on the whole option text, which
+    `_customer_phone_field` has already made "ism · telefon", so the raqam finds
+    them too when two mijoz share a name.
+
+    Progressive enhancement: the native select stays in the DOM and still submits,
+    which is what lets CustomerBronSelect keep stamping its options and the
+    quick-add keep appending to it, both untouched.
+
+    A function rather than one shared widget: a widget carries per-form state —
+    its choices, and the CustomerBronSelect that BronDrawFormMixin swaps in — so
+    three forms sharing one object would tread on each other."""
+    return forms.Select(attrs={
+        "data-combobox": "",
+        # What the box says while it is empty. The blank row it stands in for
+        # carries no label at all now — see _customer_phone_field.
+        "data-placeholder": "Mijozni tanlang",
+        "data-quick-add-url": reverse_lazy("customer_quick_create"),
+        "data-quick-add-label": "Yangi mijoz",
+    })
 
 
 class SaleLineForm(forms.Form):
@@ -1428,8 +1464,7 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
             "date": date_widget(),
             "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
-            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
-                                            "data-quick-add-label": "Yangi mijoz"}),
+            "customer": _customer_picker_widget(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -1456,8 +1491,7 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
             "date": date_widget(),
             "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
-            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
-                                            "data-quick-add-label": "Yangi mijoz"}),
+            "customer": _customer_picker_widget(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -1494,9 +1528,7 @@ class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
             "date": date_widget(),
             "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
-            # lets the modal JS add a "+ Yangi mijoz" inline quick-create next to it
-            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
-                                            "data-quick-add-label": "Yangi mijoz"}),
+            "customer": _customer_picker_widget(),
         }
 
     def __init__(self, *args, **kwargs):

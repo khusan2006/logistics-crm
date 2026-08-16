@@ -1350,6 +1350,10 @@
         sel.appendChild(existing);
       }
       sel.value = id;
+      // Setting .value fires nothing, and two things downstream are waiting on it:
+      // the combobox, whose input would still read the previous mijoz, and the
+      // "Brondan ushlansin" question, which would still be answering for them.
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
     }
     function inject(sel) {
       if (sel.dataset.qaReady) { return; }

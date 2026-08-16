@@ -1710,7 +1710,14 @@ ul.errorlist li::before { content: "⚠ "; }
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .cprog-trucks.muted { font-weight: 600; color: var(--text-faint); }
-.cprog-bar { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+/* The value column has a FLOOR, not an auto width. Sized to its content it was
+   88px against "$0 / $144 000" and 133px against "120 000 / 120 000 kg", and
+   every bar in the card ended up a different length — the tracks ran 492px to
+   537px, so two fills of the same percentage did not look the same length. Each
+   .cprog-bar is its own grid, so nothing aligns them but a shared floor.
+   minmax, not a fixed width: a so'm kelishuv's figures are far longer than a
+   dollar one's and must be allowed to push the column out rather than spill. */
+.cprog-bar { display: grid; grid-template-columns: 38px minmax(0, 1fr) minmax(148px, auto); align-items: center; gap: 9px; }
 .cprog-key { font-size: 11.5px; color: var(--text-faint); }
 /* The marka a Yuk/To'lov pair belongs to, on its own line above them. Above
    rather than in the bars' 38px key column: "7000 campaund" does not fit there,

@@ -11,6 +11,7 @@ from django.db import transaction
 from django.db.models import Max, ProtectedError, Q, Sum
 from django.http import Http404, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.defaultfilters import floatformat
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
@@ -66,6 +67,32 @@ def _bar_pct(part, whole):
     return min(100, max(0, int(Decimal(part) * 100 / Decimal(whole))))
 
 
+def _truck_count(count, planned, sent):
+    """The figure inside a progress bar's label — "2,5 / 4".
+
+    ONE denominator for both bars of a kelishuv, so that a Yuk bar and the To'lov
+    bar under it are read against the same total. Given their own — the plan on
+    one and the trucks sent on the other — they came out "4 / 5" over "4 / 4",
+    which is read as one figure contradicting the other rather than as two
+    answers to different questions.
+
+    That denominator is the kelishuv's PLAN, and where no plan was ever set, the
+    trucks it has actually sent. A kelishuv with a plan of 4 and one with none but
+    4 trucks gone both read "4 / 4" — the shape does not change under the operator
+    depending on a field they may not have filled in.
+
+    Bare count in one case only: nothing planned AND nothing sent, where any
+    denominator would be invented out of nothing and "0 / 0" would read as broken.
+
+    The number only — the noun stays in the template. Built whole here it would
+    come back through {{ }} with the apostrophe in "to'langan" escaped.
+
+    floatformat(-1) because the to'langan count is fractional: it sets the comma
+    as the decimal mark and drops a trailing zero, so a whole 4 is not "4,0"."""
+    total = planned or sent
+    return f"{floatformat(count, -1)} / {total}" if total else floatformat(count, -1)
+
+
 def _chart_line(contract, ln):
     """One marka's row in the Kelishuvlar bajarilishi card: a Yuk bar and a To'lov
     bar, each carrying its own mashina count.
@@ -75,15 +102,18 @@ def _chart_line(contract, ln):
     half of the pair it returns — walks the same loads again."""
     paid = contract._own(ln.paid_total, ln.paid_total_uzs)
     due = contract._own(ln.expected_value, ln.expected_value_uzs)
-    trucks_paid, trucks_sent = ln.trucks_paid_for
+    sent, planned = ln.truck_progress
+    trucks_paid, _sent_priced = ln.trucks_paid_for
     return {
         "brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
         "pct": _bar_pct(ln.shipped_kg, ln.kg),
-        "sent": ln.truck_progress[0], "planned": ln.planned_trucks,
-        # The mashina figures ride INSIDE the bars now, so each bar needs its own:
+        "sent": sent, "planned": planned,
+        # The mashina figures ride INSIDE the bars, so each bar needs its own:
         # trucks GONE against the Yuk bar, trucks PAID FOR against the To'lov one.
-        # Two different questions, which is what earns them the second label.
-        "trucks_paid": trucks_paid, "trucks_sent": trucks_sent,
+        # Two different questions against one denominator — see _truck_count.
+        "trucks_paid": trucks_paid,
+        "trucks_count": _truck_count(sent, planned, sent),
+        "paid_count": _truck_count(trucks_paid, planned, sent),
         "paid": paid, "due": due, "pay_pct": _bar_pct(paid, due),
     }
 
@@ -185,7 +215,7 @@ def dashboard(request):
         # needs a truck. Only worth the extra lines when there is more than one;
         # a single-marka kelishuv would just be the same bar twice.
         lines = list(contract.lines.all())
-        trucks_paid, trucks_sent = contract.trucks_paid_for
+        trucks_paid, _sent_priced = contract.trucks_paid_for
         chart_contracts.append({
             "contract": contract,
             "sent": sent, "planned": planned,
@@ -212,7 +242,11 @@ def dashboard(request):
             # What the money has actually bought: "$96 400 of $288 000" is a share
             # of a figure nobody thinks in, while "1 of 4 yuk paid for" is the
             # question being asked of a hamkor — which trucks are settled.
-            "trucks_paid": trucks_paid, "trucks_sent": trucks_sent,
+            "trucks_paid": trucks_paid,
+            "trucks_count": _truck_count(sent, planned, sent),
+            # Read twice: inside the gold bar, and by the note under the pair,
+            # which says the same figure in its own words.
+            "paid_count": _truck_count(trucks_paid, planned, sent),
         })
     contracts_total = len(chart_contracts)
     # Most trucks still to send first — the same reading as Yuboriladigan mashinalar.
