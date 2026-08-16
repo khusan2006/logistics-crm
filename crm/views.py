@@ -14,6 +14,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 
 from accounts.decorators import role_required
@@ -2800,14 +2801,64 @@ def _customer_history(customer):
     return events
 
 
+#: The Voqea facet on the mijoz tarixi — the timeline's own `kind` values. A bron
+#: carries its holat in the row's label ("Bron · Yopilgan"), so the filter is written
+#: against the kind rather than against what the badge says.
+CUSTOMER_HISTORY_KINDS = [
+    ("sotuv", "Sotuv"),
+    ("tolov", "To'lov"),
+    ("qaytarish", "Qaytarish"),
+    ("bron", "Bron"),
+]
+
+
+def _filter_customer_history(request, customer):
+    """The mijoz tarixi a screen is showing — narrowed to a davr and to one kind of
+    voqea.
+
+    Narrowed in Python rather than in SQL because the timeline is four querysets
+    braided into one list: a date filter pushed down would have to be written four
+    times over and kept in step, and this is one mijoz's dealings — small enough that
+    reading it whole and then cutting costs nothing.
+
+    Only the tarix narrows. The table above it is what the mijoz still owes, and a
+    qarz is not a fact about a period: hiding an unpaid Iyul sotuv because the reader
+    is looking at Avgust would make the page understate the debt it exists to state."""
+    events = _customer_history(customer)
+    date_from, date_to = _date_window(request)
+    if date_from:
+        start = _date.fromisoformat(date_from)
+        events = [e for e in events if e["date"] >= start]
+    if date_to:
+        end = _date.fromisoformat(date_to)
+        events = [e for e in events if e["date"] <= end]
+    kind = (request.GET.get("voqea") or "").strip()
+    if kind in dict(CUSTOMER_HISTORY_KINDS):
+        events = [e for e in events if e["kind"] == kind]
+    return events, {"date_from": date_from, "date_to": date_to, "kind": kind}
+
+
 @role_required(User.Role.ADMIN)
 def debt_customer(request, pk):
     customer = get_object_or_404(Customer, pk=pk)
     sales = [s for s in customer.sales.select_related("line__contract_line")
              .prefetch_related("allocations").all() if s.remaining_own > 0]
+    history, f = _filter_customer_history(request, customer)
     return render(request, "crm/debt_customer.html", {
         "customer": customer, "sales": sales,
-        "history": _customer_history(customer),
+        "history": history,
+        # Whether the mijoz has ANY tarix, so an empty table can tell the two cases
+        # apart: nothing ever happened, or the davr and the filter left nothing.
+        "history_exists": bool(customer.sales.exists() or customer.customer_payments.exists()
+                               or customer.reservations.exists()
+                               or Return.objects.filter(sale__customer=customer).exists()),
+        "export_url": reverse("debt_customer_history_export", args=[customer.pk]),
+        "filters": _filter_panel(request, [
+            {"name": "voqea", "label": "Voqea", "value": f["kind"],
+             "options": [("", "Hammasi")] + CUSTOMER_HISTORY_KINDS},
+        ]),
+        "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
+        "date_from": f["date_from"], "date_to": f["date_to"],
         "positions": customer_balance_by_currency(customer)})
 
 
@@ -3953,6 +4004,39 @@ def _customer_payments_table(payments):
     return headers, rows, {"Kurs": "#,##0", "Perechisleniya %": PERCENT}
 
 
+def _customer_history_table(events):
+    """One mijoz's tarix as a sheet — sotuv, to'lov, qaytarish and bron on one
+    timeline, each row in the valyuta it actually moved in.
+
+    A figure goes in ITS OWN currency's column and nowhere else. The twin every row
+    carries is the same money restated at that row's kurs, and writing it into the
+    other column would have a $39 600 sotuv counted a second time as 492 mln so'm by
+    anybody who sums the sheet — the same rule `_debtors_table` keeps, and it matters
+    more here because a file leaves the app with no row context to correct it.
+
+    A bron's price is per KG, not a total, so it gets columns of its own: summed into
+    a Summa column it would add a narx to a run of totals and quietly inflate it. A
+    bron with no narx agreed yet leaves them empty rather than writing a zero —
+    nothing was priced, and 0 is a figure somebody would add up."""
+    headers = ["Sana", "Voqea", "Tafsilot", "Summa ($)", "Summa (so'm)",
+               "Narx ($/kg)", "Narx (so'm/kg)"]
+
+    def _rows():
+        for e in events:
+            is_som = e["currency"] == Currency.UZS
+            own = e["total_uzs"] if is_som else e["total"]
+            # None, never 0: an empty cell is "no figure", a zero is a figure.
+            figure = None if e["total"] is None else own
+            per_kg = e.get("per_kg")
+            yield [e["date"], e["label"], e["detail"],
+                   None if per_kg or is_som else figure,
+                   None if per_kg or not is_som else figure,
+                   figure if per_kg and not is_som else None,
+                   figure if per_kg and is_som else None]
+
+    return headers, _rows(), None
+
+
 def _debtors_table(customers=None):
     """Every mijoz who owes something, in the currency they owe it in.
 
@@ -4122,6 +4206,18 @@ def customer_payment_list_export(request):
     payments, _f = _filter_customer_payments(request)
     headers, table, formats = _customer_payments_table(payments)
     return xlsx_response("mijoz-tolovlari.xlsx", headers, table, "To'lovlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def debt_customer_history_export(request, pk):
+    """One mijoz's tarix, exactly as the card was showing it — same davr, same Voqea
+    filter. The file is named after the mijoz, because a folder of `tarix.xlsx` says
+    nothing about whose."""
+    customer = get_object_or_404(Customer, pk=pk)
+    events, _f = _filter_customer_history(request, customer)
+    headers, table, formats = _customer_history_table(events)
+    return xlsx_response(f"{slugify(customer.name) or 'mijoz'}-tarixi.xlsx",
+                         headers, table, "Mijoz tarixi", formats)
 
 
 @role_required(User.Role.ADMIN)

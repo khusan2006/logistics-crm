@@ -54,11 +54,19 @@
 Mijoz tarixi — sotuv, to'lov, qaytarish va bron bitta vaqt chizig'ida. Har qatorda
 pul o'zi harakatlangan valyutada yoziladi; hech narsa konvertatsiya qilinmaydi, shu
 sababli dollardagi sotuv va so'mdagi to'lov ikki alohida fakt bo'lib qoladi.
+
+Davr, Voqea filtri va Excel — faqat shu kartaga tegishli, shuning uchun boshqaruv
+qatori sahifa boshida emas, kartaning o'zida turadi. Yuqoridagi jadval — mijozning
+to'lanmagan qarzi; qarz esa davrga bog'liq fakt emas (`_filter_customer_history`).
 {% endcomment %}
 <div class="card">
   <div class="card-head">
     <h2>Mijoz tarixi</h2>
     <span class="field-hint">Sotuv, to'lov, qaytarish va bronlar — eng yangisi yuqorida</span>
+  </div>
+  {# .listbar o'zi .daterange-bar ni margin-left:auto bilan o'ng chetga suradi. #}
+  <div class="listbar">
+    {% include "crm/_daterange.html" %}
   </div>
   {% if history %}
   <div class="table-wrap">
@@ -84,6 +92,12 @@ sababli dollardagi sotuv va so'mdagi to'lov ikki alohida fakt bo'lib qoladi.
     {% endfor %}
   </table>
   </div>
+  {% elif history_exists %}
+  {% comment %}
+  Bo'sh jadvalning ikki sababi bor va ular bir xil gap emas: filtr hech nima
+  qoldirmagani — shu yerda, mijoz bilan umuman ish bo'lmagani — quyida.
+  {% endcomment %}
+  <p class="muted">Tanlangan davr va filtrga mos voqea yo'q.</p>
   {% else %}
   <p class="muted">Bu mijoz bilan hali hech qanday amaliyot bo'lmagan.</p>
   {% endif %}
