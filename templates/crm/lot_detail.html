@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}{{ lot.label }} · {{ lot.brand }} · GranulaLog{% endblock %}
+{% block topbar_title %}{{ lot.brand }} · {{ lot.label }}{% endblock %}
+{% block content %}
+{% comment %}
+Where one lot's granula went. The ombor says what is left; this says who took the
+rest, which is the only question a finished lot is still good for.
+
+Read off the slices rather than off `sales`, so a sotuv split across two trucks shows
+here only the kg that came off THIS one — and names the other truck beside it, so the
+row does not read as a short delivery.
+{% endcomment %}
+
+<div class="card" style="margin-bottom: 14px;">
+  <table class="legs-inline-table">
+    <tr><th>Kelishuv</th><th>Hamkor</th><th>Kelgan sana</th>
+        <th class="num">Kirim</th><th class="num">Berilgan</th><th class="num">Qoldiq</th>
+        {% if user.is_admin_role %}<th class="num">Tan narx</th>{% endif %}</tr>
+    <tr>
+      <td>{% if user.is_admin_role %}<a href="{% url 'shipment_detail' lot.shipment_id %}">{{ lot.label }}</a>
+          {% else %}{{ lot.label }}{% endif %}
+          {% if lot.shipment.container %}<div class="muted">{{ lot.shipment.container }}</div>{% endif %}</td>
+      <td>{{ lot.shipment.contract.partner.name }}</td>
+      <td>{{ lot.arrived }}</td>
+      <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
+      <td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
+      <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong>
+        {% if lot.available_kg <= 0 %}<div class="muted">tugagan</div>{% endif %}</td>
+      {% if user.is_admin_role %}
+      <td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>
+      {% endif %}
+    </tr>
+  </table>
+</div>
+
+<div class="legs-inline-head">
+  <strong>Kimga berilgan</strong>
+  <span class="muted">
+    {% if rows %}{{ rows|length }} ta sotuv · {{ customers }} ta mijoz ·
+      {{ given_kg|floatformat:"-3" }} kg{% else %}bu lotdan hali sotilmagan{% endif %}
+  </span>
+</div>
+
+{% if rows %}
+<div class="table-wrap">
+  <table class="legs-inline-table">
+    <tr>
+      <th>Sana</th><th>Mijoz</th><th class="num">Kg</th>
+      {% if user.is_admin_role %}<th class="num">Narx</th><th class="num">Jami</th>{% endif %}
+      <th>Izoh</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.sale.date }}</td>
+      <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' r.sale.pk %}">{{ r.sale.customer.name }}</a>
+          {% else %}{{ r.sale.customer.name }}{% endif %}
+          <div class="muted">sotuv #{{ r.sale.pk }}</div></td>
+      <td class="num"><strong>{{ r.kg|floatformat:"-3" }}</strong></td>
+      {% if user.is_admin_role %}
+      <td class="num">{% rate r.sale.price r.sale.price_uzs r.sale.currency %}</td>
+      {% comment %}
+      This lot's SHARE of the sotuv, not the sotuv's total: the kg above at the narx
+      they were sold for. A sotuv spanning two trucks would otherwise print its whole
+      value against each of them.
+      {% endcomment %}
+      <td class="num">{% money_in r.value r.sale.currency %}</td>
+      {% endif %}
+      <td>
+        {% for s in r.split %}
+        <div class="muted">{{ s.kg|floatformat:"-3" }} kg — {{ s.lot.label }}</div>
+        {% endfor %}
+        {% if r.restocked %}<div class="late">{{ r.restocked|floatformat:"-3" }} kg qaytarilgan</div>{% endif %}
+        {% if r.pinned %}<div class="muted">lot qo'lda tanlangan</div>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<p style="margin-top: 14px;"><a class="btn btn-ghost" href="{% url 'ombor' %}">Omborga qaytish</a></p>
+{% endblock %}

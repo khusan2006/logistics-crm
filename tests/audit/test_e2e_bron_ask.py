@@ -69,7 +69,10 @@ def _open(page, live_server):
     page.wait_for_load_state("networkidle")
     page.goto(f"{live_server.url}/sales/new/")
     # The box starts HIDDEN — no mijoz picked yet — so wait on the form, not on it.
-    page.wait_for_selector("[name=customer]")
+    # And the mijoz <select> is hidden too now, standing behind its searchable
+    # combobox, so wait on the input an operator actually types into.
+    page.wait_for_selector("[name=customer]", state="attached")
+    page.wait_for_selector(".combobox-input")
     page.wait_for_selector("[name=draw_from_bron]", state="attached")
     page.wait_for_timeout(300)
 
@@ -80,7 +83,18 @@ def _asked(page):
 
 def _pick(page, customer=None, brand=None):
     if customer is not None:
-        page.select_option("[name=customer]", label=customer)
+        # Through the combobox, because that is the only thing that touches the
+        # mijoz <select> now — it is hidden, and setting it behind the picker's
+        # back would test a path no operator can take. Typed and clicked, which is
+        # also what fires the change the bron question listens for.
+        #
+        # Matched on the ism alone: the option reads "Ism · telefon", and which
+        # ism is on it is not what this file is about.
+        box = page.locator("[name=customer]").locator(
+            "xpath=ancestor::div[contains(@class,'combobox')][1]")
+        box.locator(".combobox-input").click()
+        box.locator(".combobox-input").fill(customer)
+        box.locator(".combobox-option", has_text=customer).first.click()
     if brand is not None:
         page.select_option("[name=lines-0-brand]", value=brand)
     page.wait_for_timeout(250)

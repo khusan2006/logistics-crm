@@ -7,6 +7,14 @@
   {% include "crm/_form_fields.html" %}
   {% if lines %}{% include "crm/_line_fields.html" %}{% endif %}
   {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
+  {% comment %}
+  Correcting an old sotuv moves FIFO's answer for the whole marka. The JS fills this
+  from a dry run as the kg is typed, so what shifts is on screen before Saqlash is
+  pressed rather than in a message afterwards.
+  {% endcomment %}
+  {% if shift_preview_url %}
+  <div data-shift-preview="{{ shift_preview_url }}"></div>
+  {% endif %}
   <div class="modal-actions">
     <button type="submit" class="btn">Saqlash</button>
     <button type="button" class="btn btn-ghost" data-modal-close>Bekor qilish</button>

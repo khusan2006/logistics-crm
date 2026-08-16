@@ -38,7 +38,12 @@
   <tr class="stock-row">
     <td class="sticky-col load-toggle" data-marka="{{ forloop.counter }}" title="Lotlarni ochish">
       <button type="button" class="leg-expand" data-marka="{{ forloop.counter }}" aria-label="Lotlarni ochish">&#9656;</button>
-      <span class="load-partner">{{ g.brand }}</span>
+      {% comment %}
+      The marka name opens its own page — kelishuvlar, every truck, every hand-over.
+      The ▸ still opens the lots inline for a quick look, and the toggle handler
+      ignores clicks on links, so the two do not fight over the same cell.
+      {% endcomment %}
+      <a class="load-partner" href="{% url 'brand_detail' g.brand %}" title="{{ g.brand }} haqida to'liq ma'lumot">{{ g.brand }}</a>
       <div class="muted load-sub">{{ g.lots|length }} lot</div>
     </td>
     <td>{{ g.partners|join:", " }}</td>
@@ -89,34 +94,31 @@
             <th class="num">Qoldiq</th>
             {% if user.is_admin_role %}<th class="num">Tan narx</th><th></th>{% endif %}
           </tr>
-          {% for lot in g.lots %}
-          <tr>
-            {% comment %}
-            The lot number opens its yuk, which is not a skladchi's page — so for
-            them it is plain text. A link that 403s reads as a broken page rather
-            than as a limit, same as the kelishuv kod does for a tarjimon.
-            {% endcomment %}
-            <td>{% if user.is_admin_role %}<a class="load-id" href="{% url 'shipment_detail' lot.shipment_id %}">#{{ lot.pk }}</a>
-                {% else %}<span class="load-id">#{{ lot.pk }}</span>{% endif %}</td>
-            <td>{{ lot.shipment.contract.code }}</td>
-            <td>{{ lot.shipment.contract.partner.name }}</td>
-            <td>{{ lot.arrived }}</td>
-            <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
-            <td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
-            <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
-            {% if user.is_admin_role %}
-            <td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>
-            <td class="row-actions">
-              {% if lot.available_kg > 0 %}
-              <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal title="Shu lotdan sotish">Sotish</a>
-              <a class="btn btn-sm btn-ghost" href="{% url 'reservation_create' %}?lot={{ lot.pk }}" data-modal>Bron</a>
-              {% else %}
-              <span class="muted">tugagan</span>
-              {% endif %}
-            </td>
-            {% endif %}
+          {% for lot in g.open_lots %}
+          <tr>{% include "crm/_ombor_lot_cells.html" %}</tr>
+          {% endfor %}
+          {% comment %}
+          Finished lots are folded away rather than dropped. They cannot be sold from
+          and after a few arrivals they are most of the list, but where their kg went
+          is still worth reading — the button opens them, and each lot's own page
+          carries the hand-over in full.
+          {% endcomment %}
+          {% if g.done_lots %}
+          {% for lot in g.done_lots %}
+          <tr class="lot-done" data-done="{{ forloop.parentloop.counter }}" hidden>
+            {% include "crm/_ombor_lot_cells.html" %}
           </tr>
           {% endfor %}
+          <tr>
+            <td colspan="{% if user.is_admin_role %}9{% else %}7{% endif %}">
+              <button type="button" class="btn btn-sm btn-ghost" data-done-toggle="{{ forloop.counter }}"
+                      data-label-open="{{ g.done_lots|length }} ta tugagan lotni yashirish"
+                      data-label-closed="{{ g.done_lots|length }} ta tugagan lotni ko'rsatish">
+                {{ g.done_lots|length }} ta tugagan lotni ko'rsatish
+              </button>
+            </td>
+          </tr>
+          {% endif %}
         </table>
 
         {% comment %}
@@ -189,6 +191,19 @@ document.querySelectorAll('.load-toggle[data-marka]').forEach(function (cell) {
     detail.hidden = !willOpen;
     btn.classList.toggle('is-open', willOpen);
     cell.closest('tr').classList.toggle('is-expanded', willOpen);
+  });
+});
+
+// Tugagan lotlar — qoldig'i 0 bo'lgani sotilmaydi, shuning uchun yig'ib qo'yiladi.
+// Kg qayerga ketgani baribir kerak bo'ladi, shuning uchun o'chirilmaydi.
+document.querySelectorAll('[data-done-toggle]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var key = btn.getAttribute('data-done-toggle');
+    var rows = document.querySelectorAll('.lot-done[data-done="' + key + '"]');
+    if (!rows.length) { return; }
+    var willOpen = rows[0].hidden;
+    rows.forEach(function (row) { row.hidden = !willOpen; });
+    btn.textContent = willOpen ? btn.dataset.labelOpen : btn.dataset.labelClosed;
   });
 });
 </script>

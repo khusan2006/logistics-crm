@@ -15,6 +15,7 @@ from .models import (
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate,
 )
+from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .templatetags.crm_extras import rate, som, usd
 
@@ -692,23 +693,6 @@ def customer_option_label(customer):
     return " · ".join([customer.name, *parts])
 
 
-class TruckPlanForm(forms.ModelForm):
-    """Just the planned truck count. Separate from ContractForm so the template can
-    render it after the Mahsulotlar rows — the main form is emitted above them."""
-
-    class Meta:
-        model = Contract
-        fields = ["planned_trucks"]
-        widgets = {"planned_trucks": forms.NumberInput(
-            attrs={"min": "1", "placeholder": "Masalan: 2"})}
-
-    def clean_planned_trucks(self):
-        count = self.cleaned_data.get("planned_trucks")
-        if count is not None and count < 1:
-            raise forms.ValidationError("Kamida 1 bo'lishi kerak")
-        return count
-
-
 class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
     """One "Mahsulot" row on the kelishuv form.
 
@@ -719,7 +703,7 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
 
     class Meta:
         model = ContractLine
-        fields = ["brand", "kg", "price"]
+        fields = ["brand", "kg", "price", "planned_trucks"]
         widgets = {
             "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
             "kg": forms.NumberInput(attrs={"placeholder": "0"}),
@@ -729,6 +713,11 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
             # it live from this attribute while the operator is still picking.
             "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "0.0000",
                                               "data-currency-label": "1 kg narxi"}),
+            # Per product, not per kelishuv: it used to be one box under the rows,
+            # which could not say which marka of a two-marka kelishuv still owed a
+            # truck. Optional — the target is often not known when the agreement
+            # is signed.
+            "planned_trucks": forms.NumberInput(attrs={"min": "1", "placeholder": "—"}),
         }
 
     def __init__(self, *args, currency=None, **kwargs):
@@ -754,6 +743,12 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         if price is not None and price <= 0:
             raise forms.ValidationError("Narx musbat bo'lishi kerak")
         return price
+
+    def clean_planned_trucks(self):
+        count = self.cleaned_data.get("planned_trucks")
+        if count is not None and count < 1:
+            raise forms.ValidationError("Kamida 1 bo'lishi kerak")
+        return count
 
     def clean(self):
         # Seeded before the mixin converts: it reads both out of cleaned_data, and
@@ -1261,11 +1256,16 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
 
     class Meta:
         model = SupplierPayment
-        fields = ["contract", "date", "currency", "amount", "exchange_rate",
-                  "commission_percent", "method", "fee_percent", "note"]
+        fields = ["contract", "contract_line", "date", "currency", "amount",
+                  "exchange_rate", "commission_percent", "method", "fee_percent",
+                  "note"]
         widgets = {
             "date": date_widget(),
-            "contract": ContractChoiceSelect(attrs={"data-contract-currency": ""}),
+            # data-contract-source as well as -currency: the product list below is
+            # every kelishuv's products at once, and this is what narrows it.
+            "contract": ContractChoiceSelect(attrs={"data-contract-currency": "",
+                                                    "data-contract-source": ""}),
+            "contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""}),
             "commission_percent": forms.NumberInput(attrs={
                 "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
                 "placeholder": "0"}),
@@ -1291,6 +1291,24 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         self.fields["contract"].label_from_instance = (
             lambda c: contract_option_label(c, payable=True))
 
+        # Which product the money is against. Every selectable kelishuv's products
+        # are listed at once and the form's JS drops the ones belonging to other
+        # kelishuvlar — the same no-AJAX arrangement the yuk form uses. `clean`
+        # re-checks the pairing, because the client is not the authority on it.
+        self.fields["contract_line"].queryset = (
+            ContractLine.objects.filter(contract__in=self.fields["contract"].queryset)
+            .select_related("contract").order_by("contract_id", "position", "id"))
+        self.fields["contract_line"].label_from_instance = (
+            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
+        # A prompt, not an option. It read "Butun kelishuv" at first, which named a
+        # choice `clean` then refused — on a kelishuv with two markalar the money
+        # went to one of them, and a to'lov the operator declined to attribute is
+        # one nobody can attribute later either. A single-product kelishuv never
+        # sees this: the form fills that one in for them (and the JS preselects it).
+        self.fields["contract_line"].empty_label = "Mahsulotni tanlang"
+        self.fields["contract_line"].help_text = (
+            "Pul qaysi mahsulot uchun ketganini belgilang")
+
     def clean_commission_percent(self):
         return _clean_percent(self.cleaned_data.get("commission_percent"))
 
@@ -1312,6 +1330,23 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
                 self.instance.exchange_rate if self.instance.pk else latest_exchange_rate())
         cleaned = super().clean()
         contract, amount = cleaned.get("contract"), cleaned.get("amount")
+
+        # Which product the money is for. The client-side filter is a convenience,
+        # not the authority — a stale page or a hand-built POST can still pair a
+        # product with someone else's kelishuv.
+        line = cleaned.get("contract_line")
+        if line is not None and contract is not None and line.contract_id != contract.pk:
+            self.add_error("contract_line", "Bu mahsulot tanlangan kelishuvda yo'q")
+        elif contract is not None:
+            lines = list(contract.lines.all())
+            if len(lines) == 1:
+                # Nothing to choose: one product IS the kelishuv, so the operator is
+                # not asked and the to'lov still records which marka it bought.
+                cleaned["contract_line"] = lines[0]
+            elif line is None and len(lines) > 1:
+                self.add_error("contract_line",
+                               "Qaysi mahsulot uchun to'lanayotganini tanlang")
+
         # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
         # kelishuv's value, not the goods shipped so far. The cap is on what the
         # hamkor RECEIVES — the middleman's cut rides on top and is not part of it,
@@ -1356,6 +1391,58 @@ def _stock_brand_choices():
          + f" · {_clean_number(row['cost'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))} $/kg")
         for row in brand_stock_costed() if row["on_hand"] > 0
     ]
+
+
+def _customer_phone_field(field):
+    """Put the telefon beside the ism in a mijoz picker, and take the "---------"
+    off the empty row.
+
+    Two mijoz sharing a name is ordinary — a family, or the same person entered
+    twice — and the ism on its own leaves the operator guessing which row is the
+    one standing at the counter. The raqam is what they have in front of them, so
+    it is what tells the two apart without closing the modal to go and look.
+
+    Not `customer_option_label`: that one carries the ostatka, which is the figure
+    a to'lov is taken against. A sotuv is not being taken against anything yet, and
+    a qarz on the option there would read as a price.
+
+    empty_label "" and not None: None DELETES the empty row, which would leave the
+    first mijoz on the list selected on a form nobody has touched — a sotuv booked
+    against whoever sorts first. Blank keeps the row, so the field is still empty
+    until someone picks, and the searchable picker skips a value-less, label-less
+    option by design — so the dashes stop showing as the box's own content and the
+    data-placeholder shows through instead."""
+    field.empty_label = ""
+    field.label_from_instance = (
+        lambda customer: f"{customer.name} · {customer.phone}"
+        if customer.phone else customer.name)
+
+
+def _customer_picker_widget():
+    """The mijoz <select> on the sotuv forms: searchable, with an inline quick-add.
+
+    The list runs to hundreds of names and a native select can only be scrolled,
+    so finding one meant hunting an alphabetical wall. `data-combobox` turns it
+    into the same type-to-filter picker the Mijoz filters on Mijoz to'lovlari and
+    Bronlar already use — and it filters on the whole option text, which
+    `_customer_phone_field` has already made "ism · telefon", so the raqam finds
+    them too when two mijoz share a name.
+
+    Progressive enhancement: the native select stays in the DOM and still submits,
+    which is what lets CustomerBronSelect keep stamping its options and the
+    quick-add keep appending to it, both untouched.
+
+    A function rather than one shared widget: a widget carries per-form state —
+    its choices, and the CustomerBronSelect that BronDrawFormMixin swaps in — so
+    three forms sharing one object would tread on each other."""
+    return forms.Select(attrs={
+        "data-combobox": "",
+        # What the box says while it is empty. The blank row it stands in for
+        # carries no label at all now — see _customer_phone_field.
+        "data-placeholder": "Mijozni tanlang",
+        "data-quick-add-url": reverse_lazy("customer_quick_create"),
+        "data-quick-add-label": "Yangi mijoz",
+    })
 
 
 class SaleLineForm(forms.Form):
@@ -1460,8 +1547,7 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
             "date": date_widget(),
             "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
-            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
-                                            "data-quick-add-label": "Yangi mijoz"}),
+            "customer": _customer_picker_widget(),
         }
 
     def __init__(self, *args, **kwargs):
@@ -1471,6 +1557,7 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
         # can happen tomorrow. `debt_deadline` beside it is left alone: a muddat is a
         # future date by definition.
         no_future_date(self.fields["date"])
+        _customer_phone_field(self.fields["customer"])
 
 
 class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
@@ -1491,13 +1578,13 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
             "date": date_widget(),
             "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
-            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
-                                            "data-quick-add-label": "Yangi mijoz"}),
+            "customer": _customer_picker_widget(),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["lot"].queryset = arrived_lots()
+        _customer_phone_field(self.fields["customer"])
         # No marka picker here — the lot decided it — so the Brondan ushlansin box
         # carries the brand itself for the JS that shows or hides it.
         lot = self.initial.get("lot") or self.data.get("lot")
@@ -1528,14 +1615,13 @@ class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
             "date": date_widget(),
             "debt_deadline": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
-            # lets the modal JS add a "+ Yangi mijoz" inline quick-create next to it
-            "customer": forms.Select(attrs={"data-quick-add-url": reverse_lazy("customer_quick_create"),
-                                            "data-quick-add-label": "Yangi mijoz"}),
+            "customer": _customer_picker_widget(),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["line"].queryset = arrived_lots()
+        _customer_phone_field(self.fields["customer"])
 
     def clean(self):
         cleaned = super().clean()
@@ -1545,11 +1631,16 @@ class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
         if line and line.arrived is None:
             self.add_error("line", "Faqat kelgan (arrived) lotdan sotish mumkin")
         if line and line.arrived is not None and kg is not None and kg > 0:
-            available = line.available_kg
-            if self.instance.pk and self.instance.line_id == line.pk:
-                available += self.instance.kg
+            # Measured against the MARKA, not against this one lot. The same granula
+            # sits in several lots at once, and after fifty sotuvlar the lot a sotuv
+            # happens to be attached to is almost always empty — checking it refused
+            # every correction to an old sotuv while the ombor was full of the stuff.
+            # Where the extra kg come from is the replay's problem, not the form's.
+            available = brand_available_kg(line.contract_line.brand,
+                                           excluding=self.instance)
             if kg > available:
-                self.add_error("kg", f"Ombor qoldig'idan oshmasligi kerak ({available} kg)")
+                self.add_error("kg", f"Bu markadan omborda {_clean_number(available)} "
+                                     f"kg bor — undan oshmasligi kerak")
         return cleaned
 
 
@@ -1840,17 +1931,26 @@ CustomerPaymentFormSet = split_payment_formset(CustomerPayment, CustomerPaymentR
 
 
 class SupplierPaymentTargetForm(forms.Form):
-    """The header of a split hamkor to'lov: which kelishuv is being paid, and when.
+    """The header of a split hamkor to'lov: which kelishuv is being paid, which
+    product of it, and when.
 
-    Both are facts about the settlement rather than about how the money moved, so
-    they are asked once — the same division the mijoz modal makes (see
+    All three are facts about the settlement rather than about how the money moved,
+    so they are asked once — the same division the mijoz modal makes (see
     `CustomerPaymentTargetForm`). Everything that CAN differ between the naqd half
     and the bank half — summa, valyuta, kurs, usul, foiz, vositachi — lives on the
-    rows."""
+    rows.
+
+    The marka belongs up here for exactly that reason: paying half in cash and half
+    by perechisleniya is one delivery being settled two ways, not two deliveries.
+    Asked per row it could say the halves bought different markalar, which is not a
+    thing that happens — and the operator would have to answer it twice."""
 
     contract = forms.ModelChoiceField(
         queryset=Contract.objects.none(), label="Kelishuv",
         widget=ContractChoiceSelect(attrs={"data-contract-currency": ""}))
+    contract_line = forms.ModelChoiceField(
+        queryset=ContractLine.objects.none(), label="Mahsulot", required=False,
+        widget=ContractLineChoiceSelect(attrs={"data-line-source": ""}))
     date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
 
     def __init__(self, *args, **kwargs):
@@ -1860,8 +1960,37 @@ class SupplierPaymentTargetForm(forms.Form):
         self.fields["contract"].queryset = _keep_if(base, lambda c: c.payable_left_own > 0)
         self.fields["contract"].label_from_instance = (
             lambda c: contract_option_label(c, payable=True))
+        # Same no-AJAX arrangement `SupplierPaymentForm` uses: every selectable
+        # kelishuv's products are listed at once and the JS drops the ones belonging
+        # to other kelishuvlar. `clean` re-checks the pairing — the client is not the
+        # authority on it.
+        self.fields["contract_line"].queryset = (
+            ContractLine.objects.filter(contract__in=self.fields["contract"].queryset)
+            .select_related("contract").order_by("contract_id", "position", "id"))
+        self.fields["contract_line"].label_from_instance = (
+            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
+        self.fields["contract_line"].empty_label = "Mahsulotni tanlang"
+        self.fields["contract_line"].help_text = (
+            "Pul qaysi mahsulot uchun ketganini belgilang")
         # This header carries the sana for every row beneath it.
         no_future_date(self.fields["date"])
+
+    def clean(self):
+        cleaned = super().clean()
+        contract, line = cleaned.get("contract"), cleaned.get("contract_line")
+        # Declared `required=False` and enforced here instead, because on a
+        # single-product kelishuv there is nothing to ask: that one product IS the
+        # kelishuv, so it is filled in rather than demanded.
+        if line is not None and contract is not None and line.contract_id != contract.pk:
+            self.add_error("contract_line", "Bu mahsulot tanlangan kelishuvda yo'q")
+        elif contract is not None:
+            lines = list(contract.lines.all())
+            if len(lines) == 1:
+                cleaned["contract_line"] = lines[0]
+            elif line is None and len(lines) > 1:
+                self.add_error("contract_line",
+                               "Qaysi mahsulot uchun to'lanayotganini tanlang")
+        return cleaned
 
 
 class SupplierPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,

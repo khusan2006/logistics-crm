@@ -61,7 +61,18 @@ part derived.
   {% for p in page %}
   <tr>
     <td class="sticky-col">{{ p.date }}</td>
-    <td><a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand_summary }}</a></td>
+    {% comment %}
+    Which marka the money was against, under the kod. Only when the kelishuv holds
+    more than one — on a single-product kelishuv the kod line already names it, and
+    repeating it would say the same thing twice. A to'lov entered before the field
+    existed names none, and shows nothing rather than guessing.
+    {% endcomment %}
+    <td>
+      <a href="{% url 'contract_edit' p.contract_id %}">{{ p.contract.code }} · {{ p.contract.brand_summary }}</a>
+      {% if p.contract_line and p.contract.lines.count > 1 %}
+      <div class="muted load-sub">{{ p.contract_line.brand }} uchun</div>
+      {% endif %}
+    </td>
     <td>{{ p.contract.partner.name }}</td>
     {% comment %}
     The converted twin used to sit under this figure. It is a derived number — and

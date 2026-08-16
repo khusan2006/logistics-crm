@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% load crm_extras l10n %}
+{% block title %}{{ brand }} · Ombor · GranulaLog{% endblock %}
+{% block topbar_title %}{{ brand }}{% endblock %}
+{% block content %}
+{% comment %}
+One marka, whole. The ombor row opens the lots inline and answers "what can I sell
+today"; this answers "how has this granula moved" — kelishuvlar, trucks, every
+hand-over and everyone still waiting — so the operator does not read it off four
+screens.
+
+Money is an admin's throughout, same rule as the ombor: a skladchi reads kg.
+{% endcomment %}
+
+<div class="card" style="margin-bottom: 14px;">
+  <table class="legs-inline-table">
+    <tr>
+      <th>Hamkor</th><th class="num">Kirim</th><th class="num">Sotilgan</th>
+      <th class="num">Omborda</th><th class="num">Bronlangan</th>
+      {% if user.is_admin_role %}<th class="num">Tan narx</th><th class="num">Tushum</th><th class="num">Foyda</th>{% endif %}
+    </tr>
+    <tr>
+      <td>{{ partners|join:", " }}<div class="muted">{{ lots|length }} lot · {{ deals|length }} kelishuv</div></td>
+      <td class="num">{{ kirim|floatformat:"-3" }}</td>
+      <td class="num">{{ sold|floatformat:"-3" }}<div class="muted">{{ sales|length }} sotuv · {{ customers }} mijoz</div></td>
+      <td class="num"><strong>{{ on_hand|floatformat:"-3" }}</strong></td>
+      <td class="num">{% if reserved %}{{ reserved|floatformat:"-3" }}
+        {% if short %}<div class="late">{{ short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}
+        {% else %}<span class="muted">—</span>{% endif %}</td>
+      {% if user.is_admin_role %}
+      <td class="num">{% if cost_min == cost_max %}{% rate_both cost_min cost_min_uzs %}
+        {% else %}{% rate_range_both cost_min cost_max cost_min_uzs cost_max_uzs %}{% endif %}</td>
+      <td class="num">{% money_both revenue revenue_uzs %}</td>
+      <td class="num"><strong>{% money_both profit profit_uzs %}</strong></td>
+      {% endif %}
+    </tr>
+  </table>
+</div>
+
+{% comment %}
+Kelishuv first: a marka is bought by the deal, several trucks at a time, and "how
+much of that deal is still on the shelf" cannot be read off the lot list without
+adding it up by hand.
+{% endcomment %}
+<div class="legs-inline-head"><strong>Kelishuvlar bo'yicha</strong></div>
+<div class="table-wrap" style="margin-bottom: 18px;">
+  <table class="legs-inline-table">
+    <tr><th>Kelishuv</th><th>Hamkor</th><th class="num">Yuk</th>
+        <th class="num">Kirim</th><th class="num">Sotilgan</th><th class="num">Qoldiq</th></tr>
+    {% for d in deals %}
+    <tr>
+      {# a kelishuv has no page of its own — the kod is what the operator reads #}
+      <td>{{ d.contract.code }}</td>
+      <td>{{ d.contract.partner.name }}</td>
+      <td class="num">{{ d.trucks }}</td>
+      <td class="num">{{ d.kirim|floatformat:"-3" }}</td>
+      <td class="num">{{ d.sold|floatformat:"-3" }}</td>
+      <td class="num"><strong>{{ d.left|floatformat:"-3" }}</strong></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="legs-inline-head">
+  <strong>Lotlar</strong>
+  <span class="muted">eng eski birinchi — FIFO shu tartibda sotadi</span>
+</div>
+<div class="table-wrap" style="margin-bottom: 18px;">
+  <table class="legs-inline-table">
+    <tr>
+      <th>Lot</th><th>Kelishuv</th><th>Hamkor</th><th>Kelgan sana</th>
+      <th class="num">Kirim</th><th class="num">Sotilgan</th><th class="num">Qoldiq</th>
+      {% if user.is_admin_role %}<th class="num">Tan narx</th><th></th>{% endif %}
+    </tr>
+    {% for lot in open_lots %}
+    <tr>{% include "crm/_ombor_lot_cells.html" %}</tr>
+    {% endfor %}
+    {% for lot in done_lots %}
+    <tr class="lot-done" data-done="marka" hidden>{% include "crm/_ombor_lot_cells.html" %}</tr>
+    {% endfor %}
+    {% if done_lots %}
+    <tr>
+      <td colspan="{% if user.is_admin_role %}9{% else %}7{% endif %}">
+        <button type="button" class="btn btn-sm btn-ghost" data-done-toggle="marka"
+                data-label-open="{{ done_lots|length }} ta tugagan lotni yashirish"
+                data-label-closed="{{ done_lots|length }} ta tugagan lotni ko'rsatish">
+          {{ done_lots|length }} ta tugagan lotni ko'rsatish
+        </button>
+      </td>
+    </tr>
+    {% endif %}
+  </table>
+</div>
+
+{% if brons %}
+<div class="legs-inline-head">
+  <strong>Bronlar</strong>
+  <span class="muted">kim oldin so'ragani ko'rinib tursin uchun — tartib majburiy emas</span>
+</div>
+<div class="table-wrap" style="margin-bottom: 18px;">
+  <table class="legs-inline-table">
+    <tr><th>#</th><th>Mijoz</th><th>Sana</th><th class="num">Qolgan kg</th>
+        {% if user.is_admin_role %}<th class="num">Narx</th>{% endif %}</tr>
+    {% for r in brons %}
+    <tr>
+      <td><span class="qpos{% if forloop.first %} qpos--first{% endif %}">{{ forloop.counter }}</span></td>
+      <td>{{ r.customer.name }}</td>
+      <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
+      <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
+        {% if r.fulfilled_kg %}<div class="muted">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>
+      {% if user.is_admin_role %}
+      <td class="num">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="legs-inline-head">
+  <strong>Sotuvlar</strong>
+  <span class="muted">eng yangisi birinchi — qaysi yukdan ketgani bilan</span>
+</div>
+{% if sales %}
+<div class="table-wrap">
+  <table class="legs-inline-table">
+    <tr>
+      <th>Sana</th><th>Mijoz</th><th class="num">Kg</th><th>Qaysi yukdan</th>
+      {% if user.is_admin_role %}<th class="num">Narx</th><th class="num">Jami</th><th class="num">Foyda</th>{% endif %}
+    </tr>
+    {% for s in sales %}
+    <tr>
+      <td>{{ s.date }}</td>
+      <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' s.pk %}">{{ s.customer.name }}</a>
+          {% else %}{{ s.customer.name }}{% endif %}
+          <div class="muted">sotuv #{{ s.pk }}</div></td>
+      <td class="num"><strong>{{ s.kg|floatformat:"-3" }}</strong></td>
+      {% comment %}
+      Off the slices, so a sotuv corrected into two trucks names both with the kg
+      each carries rather than pointing at whichever one happens to be first.
+      {% endcomment %}
+      <td>{% for sl in s.lots.all %}
+          <div>{{ sl.line.label }}{% if s.lots.all|length > 1 %}
+            <span class="muted">— {{ sl.kg|floatformat:"-3" }} kg</span>{% endif %}</div>
+          {% endfor %}</td>
+      {% if user.is_admin_role %}
+      <td class="num">{% rate s.price s.price_uzs s.currency %}</td>
+      <td class="num">{% money s.total s.total_uzs s.currency %}</td>
+      <td class="num">{% money s.profit s.profit_uzs s.currency %}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="muted">Bu markadan hali sotilmagan.</p>
+{% endif %}
+
+{% comment %}
+The marka as a story, oldest first: what landed, what went out, what was corrected
+and what was deleted again. The tables above say where things stand; only this says
+how they got there — a sotuv entered as 24 000 and changed to 16 950 a day later
+reads as neither number on its own.
+{% endcomment %}
+<div class="legs-inline-head" style="margin-top: 22px;">
+  <strong>Harakatlar tarixi</strong>
+  <span class="muted">eng eskisi birinchi — kirim, sotuv va har bir o'zgarish</span>
+</div>
+{% if activity %}
+<div class="table-wrap">
+  <table class="legs-inline-table">
+    <tr><th>Sana</th><th>Amal</th><th class="num">Kg</th><th>Mijoz</th>
+        <th>Qaysi yukdan</th><th>Kim</th></tr>
+    {% for e in activity %}
+    <tr{% if e.is_delete %} class="lot-done-row"{% endif %}>
+      <td class="muted">{{ e.at|date:"d.m.y H:i" }}</td>
+      <td>
+        {% if e.kind == "yuk" %}Yuk · {{ e.action }}
+        {% elif e.is_delete %}<span class="late">Sotuv o'chirildi</span>
+        {% elif e.down %}Kamaytirildi
+        {% elif e.up %}Ko'paytirildi
+        {% else %}Sotuv · {{ e.action }}{% endif %}
+      </td>
+      <td class="num">
+        {% if e.before %}<span class="muted">{{ e.before|floatformat:"-3" }}</span> →
+          <strong>{{ e.after|floatformat:"-3" }}</strong>
+        {% elif e.after %}{{ e.after|floatformat:"-3" }}
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td>
+        {% if e.kind == "yuk" %}<span class="muted">{{ e.summary }}</span>
+        {% else %}
+          {% if e.sale %}<a href="{% url 'sale_detail' e.sale.pk %}">{{ e.customer }}</a>
+          {% else %}<span class="muted">o'chirilgan sotuv</span>{% endif %}
+          <div class="muted">sotuv #{{ e.sale_id }}</div>
+        {% endif %}
+      </td>
+      {% comment %}
+      Where the sotuv sits TODAY, not where FIFO put it that afternoon — a correction
+      can move it since. Blank for a deleted sotuv, which no longer sits anywhere.
+      {% endcomment %}
+      <td>{% for label in e.lots %}<div>{{ label }}</div>{% empty %}
+          <span class="muted">—</span>{% endfor %}</td>
+      <td class="muted">{{ e.user.username|default:"—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="muted">Audit yozuvi yo'q.</p>
+{% endif %}
+
+<p style="margin-top: 14px;"><a class="btn btn-ghost" href="{% url 'ombor' %}">Omborga qaytish</a></p>
+
+<script>
+// Tugagan lotlar — Ombordagi bilan bir xil, faqat bu sahifada bitta marka bor.
+document.querySelectorAll('[data-done-toggle]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var rows = document.querySelectorAll('.lot-done[data-done="' + btn.getAttribute('data-done-toggle') + '"]');
+    if (!rows.length) { return; }
+    var willOpen = rows[0].hidden;
+    rows.forEach(function (row) { row.hidden = !willOpen; });
+    btn.textContent = willOpen ? btn.dataset.labelOpen : btn.dataset.labelClosed;
+  });
+});
+</script>
+{% endblock %}

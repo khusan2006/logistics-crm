@@ -395,9 +395,10 @@ def _som_priced_contract():
 
 def _post_contract_edit(client, contract, **line_overrides):
     resp = client.get(f"/contracts/{contract.pk}/edit/")
+    # Nechta mashina is a column of the product rows now, so it rides along in
+    # `rendered_formset_payload` rather than needing a line of its own here.
     payload = {"partner": contract.partner_id, "currency": contract.currency,
-               "created": "2026-07-01", "note": "",
-               "planned_trucks": resp.context["lines_after"]["planned_trucks"].value() or 1}
+               "created": "2026-07-01", "note": ""}
     formset = resp.context["lines"]
     payload.update(rendered_formset_payload(formset))
     for key, value in line_overrides.items():

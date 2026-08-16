@@ -261,16 +261,68 @@ def test_kelishuv_has_no_deadline(db):
 
 
 def test_planned_trucks_is_optional_and_saved(admin_client, db):
-    """Kelishuvga nechta mashina biriktirilishi — ixtiyoriy."""
+    """Mahsulotga nechta mashina biriktirilishi — ixtiyoriy."""
     p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
+    row = {"brand": "2102", "kg": "20000", "price": "1.10"}
     payload = {"partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
-               **line_data({"brand": "2102", "kg": "20000", "price": "1.10"})}
+               **line_data(row)}
     assert admin_client.post("/contracts/new/", payload).status_code == 302
     assert Contract.objects.get().planned_trucks is None
 
     Contract.objects.all().delete()
-    admin_client.post("/contracts/new/", {**payload, "planned_trucks": "2"})
+    admin_client.post("/contracts/new/", {
+        **payload, **line_data({**row, "planned_trucks": "2"})})
     assert Contract.objects.get().planned_trucks == 2
+
+
+def test_trucks_are_asked_per_product_and_the_kelishuv_totals_them(admin_client, db):
+    """A kelishuv for two markalar is two delivery schedules sharing a piece of
+    paper: one number across both could not say which of them still owed a truck.
+    The kelishuv's own figure is what its products add up to."""
+    p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
+    resp = admin_client.post("/contracts/new/", {
+        "partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
+        **line_data({"brand": "7000 campaund", "kg": "120000", "price": "1.10",
+                     "planned_trucks": "6"},
+                    {"brand": "209 campaund", "kg": "120000", "price": "1.20",
+                     "planned_trucks": "4"})})
+    assert resp.status_code == 302
+
+    contract = Contract.objects.get()
+    assert [(ln.brand, ln.planned_trucks) for ln in contract.lines.all()] == [
+        ("7000 campaund", 6), ("209 campaund", 4)]
+    assert contract.planned_trucks == 10
+
+
+def test_a_product_with_no_truck_target_does_not_zero_the_kelishuv(admin_client, db):
+    """One marka planned and the other not is normal — the kelishuv still has the
+    one target it was given, and the unplanned row simply adds nothing."""
+    p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
+    admin_client.post("/contracts/new/", {
+        "partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
+        **line_data({"brand": "Rejali", "kg": "1000", "price": "1.10",
+                     "planned_trucks": "3"},
+                    {"brand": "Rejasiz", "kg": "1000", "price": "1.20"})})
+
+    contract = Contract.objects.get()
+    assert contract.planned_trucks == 3
+    assert contract.lines.get(brand="Rejasiz").planned_trucks is None
+
+
+def test_a_truck_carrying_both_markalar_counts_under_each(admin_client, db):
+    """Per product, a truck counts under every marka it carried — it really did
+    carry both — so the products can add past the kelishuv's own truck count."""
+    contract = make_contract(brand="Birinchi", kg="1000", price="1.00")
+    second = ContractLine.objects.create(contract=contract, brand="Ikkinchi",
+                                         kg=Decimal("1000"), price=Decimal("1.00"))
+    ContractLine.objects.filter(contract=contract).update(planned_trucks=2)
+
+    one_truck = make_shipment(contract=contract, kg="100")
+    ShipmentLine.objects.create(shipment=one_truck, contract_line=second,
+                                kg=Decimal("100"))
+
+    assert contract.truck_progress == (1, 4)               # one truck, four planned
+    assert [ln.truck_progress for ln in contract.lines.all()] == [(1, 2), (1, 2)]
 
 
 def test_truck_progress_counts_sent_against_planned(db):

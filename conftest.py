@@ -27,8 +27,13 @@ def make_contract(partner=None, brand="LLDPE", kg="1000", price="1.00",
         partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     fields = {"created": "2026-07-01"}
     fields.update(kw)
+    # Nechta mashina lives on the product now, not the header — a kelishuv's own
+    # figure is the sum of its rows. Callers still pass it as a kelishuv-level
+    # number because that is what these single-product fixtures mean by it.
+    planned_trucks = fields.pop("planned_trucks", None)
     contract = Contract.objects.create(partner=partner, **fields)
-    line = {"kg": Decimal(str(kg)), "price": Decimal(str(price))}
+    line = {"kg": Decimal(str(kg)), "price": Decimal(str(price)),
+            "planned_trucks": planned_trucks}
     if price_uzs is not None:
         line["price_uzs"] = Decimal(str(price_uzs))
     ContractLine.objects.create(contract=contract, brand=brand, **line)
@@ -120,16 +125,22 @@ def payment_rows(*entries, customer, date="2026-07-20", debt_currency=""):
     return data
 
 
-def supplier_payment_rows(*entries, contract, date="2026-07-02"):
-    """POST payload for the hamkor to'lov modal: the shared kelishuv and sana, plus
-    one row per way the money left. The twin of `payment_rows` on the incoming side.
+def supplier_payment_rows(*entries, contract, date="2026-07-02", contract_line=None):
+    """POST payload for the hamkor to'lov modal: the shared kelishuv, marka and sana,
+    plus one row per way the money left. The twin of `payment_rows` on the incoming
+    side.
 
     Rows default to a dollar naqd at 12,000 so a test only spells out what it is
     actually testing. Called with no entries it posts an empty formset, which is how
-    "a to'lov with no rows at all" is exercised."""
+    "a to'lov with no rows at all" is exercised.
+
+    `contract_line` is left out unless a test names one: a kelishuv carrying a single
+    product fills it in server-side, which is most of them."""
     data = {"contract": getattr(contract, "pk", contract), "date": date,
             "form-TOTAL_FORMS": str(len(entries)), "form-INITIAL_FORMS": "0",
             "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
+    if contract_line is not None:
+        data["contract_line"] = getattr(contract_line, "pk", contract_line)
     defaults = {"currency": "usd", "amount": "0", "exchange_rate": "12000",
                 "commission_percent": "", "method": "cash", "fee_percent": "0",
                 "note": ""}

@@ -699,28 +699,39 @@
       if (intPart === '') { intPart = '0'; }
       return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + dec;
     }
-    function digitsBefore(str, caret) {
+    // Putting the caret back after a reformat, by what the operator TYPED — the
+    // digits AND the decimal separator, never the grouping spaces, which are ours
+    // to move. Counted from the RIGHT: what is left of the caret is where format()
+    // adds and removes characters the operator did not type, so anchoring there
+    // drifts, while the tail past the caret is untouched by all of it.
+    //
+    // Counting digits only, from the left, is what put the caret on the wrong side
+    // of a just-typed dot — "34." rewound to "34|." because both strings still held
+    // two digits, so the next key landed in the whole part and 34.5 was entered as
+    // 345. Anchoring from the left would fix the dot and still misplace ".5", where
+    // format() prepends a 0 the operator never pressed. A comma counts as typed as
+    // well: it is the same key on this keyboard, and toNumeric turns it into the
+    // dot that the formatted value is then scanned for.
+    function isTyped(ch) { return (ch >= '0' && ch <= '9') || ch === '.' || ch === ','; }
+    function typedAfter(str, caret) {
       var n = 0;
-      for (var i = 0; i < caret && i < str.length; i++) { if (str[i] >= '0' && str[i] <= '9') { n++; } }
+      for (var i = caret; i < str.length; i++) { if (isTyped(str[i])) { n++; } }
       return n;
     }
-    function caretForDigits(str, count) {
-      if (count <= 0) {
-        for (var i = 0; i < str.length; i++) { if (str[i] >= '0' && str[i] <= '9') { return i; } }
-        return str.length;
-      }
+    function caretWithTypedAfter(str, count) {
+      if (count <= 0) { return str.length; }
       var seen = 0;
-      for (var j = 0; j < str.length; j++) {
-        if (str[j] >= '0' && str[j] <= '9') { seen++; if (seen === count) { return j + 1; } }
+      for (var i = str.length - 1; i >= 0; i--) {
+        if (isTyped(str[i])) { seen++; if (seen === count) { return i; } }
       }
-      return str.length;
+      return 0;
     }
     function reformat(el) {
       var caret = el.selectionStart;
-      var before = caret == null ? null : digitsBefore(el.value, caret);
+      var tail = caret == null ? null : typedAfter(el.value, caret);
       el.value = format(el.value);
-      if (before != null) {
-        var pos = caretForDigits(el.value, before);
+      if (tail != null) {
+        var pos = caretWithTypedAfter(el.value, tail);
         try { el.setSelectionRange(pos, pos); } catch (e) {}
       }
     }
@@ -967,11 +978,14 @@
       }
       return sel.lineOptionsAll;
     }
-    function filterLineOptions(set) {
-      var source = document.querySelector('select[data-contract-source]');
+    function filterLineOptions(scope) {
+      // Its own picker when it has one (the to'lov form holds both), otherwise the
+      // page's — a formset's kelishuv select sits outside the fieldset.
+      var source = scope.querySelector('select[data-contract-source]')
+                || document.querySelector('select[data-contract-source]');
       if (!source) { return; }
       var want = source.value;
-      set.querySelectorAll('select[data-line-source]').forEach(function (sel) {
+      scope.querySelectorAll('select[data-line-source]').forEach(function (sel) {
         var chosen = sel.value;
         var keep = allLineOptions(sel).filter(function (o) {
           // The blank placeholder carries no kelishuv and always stays.
@@ -1003,6 +1017,29 @@
       }
     }
     function enhance(root) {
+      // The hamkor to'lovi form asks which MAHSULOT the money is against, and it
+      // is a plain field on the form rather than a row of a formset — so the
+      // narrowing above is wired to the form itself as well. Same option list,
+      // same rule: drop the products of every other kelishuv.
+      (root || document).querySelectorAll('form').forEach(function (form) {
+        var line = form.querySelector('select[data-line-source]');
+        var source = form.querySelector('select[data-contract-source]');
+        if (!line || !source || line.closest('[data-lineset]')) { return; }
+        if (form.dataset.lineFieldReady) { return; }
+        form.dataset.lineFieldReady = '1';
+        // A kelishuv with one marka leaves one option: pick it rather than asking
+        // a question with a single answer. The server does the same on save, so
+        // this only spares the operator the click — it is not what decides it.
+        function narrow() {
+          filterLineOptions(form);
+          var real = Array.prototype.filter.call(line.options, function (o) {
+            return o.value;
+          });
+          if (real.length === 1) { line.value = real[0].value; }
+        }
+        source.addEventListener('change', narrow);
+        narrow();
+      });
       (root || document).querySelectorAll('[data-lineset]').forEach(function (set) {
         if (set.dataset.linesetReady) { return; }
         set.dataset.linesetReady = '1';
@@ -1068,6 +1105,45 @@
     enhance(document);
   })();
 
+  // FIFO shift preview ([data-shift-preview]): correcting an old sotuv's kg empties
+  // its lot sooner and pushes every sotuv behind it onto different lots. The server
+  // dry-runs that and renders the result here while the kg is being typed, so the
+  // operator sees which sotuvlar move — or why they cannot — before saving.
+  (function () {
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-shift-preview]').forEach(function (box) {
+        if (box.dataset.shiftReady) { return; }
+        box.dataset.shiftReady = '1';
+        var form = box.closest('form');
+        var kg = form && form.querySelector('[name="kg"]');
+        if (!kg) { return; }
+        var timer = null;
+        var seq = 0;
+        function refresh() {
+          // The kg box is money-formatted, so what is in it is "16 050" or "16050,5".
+          // Sent raw and parsed server-side — the preview must read exactly what the
+          // form will later submit, not a second guess at the same string.
+          var mine = ++seq;
+          var url = box.getAttribute('data-shift-preview') +
+                    '?kg=' + encodeURIComponent(kg.value || '');
+          fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (html) {
+              // A slower earlier request must not overwrite a newer answer.
+              if (mine === seq) { box.innerHTML = html; }
+            })
+            .catch(function () { /* preview is advisory — never block the form */ });
+        }
+        kg.addEventListener('input', function () {
+          clearTimeout(timer);
+          timer = setTimeout(refresh, 350);
+        });
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
   // Inline quick-add (data-quick-add-url): a "+ <label>" button next to a select
   // opens a small name/phone panel, POSTs to the quick-create endpoint, then adds
   // and selects the new record without leaving the form. Used for the sale form's
@@ -1085,6 +1161,10 @@
         sel.appendChild(existing);
       }
       sel.value = id;
+      // Setting .value fires nothing, and two things downstream are waiting on it:
+      // the combobox, whose input would still read the previous mijoz, and the
+      // "Brondan ushlansin" question, which would still be answering for them.
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
     }
     function inject(sel) {
       if (sel.dataset.qaReady) { return; }
@@ -2349,6 +2429,210 @@
     window.addEventListener('resize', function () { if (!pop.hidden) { fitPop(); } });
   })();
 
+  // Drag the rows of Kelishuvlar bajarilishi into the order they are read in.
+  // The card ranks by trucks-still-to-send, which is a fair default and the wrong
+  // one whenever a particular deal is the one being watched — this lifts that one
+  // to the top and keeps it there.
+  //
+  // The row is picked UP: taken out of the column, floated under the pointer over
+  // a slot holding its place, and the rows it passes slide aside. Reordering the
+  // DOM under a row still in flow was the cheap version of this and read as a
+  // stutter — the row it swapped with jumped a whole row-height in one frame, and
+  // the row being dragged never actually followed the hand.
+  //
+  // Pointer events rather than the HTML5 drag-and-drop API: DnD does not fire for
+  // touch at all, so the same handler covers a mouse and a thumb.
+  (function () {
+    var list = document.querySelector('[data-cprog-reorder]');
+    if (!list) { return; }
+    var SLIDE = 180;                   // ms; the rows moving out of the way
+    var LIFT = 4;                      // px of travel before a press is a drag
+    var drag = null;                   // the row in the air
+    var press = null;                  // a press that has not travelled yet
+
+    function rows() {
+      return Array.prototype.slice.call(list.querySelectorAll('.cprog-row'));
+    }
+
+    // Reads the SLOT's position while a drag is on, since that is where the row
+    // will land — the floating row itself is out of flow and proves nothing.
+    function order() {
+      return Array.prototype.slice.call(list.children).map(function (el) {
+        return el === (drag && drag.slot) ? drag.row.dataset.contract
+                                          : el.dataset.contract;
+      }).filter(Boolean).join(',');
+    }
+
+    function save(was) {
+      if (order() === was) { return; }      // dropped back where it started
+      fetch(list.dataset.reorderUrl, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest',
+                   'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ order: order(),
+                                    csrfmiddlewaretoken: list.dataset.csrf }),
+      });
+    }
+
+    // Move `node` in the list and animate everything that shifted, FLIP-style:
+    // measure, move, then start each element from where it used to be and let it
+    // transition to zero. Nothing is animated frame by frame in JS.
+    function slide(node, target) {
+      // Every row that can shift, the moved one included — on a keyboard move it
+      // IS the one the eye is following, and the row it swaps with has to travel
+      // the other way at the same time or the swap does not read as a swap. Only
+      // a row already in the air is left out: it is placed by the pointer.
+      var moving = rows().concat(drag ? [drag.slot] : []).filter(function (el) {
+        return !drag || el !== drag.row;
+      });
+      var was = moving.map(function (el) { return el.getBoundingClientRect().top; });
+      list.insertBefore(node, target);
+      moving.forEach(function (el, i) {
+        var dy = was[i] - el.getBoundingClientRect().top;
+        if (!dy) { return; }
+        el.style.transition = 'none';
+        el.style.transform = 'translateY(' + dy + 'px)';
+        // Read back, so the browser cannot fold the two styles into one paint and
+        // skip the animation entirely.
+        void el.offsetHeight;
+        el.style.transition = 'transform ' + SLIDE + 'ms cubic-bezier(.2,.7,.3,1)';
+        el.style.transform = '';
+      });
+    }
+
+    // The element the floating row belongs in front of: the first whose middle is
+    // below the row's own middle. Measured against the row rather than the
+    // pointer, so where you grabbed a row does not change where it drops.
+    function before(middle) {
+      var candidates = rows().filter(function (el) { return el !== drag.row; });
+      for (var i = 0; i < candidates.length; i++) {
+        var box = candidates[i].getBoundingClientRect();
+        if (middle < box.top + box.height / 2) { return candidates[i]; }
+      }
+      return null;
+    }
+
+    // Take the row out of the column and put it under the pointer.
+    function lift() {
+      var row = press.row;
+      var box = row.getBoundingClientRect();
+      var listBox = list.getBoundingClientRect();
+
+      // A slot of the same height, so the column keeps its shape with the row out
+      // of it — otherwise everything below snaps up the moment the row is lifted.
+      var slot = document.createElement('div');
+      slot.className = 'cprog-slot';
+      slot.style.height = box.height + 'px';
+      list.insertBefore(slot, row);
+
+      // `none` because a previous slide left a transition on this row, and a
+      // transitioned transform makes the row lag behind the hand instead of
+      // tracking it.
+      row.style.transition = 'none';
+      row.style.width = box.width + 'px';
+      row.style.top = (box.top - listBox.top) + 'px';
+      row.style.left = (box.left - listBox.left) + 'px';
+      row.classList.add('is-dragging');
+      list.classList.add('is-reordering');
+      // On the row, not the grip: the pointer is off both within a frame, and the
+      // row is what has to keep receiving the move events.
+      try { row.setPointerCapture(press.id); } catch (err) { /* pointer already up */ }
+      // A press that began as a text selection must not leave half the card
+      // highlighted under the row now flying over it.
+      var selection = window.getSelection();
+      if (selection) { selection.removeAllRanges(); }
+
+      drag = { row: row, slot: slot, y: press.y, was: order(), moved: 0 };
+      press = null;
+    }
+
+    list.addEventListener('pointerdown', function (e) {
+      if (drag || press || !e.target.closest) { return; }
+      var row = e.target.closest('.cprog-row');
+      if (!row || (e.pointerType === 'mouse' && e.button !== 0)) { return; }
+      var onGrip = !!e.target.closest('.cprog-grip');
+      // A finger pressing the row body has to scroll the page — that is the only
+      // way down a phone screen, and taking the gesture would strand the user.
+      // Touch reorders by the grip, which reserves it (touch-action: none).
+      if (e.pointerType !== 'mouse' && !onGrip) { return; }
+
+      press = { row: row, x: e.clientX, y: e.clientY, id: e.pointerId };
+      // The grip is unambiguous, so it lifts on contact. Anywhere else on the row
+      // a press is still a click waiting to happen — the row opens Kelishuvlar —
+      // so it does not become a drag until the pointer has actually travelled.
+      if (onGrip) { lift(); e.preventDefault(); }
+    });
+
+    list.addEventListener('pointermove', function (e) {
+      if (press) {
+        if (Math.abs(e.clientY - press.y) < LIFT
+            && Math.abs(e.clientX - press.x) < LIFT) { return; }
+        lift();
+      }
+      if (!drag) { return; }
+      drag.moved = e.clientY - drag.y;
+      drag.row.style.transform = 'translateY(' + drag.moved + 'px)';
+      var box = drag.row.getBoundingClientRect();
+      var target = before(box.top + box.height / 2);
+      if (target !== drag.slot.nextElementSibling && target !== drag.slot) {
+        slide(drag.slot, target);
+      }
+    });
+
+    function drop() {
+      press = null;
+      if (!drag) { return; }
+      var row = drag.row, slot = drag.slot, was = drag.was;
+      // A drag that ends on the row must not also open the kelishuv. click fires
+      // after pointerup, so the flag is read there and dropped on the next tick —
+      // the same guard the drag-to-scroll tables use.
+      list.dataset.justDragged = '1';
+      setTimeout(function () { delete list.dataset.justDragged; }, 0);
+      // Fall into the slot rather than blinking into it.
+      var rest = slot.getBoundingClientRect().top - row.getBoundingClientRect().top
+                 + drag.moved;
+      row.style.transition = 'transform ' + SLIDE + 'ms cubic-bezier(.2,.7,.3,1)';
+      row.style.transform = 'translateY(' + rest + 'px)';
+      drag = null;
+
+      setTimeout(function () {
+        list.insertBefore(row, slot);
+        slot.remove();
+        row.classList.remove('is-dragging');
+        list.classList.remove('is-reordering');
+        row.removeAttribute('style');
+        save(was);
+      }, SLIDE);
+    }
+    list.addEventListener('pointerup', drop);
+    list.addEventListener('pointercancel', drop);
+
+    // Capture phase, so it beats the link's own navigation.
+    list.addEventListener('click', function (e) {
+      if (!list.dataset.justDragged) { return; }
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+
+    // The same move without a pointer. The grip is a real button, so it is
+    // reachable by Tab; ↑ and ↓ on it walk the row up and down the card.
+    list.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') { return; }
+      var grip = e.target.closest ? e.target.closest('.cprog-grip') : null;
+      if (!grip) { return; }
+      var row = grip.closest('.cprog-row');
+      var was = order();
+      // Through `slide`, so a keyboard move animates the same way a drag does.
+      if (e.key === 'ArrowUp' && row.previousElementSibling) {
+        slide(row, row.previousElementSibling);
+      } else if (e.key === 'ArrowDown' && row.nextElementSibling) {
+        slide(row.nextElementSibling, row);
+      }
+      e.preventDefault();       // or the page scrolls out from under the row
+      grip.focus();             // moving the node in the DOM drops focus
+      save(was);
+    });
+  })();
 </script>
 </body>
 </html>

@@ -102,33 +102,151 @@
       {% endif %}
     </div>
     {% if contracts %}
-    <div class="cprogs">
+    {% comment %}
+    The rows are draggable by the grip, so the kelishuvlar being watched can be
+    lifted above the ones the automatic ranking puts first. The order is this
+    user's own and is saved on drop — see accounts.User.dashboard_contract_order.
+
+    The grip sits OUTSIDE the row's <a>: a button inside a link is neither valid
+    nor operable, and the whole row still has to open Kelishuvlar on a click.
+    {% endcomment %}
+    <div class="cprogs" data-cprog-reorder
+         data-reorder-url="{% url 'dashboard_contract_order' %}"
+         data-csrf="{{ csrf_token }}">
       {% for row in contracts %}
+      <div class="cprog-row" data-contract="{{ row.contract.pk }}">
+        <button type="button" class="cprog-grip" aria-label="Tartibini o'zgartirish"
+                title="Sudrab tartibini o'zgartiring (yoki ↑ / ↓)">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+        </button>
       <a class="cprog xf-row" href="{% url 'contract_list' %}" title="{{ row.contract.code }} · {{ row.contract.brand_summary }}">
         <div class="cprog-head">
-          <span class="cprog-name">{{ row.contract.brand_summary }} · {{ row.contract.partner.name }}</span>
           {% comment %}
-          Without Nechta mashina there is no denominator to fill against, so the
-          kelishuv shows what has gone out and no target — the same rule the
-          Yuklar list follows.
+          With a bar per marka each one names itself, so the heading drops to the
+          hamkor alone rather than listing the same markalar twice.
+
+          The kod stands IN PLACE OF the hamkor's name rather than beside it: it
+          already begins with them ("vazifadon-4"), so printing both said the name
+          twice to say one extra digit.
+
+          And that digit is what tells two rows apart. One hamkor runs several
+          kelishuvlar for the same marka at once, and "2102 repak · sobir" twice
+          over with different figures under it reads as the card contradicting
+          itself when it is in fact sobir-1 and sobir-3. The kod was in the hover
+          title only, which answers nobody scanning the column.
           {% endcomment %}
-          {% if row.planned %}
-          <span class="cprog-trucks">{{ row.sent }} / {{ row.planned }} mashina</span>
-          {% else %}
-          <span class="cprog-trucks muted">{{ row.sent }} mashina</span>
-          {% endif %}
+          <span class="cprog-name">{% if row.lines %}{{ row.contract.code }}{% else %}{{ row.contract.brand_summary }} · {{ row.contract.code }}{% endif %}</span>
+          {% comment %}
+          The same figure the Yuk bar under it carries, built the same way — the
+          head used to drop to a bare "4 mashina" where the kelishuv set no target,
+          which left it disagreeing in SHAPE with the "4 / 4" an inch below it.
+
+          Still muted when there is no target, though: the number now reads the
+          same either way, and whether a kelishuv is measured against a plan or
+          only against what it has managed to send is worth seeing.
+          {% endcomment %}
+          <span class="cprog-trucks{% if not row.planned %} muted{% endif %}">{{ row.trucks_count }} mashina</span>
+        </div>
+        {% comment %}
+        A kelishuv covering more than one marka is read a marka at a time: each
+        gets its own Yuk and its own To'lov, under its own name. Summed into one
+        pair they hide each other — "96 000 / 240 000 kg" reads as a kelishuv a
+        third done when it may be one marka finished and the other untouched, and
+        one gold bar cannot say that a kelishuv is square on one marka and
+        untouched on the other.
+        {% endcomment %}
+        {% comment %}
+        The mashina count rides INSIDE its bar rather than on a line of its own
+        above the pair. Each bar then answers with its own trucks — the Yuk bar
+        how many have gone, the To'lov bar how many are paid for — where the one
+        heading above them could only ever say the first, and said it a whole row
+        away from the bar it belonged to.
+
+        The label is written TWICE, both copies centred across the WHOLE track and
+        so exactly on top of each other: the muted one under the fill, the inked
+        one over it and clipped to the fill's width. As the fill grows the text
+        turns colour through it, which is the only way one centred label reads at
+        both 0% and 100%.
+
+        The fill's width lives in --p on the track, because the clip is derived
+        from it — one number, two uses, no chance of them disagreeing. Order in
+        the DOM is load-bearing: muted, fill, inked. See .hbar-tag, and keep the
+        two copies identical or they will not line up.
+
+        The text itself is built in the view (_truck_label) — both bars count
+        against the kelishuv's own plan, and the one with no plan falls back to a
+        bare count, which is a conditional this template would have had to spell
+        out four times over, twice each.
+        {% endcomment %}
+        {% for line in row.lines %}
+        <div class="cprog-marka">
+          <span class="cprog-marka-name">{{ line.brand }}</span>
         </div>
         <div class="cprog-bar">
           <span class="cprog-key">Yuk</span>
-          <div class="hbar-track"><div class="hbar-fill" style="width:{{ row.kg_pct }}%"></div></div>
+          <div class="hbar-track" style="--p:{{ line.pct }}%">
+            <span class="hbar-tag">{{ line.trucks_count }} mashina</span>
+            <div class="hbar-fill"></div>
+            <span class="hbar-tag hbar-tag--on">{{ line.trucks_count }} mashina</span>
+          </div>
+          <span class="hbar-value">{{ line.shipped_kg|floatformat:"0g" }} / {{ line.kg|floatformat:"0g" }} kg</span>
+        </div>
+        <div class="cprog-bar">
+          <span class="cprog-key">To'lov</span>
+          <div class="hbar-track hbar-track--gold" style="--p:{{ line.pay_pct }}%">
+            <span class="hbar-tag">{{ line.paid_count }} to'langan</span>
+            <div class="hbar-fill hbar-fill--gold"></div>
+            <span class="hbar-tag hbar-tag--on">{{ line.paid_count }} to'langan</span>
+          </div>
+          <span class="hbar-value">{% money_progress_in line.paid line.due row.contract.currency %}</span>
+        </div>
+        {% empty %}
+        <div class="cprog-bar">
+          <span class="cprog-key">Yuk</span>
+          <div class="hbar-track" style="--p:{{ row.kg_pct }}%">
+            <span class="hbar-tag">{{ row.trucks_count }} mashina</span>
+            <div class="hbar-fill"></div>
+            <span class="hbar-tag hbar-tag--on">{{ row.trucks_count }} mashina</span>
+          </div>
           <span class="hbar-value">{{ row.shipped_kg|floatformat:"0g" }} / {{ row.kg|floatformat:"0g" }} kg</span>
         </div>
         <div class="cprog-bar">
           <span class="cprog-key">To'lov</span>
-          <div class="hbar-track"><div class="hbar-fill hbar-fill--gold" style="width:{{ row.pay_pct }}%"></div></div>
+          <div class="hbar-track hbar-track--gold" style="--p:{{ row.pay_pct }}%">
+            <span class="hbar-tag">{{ row.paid_count }} to'langan</span>
+            <div class="hbar-fill hbar-fill--gold"></div>
+            <span class="hbar-tag hbar-tag--on">{{ row.paid_count }} to'langan</span>
+          </div>
           <span class="hbar-value">{% money_progress_in row.paid row.due row.contract.currency %}</span>
         </div>
+        {% endfor %}
+        {% comment %}
+        Money paid before a to'lov could name a marka. It belongs to the kelishuv
+        and to no product, and saying so is the point — folded into either bar it
+        would credit a marka nobody has said it bought, and left out entirely the
+        gold bars would read as $0 paid on a kelishuv six figures into its life.
+        {% endcomment %}
+        {% if row.unassigned_paid %}
+        <div class="cprog-note cprog-note--warn">
+          {% money_in row.unassigned_paid row.contract.currency %} taqsimlanmagan —
+          to'lovni tahrirlab markasini belgilang
+        </div>
+        {% endif %}
+        {% comment %}
+        What the money has bought, spelled out under the bar: oldest truck first,
+        the part of a truck the money reaches into counted as the part it is.
+        See Contract.trucks_paid_for.
+
+        A kelishuv with markalar drops it. Its gold bars have gone per-marka and
+        each already carries its own to'langan count, so a kelishuv-wide fraction
+        under them is a THIRD kind of fraction on the block — one that agrees with
+        none of the ones above it and is read as though it should.
+        {% endcomment %}
+        {% if not row.lines %}
+        <div class="cprog-note">{{ row.paid_count }} yuk to'langan</div>
+        {% endif %}
       </a>
+      </div>
       {% endfor %}
     </div>
     {% else %}<p class="muted">Tugallanmagan kelishuv yo'q.</p>{% endif %}

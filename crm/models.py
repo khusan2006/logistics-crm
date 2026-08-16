@@ -1,4 +1,4 @@
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -67,6 +67,36 @@ def own_side(row, usd_value, uzs_value):
     in full never leaves the unfinished list. Costs are the one deliberate exception —
     see ShipmentLine.landed_cost_per_kg."""
     return uzs_value if row.is_som else usd_value
+
+
+def _trucks_covered(paid, trucks):
+    """How many yuklar `paid` covers, oldest truck first — the shared half of
+    `Contract.trucks_paid_for` and its per-marka twin on ContractLine.
+
+    `trucks` is (sort_key, value) pairs, each already priced in the money's own
+    currency; the caller decides what a truck is worth, since a marka pays only
+    for its share of a load carrying two.
+
+    The answer carries the PART of the next truck the money reaches into —
+    "0,2 / 2" rather than "0 / 2", which called a fifth of a truck nothing. It
+    is only ever rounded DOWN, and to one decimal: a truck shown as a whole is a
+    truck the hamkor is no longer owed for, so 1,96 must read as 1,9 and never
+    as 2. Money running past the last truck is an avans and counts for no
+    truck at all — the figure stops at `len(trucks)`."""
+    covered = Decimal("0")
+    for _key, value in sorted(trucks, key=lambda t: t[0]):
+        if value <= 0:
+            # Nothing is owed on it, so no payment is needed to cover it.
+            covered += 1
+            continue
+        if paid <= 0:
+            break
+        if paid < value:
+            covered += paid / value
+            break
+        paid -= value
+        covered += 1
+    return covered.quantize(Decimal("0.1"), rounding=ROUND_DOWN)
 
 
 class MoneyEntry(models.Model):
@@ -596,11 +626,6 @@ class Contract(models.Model):
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
     code_number = models.PositiveIntegerField(editable=False)
     created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
-    # How many trucks the kelishuv is expected to take. Optional: it is often not
-    # known when the agreement is signed, and old kelishuvlar never had it.
-    planned_trucks = models.PositiveIntegerField(
-        "Nechta mashina", null=True, blank=True,
-        help_text="Kelishuv bo'yicha rejalashtirilgan mashinalar soni")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, blank=True, related_name="contracts",
@@ -770,9 +795,54 @@ class Contract(models.Model):
         return self.shipped_value - self.paid_total
 
     @property
+    def planned_trucks(self):
+        """How many trucks the kelishuv is expected to take — the sum of what its
+        products each plan.
+
+        The target used to be a field on the kelishuv, typed once for the whole
+        agreement. It is asked per MAHSULOT now, because that is the unit trucks
+        are actually booked against: a kelishuv for two markalar is two delivery
+        schedules sharing a piece of paper, and one number across both could not
+        say which of them still owed a truck.
+
+        None, not 0, when no product sets one — the bar shows a count with no
+        total rather than pretending to a target of nothing."""
+        counts = [ln.planned_trucks for ln in self.lines.all() if ln.planned_trucks]
+        return sum(counts) if counts else None
+
+    @property
+    def trucks_paid_for(self):
+        """(covered, sent) — how many of the yuklar already sent the money paid so
+        far covers.
+
+        A to'lov is not booked against a particular truck, so "which one did this
+        pay for" has no stored answer. It is read the way the debt is actually
+        worked off: oldest truck first, each covered in full before the next
+        starts, which is the order a hamkor settles in.
+
+        `covered` is FRACTIONAL — money part-way through a truck shows as the
+        part it is, never rounded up into a load the hamkor is still owed for.
+        See `_trucks_covered`.
+
+        In the kelishuv's own currency on both sides. Comparing a so'm to'lov
+        against a dollar truck at today's kurs would move the count every time
+        the market did."""
+        # A truck with no sent date has not left yet, so it queues behind the
+        # ones that have rather than sorting to the front as NULL.
+        trucks = [((truck.sent is None, truck.sent, truck.pk),
+                   own_side(self, truck.goods_value, truck.goods_value_uzs))
+                  for truck in self.shipments.all()]
+        return _trucks_covered(self.paid_total_own, trucks), len(trucks)
+
+    @property
     def truck_progress(self):
         """(sent, planned) for the Yuklar progress bar. `planned` is None when the
-        kelishuv never set a target, so the bar shows a count without a total."""
+        kelishuv never set a target, so the bar shows a count without a total.
+
+        `sent` counts TRUCKS, so a truck carrying both markalar counts once here
+        while counting under each product in `ContractLine.truck_progress` — it
+        really did carry both. The two therefore need not add up, and the per-
+        product figures are the ones to read when they disagree."""
         return self.shipments.count(), self.planned_trucks
 
     @property
@@ -807,6 +877,18 @@ class Contract(models.Model):
     @property
     def shipped_value_own(self):
         return self._own(self.shipped_value, self.shipped_value_uzs)
+
+    @property
+    def unassigned_paid_own(self):
+        """Money paid on this kelishuv that names no product, in its own currency.
+
+        Every to'lov entered before a to'lov could name one lands here, so on a
+        multi-marka kelishuv it is what stops the per-marka bars from reading as
+        though nothing had been paid at all. It empties as the old to'lovlar are
+        edited and given a marka."""
+        assigned = sum((self._own(ln.paid_total, ln.paid_total_uzs)
+                        for ln in self.lines.all()), Decimal("0"))
+        return self.paid_total_own - assigned
 
     @property
     def payable_left_own(self):
@@ -856,6 +938,11 @@ class ContractLine(MoneyEntry):
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
                                     decimal_places=2, default=0)
+    # How many trucks THIS product is expected to take. Optional: it is often not
+    # known when the agreement is signed, and old kelishuvlar never had it.
+    planned_trucks = models.PositiveIntegerField(
+        "Nechta mashina", null=True, blank=True,
+        help_text="Shu mahsulot uchun rejalashtirilgan mashinalar soni")
     position = models.PositiveIntegerField(default=0, editable=False)
 
     class Meta:
@@ -892,6 +979,59 @@ class ContractLine(MoneyEntry):
     @property
     def remaining_kg(self):
         return self.kg - self.shipped_kg
+
+    @property
+    def truck_progress(self):
+        """(sent, planned) for this product alone.
+
+        Trucks, not rows: a yuk that carries this marka twice is still one truck.
+        And a truck carrying TWO markalar counts under each of them — it really
+        did carry both — so these can add past the kelishuv's own truck count,
+        the same way Yuk holatlari counts a two-marka yuk under both."""
+        sent = len({sl.shipment_id for sl in self.shipment_lines.all()})
+        return sent, self.planned_trucks
+
+    @property
+    def trucks_paid_for(self):
+        """(covered, sent) for THIS product alone — the per-marka twin of
+        `Contract.trucks_paid_for`, and it follows the same rule: oldest truck
+        first, in the kelishuv's own currency, the part of a truck the money
+        reaches into counted as the part it is.
+
+        Both sides are narrowed to this marka. The money is what named it — the
+        kelishuv's unassigned to'lovlar bought nobody's trucks and cannot settle
+        one here. The trucks are this marka's SHARE of each yuk: a truck carrying
+        two markalar is covered here once this one's slice of it is paid, whatever
+        is still owed on the other. That is why these need not add up to the
+        kelishuv's own count, the same way the truck counts don't."""
+        paid = own_side(self.contract, self.paid_total, self.paid_total_uzs)
+        shares = {}
+        for sl in self.shipment_lines.all():
+            value = own_side(self.contract, sl.goods_value, sl.goods_value_uzs)
+            shares[sl.shipment] = shares.get(sl.shipment, Decimal("0")) + value
+        trucks = [((truck.sent is None, truck.sent, truck.pk), value)
+                  for truck, value in shares.items()]
+        return _trucks_covered(paid, trucks), len(trucks)
+
+    @property
+    def paid_total(self):
+        """What has been paid against THIS product.
+
+        Credited, not gross — the same figure the kelishuv's own `paid_total`
+        sums, so a kelishuv's products and its unassigned money add back up to
+        it exactly.
+
+        A to'lov that names no product counts here for nobody. Every to'lov
+        entered before the field existed is one of those, and they are the
+        kelishuv's `unassigned_paid` — guessing which marka they bought would be
+        inventing a fact, so they are shown as unassigned until someone says."""
+        return sum((p.credited_amount for p in self.supplier_payments.all()),
+                   Decimal("0"))
+
+    @property
+    def paid_total_uzs(self):
+        return sum((p.credited_amount_uzs for p in self.supplier_payments.all()),
+                   Decimal("0"))
 
     @property
     def shipped_value(self):
@@ -963,6 +1103,27 @@ class SupplierPayment(CashEntry):
 
     contract = models.ForeignKey(Contract, on_delete=models.PROTECT,
                                  related_name="supplier_payments", verbose_name="Kelishuv")
+    # WHICH product of the kelishuv the money is against. A kelishuv covering two
+    # markalar is two deliveries sharing a piece of paper, and "paid $96 400 of
+    # $288 000" said nothing about which of them the money went to.
+    #
+    # Nullable, and it stays that way: every to'lov entered before this field
+    # existed names no product, and guessing one for them would be inventing a
+    # fact. Blank therefore means "nobody has said yet", and those rows surface on
+    # the dashboard as `unassigned_paid` until someone opens them and does.
+    #
+    # Nothing NEW can be left blank, though — the form refuses a to'lov on a
+    # multi-product kelishuv that names no marka, and fills the marka in by itself
+    # when the kelishuv has only one. Blank is a fact about the past, not a choice
+    # on offer.
+    #
+    # The qarz is still settled per KELISHUV, not per product: the ceiling this
+    # form checks against, `payable_left_own`, and everything partner_positions()
+    # reports are unchanged. This field records where the money went; it does not
+    # yet split what is owed.
+    contract_line = models.ForeignKey(
+        ContractLine, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="supplier_payments", verbose_name="Mahsulot")
     date = models.DateField("Sana", default=timezone.localdate)
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
     amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
@@ -1231,6 +1392,27 @@ class Shipment(models.Model):
         verbose_name_plural = "Yuklar"
 
     @property
+    def order_in_contract(self):
+        """Which truck of its kelishuv this is — the 2 in "2-yuk".
+
+        Counted, not stored: a yuk carries no number of its own, and the operator
+        names them by the order they went out. Ordered by `sent` with the id behind
+        it, so two trucks dispatched the same day still come out in a stable order
+        and one not yet sent sorts last rather than first."""
+        rows = list(Shipment.objects
+                    .filter(contract_id=self.contract_id)
+                    .values_list("pk", "sent"))
+        rows.sort(key=lambda r: (r[1] is None, r[1], r[0]))
+        return [pk for pk, _ in rows].index(self.pk) + 1
+
+    @property
+    def label(self):
+        """How a yuk is named out loud: "vazifadon-3 · 2-yuk". A bare "#17" says
+        nothing about whose truck it was — which is the only thing that helps when
+        the question is why a sotuv sits on this lot rather than that one."""
+        return f"{self.contract.code} · {self.order_in_contract}-yuk"
+
+    @property
     def has_qr(self):
         """Whether this load's driver is carrying a QR kod. Green in the yuklar
         table; every load without one is yellow, since "no QR" is itself the fact
@@ -1433,6 +1615,12 @@ class ShipmentLine(MoneyEntry):
         return self.contract_line.brand
 
     @property
+    def label(self):
+        """The lot named the way the ombor talks about it — "vazifadon-3 · 2-yuk"
+        — rather than by its row id."""
+        return self.shipment.label
+
+    @property
     def arrived(self):
         return self.shipment.arrived
 
@@ -1498,14 +1686,25 @@ class ShipmentLine(MoneyEntry):
 
     @property
     def sold_kg(self):
-        return sum((s.kg for s in self.sales.all()), Decimal("0"))
+        """Read off the slices rather than off `sales`: a sotuv that reached across
+        a lot boundary leaves only PART of its kg here, and counting the whole sotuv
+        against its first lot would empty that lot twice over."""
+        return sum((sl.kg for sl in self.sale_lots.all()), Decimal("0"))
 
     @property
     def returned_kg(self):
-        # kg flowed back into this lot by restocked returns on its sales
+        """kg flowed back into this lot by restocked returns.
+
+        A qaytarish is recorded against the sotuv, not against a lot, so when the
+        sotuv spans two lots the kg go back in the proportion they came out. Exact
+        whenever a sotuv sits on one lot, which is the ordinary case."""
         total = Decimal("0")
-        for s in self.sales.all():
-            total += sum((r.kg for r in s.returns.all() if r.restock), Decimal("0"))
+        for sl in self.sale_lots.all():
+            sale = sl.sale
+            restocked = sum((r.kg for r in sale.returns.all() if r.restock),
+                            Decimal("0"))
+            if restocked and sale.kg:
+                total += restocked * sl.kg / sale.kg
         return total
 
     @property
@@ -1964,7 +2163,10 @@ def partner_positions_by_currency():
 #: a lot what it cost — landed cost reaches into the truck's expenses and the
 #: kelishuv's to'lovlar, so without this it is a handful of queries per lot.
 STOCK_COST_PREFETCH = (
-    "sales__returns", "shipment__expenses",
+    # Through the slices, not through `sales`: a sotuv that reached across a lot
+    # boundary leaves only part of its kg here, which is what `ShipmentLine.sold_kg`
+    # and `returned_kg` now read.
+    "sale_lots__sale__returns", "shipment__expenses",
     "contract_line__contract__supplier_payments",
     "contract_line__contract__lines",
 )
@@ -2297,10 +2499,24 @@ class Sale(MoneyEntry):
 
     @property
     def cost_price(self):
-        """1 kg tan narxi — the lot's live landed cost (goods + freight + vositachi),
-        read fresh every time rather than frozen at sale, so cost of goods always
-        reflects the latest expenses and hamkor payments."""
-        return self.line.landed_cost_per_kg
+        """1 kg tan narxi — the live landed cost (goods + freight + vositachi) of the
+        lots this sotuv drew from, read fresh every time rather than frozen at sale,
+        so cost of goods always reflects the latest expenses and hamkor payments.
+
+        kg-weighted when the sotuv reached across a lot boundary: 5 000 kg off a
+        cheap truck and 1 000 off a dearer one cost what they cost, and billing the
+        whole sotuv at either lot's narx would misstate the foyda in one direction
+        or the other. One slice — the ordinary case — reduces to that lot's tannarx."""
+        slices = list(self.lots.all())
+        kg = sum((sl.kg for sl in slices), Decimal("0"))
+        if kg <= 0:
+            # No slice yet: an unsaved sotuv, or one being read mid-construction.
+            return self.line.landed_cost_per_kg
+        if len(slices) == 1:
+            return slices[0].line.landed_cost_per_kg
+        total = sum((sl.line.landed_cost_per_kg * sl.kg for sl in slices),
+                    Decimal("0"))
+        return (total / kg).quantize(Decimal("0.0001"))
 
     @property
     def cost_price_uzs(self):
@@ -2400,7 +2616,28 @@ class Sale(MoneyEntry):
         now", which is what the sale date says."""
         if self.debt_deadline is None:
             self.debt_deadline = self.date
-        return super().save(*args, **kwargs)
+        result = super().save(*args, **kwargs)
+        self.sync_lot()
+        return result
+
+    def sync_lot(self):
+        """Keep the single-slice case in step with `line` and `kg`, so every caller
+        that just creates or edits a Sale gets a correct slice without knowing the
+        table exists.
+
+        A sotuv already spanning two lots is left alone: those slices are a replay's
+        work and only a replay may rewrite them. Its kg no longer add up until the
+        replay runs, which is why the edit flow replays before it saves."""
+        slices = list(self.lots.all())
+        if len(slices) > 1:
+            return
+        if not slices:
+            SaleLot.objects.create(sale=self, line_id=self.line_id, kg=self.kg)
+            return
+        one = slices[0]
+        if one.line_id != self.line_id or one.kg != self.kg:
+            one.line_id, one.kg = self.line_id, self.kg
+            one.save(update_fields=["line", "kg"])
 
     @property
     def is_overdue(self):
@@ -2432,6 +2669,51 @@ class Sale(MoneyEntry):
 
     def __str__(self):
         return f"Sotuv #{self.pk} · {self.customer} · {self.kg} kg"
+
+
+class SaleLot(models.Model):
+    """One slice of a sotuv against one lot: how many of its kg are costed to which
+    truck. Usually one row; two when the sotuv had to reach across a lot boundary.
+
+    Split out of `Sale` because a sotuv is two facts glued together. What the mijoz
+    took — kg, narx, qarz — is history and never moves. Which lot it is billed to is
+    FIFO's ANSWER, and that answer changes the moment an earlier sotuv is corrected:
+    the lot empties sooner and everything behind it shifts down the chain.
+
+    Re-costing therefore has to rewrite rows, and it must not be these:
+    `PaymentAllocation` and `Return` both hang off a `Sale`, and the allocation's
+    summa is stored rather than sliced precisely so a so'm sotuv settled by a so'm
+    to'lov lands on zero exactly. Splitting a paid Sale would re-derive those figures
+    on every replay and reintroduce the tiyin the stored column exists to prevent.
+    So a shift rewrites SaleLot and leaves Sale alone, and to'lovlar cannot be
+    disturbed by a correction they have nothing to do with.
+
+    `Sale.line` stays as the first slice's lot — every existing query, form and
+    template reads it — and the two are kept in step by whatever writes the slices.
+    """
+
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="lots",
+                             verbose_name="Sotuv")
+    line = models.ForeignKey(ShipmentLine, on_delete=models.PROTECT,
+                             related_name="sale_lots", verbose_name="Lot")
+    kg = models.DecimalField("Kg", max_digits=12, decimal_places=3)
+    # A lot the operator CHOSE — the Sotish button inside a marka in the ombor picks
+    # the dearer lot on purpose (see `sale_create_lot`), and a replay that moved it
+    # would silently bill the sotuv to a lot nobody asked for. FIFO's own slices are
+    # free to move; these are not.
+    pinned = models.BooleanField("Lot qo'lda tanlangan", default=False)
+
+    class Meta:
+        ordering = ["sale_id", "id"]
+        verbose_name = "Sotuv loti"
+        verbose_name_plural = "Sotuv lotlari"
+
+    @property
+    def landed_cost_per_kg(self):
+        return self.line.landed_cost_per_kg
+
+    def __str__(self):
+        return f"Sotuv #{self.sale_id} · lot #{self.line_id} · {self.kg} kg"
 
 
 class Return(MoneyEntry):
