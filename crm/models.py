@@ -2194,10 +2194,11 @@ STOCK_COST_PREFETCH = (
     "contract_line__contract__lines",
 )
 
-#: The lot's own kelishuv and its hamkor, for screens that NAME them. `arrived_lots`
-#: already joins the truck's side; a lot's contract is reached the other way, through
-#: `contract_line`, and left alone it is two queries per row.
-STOCK_LOT_RELATED = ("contract_line__contract__partner",)
+#: The hamkor behind a lot, reached BOTH ways, for screens that name them.
+#: `arrived_lots` joins as far as the truck's kelishuv but stops before its partner,
+#: and a lot's own kelishuv hangs off `contract_line` instead — each one left out is
+#: a query per row.
+STOCK_LOT_RELATED = ("shipment__contract__partner", "contract_line__contract__partner")
 
 
 def stock_value():

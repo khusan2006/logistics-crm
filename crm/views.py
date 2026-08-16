@@ -1836,6 +1836,12 @@ def _ombor_groups(request):
         partner = lot.shipment.contract.partner.name
         if partner not in g["partners"]:
             g["partners"].append(partner)
+    # The whole bron board in one read, then split by marka here. Asked per group it
+    # was a query per marka — and `bron_queue` is written to be called this way: "one
+    # list, not one per marka".
+    queue_by_brand = {}
+    for bron in bron_queue():
+        queue_by_brand.setdefault(bron.brand, []).append(bron)
     for g in groups:
         # A finished lot is history: it holds nothing, cannot be sold from, and after
         # a few months of arrivals it is most of the list. The kg it moved are still
@@ -1853,7 +1859,7 @@ def _ombor_groups(request):
         # `on_hand` is both the physical count and what may be sold; `reserved` says
         # how much of it is spoken for and `short` when more is promised than has
         # landed. Both are there to be read before selling, not to refuse the sotuv.
-        g["brons"] = bron_queue(g["brand"])
+        g["brons"] = queue_by_brand.get(g["brand"], [])
         g["reserved"] = sum((r.remaining_kg for r in g["brons"]), Decimal("0"))
         g["short"] = max(g["reserved"] - g["on_hand"], Decimal("0"))
         for bron in g["brons"]:
@@ -2581,9 +2587,12 @@ def _filter_sales(request):
     # so the same rows the doska loads are loaded here (`PRICED_SALE_PREFETCH`).
     # Named once rather than spelled again: this is the second screen to go quietly
     # to ten queries a sotuv when that path moved under it.
+    # `allocations` on top of the foyda's own rows: every line also prints a qoldiq,
+    # and `Sale.paid` sums the allocations in Python precisely so a prefetch can feed
+    # it — which only helps where one is actually asked for.
     sales = Sale.objects.select_related(
         "customer", "line__contract_line", "line__shipment__contract__partner"
-    ).prefetch_related(*PRICED_SALE_PREFETCH)
+    ).prefetch_related(*PRICED_SALE_PREFETCH, "allocations")
     if q:
         filters = (Q(customer__name__icontains=q) | Q(line__contract_line__brand__icontains=q))
         if q.isdigit():
