@@ -970,8 +970,11 @@ class SupplierPayment(CashEntry):
     commission_percent = models.DecimalField(
         "Vositachi foizi (%)", max_digits=5, decimal_places=2, default=0, blank=True,
         help_text="Vositachisiz to'lov uchun bo'sh qoldiring")
+    # Naqd, like every other kind of to'lov in the app. A form that opens on
+    # perechisleniya also opens the bank foiz box beside it, so the commonest to'lov
+    # was the one that had to be corrected in two places every time.
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
-                              default=PayMethod.TRANSFER)
+                              default=PayMethod.CASH)
     note = models.CharField("Izoh", max_length=255, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="supplier_payments",
@@ -2694,8 +2697,9 @@ class CustomerPayment(CashEntry):
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
     amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
                                      default=0)
+    # Naqd, the same as the hamkor side and as every other kind of to'lov.
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
-                              default=PayMethod.TRANSFER)
+                              default=PayMethod.CASH)
     # WHICH qarz this settlement is aimed at, when the mijoz owes in both currencies
     # at once. A dollar qarz and a so'm qarz are two separate debts — the operator
     # knows which one they are collecting, and without somewhere to say so the money
