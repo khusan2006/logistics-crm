@@ -490,7 +490,12 @@ def test_a_fee_on_a_cash_row_is_ignored_not_charged(admin_client, shipment):
     rows = {e.category: e for e in ShipmentExpense.objects.all()}
     assert rows["customs"].fee_amount == Decimal("20.00")
     assert rows["loader"].fee_amount == Decimal("0")
-    assert rows["loader"].total_out == Decimal("500.00")
+    # 500 and no foiz on top. Read off `pending_out` rather than `total_out` because
+    # gruzchi is settled at the ombor gate and this fixture's yuk has not arrived —
+    # the pair are twins, and exactly one of them is ever non-zero. See
+    # tests/test_expense_deferral.py.
+    assert rows["loader"].pending_out == Decimal("500.00")
+    assert rows["loader"].total_out == Decimal("0")
 
 
 def test_deleting_the_yuk_takes_its_expenses_with_it(admin_client, shipment):

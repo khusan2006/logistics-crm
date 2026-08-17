@@ -1,8 +1,11 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
-from conftest import make_contract, make_shipment
-from crm.models import SupplierPayment, Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus
+from django.utils import timezone
+
+from conftest import make_contract, make_lot, make_shipment
+from crm.models import (Contract, ContractLine, Customer, Partner, Sale, Shipment,
+                        ShipmentLine, ShipmentStatus, SupplierPayment)
 
 
 def test_dashboard_kpis(admin_client, db):
@@ -290,9 +293,6 @@ def test_each_marka_counts_the_yuklar_its_own_money_covers(admin_client, db):
                                    amount=Decimal("1000"), date="2026-07-08")
 
     assert first.trucks_paid_for == (0, 2) and second.trucks_paid_for == (1, 1)
-    row = admin_client.get("/").context["contracts"][0]
-    assert [(ln["brand"], ln["trucks_paid"]) for ln in row["lines"]] == [
-        ("7000 campaund", 0), ("209 campaund", 1)]
     html = admin_client.get("/").content.decode()
     # Against each marka's OWN plan, not the trucks it happens to have sent.
     assert "0 / 3 to'langan" in html and "1 / 2 to'langan" in html
@@ -347,14 +347,17 @@ def test_a_kelishuv_with_no_plan_counts_against_the_trucks_it_has_sent(admin_cli
                                    date="2026-07-08")
 
     html = admin_client.get("/").content.decode()
-    assert "2 / 2 mashina" in html and "1 / 2 to'langan" in html
+    # $1 000 of the $3 000 this kelishuv will cost, over the 2 trucks it has sent.
+    assert "2 / 2 mashina" in html and "0,6 / 2 to'langan" in html
     assert "/ None" not in html
 
 
-def test_money_paid_before_the_marka_was_asked_for_shows_as_unassigned(admin_client, db):
-    """Every to'lov entered before a to'lov could name a marka names none. Folded
-    into either bar it would credit a marka nobody said it bought; left out, the
-    gold bars would read as nothing paid on a kelishuv six figures into its life."""
+def test_a_tolov_naming_no_marka_is_spread_across_the_products(admin_client, db):
+    """A to'lov that names no marka is a zaklad, and a zaklad buys the kelishuv's
+    products rather than sitting outside them: it splits by mashina count where
+    there is a plan to split by, and otherwise runs the kelishuv in order
+    (`allocate_supplier_payment`). Left out of both bars, a kelishuv six figures
+    into its life read as nothing paid."""
     contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
     ContractLine.objects.create(contract=contract, brand="209 campaund",
                                 kg=Decimal("1000"), price=Decimal("1.00"))
@@ -362,11 +365,57 @@ def test_money_paid_before_the_marka_was_asked_for_shows_as_unassigned(admin_cli
                                    date="2026-07-05")          # names no marka
 
     row = admin_client.get("/").context["contracts"][0]
-    assert [ln["paid"] for ln in row["lines"]] == [Decimal("0"), Decimal("0")]
-    assert row["unassigned_paid"] == Decimal("600")
-    # The parts and the unassigned remainder add back to the kelishuv's own figure.
+    # No truck plan on either product, so there is nothing to weigh by: the money
+    # runs the kelishuv in its own order and stops when it is spent.
+    assert [ln["paid"] for ln in row["lines"]] == [Decimal("600"), Decimal("0")]
+    # Nothing is left over — every som of it found a product to buy.
+    assert row["unassigned_paid"] == Decimal("0")
+    # The parts and whatever no product could take add back to the kelishuv's own
+    # figure, however the money was placed.
     assert sum(ln["paid"] for ln in row["lines"]) + row["unassigned_paid"] == row["paid"]
+
+
+def test_what_no_product_can_take_is_still_shown_as_unassigned(admin_client, db):
+    """The hamkor's avans: money past what the whole kelishuv costs belongs to the
+    hamkor rather than to any marka, and the card says so instead of quietly
+    crediting the last product with it."""
+    contract = make_contract(brand="7000 campaund", kg="1000", price="1.00")
+    ContractLine.objects.create(contract=contract, brand="209 campaund",
+                                kg=Decimal("1000"), price=Decimal("1.00"))
+    SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
+                                   date="2026-07-05")          # 500 past the lot
+
+    row = admin_client.get("/").context["contracts"][0]
+    assert [ln["paid"] for ln in row["lines"]] == [Decimal("1000"), Decimal("1000")]
+    assert row["unassigned_paid"] == Decimal("500")
     assert "taqsimlanmagan" in admin_client.get("/").content.decode().lower()
+
+
+def test_the_same_money_reads_the_same_whether_a_truck_has_left_or_not(admin_client, db):
+    """Two markalar, same cost, same money on each — one with a truck out and one
+    without. Their gold bars are drawn to the same width because the money is the
+    same, so the labels have to say the same thing.
+
+    They did not. The count measured against the trucks already SENT, so the marka
+    with nothing on the road could not be credited with a truck at any amount of
+    money and read "0" beside a bar that was plainly not empty."""
+    contract = make_contract(brand="7000", kg="1000", price="1.00", planned_trucks=5)
+    second = ContractLine.objects.create(contract=contract, brand="209",
+                                         kg=Decimal("1000"), price=Decimal("1.00"),
+                                         planned_trucks=5)
+    # Only 209 has a truck on the road; both markalar are paid exactly the same.
+    make_shipment(contract=contract, kg="200", contract_line=second,
+                  sent=date(2026, 7, 5))
+    for line in (contract.lines.get(brand="7000"), second):
+        SupplierPayment.objects.create(contract=contract, contract_line=line,
+                                       amount=Decimal("100"), date="2026-07-06")
+
+    row = admin_client.get("/").context["contracts"][0]
+    labels = {ln["brand"]: ln["paid_count"] for ln in row["lines"]}
+    assert labels["7000"] == labels["209"], labels
+    # And the label IS the bar's own fill: $100 of $1 000 is a tenth of 5 trucks.
+    assert labels["7000"] == "0,5 / 5"
+    assert {ln["brand"]: ln["pay_pct"] for ln in row["lines"]} == {"7000": 10, "209": 10}
 
 
 def test_a_one_marka_kelishuv_keeps_the_single_yuk_bar(admin_client, db):
@@ -392,9 +441,6 @@ def test_the_tolov_bar_says_how_many_yuklar_the_money_covers(admin_client, db):
     SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
                                    date="2026-07-08")
 
-    assert contract.trucks_paid_for == (Decimal("2.5"), 3)
-    row = admin_client.get("/").context["contracts"][0]
-    assert row["trucks_paid"] == Decimal("2.5")
     html = admin_client.get("/").content.decode()
     # Twice inside the gold bar — the label is written a second time so it can
     # turn white where the fill reaches it — and once more on the note below,
@@ -432,18 +478,18 @@ def test_a_trailing_zero_is_never_printed_on_a_whole_count(admin_client, db):
     assert "2 / 3 to'langan" in html and "2,0 / 3" not in html
 
 
-def test_money_past_the_last_truck_counts_for_no_truck(admin_client, db):
-    """An avans running past everything sent is not a fraction of a truck that
-    does not exist — the count stops at what has actually left."""
+def test_an_avans_counts_even_before_the_load_it_bought_leaves(admin_client, db):
+    """Money paid ahead of the goods is progress, and the bar always drew it as
+    such — it was the LABEL that refused to, because it counted against the trucks
+    already sent. One truck out of three and $2 500 of the $3 000 this kelishuv
+    will cost reads 2,5 of 3, not the 1 the old count capped it at: the hamkor is
+    holding the money whether or not they have loaded the lorry yet."""
     contract = make_contract(kg="3000", price="1.00", planned_trucks=3)
     make_shipment(contract=contract, kg="1000", sent=date(2026, 7, 5))
     SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
                                    date="2026-07-08")
 
-    # One truck priced, so one truck is the ceiling however far the money runs —
-    # and the bar still measures it against the kelishuv's plan of three.
-    assert contract.trucks_paid_for == (Decimal("1"), 1)
-    assert "1 / 3 to'langan" in admin_client.get("/").content.decode()
+    assert "2,5 / 3 to'langan" in admin_client.get("/").content.decode()
 
 
 def test_the_oldest_truck_is_the_one_paid_off_first(admin_client, db):
@@ -615,3 +661,154 @@ class TestKechikkanYuklarNamesTheTruck:
         self._late(transport="", container="")
         assert admin_client.get("/").status_code == 200
         assert admin_client.get("/reports/").status_code == 200
+
+
+class TestTheDoskaOpensOnThisMonth:
+    """The five flow KPIs are a slice of a davr; the four standing ones are not.
+
+    "1 091 950 kg yuborilgan" since the book began is a figure nobody is measured
+    against, so the board opens on the month the business is actually being run in and
+    the ‹ davr › bar steps it. What it must NOT do is narrow the standing figures with
+    it: a "hamkor qarzi in Iyul" is not a sum anybody is owed, and a qoldiq is what is
+    on the floor now or it is nothing. See `_dashboard_window`.
+    """
+
+    #: Today, and a day that is certainly in the month before it — the window is real
+    #: wall-clock time here (nothing in this suite freezes the clock), so a date typed
+    #: as "2026-07-05" would drift out of the month it was written for.
+    def _dates(self):
+        today = timezone.localdate()
+        return today, today.replace(day=1) - timedelta(days=1)
+
+    def _world(self):
+        """One truck's worth of every flow, this month and last, so each card can be
+        read against a figure that is unambiguously one month's."""
+        today, last_month = self._dates()
+        customer = Customer.objects.create(name="Alisher", phone="1")
+        for when, kg in ((today, "400"), (last_month, "700")):
+            contract = make_contract(kg="100000", price="1.00", created=when)
+            lot = make_lot(contract=contract, kg=kg, price="1.00", sent=when,
+                           arrived=when, status=ShipmentStatus.arrival())
+            SupplierPayment.objects.create(contract=contract, date=when,
+                                           amount=Decimal("100"))
+            Sale.objects.create(customer=customer, line=lot, kg=Decimal("10"),
+                                price=Decimal("3"), date=when)
+        return today, last_month
+
+    def test_it_opens_on_this_month_rather_than_on_everything(self, admin_client, db):
+        self._world()
+        ctx = admin_client.get("/").context
+        # This month's truck only — last month's 700 kg is a different month's work.
+        assert ctx["shipped_kg"] == Decimal("400.000")
+        assert ctx["arrived_kg"] == Decimal("400.000")
+        assert ctx["total_kg"] == Decimal("100000.000")
+        assert dict(ctx["paid_split"])["usd"] == Decimal("100")
+
+    def test_hammasi_is_the_way_back_out_to_all_time(self, admin_client, db):
+        """An empty querystring is the month it opened in, so "everything" has to be
+        written down — the kassa says it the same way."""
+        self._world()
+        ctx = admin_client.get("/?davr=all").context
+        assert ctx["shipped_kg"] == Decimal("1100.000")        # 400 + 700
+        assert ctx["arrived_kg"] == Decimal("1100.000")
+        assert ctx["total_kg"] == Decimal("200000.000")
+        assert dict(ctx["paid_split"])["usd"] == Decimal("200")
+
+    def test_a_named_month_wins_over_the_default(self, admin_client, db):
+        _today, last_month = self._world()
+        first = last_month.replace(day=1)
+        ctx = admin_client.get("/", {"from": first.isoformat(),
+                                     "to": last_month.isoformat()}).context
+        assert ctx["shipped_kg"] == Decimal("700.000")
+        assert ctx["arrived_kg"] == Decimal("700.000")
+        assert dict(ctx["paid_split"])["usd"] == Decimal("100")
+
+    def test_the_standing_figures_ignore_the_window(self, admin_client, db):
+        """Qarz, qoldiq and kechikkan yuklar are the state of things TODAY. Narrowed to
+        a month they would answer a question nobody asked — and the qoldiq of a month
+        that is over is not a number the ombor holds."""
+        self._world()
+        first = timezone.localdate().replace(day=1) - timedelta(days=1)
+        month = admin_client.get("/", {"from": first.replace(day=1).isoformat(),
+                                       "to": first.isoformat()}).context
+        everything = admin_client.get("/?davr=all").context
+        for key in ("stock_kg", "debt_split", "customer_debt_split"):
+            assert list(month[key]) == list(everything[key]) if key.endswith("_split") \
+                else month[key] == everything[key]
+        assert len(month["overdue"]) == len(everything["overdue"])
+
+    def test_each_card_reads_the_date_that_makes_it_that_month(self, admin_client, db):
+        """One truck that LEFT last month and LANDED this one belongs to both cards —
+        Yuborilgan to the month it went, Omborga kelgan to the month it arrived. The
+        two figures are meant to disagree; that is why each card names its own sana."""
+        today, last_month = self._dates()
+        contract = make_contract(kg="100000", price="1.00", created=last_month)
+        make_lot(contract=contract, kg="500", price="1.00", sent=last_month,
+                 arrived=today, status=ShipmentStatus.arrival())
+
+        this = admin_client.get("/").context
+        assert this["shipped_kg"] == 0 and this["arrived_kg"] == Decimal("500.000")
+        # …and the kelishuv itself was struck last month, so it counts there.
+        assert this["total_kg"] == 0
+
+        prev = admin_client.get("/", {"from": last_month.replace(day=1).isoformat(),
+                                      "to": last_month.isoformat()}).context
+        assert prev["shipped_kg"] == Decimal("500.000") and prev["arrived_kg"] == 0
+        assert prev["total_kg"] == Decimal("100000.000")
+
+    def test_foyda_is_this_month_s_sotuvlar(self, admin_client, db):
+        today, last_month = self._dates()
+        customer = Customer.objects.create(name="Alisher", phone="1")
+        lot = make_lot(contract=make_contract(kg="100000", price="1.00"), kg="1000",
+                       price="1.00", sent=last_month, arrived=last_month,
+                       status=ShipmentStatus.arrival())
+        Sale.objects.create(customer=customer, line=lot, kg=Decimal("100"),
+                            price=Decimal("3"), date=today)
+        Sale.objects.create(customer=customer, line=lot, kg=Decimal("100"),
+                            price=Decimal("3"), date=last_month)
+
+        # (3.00 - 1.00) * 100 — one sotuv's worth, not both.
+        assert admin_client.get("/").context["sales_profit_total"] == Decimal("200.00")
+        assert admin_client.get("/?davr=all").context["sales_profit_total"] \
+            == Decimal("400.00")
+
+    def test_the_oylik_hisobot_below_still_covers_every_month(self, admin_client, db):
+        """The table is the year read a row at a time — narrowing it to the one month
+        the cards above are showing would leave it saying what they already said."""
+        self._world()
+        months = {row["month"] for row in admin_client.get("/").context["monthly"]}
+        today, last_month = self._dates()
+        assert {today.replace(day=1), last_month.replace(day=1)} <= months
+
+    def test_the_bar_is_drawn_with_its_arrows_and_a_spelled_out_hammasi(self, admin_client, db):
+        html = admin_client.get("/").content.decode()
+        assert "daterange-bar" in html
+        # It landed on a period, so it has arrows rather than reading "Hammasi"…
+        assert "daterange--bare" not in html
+        # …and Hammasi has to be written down, since no period is where it started.
+        assert "davr=all" in html and "data-opens-period" in html
+
+    def test_the_bar_sits_on_the_group_it_narrows(self, admin_client, db):
+        """Caption then bar, one .listbar row, and the standing group's own caption
+        after both KPI grids' worth of cards — the layout is what says which figures
+        answer to the davr."""
+        html = admin_client.get("/").content.decode()
+        assert html.index('class="listbar"') < html.index('class="daterange-bar"')
+        assert (html.index("Davr natijalari")
+                < html.index("Sotuvdan foyda")
+                < html.index("Hozirgi holat")
+                < html.index("Hamkor qarzi"))
+
+    def test_a_mistyped_period_falls_back_to_this_month_instead_of_500ing(self, admin_client, db):
+        """A querystring is typed by hand and lives in bookmarks, so a stale or
+        mistyped one must not take the board down.
+
+        It lands on this month rather than on Hammasi: neither end parsed, which is
+        the same as not having said a period at all, and on this screen that is the
+        month it opens in. Falling through to all-time would answer a garbled
+        question with the widest possible figure."""
+        today = timezone.localdate()
+        resp = admin_client.get("/", {"from": "kecha", "to": "2026-13-45"})
+        assert resp.status_code == 200
+        assert resp.context["date_from"] == today.replace(day=1).isoformat()
+        assert resp.context["date_to"] == today.isoformat()

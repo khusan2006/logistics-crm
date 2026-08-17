@@ -225,8 +225,20 @@
       Who the cash came from, because it decides whether this row also left the
       kassa. Funded by a holder we had already topped up, it did not — and a column
       that says so is what stops somebody entering the same money twice.
+
+      A waiting row says so instead of saying "Kassadan". Transport and gruzchi leave
+      the till when the truck is unloaded (ShipmentExpense.ARRIVAL_CATEGORIES), so on
+      a load still on the road this column would otherwise assert a payment that has
+      not happened — the one place the deferral could quietly make a screen lie. The
+      xarajat is still entered here at any point in the load's life; only the day the
+      money moves is decided elsewhere.
       {% endcomment %}
-      <td>{% if e.from_kassa %}<span class="muted">Kassadan</span>{% else %}{{ e.paid_by.name }}{% endif %}</td>
+      <td>
+        {% if e.is_pending %}
+        <span class="badge badge-warning" title="Yuk omborga kelganda kassadan chiqadi">Omborga kelganda</span>
+        {% elif e.from_kassa %}<span class="muted">Kassadan</span>
+        {% else %}{{ e.paid_by.name }}{% endif %}
+      </td>
       <td>{{ e.note|default:"—" }}</td>
       <td class="row-actions">
         <a class="btn btn-ghost" href="{% url 'expense_edit' e.pk %}" data-modal>Tahrirlash</a>

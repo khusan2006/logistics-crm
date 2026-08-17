@@ -705,19 +705,29 @@ def _pay_marka(client, contract, amount="100", line=None, **row):
         contract=contract.pk, date="2026-07-02", contract_line=line))
 
 
-def test_a_multi_marka_tolov_must_name_the_product(admin_client, db):
-    """"Paid $96 400 of $288 000" said nothing about WHICH marka the money went
-    to, and a kelishuv covering two of them is two deliveries sharing a piece of
-    paper."""
-    contract, first, _second = _two_marka_contract()
+def test_a_multi_marka_tolov_may_name_the_product_or_not(admin_client, db):
+    """"Paid $96 400 of $288 000" says nothing about WHICH marka the money went to,
+    and a kelishuv covering two of them is two deliveries sharing a piece of paper —
+    so naming one is the ordinary case and it is recorded.
 
-    resp = _pay_marka(admin_client, contract)
-    assert resp.status_code == 200 and not SupplierPayment.objects.exists()
-    assert "contract_line" in resp.context["form"].errors
+    But naming NONE is no longer refused. It used to be, on the grounds that a to'lov
+    nobody attributes on the day is one nobody can attribute later; that stopped
+    being true when the zaklad arrived, because `allocate_supplier_payment` now
+    attributes it — split across the markalar by mashina count. Refusing it here left
+    that whole branch unreachable from any screen. See
+    tests/test_supplier_allocation_triggers.py."""
+    contract, first, _second = _two_marka_contract()
 
     resp = _pay_marka(admin_client, contract, line=first)
     assert resp.status_code == 302
     assert SupplierPayment.objects.get().contract_line_id == first.pk
+
+    SupplierPayment.objects.all().delete()
+    resp = _pay_marka(admin_client, contract)
+    assert resp.status_code == 302
+    # Named nothing, so the row itself names nothing — the slices are where it
+    # actually landed, and they are the zaklad's business, not this column's.
+    assert SupplierPayment.objects.get().contract_line_id is None
 
 
 def test_a_one_marka_kelishuv_fills_the_product_in_by_itself(admin_client, db):
@@ -766,13 +776,18 @@ def test_the_qarz_is_still_settled_per_kelishuv(admin_client, db):
     assert contract.paid_total == Decimal("1500")
 
 
-def test_the_product_box_offers_no_whole_kelishuv_escape(db):
-    """It read "Butun kelishuv" at first — a choice `clean` then refused, so the
-    box named an option the form would not accept. On a kelishuv with two markalar
-    the money went to one of them, and a to'lov nobody attributes on the day is one
-    nobody can attribute later either."""
+def test_the_product_box_names_the_whole_kelishuv_choice(db):
+    """The empty row went back and forth with what `clean` would accept.
+
+    "Butun kelishuv" first, which `clean` refused — so the box named an option the
+    form would not take. Then a bare "Mahsulotni tanlang" prompt, honest while blank
+    was genuinely an omission. It is a real answer again now — the zaklad — so it is
+    named again, and a bare prompt would read as something the operator forgot to
+    fill in rather than a choice they made."""
     from crm.forms import SupplierPaymentForm
     make_contract(kg="1000", price="1.00")
     field = SupplierPaymentForm().fields["contract_line"]
-    assert field.empty_label == "Mahsulotni tanlang"
-    assert "Butun kelishuv" not in [str(label) for _value, label in field.choices]
+    assert field.empty_label == "Butun kelishuv (zaklad)"
+    assert any("Butun kelishuv" in str(label) for _value, label in field.choices)
+    # And the box says what leaving it blank will do with the money.
+    assert "mashinalar soniga qarab" in str(field.help_text)

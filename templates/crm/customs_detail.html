@@ -27,18 +27,18 @@ be a total of what is underneath it.
     </div>
   </div>
   <div class="ktile ktile--in">
-    <div class="ktile-label">Biz yuborganmiz</div>
+    <div class="ktile-label">Yuborilgan pul</div>
     {% for currency, amount in agent.received_by_currency %}
     <div class="ktile-num">{% money_in amount currency %}</div>
     {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
     <div class="ktile-note">kassadan chiqqan pul</div>
   </div>
   <div class="ktile ktile--out">
-    <div class="ktile-label">Bojxonada sarflagan</div>
+    <div class="ktile-label">Sarflangan pul</div>
     {% for currency, amount in agent.spent_by_currency %}
     <div class="ktile-num">{% money_in amount currency %}</div>
     {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
-    <div class="ktile-note">yuklarning tannarxiga kirgan</div>
+    <div class="ktile-note">bojxonada — yuklarning tannarxiga kirgan</div>
   </div>
 </div>
 <p class="ktiles-foot">
@@ -50,46 +50,83 @@ be a total of what is underneath it.
 
 {% include "crm/_holder_loads.html" with loads=loads paid_label="Bojxonada sarflagan" show_sent=1 %}
 
-{% if page.object_list %}
-<div class="card">
-  <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-    <h2 style="margin:0;">Hisob varaqasi</h2>
-    <span class="ledger-total">{{ page.paginator.count }} ta yozuv</span>
+{% comment %}
+Two daftar rather than one Hisob varaqasi with a Kirim and a Chiqim column.
+
+It matters more here than on the logist's page, and for the reason this whole feature
+exists: what we SEND for a truck is an estimate typed before anybody knows the price,
+and what clearing COSTS is only known afterwards. Those two figures are the ones being
+compared — and interleaved by date in one table, comparing them meant reading a column
+that was blank on every other row.
+
+Qaysi yuklarga above sets them against each other per load, with the Farq spelled out.
+These two set them against each other in total: the head of each carries its own
+per-currency heap, and the Qoldiq tile above is the difference between them.
+
+Each pages on its own (?ipage / ?opage) — see .ledger-pair, the same shape the kassa
+draws.
+{% endcomment %}
+<div class="grid-2 ledger-pair">
+  <div class="card" style="margin-bottom:0;">
+    <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <h2 style="margin:0;">Yuborilgan pul</h2>
+      <span class="ledger-total amt-in">{% for currency, amount in agent.received_by_currency %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "uzs" %}</span>{% endfor %}</span>
+    </div>
+    <p class="field-hint" style="margin:2px 0 8px;">Biz kassadan shu bojxonachiga yuborgan pul — eng yangisi yuqorida.</p>
+    <div class="table-wrap">
+    <table class="ledger-table ledger-table--in">
+      <tr>
+        <th>Sana</th><th>Nima uchun</th><th>Usul</th><th class="num">Summa</th><th></th>
+      </tr>
+      {% for r in sent_page %}
+      <tr>
+        <td>{{ r.date|date:"d.m.Y" }}</td>
+        <td>{{ r.title }}</td>
+        <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
+        {# What landed, not what was sent: a perechisleniya foiz never reached them. #}
+        <td class="num amt-in"><strong>+{% money r.amount r.amount_uzs r.currency %}</strong></td>
+        <td class="row-actions">
+          <a class="icon-action" href="{% url 'customs_payment_edit' r.obj.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+          <a class="icon-action danger" href="{% url 'customs_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="5" class="muted">Bu bojxonachiga hali pul yuborilmagan.</td></tr>{% endfor %}
+    </table>
+    </div>
+    {% include "crm/_pagination.html" with page=sent_page label="to'lov" param="ipage" %}
   </div>
-  <div class="table-wrap">
-  <table class="ledger-table">
-    <tr>
-      <th>Sana</th><th>Tavsif</th><th>Usul</th>
-      <th class="num">Kirim</th><th class="num">Chiqim</th><th></th>
-    </tr>
-    {% for r in page %}
-    <tr>
-      <td>{{ r.date|date:"d.m.Y" }}</td>
-      <td>{% if r.kind == "in" %}<span class="badge badge-ok">Bizdan</span>{% else %}<span class="badge badge-remit">Bojxonaga</span>{% endif %} {{ r.title }}</td>
-      <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
-      <td class="num amt-in">{% if r.kind == "in" %}<strong>+{% money r.amount r.amount_uzs r.currency %}</strong>{% endif %}</td>
-      <td class="num amt-out">{% if r.kind == "out" %}<strong>−{% money r.amount r.amount_uzs r.currency %}</strong>{% endif %}</td>
-      <td class="row-actions">
-        {% comment %}
-        A clearing is edited on its own yuk, where the turkum and the kg it prices
-        live — editing it from here would be the same row wearing a different hat,
-        and one of the two screens would go stale. Same rule as the logist ledger.
-        {% endcomment %}
-        {% if r.kind == "in" %}
-        <a class="icon-action" href="{% url 'customs_payment_edit' r.obj.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-        <a class="icon-action danger" href="{% url 'customs_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-        {% else %}
-        <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
+
+  <div class="card" style="margin-bottom:0;">
+    <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <h2 style="margin:0;">Sarflangan pul</h2>
+      <span class="ledger-total amt-out">{% for currency, amount in agent.spent_by_currency %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "uzs" %}</span>{% endfor %}</span>
+    </div>
+    <p class="field-hint" style="margin:2px 0 8px;">Yuklarni rasmiylashtirishga ketgan haqiqiy xarajat — eng yangisi yuqorida.</p>
+    <div class="table-wrap">
+    <table class="ledger-table ledger-table--out">
+      <tr>
+        <th>Sana</th><th>Yuk</th><th>Usul</th><th class="num">Summa</th><th></th>
+      </tr>
+      {% for r in spent_page %}
+      <tr>
+        <td>{{ r.date|date:"d.m.Y" }}</td>
+        <td>{{ r.title }}</td>
+        <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
+        <td class="num amt-out"><strong>−{% money r.amount r.amount_uzs r.currency %}</strong></td>
+        <td class="row-actions">
+          {% comment %}
+          A clearing is edited on its own yuk, where the turkum and the kg it prices
+          live — editing it from here would be the same row wearing a different hat,
+          and one of the two screens would go stale. Same rule as the logist daftar.
+          {% endcomment %}
+          <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="5" class="muted">Hali xarajat kiritilmagan.</td></tr>{% endfor %}
+    </table>
+    </div>
+    {% include "crm/_pagination.html" with page=spent_page label="xarajat" param="opage" %}
   </div>
-  {% include "crm/_pagination.html" with label="yozuv" %}
 </div>
-{% else %}
-<p class="muted">Hali hech qanday harakat yo'q.</p>
-{% endif %}
 
 {% endblock %}

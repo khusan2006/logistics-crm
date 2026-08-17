@@ -1,3 +1,4 @@
+from datetime import date as _date
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from django.conf import settings
@@ -199,6 +200,15 @@ class CashEntry(MoneyEntry):
     #: been the sender's loss — 1000 sent at 2% paid off 980 — while money going OUT
     #: has always ridden on top, so the other side received the full figure.
     default_fee_bearer = FeeBearer.COMPANY
+
+    #: The answers that describe the SETTLEMENT rather than the way the money moved:
+    #: whose it was, what it was for, when. A split to'lov asks these once in its
+    #: header and stamps every row with them, so they must agree across a `group` —
+    #: two rows of one payment cannot have bought different markalar or landed on
+    #: different days. Editing reopens a single row and shows the same boxes, which
+    #: is where they could drift apart; `_sync_settlement` carries a correction back
+    #: across the rest. Empty means the model is never entered as a split.
+    settlement_fields = ()
 
     class Meta:
         abstract = True
@@ -1015,22 +1025,25 @@ class ContractLine(MoneyEntry):
 
     @property
     def paid_total(self):
-        """What has been paid against THIS product.
+        """What has actually landed on THIS product.
 
-        Credited, not gross — the same figure the kelishuv's own `paid_total`
-        sums, so a kelishuv's products and its unassigned money add back up to
-        it exactly.
+        Read off the SLICES, not off the to'lovlar that named this marka
+        (`SupplierPaymentAllocation`). A to'lov is not one product's: 7 000 sent
+        against a marka owing 5 000 bought this one and the next, and counting the
+        whole of it here would say a product was paid twice what it costs while its
+        neighbour looked untouched.
 
-        A to'lov that names no product counts here for nobody. Every to'lov
-        entered before the field existed is one of those, and they are the
-        kelishuv's `unassigned_paid` — guessing which marka they bought would be
-        inventing a fact, so they are shown as unassigned until someone says."""
-        return sum((p.credited_amount for p in self.supplier_payments.all()),
-                   Decimal("0"))
+        Credited, not gross — the bank's foiz rides on top of what the hamkor
+        receives, so it was never theirs to be credited with.
+
+        A to'lov that no product could take counts here for nobody: it is the
+        hamkor's avans (`partner_advance_total`), and guessing which marka it will
+        end up buying would be inventing a fact."""
+        return sum((s.amount for s in self.supplier_allocations.all()), Decimal("0"))
 
     @property
     def paid_total_uzs(self):
-        return sum((p.credited_amount_uzs for p in self.supplier_payments.all()),
+        return sum((s.amount_uzs for s in self.supplier_allocations.all()),
                    Decimal("0"))
 
     @property
@@ -1054,6 +1067,28 @@ class ContractLine(MoneyEntry):
     def expected_value_uzs(self):
         left = self.remaining_kg if self.remaining_kg > 0 else Decimal("0")
         return (self.shipped_value_uzs + left * self.price_uzs).quantize(Decimal("0.01"))
+
+    @property
+    def payable_left(self):
+        """How much more will be paid on THIS product — what it will cost, less what
+        has actually landed on it.
+
+        A figure that only became answerable once a to'lov was placed per product
+        (`SupplierPaymentAllocation`). Before that the money sat on the kelishuv and
+        no product could say what it was still owed, which is why the Kelishuvlar
+        list carried one combined figure beside a per-marka Qolgan kg column.
+
+        These need not add up to the kelishuv's own `payable_left`: money no product
+        could take is the hamkor's avans and is owed to nobody here."""
+        return self.expected_value - self.paid_total
+
+    @property
+    def payable_left_uzs(self):
+        return self.expected_value_uzs - self.paid_total_uzs
+
+    @property
+    def payable_left_own(self):
+        return own_side(self.contract, self.payable_left, self.payable_left_uzs)
 
     def __str__(self):
         return f"{self.brand} · {self.kg} kg"
@@ -1152,6 +1187,9 @@ class SupplierPayment(CashEntry):
         """The middleman's cut, on top of what the hamkor receives."""
         return (self.amount * self.commission_percent / 100).quantize(Decimal("0.01"))
 
+    #: Which kelishuv, which of its markalar, and when — see CashEntry.
+    settlement_fields = ("contract", "contract_line", "date")
+
     @property
     def credited_amount(self):
         """What the hamkor is credited — the figure their qarz falls by.
@@ -1195,8 +1233,66 @@ class SupplierPayment(CashEntry):
         so'm settles it at face value and converts nothing."""
         return self.currency != self.contract.currency
 
+    def save(self, *args, **kwargs):
+        """Place the money as well as record it.
+
+        Same reasoning as `Sale.save` calling `sync_lot`: every caller that just
+        creates or edits a to'lov gets it spread across the kelishuv's products
+        without having to know the slice table exists. A row saved from a script, a
+        fixture or a future screen is placed exactly like one typed into the modal —
+        and a to'lov that sits on no product at all is a figure that shows up in the
+        kelishuv's total while every marka under it reads zero.
+
+        Only THIS to'lov is placed. Lowering one frees room the others could use, so
+        an edit or a delete has to re-answer the whole kelishuv —
+        `reconcile_supplier_allocations`, which the views call."""
+        result = super().save(*args, **kwargs)
+        allocate_supplier_payment(self)
+        return result
+
     def __str__(self):
         return f"{self.contract_id} · {self.amount}$ ({self.date})"
+
+
+class SupplierPaymentAllocation(models.Model):
+    """One slice of a hamkor to'lov applied to one product of a kelishuv.
+
+    The mirror of `PaymentAllocation` on the outgoing side, and it exists for the
+    same reason: money and the thing it pays for are not one to one. A to'lov aimed
+    at a marka owing 5 000 but sent as 7 000 has bought two things, and a single
+    `contract_line` column on the row could only name one of them — so the extra
+    2 000 either overpaid a product it did not buy or vanished from the per-marka
+    picture entirely.
+
+    `contract_line` on the to'lov stays: it is what the operator SAID the money was
+    for, the point the spread starts from. These rows are where it actually landed.
+    """
+
+    payment = models.ForeignKey(SupplierPayment, on_delete=models.CASCADE,
+                                related_name="allocations", verbose_name="To'lov")
+    line = models.ForeignKey(ContractLine, on_delete=models.CASCADE,
+                             related_name="supplier_allocations",
+                             verbose_name="Mahsulot")
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    # Stored rather than sliced off the parent, for the reason PaymentAllocation
+    # gives: both columns have a reader that must be exact, and a so'm kelishuv paid
+    # in so'm has to land on zero rather than a tiyin away from it.
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def in_currency(self, currency):
+        """This slice as read by one side of it — the kelishuv asks in the currency
+        it was struck in, the to'lov in the one the money left in."""
+        return self.amount_uzs if currency == Currency.UZS else self.amount
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Hamkor to'lovi taqsimoti"
+        verbose_name_plural = "Hamkor to'lovi taqsimotlari"
+
+    def __str__(self):
+        return f"{self.payment_id} → {self.line_id}: {self.amount}$"
 
 
 class LogistPayment(HeldFloat, CashEntry):
@@ -1213,6 +1309,9 @@ class LogistPayment(HeldFloat, CashEntry):
     #: See HeldFloat.float_currency — every driver advance is booked in dollars
     #: (ShipmentForm.sync_driver_advance), so the balance is a dollar figure.
     float_currency = Currency.USD
+
+    #: Which logist was topped up, and when — see CashEntry.
+    settlement_fields = ("logist", "date")
 
     logist = models.ForeignKey(Logist, on_delete=models.PROTECT,
                                related_name="payments", verbose_name="Logist")
@@ -1252,6 +1351,9 @@ class CustomsPayment(HeldFloat, CashEntry):
 
     agent = models.ForeignKey(CustomsAgent, on_delete=models.PROTECT,
                               related_name="payments", verbose_name="Bojxonachi")
+    #: Which bojxonachi, against which yuk, and when — see CashEntry.
+    settlement_fields = ("agent", "shipment", "date")
+
     # PROTECT rather than CASCADE: deleting a yuk must not silently swallow money
     # that really left the kassa for it.
     shipment = models.ForeignKey("Shipment", on_delete=models.PROTECT, null=True,
@@ -1911,8 +2013,13 @@ def kassa_row_sets():
         # Signed by direction, so it joins the inflow side whichever way it went — a
         # ta'sischi taking money out is a negative kirim, not a fifth kind of chiqim.
         "kapital": list(Kapital.objects.all()),
-        "outgoing": [*SupplierPayment.objects.all(), *ShipmentExpense.objects.all(),
-                     *LogistPayment.objects.all(), *CustomsPayment.objects.all()],
+        # `select_related("shipment")` on the xarajatlar: `total_out` now asks each
+        # one whether its truck has landed (see `is_pending`), which without it is a
+        # query per expense on every screen that counts the till.
+        "outgoing": [*SupplierPayment.objects.all(),
+                     *ShipmentExpense.objects.select_related("shipment"),
+                     *LogistPayment.objects.all(), *CustomsPayment.objects.all(),
+                     *OtherExpense.objects.all()],
         # Its own side, deliberately neither of the other two: a konvertatsiya is not
         # money arriving or leaving, so nothing that counts kirim or chiqim may pick
         # it up. It only ever moves one heap into another.
@@ -2176,10 +2283,11 @@ STOCK_COST_PREFETCH = (
     "contract_line__contract__lines",
 )
 
-#: The lot's own kelishuv and its hamkor, for screens that NAME them. `arrived_lots`
-#: already joins the truck's side; a lot's contract is reached the other way, through
-#: `contract_line`, and left alone it is two queries per row.
-STOCK_LOT_RELATED = ("contract_line__contract__partner",)
+#: The hamkor behind a lot, reached BOTH ways, for screens that name them.
+#: `arrived_lots` joins as far as the truck's kelishuv but stops before its partner,
+#: and a lot's own kelishuv hangs off `contract_line` instead — each one left out is
+#: a query per row.
+STOCK_LOT_RELATED = ("shipment__contract__partner", "contract_line__contract__partner")
 
 
 def stock_value():
@@ -2816,6 +2924,9 @@ class Kapital(CashEntry):
     #: business are one pocket — so the form never asks, and the row nets.
     default_fee_bearer = FeeBearer.COUNTERPARTY
 
+    #: Which way the ta'sischi's money moved, and when — see CashEntry.
+    settlement_fields = ("kind", "date")
+
     @property
     def is_out(self):
         return self.kind == KapitalKind.OUT
@@ -2853,6 +2964,77 @@ class Kapital(CashEntry):
 
     def __str__(self):
         return f"Kapital {self.get_kind_display().lower()} · {self.amount}$ ({self.date})"
+
+
+class OtherExpense(CashEntry):
+    """Money out of the kassa that belongs to no yuk, hamkor, logist or bojxonachi —
+    the "proche chiqim" of the business itself: ijara, ish haqi, kommunal, soliq,
+    whatever else the month brings.
+
+    Every other outflow in the app is tied to something and priced INTO something: a
+    SupplierPayment settles a kelishuv, a ShipmentExpense lands in a yuk's tannarx, a
+    LogistPayment funds a float. Money that runs the office is none of those, and
+    until this row existed it had nowhere to go — so it was either left out of the
+    kassa entirely, which made "Kassada" disagree with the safe, or hung off whatever
+    yuk happened to be open, which quietly inflated that load's tannarx and every
+    foyda computed from it. This row moves the till and stops there.
+
+    It is a peer of `Kapital`, not of `ShipmentExpense`: a cost with no cost object.
+    Deliberately NOT part of any foyda figure — "Sotuvdan foyda" is a gross margin
+    (sotuv less tannarx) and quietly netting the office rent into it would change
+    what that number has always meant on every screen it appears on.
+
+    No turkum by request: the izoh is the whole description, which is why it is the
+    one field that must be filled. A row saying only "$400 left on the 9th" is not a
+    record of anything, and a note is all that stands between this table and that."""
+
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    #: Required, unlike every other `note` in the app — see the class docstring.
+    note = models.CharField("Izoh", max_length=255,
+                            help_text="Nima uchun chiqdi — bu yagona izoh")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="other_expenses",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Boshqa chiqim"
+        verbose_name_plural = "Boshqa chiqimlar"
+
+    #: Money going out, like every other chiqim: the bank's cut rides on TOP, so the
+    #: payee receives the full figure and the till is short by the foiz as well.
+    default_fee_bearer = FeeBearer.COMPANY
+
+    #: What the row is FOR and when — stamped across a split entered in one go.
+    settlement_fields = ("date", "note")
+
+    @property
+    def total_out(self):
+        """What the till loses: the sum plus any bank foiz we absorbed. Same name and
+        same shape as the other four outflows, so `kassa_row_sets` can sum the lot
+        without asking which kind each row is."""
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def total_out_uzs(self):
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+    @property
+    def crosses_currency(self):
+        """Never: this row settles no qarz agreed in another currency, so its kurs was
+        inherited rather than chosen and printing it would tell the reader nothing.
+        Named so the daftar can ask every row the same question — see Kapital."""
+        return False
+
+    def __str__(self):
+        return f"Boshqa chiqim · {self.amount}$ ({self.date})"
 
 
 class Konvertatsiya(models.Model):
@@ -3018,6 +3200,9 @@ class CustomerPayment(CashEntry):
     #: Money coming IN has always been the sender's loss: 1000 sent by
     #: perechisleniya at 2% paid off 980 of their qarz.
     default_fee_bearer = FeeBearer.COUNTERPARTY
+
+    #: Whose money, when, and which of their qarzlar it is aimed at — see CashEntry.
+    settlement_fields = ("customer", "date", "target_currency")
 
     @property
     def net_amount(self):
@@ -3349,6 +3534,210 @@ def reconcile_customer_allocations(customer):
                     break
 
 
+# ── Hamkor to'lovining taqsimoti ────────────────────────────────────────────────
+#
+# The outgoing mirror of everything above. One kelishuv covers two or three markalar
+# and the money does not arrive one marka at a time: a to'lov aimed at a product
+# owing 5 000 is sent as 7 000, and a zaklad is handed over before anybody knows
+# which product it will end up buying.
+#
+# Everything is measured in the KELISHUV's own currency. Unlike the mijoz side there
+# is no per-row target to reconcile — a kelishuv is struck in one currency and every
+# one of its products is priced in it, so the pool converts once and the rest is
+# arithmetic in a single money.
+
+
+def supplier_allocation_pair(payment, spent_own):
+    """Both columns of a slice worth `spent_own` of a hamkor to'lov.
+
+    A FRACTION of the parent rather than a conversion, for the reason
+    `allocation_pair` gives on the incoming side: the slices of one to'lov then add
+    up to exactly that to'lov on both sides, so one spent in full leaves nothing
+    behind and a product covered in full lands on zero."""
+    contract = payment.contract
+    total_own = own_side(contract, payment.credited_amount, payment.credited_amount_uzs)
+    if not total_own:
+        return Decimal("0"), Decimal("0")
+    share = Decimal(spent_own) / total_own
+    return ((payment.credited_amount * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            (payment.credited_amount_uzs * share).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _line_capacity(line, contract, taken):
+    """What this product can still absorb, in the kelishuv's currency.
+
+    Measured against `expected_value` — what the product will really cost, trucks
+    already sent at the price they went at plus the rest at the agreed narx — and
+    NOT against what has shipped so far. Paying a hamkor before their truck leaves is
+    ordinary here, and a ceiling of "goods delivered" would refuse the zaklad this
+    whole arrangement exists to record."""
+    total = own_side(contract, line.expected_value, line.expected_value_uzs)
+    return total - taken.get(line.pk, Decimal("0"))
+
+
+def _supplier_taken(contract, exclude_payment=None):
+    """What every product of a kelishuv already has on it, by line id — the other
+    to'lovlar's slices, in the kelishuv's currency."""
+    taken = {}
+    slices = (SupplierPaymentAllocation.objects
+              .filter(line__contract=contract)
+              .select_related("payment"))
+    if exclude_payment is not None:
+        slices = slices.exclude(payment_id=exclude_payment.pk)
+    for row in slices:
+        taken[row.line_id] = (taken.get(row.line_id, Decimal("0"))
+                              + row.in_currency(contract.currency))
+    return taken
+
+
+def _truck_weights(lines):
+    """Each product's share of a zaklad, by MASHINA count.
+
+    The kelishuv owner's rule: 10 000 handed over on a kelishuv running five trucks
+    of one marka and five of another splits 5 000 / 5 000, and an uneven plan splits
+    in that same proportion. The plan is what counts where one was set and the trucks
+    actually sent where it was not — the same "plan or sent" reading the doska's
+    counters use, so the split does not change shape depending on a field nobody
+    filled in.
+
+    Returns None when there is nothing to weigh by (no plan, no trucks): then the
+    money simply runs the kelishuv in order, which is what it did before."""
+    weights = {}
+    for line in lines:
+        sent, planned = line.truck_progress
+        weights[line.pk] = Decimal(planned or sent or 0)
+    return weights if sum(weights.values()) > 0 else None
+
+
+def allocate_supplier_payment(payment):
+    """Spread one hamkor to'lov across the kelishuv's products; hand back what no
+    product could take.
+
+    Two ways in, one way out:
+
+    * The to'lov NAMES a marka — it starts there and runs FORWARD through the
+      kelishuv in its own order, then round to the ones before it. Pay 7 000 against
+      a marka owing 5 000 and the extra 2 000 lands on the next product rather than
+      overpaying the one that was named. Wrapping matters: money must find every
+      product that is still owed before it is called an avans.
+
+    * The to'lov names none — a zaklad — and it splits by mashina count
+      (`_truck_weights`). A product that cannot take its whole share (already
+      covered) passes the rest on, and the leftovers then run the kelishuv in order
+      rather than being lost.
+
+    Whatever is left over stays unallocated. That is the hamkor's avans and it
+    belongs to the HAMKOR, not to this kelishuv — they can spend it on another one
+    (`partner_advance_total`), which is how the incoming side treats a mijoz's avans
+    too.
+
+    Re-runnable: it clears this to'lov's own slices first, so calling it again after
+    an edit, a new truck or another to'lov re-answers the question from scratch
+    rather than stacking a second set on top."""
+    contract = payment.contract
+    with transaction.atomic():
+        payment.allocations.all().delete()
+        pool = own_side(contract, payment.credited_amount, payment.credited_amount_uzs)
+        if pool <= 0:
+            return Decimal("0")
+        lines = list(contract.lines.all())
+        if not lines:
+            return pool
+        taken = _supplier_taken(contract, exclude_payment=payment)
+        # Accumulated, then written once per product at the end: a share that lands in
+        # two passes — its slice of the zaklad and again from the leftovers — is still
+        # one answer about one product, and two rows saying so read as two payments.
+        placed = {}
+
+        def place(line, want):
+            """Put `want` on one product, capped by what it can still absorb."""
+            nonlocal pool
+            take = min(want, _line_capacity(line, contract, taken), pool)
+            if take <= 0:
+                return
+            placed[line] = placed.get(line, Decimal("0")) + take
+            taken[line.pk] = taken.get(line.pk, Decimal("0")) + take
+            pool -= take
+
+        named = payment.contract_line
+        if named is None:
+            weights = _truck_weights(lines)
+            if weights:
+                # Sized off the pool as it arrived, not as it drains: each product's
+                # share is its share of the whole zaklad, and what one cannot take
+                # falls through to the run below rather than inflating the next.
+                whole = pool
+                for line in lines:
+                    share = (whole * weights[line.pk]
+                             / sum(weights.values())).quantize(Decimal("0.01"),
+                                                               rounding=ROUND_HALF_UP)
+                    place(line, share)
+            order = lines
+        else:
+            start = next((i for i, ln in enumerate(lines) if ln.pk == named.pk), 0)
+            order = lines[start:] + lines[:start]
+
+        for line in order:
+            if pool <= 0:
+                break
+            place(line, pool)
+
+        for line, amount in placed.items():
+            slice_usd, slice_uzs = supplier_allocation_pair(payment, amount)
+            SupplierPaymentAllocation.objects.create(
+                payment=payment, line=line, amount=slice_usd, amount_uzs=slice_uzs)
+        return pool
+
+
+def unspent_supplier_payment_pair(payment):
+    """(usd, uzs) of a hamkor to'lov that sits on no product yet.
+
+    Both columns straight off the parent minus its slices, so each side is exact —
+    the same rule `unspent_payment_pair` follows on the incoming side. The pool is
+    `credited_amount`: the bank's foiz rides on top of what the hamkor receives, so
+    it never was theirs to be credited with."""
+    slices = list(payment.allocations.all())
+    return (payment.credited_amount - sum((s.amount for s in slices), Decimal("0")),
+            payment.credited_amount_uzs - sum((s.amount_uzs for s in slices), Decimal("0")))
+
+
+def unspent_supplier_payment_amount(payment):
+    """The avans part of one hamkor to'lov, in the kelishuv's own currency."""
+    return own_side(payment.contract, *unspent_supplier_payment_pair(payment))
+
+
+def partner_advance_total(partner):
+    """(usd, uzs) a hamkor is holding of ours that no product has claimed yet.
+
+    Read across ALL of their kelishuvlar, because that is whose money it is. A zaklad
+    handed over on one kelishuv is credit with that hamkor, and they carry it to the
+    next one — the same way a mijoz's avans is the mijoz's rather than one sotuv's."""
+    total = total_uzs = Decimal("0")
+    payments = (SupplierPayment.objects.filter(contract__partner=partner)
+                .select_related("contract").prefetch_related("allocations"))
+    for payment in payments:
+        usd, uzs = unspent_supplier_payment_pair(payment)
+        if own_side(payment.contract, usd, uzs) > 0:
+            total += usd
+            total_uzs += uzs
+    return total, total_uzs
+
+
+def reconcile_supplier_allocations(contract):
+    """Re-answer the whole kelishuv: every to'lov placed again, oldest first.
+
+    Needed because a slice is an answer to a question that keeps moving. A new truck
+    raises what a product costs, an edited to'lov changes what there is to spread,
+    and a deleted one frees the products it was sitting on — after any of those the
+    stored slices are yesterday's answer. Oldest first so the result does not depend
+    on the order the rows happen to come back in."""
+    with transaction.atomic():
+        for payment in (contract.supplier_payments
+                        .select_related("contract", "contract_line")
+                        .order_by("date", "pk")):
+            allocate_supplier_payment(payment)
+
+
 def apply_customer_advance(sale):
     """Cover a fresh sale from money the mijoz has already handed over. Money
     earmarked for this sale's bron (`CustomerPayment.reservation == sale.reservation`)
@@ -3419,6 +3808,19 @@ class ShipmentExpense(CashEntry):
         ROAD = "road", "Yo'l xarajati"
         CERT = "cert", "Sertifikat"
         OTHER = "other", "Boshqa"
+
+    #: The turkumlar the kassa settles when the truck is UNLOADED rather than on the
+    #: day the bill is written down.
+    #:
+    #: Transport and gruzchi are paid at the ombor gate — the driver is settled with
+    #: when he delivers and the loaders when they have carried it in. Booking them out
+    #: of the till the moment the row was entered showed money gone that was still in
+    #: the safe, sometimes for weeks while the load was on the road.
+    #:
+    #: Bojxona and deklarant deliberately stay immediate: they are paid AT the border,
+    #: long before the warehouse, so waiting for arrival would misstate the till in the
+    #: other direction and for longer.
+    ARRIVAL_CATEGORIES = frozenset({Category.TRANSPORT, Category.LOADER})
 
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE,
                                  related_name="expenses", verbose_name="Yuk")
@@ -3492,21 +3894,92 @@ class ShipmentExpense(CashEntry):
         return self.logist or self.customs_agent
 
     @property
+    def waits_for_arrival(self):
+        """True for a row the kassa settles at the ombor gate rather than on the day
+        it was written down — see `ARRIVAL_CATEGORIES`.
+
+        Only ever true of a kassa-funded row. One a logist or a bojxonachi paid left
+        the till when we funded THEM, which already happened and cannot be waited
+        for; `total_out` was zero for those long before this existed."""
+        return self.from_kassa and self.category in self.ARRIVAL_CATEGORIES
+
+    @property
+    def is_pending(self):
+        """Recorded and owed, but still in the till: the yuk has not landed yet.
+
+        Read off `shipment.arrived` rather than off the holat itself. The two say the
+        same thing — the date is set the moment a load is moved to the arrival holat
+        and cleared when it is moved back off one (see `shipment_set_status`) — and
+        this one carries the DAY as well, which is what `cash_date` needs."""
+        return self.waits_for_arrival and self.shipment.arrived is None
+
+    @property
+    def cash_date(self):
+        """The day the till actually loses this row — None while it is pending.
+
+        For a row that waits, the LATER of the two dates. A gruzchi bill written down
+        while the truck was still on the road is paid when it lands; one written down
+        a week after it landed is paid that day, because money cannot leave before
+        anybody has recorded that it is owed. That pair is what lets a xarajat be
+        entered at any point in a load's life and still reach the till honestly.
+
+        Everything else moves on the day it says it did.
+
+        Both sides go through `_as_day` before being compared: Django converts a
+        DateField only on save or refresh, so a row still in memory carries whatever
+        it was handed, and `"2026-07-28" > date(2026, 7, 20)` raises rather than
+        sorting. The importer, the seeders and any shell one-liner build rows exactly
+        that way — the same reason `expense_has_one_payer` is a DB constraint and not
+        only a clean().
+
+        `cash_date_expression()` is this same rule in SQL, for the screens that narrow
+        to a period; tests/test_expense_deferral.py pins the two equal row by row."""
+        written = _as_day(self.date)
+        if not self.waits_for_arrival:
+            return written
+        arrived = _as_day(self.shipment.arrived)
+        if arrived is None:
+            return None
+        return max(written, arrived)
+
+    @property
     def total_out(self):
         """What the kassa loses: the expense plus any bank foiz — and nothing at all
         when a holder paid it, because that money already left as the LogistPayment
-        or CustomsPayment that funded them.
+        or CustomsPayment that funded them, or while it is still pending, because a
+        transport bill on a truck that has not arrived has not been paid yet.
 
-        The landed cost deliberately keeps using `amount` either way: a transfer fee
-        is the cost of moving money, not of the goods, and who handed the cash over
-        does not change what the granula cost."""
-        if not self.from_kassa:
+        The landed cost deliberately keeps using `amount` either way, and so does
+        every other figure about what the goods COST. A tannarx is what the load is
+        worth to us, which is settled the moment the obligation exists — when the
+        cash happens to leave the safe changes the till, not the price of a kg. That
+        separation is why deferring this moved no cost figure anywhere in the app.
+
+        A transfer fee is likewise the cost of moving money, not of the goods, and
+        who handed the cash over does not change what the granula cost."""
+        if not self.from_kassa or self.is_pending:
             return Decimal("0")
         return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
 
     @property
     def total_out_uzs(self):
-        if not self.from_kassa:
+        if not self.from_kassa or self.is_pending:
+            return Decimal("0")
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+    @property
+    def pending_out(self):
+        """What this row WILL cost the till, while it is still waiting — zero once it
+        has gone. The twin of `total_out`: exactly one of the two is ever non-zero, so
+        "in the safe" and "already spent" can never double-count the same bill."""
+        if not self.is_pending:
+            return Decimal("0")
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def pending_out_uzs(self):
+        if not self.is_pending:
             return Decimal("0")
         fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
         return self.amount_uzs + fee
@@ -3520,6 +3993,66 @@ class ShipmentExpense(CashEntry):
 
     def __str__(self):
         return f"{self.get_category_display()}: {self.amount}$ (yuk #{self.shipment_id})"
+
+
+def _as_day(value):
+    """A DateField's value as a real date, whatever the instance is holding.
+
+    Django converts on save or refresh, not on assignment, so a row built in memory
+    still carries the string it was handed — and two of those cannot be compared with
+    a date. `cash_date` compares exactly that pair."""
+    return _date.fromisoformat(value) if isinstance(value, str) else value
+
+
+def cash_date_expression():
+    """`ShipmentExpense.cash_date` as SQL, for the screens that narrow xarajatlar to a
+    period — the kassa's window and the opening balance behind its waterfall.
+
+    Those filter thousands of rows in the database and cannot ask a Python property.
+    The property is the readable statement of the rule and this is the same rule in
+    the only other language it has to be said in; tests/test_expense_deferral.py pins
+    the two equal row by row, because two spellings of one rule is precisely the pair
+    that drifts apart.
+
+    Spelled as explicit When branches rather than with Greatest(): Postgres's GREATEST
+    ignores a NULL argument while SQLite's MAX() returns NULL if either side is, and
+    this project runs on both (SQLite in dev, Postgres in prod). A pending row would
+    then come back as its own date on one and as NULL on the other — the same query
+    giving two different tills depending on which machine ran it."""
+    waits = models.Q(logist__isnull=True, customs_agent__isnull=True,
+                     category__in=ShipmentExpense.ARRIVAL_CATEGORIES)
+    return models.Case(
+        # Somebody else funded it, or it is a turkum paid on the day it is written:
+        # the till moved when the row says it did.
+        models.When(~waits, then=models.F("date")),
+        # Waits, and the truck has not landed — no cash date at all yet.
+        models.When(shipment__arrived__isnull=True,
+                    then=models.Value(None, output_field=models.DateField())),
+        # Waits and has landed: the later of the two, spelled out rather than MAX()d.
+        models.When(shipment__arrived__gt=models.F("date"),
+                    then=models.F("shipment__arrived")),
+        default=models.F("date"),
+        output_field=models.DateField(),
+    )
+
+
+def pending_expenses_by_currency(expenses=None):
+    """[(currency, kutilayotgan)] — bills recorded against loads still on the road.
+
+    Money the business has committed and not yet handed over: the till still holds it,
+    so it is NOT a chiqim, and the kassa board would be lying by omission without it —
+    an operator reading "kassada 87 mln" needs to know that 40 of it is spoken for the
+    moment two trucks land. Read per currency like every other heap on that board.
+
+    `expenses` is a list a caller already has loaded; left out, this reads them, and
+    `select_related` because `is_pending` asks each row's yuk whether it has
+    arrived."""
+    if expenses is None:
+        expenses = ShipmentExpense.objects.select_related("shipment").all()
+    return _by_currency(
+        (expense.currency,
+         own_side(expense, expense.pending_out, expense.pending_out_uzs))
+        for expense in expenses)
 
 
 def latest_exchange_rate():

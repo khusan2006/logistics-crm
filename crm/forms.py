@@ -9,7 +9,7 @@ from django.utils import timezone
 from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
     CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
-    LogistPayment, Partner,
+    LogistPayment, OtherExpense, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
@@ -1300,14 +1300,18 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
             .select_related("contract").order_by("contract_id", "position", "id"))
         self.fields["contract_line"].label_from_instance = (
             lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
-        # A prompt, not an option. It read "Butun kelishuv" at first, which named a
-        # choice `clean` then refused — on a kelishuv with two markalar the money
-        # went to one of them, and a to'lov the operator declined to attribute is
-        # one nobody can attribute later either. A single-product kelishuv never
-        # sees this: the form fills that one in for them (and the JS preselects it).
-        self.fields["contract_line"].empty_label = "Mahsulotni tanlang"
+        # A real choice again, and named as one. It was demoted to a bare prompt
+        # while `clean` refused it — but a to'lov that names no marka is now the
+        # ZAKLAD, and `allocate_supplier_payment` splits it across the kelishuv by
+        # mashina count. Left as "Mahsulotni tanlang" the option read as an omission
+        # the form was about to complain about, which is exactly what it did.
+        #
+        # A single-product kelishuv never sees this: the form fills that one in for
+        # them (and the JS preselects it).
+        self.fields["contract_line"].empty_label = "Butun kelishuv (zaklad)"
         self.fields["contract_line"].help_text = (
-            "Pul qaysi mahsulot uchun ketganini belgilang")
+            "Pul qaysi mahsulot uchun ketganini belgilang. "
+            "Bo'sh qoldirilsa — zaklad: mashinalar soniga qarab bo'linadi")
 
     def clean_commission_percent(self):
         return _clean_percent(self.cleaned_data.get("commission_percent"))
@@ -1343,9 +1347,11 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
                 # Nothing to choose: one product IS the kelishuv, so the operator is
                 # not asked and the to'lov still records which marka it bought.
                 cleaned["contract_line"] = lines[0]
-            elif line is None and len(lines) > 1:
-                self.add_error("contract_line",
-                               "Qaysi mahsulot uchun to'lanayotganini tanlang")
+            # Blank on a multi-marka kelishuv is NOT an omission to complain about.
+            # It is the zaklad — money handed over before anyone knows which marka
+            # it will buy — and `allocate_supplier_payment` splits it by mashina
+            # count. Demanding a marka here made that whole branch unreachable: the
+            # model would place it correctly and the form never let it through.
 
         # Paying before a yuk is sent is normal (avans), so the ceiling is the whole
         # kelishuv's value, not the goods shipped so far. The cap is on what the
@@ -1947,7 +1953,13 @@ class SupplierPaymentTargetForm(forms.Form):
 
     contract = forms.ModelChoiceField(
         queryset=Contract.objects.none(), label="Kelishuv",
-        widget=ContractChoiceSelect(attrs={"data-contract-currency": ""}))
+        # data-contract-source as well as -currency: the Mahsulot list below holds
+        # EVERY selectable kelishuv's products at once, and this attribute is the
+        # only thing that tells the page which select to narrow it against. Without
+        # it the narrowing never ran here, and the operator was offered markalar
+        # from other kelishuvlar — a pairing `clean` then refused on save.
+        widget=ContractChoiceSelect(attrs={"data-contract-currency": "",
+                                           "data-contract-source": ""}))
     contract_line = forms.ModelChoiceField(
         queryset=ContractLine.objects.none(), label="Mahsulot", required=False,
         widget=ContractLineChoiceSelect(attrs={"data-line-source": ""}))
@@ -1969,27 +1981,27 @@ class SupplierPaymentTargetForm(forms.Form):
             .select_related("contract").order_by("contract_id", "position", "id"))
         self.fields["contract_line"].label_from_instance = (
             lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
-        self.fields["contract_line"].empty_label = "Mahsulotni tanlang"
+        # Named, not a bare prompt — the twin of `SupplierPaymentForm`, and for the
+        # reason spelled out there: blank is the zaklad, not a missing answer.
+        self.fields["contract_line"].empty_label = "Butun kelishuv (zaklad)"
         self.fields["contract_line"].help_text = (
-            "Pul qaysi mahsulot uchun ketganini belgilang")
+            "Pul qaysi mahsulot uchun ketganini belgilang. "
+            "Bo'sh qoldirilsa — zaklad: mashinalar soniga qarab bo'linadi")
         # This header carries the sana for every row beneath it.
         no_future_date(self.fields["date"])
 
     def clean(self):
         cleaned = super().clean()
         contract, line = cleaned.get("contract"), cleaned.get("contract_line")
-        # Declared `required=False` and enforced here instead, because on a
-        # single-product kelishuv there is nothing to ask: that one product IS the
-        # kelishuv, so it is filled in rather than demanded.
+        # `required=False` and settled here instead: on a single-product kelishuv
+        # there is nothing to ask, and on a multi-product one blank is a real answer
+        # — the zaklad, which `allocate_supplier_payment` splits by mashina count.
         if line is not None and contract is not None and line.contract_id != contract.pk:
             self.add_error("contract_line", "Bu mahsulot tanlangan kelishuvda yo'q")
         elif contract is not None:
             lines = list(contract.lines.all())
             if len(lines) == 1:
                 cleaned["contract_line"] = lines[0]
-            elif line is None and len(lines) > 1:
-                self.add_error("contract_line",
-                               "Qaysi mahsulot uchun to'lanayotganini tanlang")
         return cleaned
 
 
@@ -2209,6 +2221,80 @@ class KapitalRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
 
 
 KapitalFormSet = split_payment_formset(Kapital, KapitalRowForm)
+
+
+class OtherExpenseTargetForm(forms.Form):
+    """The header of a boshqa chiqim: what it was for, and when.
+
+    The izoh lives HERE rather than on each row because it describes the payment, not
+    the way the money moved — one rent bill settled half naqd and half by transfer is
+    one "Avgust ijarasi", said once. It is the only description this row has (no
+    turkum, by request), which is why it is required where every other note in the
+    app is optional: a row saying "$400 left on the 9th" records nothing."""
+
+    note = forms.CharField(
+        label="Izoh", max_length=255,
+        widget=forms.TextInput(attrs={"placeholder": "Masalan: avgust ijarasi, ish haqi"}),
+        help_text="Nima uchun chiqdi — bu yagona izoh")
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        no_future_date(self.fields["date"])
+
+
+class OtherExpenseRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                          MoneyEntryFormMixin, forms.ModelForm):
+    """One way a boshqa chiqim left the kassa. No izoh and no fee_bearer here: the
+    first is the header's (it describes the payment, not the movement) and the second
+    is answered once by `OtherExpense.default_fee_bearer` — money going out rides the
+    bank's cut on top, the way every other chiqim in the app does."""
+
+    float_currency = Currency.USD
+    field_order = ["amount", "currency", "method", "fee_percent", "exchange_rate"]
+
+    class Meta:
+        model = OtherExpense
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent"]
+        labels = {"amount": "Summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["exchange_rate"].help_text = "Faqat so'mda kiritilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def settled_against(self):
+        return self.float_currency
+
+
+OtherExpenseFormSet = split_payment_formset(OtherExpense, OtherExpenseRowForm)
+
+
+class OtherExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """One boshqa chiqim, reopened on its own — the edit twin of the pair above.
+
+    Built like `KapitalForm` and for the same reasons: no counterparty, no qarz to
+    overpay, nobody's balance to keep. It moves the till and stops there."""
+
+    #: The currency the kassa's own figure is anchored in — a dollar entry crosses
+    #: nothing, so the same JS hides the kurs box for it.
+    float_currency = Currency.USD
+
+    class Meta:
+        model = OtherExpense
+        fields = ["date", "note", "currency", "amount", "exchange_rate",
+                  "method", "fee_percent"]
+        widgets = {"date": date_widget()}
+        labels = {"amount": "Summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        no_future_date(self.fields["date"])
+        self.fields["exchange_rate"].help_text = "Faqat so'mda kiritilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def settled_against(self):
+        return self.float_currency
 
 
 def payer_choices(category):

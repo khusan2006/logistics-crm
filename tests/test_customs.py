@@ -820,14 +820,56 @@ class TestCustomsScreens:
         assert pks("/customs/loads/?state=left") == [under.pk]
         assert pks("/customs/loads/?state=over") == [over.pk]
 
-    def test_detail_lists_both_directions_newest_first(self, admin_client, db):
+    def test_the_two_daftar_are_kept_apart_each_newest_first(self, admin_client, db):
+        """Yuborilgan pul and Sarflangan pul are two lists, not two columns of one.
+
+        It matters more here than on a logist's page, and for the reason the feature
+        exists: what we SEND for a truck is an estimate typed before anybody knows the
+        price, and what clearing COSTS is only known afterwards. Those are the two
+        figures being compared, and interleaved by date they were compared across a
+        column that was blank on every other row."""
+        agent = _agent()
+        shipment = _shipment()
+        _send(agent, "40000000", shipment, date="2026-07-01")
+        _send(agent, "5000000", shipment=None, date="2026-07-11")
+        _cleared(shipment, agent, "37000000", date="2026-07-08")
+
+        ctx = admin_client.get(f"/customs/{agent.pk}/").context
+        sent, spent = list(ctx["sent_page"]), list(ctx["spent_page"])
+        assert [r["amount_uzs"] for r in sent] == [
+            Decimal("5000000.00"), Decimal("40000000.00")]
+        assert [r["amount_uzs"] for r in spent] == [Decimal("37000000.00")]
+        # A top-up against no yuk says so; one sent for a truck names it.
+        assert "Umumiy to'ldirish" in sent[0]["title"]
+        assert f"Yuk #{shipment.pk} uchun" in sent[1]["title"]
+
+    def test_neither_daftar_carries_the_other_side_s_rows(self, admin_client, db):
+        agent = _agent()
+        shipment = _shipment()
+        payment = _send(agent, "40000000", shipment, date="2026-07-01")
+        expense = _cleared(shipment, agent, "37000000", date="2026-07-08")
+
+        ctx = admin_client.get(f"/customs/{agent.pk}/").context
+        assert [r["obj"].pk for r in ctx["sent_page"]] == [payment.pk]
+        assert [r["obj"].pk for r in ctx["spent_page"]] == [expense.pk]
+
+    def test_each_daftar_totals_its_own_side_in_the_head(self, admin_client, db):
+        """The head of each daftar repeats the tile above it, so the two cannot
+        drift — and the Qoldiq tile is the difference between them."""
         agent = _agent()
         shipment = _shipment()
         _send(agent, "40000000", shipment, date="2026-07-01")
         _cleared(shipment, agent, "37000000", date="2026-07-08")
-        rows = list(admin_client.get(f"/customs/{agent.pk}/").context["page"])
-        assert [r["kind"] for r in rows] == ["out", "in"]
-        assert rows[0]["amount_uzs"] == Decimal("37000000.00")
+
+        resp = admin_client.get(f"/customs/{agent.pk}/")
+        assert dict(resp.context["agent"].received_by_currency())[UZS] \
+            == Decimal("40000000.00")
+        assert dict(resp.context["agent"].spent_by_currency())[UZS] \
+            == Decimal("37000000.00")
+        assert dict(resp.context["agent"].balance_by_currency())[UZS] \
+            == Decimal("3000000.00")
+        html = resp.content.decode()
+        assert "Yuborilgan pul" in html and "Sarflangan pul" in html
 
     def test_the_detail_page_lists_the_loads_the_money_went_to(self, admin_client, db):
         """The hisob varaqasi says what moved; this says on WHAT — and a load is
@@ -867,7 +909,11 @@ class TestCustomsScreens:
         assert row["sent"] == []
         html = resp.content.decode()
         assert shipment.contract.code in html
-        assert "Yuborilgan" not in html
+        # Aimed at the two columns themselves, not at the word: the page has a
+        # Yuborilgan pul daftar of its own now, and a bare `"Yuborilgan" not in html`
+        # would pass or fail on that instead of on the table it is about.
+        assert 'title="Shu yuk uchun oldindan yuborilgan"' not in html
+        assert ">Farq</th>" not in html
 
     def test_the_yuk_page_shows_that_load_own_reconciliation(self, admin_client, db):
         agent = _agent()

@@ -315,6 +315,12 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
   font-weight: 700;
   color: var(--text-muted);
 }
+/* The doska's davr row: the caption sits where a list's search box would, and the
+   ‹ davr › bar keeps the right edge it has on every other screen. The bar therefore
+   sits ON the group of cards it narrows, which is what tells the reader that the four
+   standing figures below the next eyebrow do NOT answer to it. Its own bottom margin
+   goes — the .listbar row owns the spacing, or the caption rides high in the row. */
+.listbar > .section-eyebrow { margin: 0; }
 .kpi {
   --kpi: var(--accent);
   position: relative;
@@ -409,6 +415,24 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 @media (max-width: 1100px) {
   .kpi-grid--compact { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 }
+
+/* The doska's davr group: five flow cards, one row. The auto-fit default lands them
+   4-up at most widths and leaves the fifth alone on a row beneath, which reads as a
+   card that got separated from its group rather than as the fifth of five — and the
+   group below it (four standing figures) filled its row exactly, so the widow looked
+   like a mistake. Stepped 5 → 3 → 2 → 1 rather than straight to 2, and it leaves the
+   five at 1550 rather than squeezing further: "Omborga kelgan kg" beside its icon
+   chip wraps to two lines below roughly 230px of card, which is what a fifth column
+   costs at 1520 of viewport. */
+.kpi-grid--flow { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1550px) { .kpi-grid--flow { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px) { .kpi-grid--flow { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .kpi-grid--flow { grid-template-columns: 1fr; } }
+
+/* …and its four standing twins, which divide evenly and only need the same steps. */
+.kpi-grid--standing { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .kpi-grid--standing { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .kpi-grid--standing { grid-template-columns: 1fr; } }
 
 /* Kassa: five production-flow cards forced onto one row (drops to 2-up on narrow) */
 .kpi-grid--kassa { grid-template-columns: repeat(5, minmax(0, 1fr)); }
@@ -519,6 +543,13 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 
 .ktiles-foot { margin: 0 0 14px; font-size: 12px; line-height: 1.55; color: var(--text-faint); max-width: 96ch; }
 .ktiles-foot b { color: var(--text-muted); font-weight: 650; }
+/* Kutilayotgan xarajatlar — committed money still sitting in the till. A note under
+   the Kassada card rather than a tile beside it: it is not a heap the safe holds, so
+   giving it a card of its own would read as a fourth pile to count. Amber because it
+   is a caveat on the figure above and not a loss — nothing has gone yet. */
+.kassa-pending { display: flex; align-items: baseline; gap: 7px; margin-top: -6px; color: var(--text-muted); }
+.kassa-pending svg { width: 13px; height: 13px; flex-shrink: 0; align-self: center; color: var(--warning); }
+.kassa-pending strong { color: var(--warning); font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (max-width: 1000px) { .ktiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .ktiles { grid-template-columns: 1fr; } }
 
@@ -724,10 +755,18 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
    .table-wrap. Kassa's chiqim ledger is the case that showed it. */
 .grid-2 > *, .stat-grid > * { min-width: 0; }
 
-/* Kassa kirim/chiqim ledgers — two scrollable transaction lists side by side */
+/* A pair of opposed ledgers side by side — the kassa's kirim/chiqim, and the money
+   sent to / spent by a logist or bojxonachi. Named for the shape rather than for the
+   kassa now that three screens draw it. */
+/* Each card is its own height rather than both being stretched to the taller. The
+   two sides of a holder's hisob are uneven by nature — a logist is funded by a few
+   lump to'lovlar and spends it as dozens of small driver advances — so the short one
+   was drawing 800px of empty card, which reads as content that failed to load rather
+   than as a list that is simply shorter. */
+.ledger-pair { align-items: start; }
 /* Two currencies in a ledger headline are two heaps: stacked, not run together on
    one line, and both at the same size — neither is the other's footnote. */
-.kassa-ledger .ledger-total {
+.ledger-pair .ledger-total {
   display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
   font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
@@ -785,19 +824,19 @@ html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
    sideways. An overlay scrollbar only surfaces once you are already scrolling,
    which is no use to somebody looking for something to drag — so these keep a
    handle on screen whether or not the pointer is moving. */
-.kassa-ledger .table-wrap {
+.ledger-pair .table-wrap {
   overflow-x: scroll;
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) var(--surface-2);
 }
-.kassa-ledger .table-wrap::-webkit-scrollbar { height: 12px; }
-.kassa-ledger .table-wrap::-webkit-scrollbar-track { background: var(--surface-2); }
-.kassa-ledger .table-wrap::-webkit-scrollbar-thumb {
+.ledger-pair .table-wrap::-webkit-scrollbar { height: 12px; }
+.ledger-pair .table-wrap::-webkit-scrollbar-track { background: var(--surface-2); }
+.ledger-pair .table-wrap::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border: 3px solid var(--surface-2);
   border-radius: 999px;
 }
-.kassa-ledger .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+.ledger-pair .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
 
 /* A single production-till figure line */
 .prod-stat { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--border); }
