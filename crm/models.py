@@ -1067,6 +1067,28 @@ class ContractLine(MoneyEntry):
         left = self.remaining_kg if self.remaining_kg > 0 else Decimal("0")
         return (self.shipped_value_uzs + left * self.price_uzs).quantize(Decimal("0.01"))
 
+    @property
+    def payable_left(self):
+        """How much more will be paid on THIS product — what it will cost, less what
+        has actually landed on it.
+
+        A figure that only became answerable once a to'lov was placed per product
+        (`SupplierPaymentAllocation`). Before that the money sat on the kelishuv and
+        no product could say what it was still owed, which is why the Kelishuvlar
+        list carried one combined figure beside a per-marka Qolgan kg column.
+
+        These need not add up to the kelishuv's own `payable_left`: money no product
+        could take is the hamkor's avans and is owed to nobody here."""
+        return self.expected_value - self.paid_total
+
+    @property
+    def payable_left_uzs(self):
+        return self.expected_value_uzs - self.paid_total_uzs
+
+    @property
+    def payable_left_own(self):
+        return own_side(self.contract, self.payable_left, self.payable_left_uzs)
+
     def __str__(self):
         return f"{self.brand} · {self.kg} kg"
 

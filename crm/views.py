@@ -1,6 +1,6 @@
 import re
 from datetime import date as _date, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -99,6 +99,32 @@ def priced_sales(queryset=None):
     return base.select_related(*PRICED_SALE_RELATED).prefetch_related(*PRICED_SALE_PREFETCH)
 
 
+def _paid_in_trucks(paid, due, total):
+    """The To'lov bar's own fill, said in mashina — the numerator of its label.
+
+    It is `paid / due` scaled to the denominator, which makes the label and the bar
+    it sits inside the SAME figure by construction. They used to be two different
+    ones: the count came from `trucks_paid_for`, which measures against the trucks
+    actually SENT, while the denominator was the kelishuv's plan. Two markalar with
+    the same $15 000 against the same $144 000 then drew two identical gold bars
+    labelled "0 / 5" and "0,5 / 5" — the one with no truck out yet could not be
+    credited with a truck at any amount of money, so its label read zero while its
+    bar plainly did not.
+
+    Money paid before a load leaves is an avans, and an avans is progress: it has
+    bought part of a kelishuv even when nothing has shipped. That is what the bar
+    was already drawing, and now the number agrees with it.
+
+    ROUND_DOWN keeps the rule the count has always had — never claim a whole truck
+    that is not paid for, so 1,99 shows as 1,9 rather than 2. Not clamped at the
+    total: an overpaid marka reads past its plan the same way the Yuk bar reads
+    "2 / 1 mashina" when a kelishuv sends more trucks than it planned."""
+    if not due or not total:
+        return Decimal("0")
+    return (Decimal(paid) / Decimal(due) * Decimal(total)).quantize(
+        Decimal("0.1"), rounding=ROUND_DOWN)
+
+
 def _truck_count(count, planned, sent):
     """The figure inside a progress bar's label — "2,5 / 4".
 
@@ -129,23 +155,20 @@ def _chart_line(contract, ln):
     """One marka's row in the Kelishuvlar bajarilishi card: a Yuk bar and a To'lov
     bar, each carrying its own mashina count.
 
-    Built here rather than inline so every figure is read once. `trucks_paid_for`
-    prices each of this marka's trucks to answer, and asking it twice — once per
-    half of the pair it returns — walks the same loads again."""
+    Built here rather than inline so every figure is read once."""
     paid = contract._own(ln.paid_total, ln.paid_total_uzs)
     due = contract._own(ln.expected_value, ln.expected_value_uzs)
     sent, planned = ln.truck_progress
-    trucks_paid, _sent_priced = ln.trucks_paid_for
     return {
         "brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
         "pct": _bar_pct(ln.shipped_kg, ln.kg),
         "sent": sent, "planned": planned,
         # The mashina figures ride INSIDE the bars, so each bar needs its own:
-        # trucks GONE against the Yuk bar, trucks PAID FOR against the To'lov one.
-        # Two different questions against one denominator — see _truck_count.
-        "trucks_paid": trucks_paid,
+        # trucks GONE against the Yuk bar, the money said in trucks against the
+        # To'lov one. Two questions, one denominator — see _truck_count.
         "trucks_count": _truck_count(sent, planned, sent),
-        "paid_count": _truck_count(trucks_paid, planned, sent),
+        "paid_count": _truck_count(_paid_in_trucks(paid, due, planned or sent),
+                                   planned, sent),
         "paid": paid, "due": due, "pay_pct": _bar_pct(paid, due),
     }
 
@@ -253,7 +276,7 @@ def dashboard(request):
         # needs a truck. Only worth the extra lines when there is more than one;
         # a single-marka kelishuv would just be the same bar twice.
         lines = list(contract.lines.all())
-        trucks_paid, _sent_priced = contract.trucks_paid_for
+
         chart_contracts.append({
             "contract": contract,
             "sent": sent, "planned": planned,
@@ -277,14 +300,15 @@ def dashboard(request):
             "kg_pct": _bar_pct(contract.shipped_kg, contract.kg),
             "paid": contract.paid_total_own, "due": contract.expected_value_own,
             "pay_pct": _bar_pct(contract.paid_total_own, contract.expected_value_own),
-            # What the money has actually bought: "$96 400 of $288 000" is a share
-            # of a figure nobody thinks in, while "1 of 4 yuk paid for" is the
-            # question being asked of a hamkor — which trucks are settled.
-            "trucks_paid": trucks_paid,
             "trucks_count": _truck_count(sent, planned, sent),
-            # Read twice: inside the gold bar, and by the note under the pair,
-            # which says the same figure in its own words.
-            "paid_count": _truck_count(trucks_paid, planned, sent),
+            # What the money has bought, in the unit the hamkor is owed in:
+            # "$96 400 of $288 000" is a share of a figure nobody thinks in, while
+            # "3,3 of 5 mashina paid for" is the question actually being asked.
+            # Read twice — inside the gold bar, and by the note under the pair.
+            "paid_count": _truck_count(
+                _paid_in_trucks(contract.paid_total_own,
+                                contract.expected_value_own, planned or sent),
+                planned, sent),
         })
     contracts_total = len(chart_contracts)
     # Most trucks still to send first — the same reading as Yuboriladigan mashinalar.
@@ -934,6 +958,10 @@ def contract_edit(request, pk):
             with transaction.atomic():
                 form.save()
                 _save_lines(lines, contract)
+                # kg, narx or a marka added or dropped all change what the products
+                # cost, and that is the ceiling every hamkor to'lov is placed
+                # against — so the kelishuv is placed again. See shipment_create.
+                reconcile_supplier_allocations(contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
                 f"Kelishuv tahrirlandi: {contract.code} · {contract.brand_summary}",
@@ -2095,6 +2123,11 @@ def shipment_create(request):
                 # dispatch form rather than waiting for somebody to remember it as
                 # an xarajat later.
                 form.sync_driver_advance(shipment, request.user)
+                # A truck changes what its marka COSTS (`expected_value`), which is
+                # the ceiling every hamkor to'lov is placed against. Money that
+                # spilled onto the next marka — or sat as the hamkor's avans —
+                # belongs to this one now, so the kelishuv is placed again.
+                reconcile_supplier_allocations(shipment.contract)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Yuk", shipment.pk,
                 f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
@@ -2155,6 +2188,10 @@ def shipment_edit(request, pk):
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
             before = _shipment_snapshot(shipment)
+            # Read before the form writes over it: this screen can move a yuk to
+            # another kelishuv, and the one it LEFT has to be placed again too — it
+            # just got cheaper, so its to'lovlar may now reach further than they did.
+            previous_contract = Contract.objects.filter(pk=shipment.contract_id).first()
             with transaction.atomic():
                 shipment = form.save(commit=False)
                 # The holat decides WHETHER a yuk has arrived; the date field only
@@ -2174,6 +2211,11 @@ def shipment_edit(request, pk):
                 shipment.save()
                 _save_lines(lines, shipment)
                 form.sync_driver_advance(shipment, request.user)
+                # Editing a yuk re-prices its marka, so every to'lov on the kelishuv
+                # is placed again — see shipment_create.
+                reconcile_supplier_allocations(shipment.contract)
+                if previous_contract and previous_contract.pk != shipment.contract_id:
+                    reconcile_supplier_allocations(previous_contract)
             moved = _shipment_changes(before, _shipment_snapshot(shipment))
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
@@ -2434,8 +2476,14 @@ def shipment_delete(request, pk):
     shipment = get_object_or_404(Shipment, pk=pk)
     if request.method == "POST":
         label = f"{shipment.brand_summary} · {shipment.kg} kg"
+        contract = shipment.contract
         try:
             shipment.delete()
+            # The marka just got cheaper, so a to'lov may now be sitting on more
+            # than that marka can cost. Placed again, the excess moves to the next
+            # product or falls back to being the hamkor's avans — left alone it
+            # reads as a settled marka nobody in fact paid for.
+            reconcile_supplier_allocations(contract)
             AuditLog.record(request.user, AuditLog.Action.DELETE, "Yuk", pk, f"Yuk o'chirildi: {label}")
             messages.success(request, "Yuk o'chirildi")
         except ProtectedError:

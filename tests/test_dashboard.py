@@ -290,9 +290,6 @@ def test_each_marka_counts_the_yuklar_its_own_money_covers(admin_client, db):
                                    amount=Decimal("1000"), date="2026-07-08")
 
     assert first.trucks_paid_for == (0, 2) and second.trucks_paid_for == (1, 1)
-    row = admin_client.get("/").context["contracts"][0]
-    assert [(ln["brand"], ln["trucks_paid"]) for ln in row["lines"]] == [
-        ("7000 campaund", 0), ("209 campaund", 1)]
     html = admin_client.get("/").content.decode()
     # Against each marka's OWN plan, not the trucks it happens to have sent.
     assert "0 / 3 to'langan" in html and "1 / 2 to'langan" in html
@@ -347,7 +344,8 @@ def test_a_kelishuv_with_no_plan_counts_against_the_trucks_it_has_sent(admin_cli
                                    date="2026-07-08")
 
     html = admin_client.get("/").content.decode()
-    assert "2 / 2 mashina" in html and "1 / 2 to'langan" in html
+    # $1 000 of the $3 000 this kelishuv will cost, over the 2 trucks it has sent.
+    assert "2 / 2 mashina" in html and "0,6 / 2 to'langan" in html
     assert "/ None" not in html
 
 
@@ -390,6 +388,33 @@ def test_what_no_product_can_take_is_still_shown_as_unassigned(admin_client, db)
     assert "taqsimlanmagan" in admin_client.get("/").content.decode().lower()
 
 
+def test_the_same_money_reads_the_same_whether_a_truck_has_left_or_not(admin_client, db):
+    """Two markalar, same cost, same money on each — one with a truck out and one
+    without. Their gold bars are drawn to the same width because the money is the
+    same, so the labels have to say the same thing.
+
+    They did not. The count measured against the trucks already SENT, so the marka
+    with nothing on the road could not be credited with a truck at any amount of
+    money and read "0" beside a bar that was plainly not empty."""
+    contract = make_contract(brand="7000", kg="1000", price="1.00", planned_trucks=5)
+    second = ContractLine.objects.create(contract=contract, brand="209",
+                                         kg=Decimal("1000"), price=Decimal("1.00"),
+                                         planned_trucks=5)
+    # Only 209 has a truck on the road; both markalar are paid exactly the same.
+    make_shipment(contract=contract, kg="200", contract_line=second,
+                  sent=date(2026, 7, 5))
+    for line in (contract.lines.get(brand="7000"), second):
+        SupplierPayment.objects.create(contract=contract, contract_line=line,
+                                       amount=Decimal("100"), date="2026-07-06")
+
+    row = admin_client.get("/").context["contracts"][0]
+    labels = {ln["brand"]: ln["paid_count"] for ln in row["lines"]}
+    assert labels["7000"] == labels["209"], labels
+    # And the label IS the bar's own fill: $100 of $1 000 is a tenth of 5 trucks.
+    assert labels["7000"] == "0,5 / 5"
+    assert {ln["brand"]: ln["pay_pct"] for ln in row["lines"]} == {"7000": 10, "209": 10}
+
+
 def test_a_one_marka_kelishuv_keeps_the_single_yuk_bar(admin_client, db):
     """Splitting a kelishuv with nothing to split would just draw the same bar
     twice, under a heading that already names the marka."""
@@ -413,9 +438,6 @@ def test_the_tolov_bar_says_how_many_yuklar_the_money_covers(admin_client, db):
     SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
                                    date="2026-07-08")
 
-    assert contract.trucks_paid_for == (Decimal("2.5"), 3)
-    row = admin_client.get("/").context["contracts"][0]
-    assert row["trucks_paid"] == Decimal("2.5")
     html = admin_client.get("/").content.decode()
     # Twice inside the gold bar — the label is written a second time so it can
     # turn white where the fill reaches it — and once more on the note below,
@@ -453,18 +475,18 @@ def test_a_trailing_zero_is_never_printed_on_a_whole_count(admin_client, db):
     assert "2 / 3 to'langan" in html and "2,0 / 3" not in html
 
 
-def test_money_past_the_last_truck_counts_for_no_truck(admin_client, db):
-    """An avans running past everything sent is not a fraction of a truck that
-    does not exist — the count stops at what has actually left."""
+def test_an_avans_counts_even_before_the_load_it_bought_leaves(admin_client, db):
+    """Money paid ahead of the goods is progress, and the bar always drew it as
+    such — it was the LABEL that refused to, because it counted against the trucks
+    already sent. One truck out of three and $2 500 of the $3 000 this kelishuv
+    will cost reads 2,5 of 3, not the 1 the old count capped it at: the hamkor is
+    holding the money whether or not they have loaded the lorry yet."""
     contract = make_contract(kg="3000", price="1.00", planned_trucks=3)
     make_shipment(contract=contract, kg="1000", sent=date(2026, 7, 5))
     SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
                                    date="2026-07-08")
 
-    # One truck priced, so one truck is the ceiling however far the money runs —
-    # and the bar still measures it against the kelishuv's plan of three.
-    assert contract.trucks_paid_for == (Decimal("1"), 1)
-    assert "1 / 3 to'langan" in admin_client.get("/").content.decode()
+    assert "2,5 / 3 to'langan" in admin_client.get("/").content.decode()
 
 
 def test_the_oldest_truck_is_the_one_paid_off_first(admin_client, db):

@@ -60,7 +60,7 @@ so changing a select keeps it (see crm/_daterange.html).
     {% endif %}
     <th title="Har bir marka bo'yicha yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
     {% if user.is_admin_role %}
-    <th title="Kelishuv bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
+    <th title="Har bir marka bo'yicha yana to'lanishi kerak bo'lgan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th></th>
     {% endif %}
   </tr>
@@ -106,9 +106,27 @@ so changing a select keeps it (see crm/_daterange.html).
     In the kelishuv's own currency, with no converted twin under it: the twin was
     derived at a different day's kurs than the to'lovlar, so it never reaches zero on
     a kelishuv that has in fact been settled.
+
+    Per marka once there is more than one, lining up with Qolgan kg beside it. It was
+    one combined figure because a to'lov belonged to the kelishuv and there was
+    nothing to split it by — `SupplierPaymentAllocation` places it per product now,
+    so "$210 400" across two markalar can say which of them it is actually owed for.
+
+    A single-marka kelishuv keeps the kelishuv-level figure: it is the same number,
+    and it is the one that still counts the hamkor's unallocated avans.
     {% endcomment %}
     {% if user.is_admin_role %}
-    <td><span class="badge {% if c.payable_left_own > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money c.payable_left c.payable_left_uzs c.currency %}</span></td>
+    <td>
+      {% if c.lines.all|length > 1 %}
+      {% for ln in c.lines.all %}
+      <div class="cell-line">
+        <span class="badge {% if ln.payable_left_own > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money ln.payable_left ln.payable_left_uzs c.currency %}</span>
+      </div>
+      {% endfor %}
+      {% else %}
+      <span class="badge {% if c.payable_left_own > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money c.payable_left c.payable_left_uzs c.currency %}</span>
+      {% endif %}
+    </td>
     <td class="row-actions">
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
