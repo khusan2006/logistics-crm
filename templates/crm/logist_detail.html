@@ -7,25 +7,42 @@
 {% endblock %}
 {% block content %}
 
+{% comment %}
+One line per currency, never added — the same rule the bojxonachi's page and the
+kassa board follow. These three were a single dollar figure while a logist's hisob
+was assumed to be dollars-only; logistlar are funded in so'm too, so the lone dollar
+figure was part real and part conversion at a kurs nobody chose, and it hid a so'm
+gap completely (see Logist.balance_by_currency, which has been bucketed for a while
+— this page was still reading the blended twin). The two daftar below are drawn in
+the currency each row actually moved in, so the headline has to bucket the same way
+or it is not a total of what is underneath it.
+{% endcomment %}
 <div class="ktiles">
   <div class="ktile ktile--cash">
     <div class="ktile-label">Qoldiq</div>
-    <div class="ktile-num {% if logist.balance < 0 %}late{% elif logist.balance > 0 %}avans{% endif %}">{{ logist.balance|usd }}</div>
+    {% for currency, amount in logist.balance_by_currency %}
+    <div class="ktile-num {% if amount < 0 %}late{% else %}avans{% endif %}">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "usd" %}</div>{% endfor %}
     <div class="ktile-note">
-      {% if logist.balance > 0 %}bizning pulimiz shu odamda turibdi
-      {% elif logist.balance < 0 %}o'z pulidan bergan — biz qarzdormiz
+      {% if logist.held_by_currency and logist.owed_by_currency %}bir valyutada bizniki turibdi, boshqasida biz qarzdormiz
+      {% elif logist.held_by_currency %}bizning pulimiz shu odamda turibdi
+      {% elif logist.owed_by_currency %}o'z pulidan bergan — biz qarzdormiz
       {% else %}hisob teng{% endif %}
     </div>
   </div>
   <div class="ktile ktile--in">
-    <div class="ktile-label">Biz yuborganmiz</div>
-    <div class="ktile-num">{{ logist.received_total|usd }}</div>
+    <div class="ktile-label">Yuborilgan pul</div>
+    {% for currency, amount in logist.received_by_currency %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "usd" %}</div>{% endfor %}
     <div class="ktile-note">kassadan chiqqan pul</div>
   </div>
   <div class="ktile ktile--out">
-    <div class="ktile-label">Haydovchilarga bergan</div>
-    <div class="ktile-num">{{ logist.paid_total|usd }}</div>
-    <div class="ktile-note">yuklarning tannarxiga kirgan</div>
+    <div class="ktile-label">Sarflangan pul</div>
+    {% for currency, amount in logist.paid_by_currency %}
+    <div class="ktile-num">{% money_in amount currency %}</div>
+    {% empty %}<div class="ktile-num">{% money_in 0 "usd" %}</div>{% endfor %}
+    <div class="ktile-note">haydovchilarga — yuklarning tannarxiga kirgan</div>
   </div>
 </div>
 <p class="ktiles-foot">
@@ -36,57 +53,85 @@
 
 {% include "crm/_holder_loads.html" with loads=loads paid_label="Haydovchiga bergan" %}
 
-{% if page.object_list %}
-<div class="card">
-  <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-    <h2 style="margin:0;">Logist tarixi</h2>
-    <span class="ledger-total">{{ page.paginator.count }} ta yozuv</span>
+{% comment %}
+Two daftar rather than one timeline with a Kirim and a Chiqim column.
+
+The old table put both sides on one list ordered by date, which reads as a bank
+statement — and a logist's hisob is not one. The two sides answer two different
+questions: "have we sent them enough" and "what has that money bought". On one list
+each row left one of the two money columns blank by construction, so answering either
+question meant reading past every row belonging to the other.
+
+Apart, each carries its own per-currency total in its head — which is the figure the
+tile above it repeats, so the two cannot drift — and pages on its own (?ipage /
+?opage), so paging the to'lovlar does not scroll the advances away. Same shape as the
+kassa's pair; see .ledger-pair.
+
+The yuklar that used to ride this timeline are in Qaysi yuklarga above. A yuk moves no
+money of ours on its own, so on a money daftar it could only ever be a row with an
+empty summa.
+{% endcomment %}
+<div class="grid-2 ledger-pair">
+  <div class="card" style="margin-bottom:0;">
+    <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <h2 style="margin:0;">Yuborilgan pul</h2>
+      <span class="ledger-total amt-in">{% for currency, amount in logist.received_by_currency %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "usd" %}</span>{% endfor %}</span>
+    </div>
+    <p class="field-hint" style="margin:2px 0 8px;">Biz kassadan shu logistga yuborgan pul — eng yangisi yuqorida.</p>
+    <div class="table-wrap">
+    <table class="ledger-table ledger-table--in">
+      <tr>
+        <th>Sana</th><th>Tavsif</th><th>Usul</th><th class="num">Summa</th><th></th>
+      </tr>
+      {% for r in sent_page %}
+      <tr>
+        <td>{{ r.date|date:"d.m.Y" }}</td>
+        <td>{{ r.title }}</td>
+        <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
+        {# What landed, not what was sent: a perechisleniya foiz never reached them. #}
+        <td class="num amt-in"><strong>+{% money r.amount r.amount_uzs r.currency %}</strong></td>
+        <td class="row-actions">
+          <a class="icon-action" href="{% url 'logist_payment_edit' r.obj.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+          <a class="icon-action danger" href="{% url 'logist_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="5" class="muted">Bu logistga hali pul yuborilmagan.</td></tr>{% endfor %}
+    </table>
+    </div>
+    {% include "crm/_pagination.html" with page=sent_page label="to'lov" param="ipage" %}
   </div>
-  <div class="table-wrap">
-  <table class="ledger-table">
-    <tr>
-      <th>Sana</th><th>Tavsif</th><th>Usul</th>
-      <th class="num">Kirim</th><th class="num">Chiqim</th><th></th>
-    </tr>
-    {% for r in page %}
-    <tr>
-      <td>{{ r.date|date:"d.m.Y" }}</td>
-      <td>
-        {% if r.kind == "in" %}<span class="badge badge-ok">Bizdan</span>
-        {% elif r.kind == "out" %}<span class="badge badge-remit">Haydovchiga</span>
-        {% else %}<span class="hist hist--yuk">Yuk</span>{% endif %} {{ r.title }}
-      </td>
-      {% comment %}
-      A yuk moves no money of ours on its own — the driver's advance is its own row
-      below — so its Usul, Kirim and Chiqim cells are left empty rather than filled
-      with a zero that would read as a payment of nothing.
-      {% endcomment %}
-      <td>{% if r.kind != "yuk" %}{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}{% endif %}</td>
-      <td class="num amt-in">{% if r.kind == "in" %}<strong>+{% money r.amount r.amount_uzs r.currency %}</strong>{% endif %}</td>
-      <td class="num amt-out">{% if r.kind == "out" %}<strong>−{% money r.amount r.amount_uzs r.currency %}</strong>{% endif %}</td>
-      <td class="row-actions">
-        {% comment %}
-        A driver advance is edited on its own yuk, where the category and the kg it
-        prices live — editing it from here would be the same row wearing a different
-        hat, and one of the two screens would go stale.
-        {% endcomment %}
-        {% if r.kind == "in" %}
-        <a class="icon-action" href="{% url 'logist_payment_edit' r.obj.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-        <a class="icon-action danger" href="{% url 'logist_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-        {% elif r.kind == "out" %}
-        <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
-        {% else %}
-        <a class="icon-action" href="{% url 'shipment_detail' r.obj.pk %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
+
+  <div class="card" style="margin-bottom:0;">
+    <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <h2 style="margin:0;">Sarflangan pul</h2>
+      <span class="ledger-total amt-out">{% for currency, amount in logist.paid_by_currency %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "usd" %}</span>{% endfor %}</span>
+    </div>
+    <p class="field-hint" style="margin:2px 0 8px;">Haydovchilarga bergan avanslari — eng yangisi yuqorida.</p>
+    <div class="table-wrap">
+    <table class="ledger-table ledger-table--out">
+      <tr>
+        <th>Sana</th><th>Yuk</th><th>Usul</th><th class="num">Summa</th><th></th>
+      </tr>
+      {% for r in spent_page %}
+      <tr>
+        <td>{{ r.date|date:"d.m.Y" }}</td>
+        <td>{{ r.title }}</td>
+        <td>{% include "crm/_method_badge.html" with code=r.method_code label=r.method %}</td>
+        <td class="num amt-out"><strong>−{% money r.amount r.amount_uzs r.currency %}</strong></td>
+        <td class="row-actions">
+          {% comment %}
+          A driver advance is edited on its own yuk, where the turkum and the kg it
+          prices live — editing it from here would be the same row wearing a
+          different hat, and one of the two screens would go stale.
+          {% endcomment %}
+          <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="5" class="muted">Hali haydovchiga pul berilmagan.</td></tr>{% endfor %}
+    </table>
+    </div>
+    {% include "crm/_pagination.html" with page=spent_page label="avans" param="opage" %}
   </div>
-  {% include "crm/_pagination.html" with label="yozuv" %}
 </div>
-{% else %}
-<p class="muted">Hali hech qanday harakat yo'q.</p>
-{% endif %}
 
 {% endblock %}

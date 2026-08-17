@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date as _date, timedelta
 from decimal import Decimal
 
 from django.utils import timezone
@@ -130,8 +130,17 @@ def test_kassa_kirim_chiqim_ledgers_and_cash_hero(admin_client, db):
     resp = admin_client.get("/kassa/", {"from": "2026-07-11", "to": "2026-07-12"})
     assert resp.context["cash_total"] == Decimal("200.00")   # 500 - 200 - 100
     assert [p.amount for p in resp.context["income_page"]] == []      # 07-10 outside range
+    # The transport bill is written on 07-12 but PAID when the truck is unloaded, and
+    # this one landed on 07-16 — so it is not in a window that closes on the 12th. The
+    # hero above still counts it: the load HAS arrived, so that money really has gone.
     kinds = [(r["kind"], r["amount"]) for r in resp.context["outflow_page"]]
-    assert kinds == [("expense", Decimal("100.00")), ("supplier", Decimal("200.00"))]
+    assert kinds == [("supplier", Decimal("200.00"))]
+
+    # Widen to the day it landed and it files there, under the arrival date.
+    wider = admin_client.get("/kassa/", {"from": "2026-07-11", "to": "2026-07-16"})
+    rows = [(r["kind"], r["amount"], r["date"]) for r in wider.context["outflow_page"]]
+    assert rows == [("expense", Decimal("100.00"), _date(2026, 7, 16)),
+                    ("supplier", Decimal("200.00"), _date(2026, 7, 11))]
     html = resp.content.decode()
     assert "Kirim" in html and "Chiqim" in html and "Kassada" in html
 

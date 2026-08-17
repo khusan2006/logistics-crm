@@ -9,7 +9,7 @@ from django.utils import timezone
 from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
     CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
-    LogistPayment, Partner,
+    LogistPayment, OtherExpense, Partner,
     FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
@@ -2221,6 +2221,80 @@ class KapitalRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
 
 
 KapitalFormSet = split_payment_formset(Kapital, KapitalRowForm)
+
+
+class OtherExpenseTargetForm(forms.Form):
+    """The header of a boshqa chiqim: what it was for, and when.
+
+    The izoh lives HERE rather than on each row because it describes the payment, not
+    the way the money moved — one rent bill settled half naqd and half by transfer is
+    one "Avgust ijarasi", said once. It is the only description this row has (no
+    turkum, by request), which is why it is required where every other note in the
+    app is optional: a row saying "$400 left on the 9th" records nothing."""
+
+    note = forms.CharField(
+        label="Izoh", max_length=255,
+        widget=forms.TextInput(attrs={"placeholder": "Masalan: avgust ijarasi, ish haqi"}),
+        help_text="Nima uchun chiqdi — bu yagona izoh")
+    date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        no_future_date(self.fields["date"])
+
+
+class OtherExpenseRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
+                          MoneyEntryFormMixin, forms.ModelForm):
+    """One way a boshqa chiqim left the kassa. No izoh and no fee_bearer here: the
+    first is the header's (it describes the payment, not the movement) and the second
+    is answered once by `OtherExpense.default_fee_bearer` — money going out rides the
+    bank's cut on top, the way every other chiqim in the app does."""
+
+    float_currency = Currency.USD
+    field_order = ["amount", "currency", "method", "fee_percent", "exchange_rate"]
+
+    class Meta:
+        model = OtherExpense
+        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent"]
+        labels = {"amount": "Summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["exchange_rate"].help_text = "Faqat so'mda kiritilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def settled_against(self):
+        return self.float_currency
+
+
+OtherExpenseFormSet = split_payment_formset(OtherExpense, OtherExpenseRowForm)
+
+
+class OtherExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """One boshqa chiqim, reopened on its own — the edit twin of the pair above.
+
+    Built like `KapitalForm` and for the same reasons: no counterparty, no qarz to
+    overpay, nobody's balance to keep. It moves the till and stops there."""
+
+    #: The currency the kassa's own figure is anchored in — a dollar entry crosses
+    #: nothing, so the same JS hides the kurs box for it.
+    float_currency = Currency.USD
+
+    class Meta:
+        model = OtherExpense
+        fields = ["date", "note", "currency", "amount", "exchange_rate",
+                  "method", "fee_percent"]
+        widgets = {"date": date_widget()}
+        labels = {"amount": "Summa"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        no_future_date(self.fields["date"])
+        self.fields["exchange_rate"].help_text = "Faqat so'mda kiritilayotganda kerak"
+        self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
+
+    def settled_against(self):
+        return self.float_currency
 
 
 def payer_choices(category):

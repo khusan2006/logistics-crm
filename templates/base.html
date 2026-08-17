@@ -2298,8 +2298,8 @@
     // `page` is what a list pages on; the kassa's two ledgers page independently and
     // spell theirs `ipage`/`opage`. The legacy `date_from`/`date_to` pair goes too, or
     // a screen still carrying one would filter on the old window (see `_date_window`).
-    // `davr` goes too: it only ever says "hammasi, and I meant it" on the one screen
-    // that opens on bugun, and picking a real period answers that question already.
+    // `davr` goes too: it only ever says "hammasi, and I meant it" on the screens that
+    // open ON a period, and picking a real period answers that question already.
     function reset(u) {
       ['page', 'ipage', 'opage', 'date_from', 'date_to', 'davr'].forEach(function (k) {
         u.searchParams.delete(k);
@@ -2318,14 +2318,15 @@
     }
 
     // No period at all: the filter comes OFF rather than being set to some range that
-    // happens to cover everything so far. On a screen that OPENS on bugun there is no
-    // such thing as "off" — an empty querystring is the state it started in — so the
-    // choice is written down as ?davr=all instead (see crm/_daterange.html).
+    // happens to cover everything so far. On a screen that OPENS on a window — the
+    // kassa on bugun, the doska on this month — there is no such thing as "off": an
+    // empty querystring is the state it started in, so the choice is written down as
+    // ?davr=all instead (see crm/_daterange.html).
     function clearRange() {
       var u = reset(new URL(window.location.href));
       u.searchParams.delete('from');
       u.searchParams.delete('to');
-      if (root.getAttribute('data-opens-today')) { u.searchParams.set('davr', 'all'); }
+      if (root.getAttribute('data-opens-period')) { u.searchParams.set('davr', 'all'); }
       window.location.assign(u.toString());
     }
 

@@ -1,3 +1,4 @@
+from datetime import date as _date
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from django.conf import settings
@@ -2012,8 +2013,13 @@ def kassa_row_sets():
         # Signed by direction, so it joins the inflow side whichever way it went — a
         # ta'sischi taking money out is a negative kirim, not a fifth kind of chiqim.
         "kapital": list(Kapital.objects.all()),
-        "outgoing": [*SupplierPayment.objects.all(), *ShipmentExpense.objects.all(),
-                     *LogistPayment.objects.all(), *CustomsPayment.objects.all()],
+        # `select_related("shipment")` on the xarajatlar: `total_out` now asks each
+        # one whether its truck has landed (see `is_pending`), which without it is a
+        # query per expense on every screen that counts the till.
+        "outgoing": [*SupplierPayment.objects.all(),
+                     *ShipmentExpense.objects.select_related("shipment"),
+                     *LogistPayment.objects.all(), *CustomsPayment.objects.all(),
+                     *OtherExpense.objects.all()],
         # Its own side, deliberately neither of the other two: a konvertatsiya is not
         # money arriving or leaving, so nothing that counts kirim or chiqim may pick
         # it up. It only ever moves one heap into another.
@@ -2960,6 +2966,77 @@ class Kapital(CashEntry):
         return f"Kapital {self.get_kind_display().lower()} · {self.amount}$ ({self.date})"
 
 
+class OtherExpense(CashEntry):
+    """Money out of the kassa that belongs to no yuk, hamkor, logist or bojxonachi —
+    the "proche chiqim" of the business itself: ijara, ish haqi, kommunal, soliq,
+    whatever else the month brings.
+
+    Every other outflow in the app is tied to something and priced INTO something: a
+    SupplierPayment settles a kelishuv, a ShipmentExpense lands in a yuk's tannarx, a
+    LogistPayment funds a float. Money that runs the office is none of those, and
+    until this row existed it had nowhere to go — so it was either left out of the
+    kassa entirely, which made "Kassada" disagree with the safe, or hung off whatever
+    yuk happened to be open, which quietly inflated that load's tannarx and every
+    foyda computed from it. This row moves the till and stops there.
+
+    It is a peer of `Kapital`, not of `ShipmentExpense`: a cost with no cost object.
+    Deliberately NOT part of any foyda figure — "Sotuvdan foyda" is a gross margin
+    (sotuv less tannarx) and quietly netting the office rent into it would change
+    what that number has always meant on every screen it appears on.
+
+    No turkum by request: the izoh is the whole description, which is why it is the
+    one field that must be filled. A row saying only "$400 left on the 9th" is not a
+    record of anything, and a note is all that stands between this table and that."""
+
+    date = models.DateField("Sana", default=timezone.localdate)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    #: Required, unlike every other `note` in the app — see the class docstring.
+    note = models.CharField("Izoh", max_length=255,
+                            help_text="Nima uchun chiqdi — bu yagona izoh")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="other_expenses",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Boshqa chiqim"
+        verbose_name_plural = "Boshqa chiqimlar"
+
+    #: Money going out, like every other chiqim: the bank's cut rides on TOP, so the
+    #: payee receives the full figure and the till is short by the foiz as well.
+    default_fee_bearer = FeeBearer.COMPANY
+
+    #: What the row is FOR and when — stamped across a split entered in one go.
+    settlement_fields = ("date", "note")
+
+    @property
+    def total_out(self):
+        """What the till loses: the sum plus any bank foiz we absorbed. Same name and
+        same shape as the other four outflows, so `kassa_row_sets` can sum the lot
+        without asking which kind each row is."""
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def total_out_uzs(self):
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+    @property
+    def crosses_currency(self):
+        """Never: this row settles no qarz agreed in another currency, so its kurs was
+        inherited rather than chosen and printing it would tell the reader nothing.
+        Named so the daftar can ask every row the same question — see Kapital."""
+        return False
+
+    def __str__(self):
+        return f"Boshqa chiqim · {self.amount}$ ({self.date})"
+
+
 class Konvertatsiya(models.Model):
     """Money moving from one heap of the kassa into another — naqd so'm sold for naqd
     dollars, cash walked into the bank, a card balance drawn out over the counter.
@@ -3732,6 +3809,19 @@ class ShipmentExpense(CashEntry):
         CERT = "cert", "Sertifikat"
         OTHER = "other", "Boshqa"
 
+    #: The turkumlar the kassa settles when the truck is UNLOADED rather than on the
+    #: day the bill is written down.
+    #:
+    #: Transport and gruzchi are paid at the ombor gate — the driver is settled with
+    #: when he delivers and the loaders when they have carried it in. Booking them out
+    #: of the till the moment the row was entered showed money gone that was still in
+    #: the safe, sometimes for weeks while the load was on the road.
+    #:
+    #: Bojxona and deklarant deliberately stay immediate: they are paid AT the border,
+    #: long before the warehouse, so waiting for arrival would misstate the till in the
+    #: other direction and for longer.
+    ARRIVAL_CATEGORIES = frozenset({Category.TRANSPORT, Category.LOADER})
+
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE,
                                  related_name="expenses", verbose_name="Yuk")
     date = models.DateField("Sana", default=timezone.localdate)
@@ -3804,21 +3894,92 @@ class ShipmentExpense(CashEntry):
         return self.logist or self.customs_agent
 
     @property
+    def waits_for_arrival(self):
+        """True for a row the kassa settles at the ombor gate rather than on the day
+        it was written down — see `ARRIVAL_CATEGORIES`.
+
+        Only ever true of a kassa-funded row. One a logist or a bojxonachi paid left
+        the till when we funded THEM, which already happened and cannot be waited
+        for; `total_out` was zero for those long before this existed."""
+        return self.from_kassa and self.category in self.ARRIVAL_CATEGORIES
+
+    @property
+    def is_pending(self):
+        """Recorded and owed, but still in the till: the yuk has not landed yet.
+
+        Read off `shipment.arrived` rather than off the holat itself. The two say the
+        same thing — the date is set the moment a load is moved to the arrival holat
+        and cleared when it is moved back off one (see `shipment_set_status`) — and
+        this one carries the DAY as well, which is what `cash_date` needs."""
+        return self.waits_for_arrival and self.shipment.arrived is None
+
+    @property
+    def cash_date(self):
+        """The day the till actually loses this row — None while it is pending.
+
+        For a row that waits, the LATER of the two dates. A gruzchi bill written down
+        while the truck was still on the road is paid when it lands; one written down
+        a week after it landed is paid that day, because money cannot leave before
+        anybody has recorded that it is owed. That pair is what lets a xarajat be
+        entered at any point in a load's life and still reach the till honestly.
+
+        Everything else moves on the day it says it did.
+
+        Both sides go through `_as_day` before being compared: Django converts a
+        DateField only on save or refresh, so a row still in memory carries whatever
+        it was handed, and `"2026-07-28" > date(2026, 7, 20)` raises rather than
+        sorting. The importer, the seeders and any shell one-liner build rows exactly
+        that way — the same reason `expense_has_one_payer` is a DB constraint and not
+        only a clean().
+
+        `cash_date_expression()` is this same rule in SQL, for the screens that narrow
+        to a period; tests/test_expense_deferral.py pins the two equal row by row."""
+        written = _as_day(self.date)
+        if not self.waits_for_arrival:
+            return written
+        arrived = _as_day(self.shipment.arrived)
+        if arrived is None:
+            return None
+        return max(written, arrived)
+
+    @property
     def total_out(self):
         """What the kassa loses: the expense plus any bank foiz — and nothing at all
         when a holder paid it, because that money already left as the LogistPayment
-        or CustomsPayment that funded them.
+        or CustomsPayment that funded them, or while it is still pending, because a
+        transport bill on a truck that has not arrived has not been paid yet.
 
-        The landed cost deliberately keeps using `amount` either way: a transfer fee
-        is the cost of moving money, not of the goods, and who handed the cash over
-        does not change what the granula cost."""
-        if not self.from_kassa:
+        The landed cost deliberately keeps using `amount` either way, and so does
+        every other figure about what the goods COST. A tannarx is what the load is
+        worth to us, which is settled the moment the obligation exists — when the
+        cash happens to leave the safe changes the till, not the price of a kg. That
+        separation is why deferring this moved no cost figure anywhere in the app.
+
+        A transfer fee is likewise the cost of moving money, not of the goods, and
+        who handed the cash over does not change what the granula cost."""
+        if not self.from_kassa or self.is_pending:
             return Decimal("0")
         return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
 
     @property
     def total_out_uzs(self):
-        if not self.from_kassa:
+        if not self.from_kassa or self.is_pending:
+            return Decimal("0")
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+    @property
+    def pending_out(self):
+        """What this row WILL cost the till, while it is still waiting — zero once it
+        has gone. The twin of `total_out`: exactly one of the two is ever non-zero, so
+        "in the safe" and "already spent" can never double-count the same bill."""
+        if not self.is_pending:
+            return Decimal("0")
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def pending_out_uzs(self):
+        if not self.is_pending:
             return Decimal("0")
         fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
         return self.amount_uzs + fee
@@ -3832,6 +3993,66 @@ class ShipmentExpense(CashEntry):
 
     def __str__(self):
         return f"{self.get_category_display()}: {self.amount}$ (yuk #{self.shipment_id})"
+
+
+def _as_day(value):
+    """A DateField's value as a real date, whatever the instance is holding.
+
+    Django converts on save or refresh, not on assignment, so a row built in memory
+    still carries the string it was handed — and two of those cannot be compared with
+    a date. `cash_date` compares exactly that pair."""
+    return _date.fromisoformat(value) if isinstance(value, str) else value
+
+
+def cash_date_expression():
+    """`ShipmentExpense.cash_date` as SQL, for the screens that narrow xarajatlar to a
+    period — the kassa's window and the opening balance behind its waterfall.
+
+    Those filter thousands of rows in the database and cannot ask a Python property.
+    The property is the readable statement of the rule and this is the same rule in
+    the only other language it has to be said in; tests/test_expense_deferral.py pins
+    the two equal row by row, because two spellings of one rule is precisely the pair
+    that drifts apart.
+
+    Spelled as explicit When branches rather than with Greatest(): Postgres's GREATEST
+    ignores a NULL argument while SQLite's MAX() returns NULL if either side is, and
+    this project runs on both (SQLite in dev, Postgres in prod). A pending row would
+    then come back as its own date on one and as NULL on the other — the same query
+    giving two different tills depending on which machine ran it."""
+    waits = models.Q(logist__isnull=True, customs_agent__isnull=True,
+                     category__in=ShipmentExpense.ARRIVAL_CATEGORIES)
+    return models.Case(
+        # Somebody else funded it, or it is a turkum paid on the day it is written:
+        # the till moved when the row says it did.
+        models.When(~waits, then=models.F("date")),
+        # Waits, and the truck has not landed — no cash date at all yet.
+        models.When(shipment__arrived__isnull=True,
+                    then=models.Value(None, output_field=models.DateField())),
+        # Waits and has landed: the later of the two, spelled out rather than MAX()d.
+        models.When(shipment__arrived__gt=models.F("date"),
+                    then=models.F("shipment__arrived")),
+        default=models.F("date"),
+        output_field=models.DateField(),
+    )
+
+
+def pending_expenses_by_currency(expenses=None):
+    """[(currency, kutilayotgan)] — bills recorded against loads still on the road.
+
+    Money the business has committed and not yet handed over: the till still holds it,
+    so it is NOT a chiqim, and the kassa board would be lying by omission without it —
+    an operator reading "kassada 87 mln" needs to know that 40 of it is spoken for the
+    moment two trucks land. Read per currency like every other heap on that board.
+
+    `expenses` is a list a caller already has loaded; left out, this reads them, and
+    `select_related` because `is_pending` asks each row's yuk whether it has
+    arrived."""
+    if expenses is None:
+        expenses = ShipmentExpense.objects.select_related("shipment").all()
+    return _by_currency(
+        (expense.currency,
+         own_side(expense, expense.pending_out, expense.pending_out_uzs))
+        for expense in expenses)
 
 
 def latest_exchange_rate():

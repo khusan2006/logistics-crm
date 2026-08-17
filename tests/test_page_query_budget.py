@@ -56,12 +56,28 @@ def test_the_sotuvlar_list_does_not_query_per_sotuv(admin_client,
         assert admin_client.get("/sales/").status_code == 200
 
 
+#: The doska over EVERYTHING. It opens on this month now (`_dashboard_window`), and
+#: `_world` dates its sotuvlar into Iyul 2026 — so plain "/" walks nought sotuvlar and
+#: the Sotuvdan foyda path these budgets exist to guard is never entered at all. The
+#: page still answers 200 in 51 queries and the test still passes, which is precisely
+#: the way this file's docstring says the regression hid the first time. Asking for
+#: hammasi is what puts the rows back under the ceiling.
+DOSKA = "/?davr=all"
+
+
 def test_the_doska_does_not_query_per_lot(admin_client, django_assert_max_num_queries):
     """Ombordagi qoldiq reads what is left on every lot — kg sold off it and kg
     returned to it — and both of those are read through the sotuv's slices."""
     _world()
     with django_assert_max_num_queries(75):
-        assert admin_client.get("/").status_code == 200
+        assert admin_client.get(DOSKA).status_code == 200
+
+
+def test_the_doska_budget_is_measuring_the_sotuvlar_it_thinks_it_is(admin_client):
+    """The guard on the guard: a board reporting nought foyda is a board that never
+    walked a sotuv, and a ceiling held by an empty page is not a ceiling."""
+    _world()
+    assert admin_client.get(DOSKA).context["sales_profit_total"] > 0
 
 
 def test_the_budget_holds_as_the_table_grows(admin_client, django_assert_max_num_queries):
@@ -73,4 +89,4 @@ def test_the_budget_holds_as_the_table_grows(admin_client, django_assert_max_num
     with django_assert_max_num_queries(25):
         assert admin_client.get("/sales/").status_code == 200
     with django_assert_max_num_queries(75):
-        assert admin_client.get("/").status_code == 200
+        assert admin_client.get(DOSKA).status_code == 200

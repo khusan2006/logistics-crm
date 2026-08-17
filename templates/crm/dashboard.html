@@ -4,13 +4,42 @@
 {% block topbar_title %}Asosiy{% endblock %}
 {% block content %}
 
-<div class="kpi-grid">
+{% comment %}
+The board is read in two halves, and the split is the point.
+
+Above: what MOVED in a period — kg agreed, kg sent, kg landed, money paid out, foyda
+earned. Every one of those is a flow, so it only means anything once you say over what:
+"1 091 950 kg yuborilgan" since the book began is a number nobody is measured against,
+while "84 000 kg in Avgust" is the month being run. The ‹ davr › bar therefore sits ON
+this group's caption row rather than at the top of the page — it is the group's own
+control, and putting it here is what says which cards answer to it.
+
+Below: the standing figures — hamkor va mijoz qarzi, ombordagi qoldiq and the loads
+running late. Those are the state of things TODAY and read no window at all. Narrowing
+them would be asking a question with no answer: "hamkor qarzi in Iyul" is not a sum
+anybody is owed, and a qoldiq is what is on the floor now or it is nothing. The kassa
+draws the same line between its daftar and its till, for the same reason — see
+crm/kassa.html.
+{% endcomment %}
+<div class="listbar">
+  <div class="section-eyebrow">Davr natijalari</div>
+  {% include "crm/_daterange.html" %}
+</div>
+
+<div class="kpi-grid kpi-grid--flow">
   <div class="kpi kpi--blue">
     <div class="kpi-head">
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
       <span class="kpi-label">Kelishilgan kg</span>
     </div>
     <div class="kpi-value">{{ total_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+    {% comment %}
+    Each period card names the date that put it in this month, because five cards
+    counting five different days is exactly the thing a reader would otherwise assume
+    away — a truck can be in Yuborilgan under Iyul and in Omborga kelgan under Avgust,
+    and the two figures are meant to disagree.
+    {% endcomment %}
+    <div class="kpi-meta muted">kelishuv sanasi bo'yicha</div>
   </div>
 
   <div class="kpi kpi--gold">
@@ -19,6 +48,7 @@
       <span class="kpi-label">Yuborilgan kg</span>
     </div>
     <div class="kpi-value">{{ shipped_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+    <div class="kpi-meta muted">jo'natilgan sana bo'yicha</div>
   </div>
 
   <div class="kpi kpi--green">
@@ -27,57 +57,26 @@
       <span class="kpi-label">Omborga kelgan kg</span>
     </div>
     <div class="kpi-value">{{ arrived_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+    <div class="kpi-meta muted">yetib kelgan sana bo'yicha</div>
   </div>
 
   <div class="kpi kpi--blue">
     <div class="kpi-head">
       <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span>
-      <span class="kpi-label">Jami to'langan</span>
+      <span class="kpi-label">Hamkorga to'langan</span>
     </div>
     {% comment %}
     One figure per currency, never added — the same rule the kassa board follows.
     Summing both stored columns counted every dollar row a second time in so'm.
+
+    "Jami to'langan" was its name while it was every to'lov ever made. It is a month's
+    worth now, and "jami" on a figure that is one slice of the ledger reads as the
+    total it no longer is.
     {% endcomment %}
     {% for currency, amount in paid_split %}
     <div class="kpi-value">{% money_in amount currency %}</div>
     {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
-  </div>
-
-  <div class="kpi kpi--red">
-    <div class="kpi-head">
-      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
-      <span class="kpi-label">Hamkor qarzi</span>
-    </div>
-    {% for currency, amount in debt_split %}
-    <div class="kpi-value">{% money_in amount currency %}</div>
-    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
-    <div class="kpi-meta muted">barcha kelishuvlar bo'yicha</div>
-  </div>
-
-  <div class="kpi {% if overdue %}kpi--red{% else %}kpi--green{% endif %}">
-    <div class="kpi-head">
-      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
-      <span class="kpi-label">Kechikkan yuklar</span>
-    </div>
-    <div class="kpi-value">{{ overdue|length }}</div>
-  </div>
-
-  <div class="kpi kpi--green">
-    <div class="kpi-head">
-      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
-      <span class="kpi-label">Omborda qoldiq</span>
-    </div>
-    <div class="kpi-value">{{ stock_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
-  </div>
-
-  <div class="kpi kpi--red">
-    <div class="kpi-head">
-      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
-      <span class="kpi-label">Mijoz qarzi</span>
-    </div>
-    {% for currency, amount in customer_debt_split %}
-    <div class="kpi-value">{% money_in amount currency %}</div>
-    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
+    <div class="kpi-meta muted">to'lov sanasi bo'yicha</div>
   </div>
 
   <div class="kpi kpi--gold">
@@ -90,6 +89,48 @@
     and a tannarx blends a dollar mol with a so'm transport bill by design.
     {% endcomment %}
     <div class="kpi-value">{% money_both sales_profit_total sales_profit_total_uzs %}</div>
+    <div class="kpi-meta muted">sotuv sanasi bo'yicha</div>
+  </div>
+</div>
+
+<div class="section-eyebrow">Hozirgi holat</div>
+
+<div class="kpi-grid kpi-grid--standing">
+  <div class="kpi kpi--red">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>
+      <span class="kpi-label">Hamkor qarzi</span>
+    </div>
+    {% for currency, amount in debt_split %}
+    <div class="kpi-value">{% money_in amount currency %}</div>
+    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
+    <div class="kpi-meta muted">barcha kelishuvlar bo'yicha</div>
+  </div>
+
+  <div class="kpi kpi--red">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+      <span class="kpi-label">Mijoz qarzi</span>
+    </div>
+    {% for currency, amount in customer_debt_split %}
+    <div class="kpi-value">{% money_in amount currency %}</div>
+    {% empty %}<div class="kpi-value">{% money_in 0 "usd" %}</div>{% endfor %}
+  </div>
+
+  <div class="kpi kpi--green">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></span>
+      <span class="kpi-label">Omborda qoldiq</span>
+    </div>
+    <div class="kpi-value">{{ stock_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+  </div>
+
+  <div class="kpi {% if overdue %}kpi--red{% else %}kpi--green{% endif %}">
+    <div class="kpi-head">
+      <span class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+      <span class="kpi-label">Kechikkan yuklar</span>
+    </div>
+    <div class="kpi-value">{{ overdue|length }}</div>
   </div>
 </div>
 

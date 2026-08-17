@@ -55,7 +55,15 @@ def _side(split, currency=Currency.USD):
 # --- helpers ---------------------------------------------------------------
 
 def _dash(client):
-    resp = client.get("/")
+    """The board over EVERYTHING, which is what every figure below is rebuilt against.
+
+    `?davr=all` because the doska now opens on this month (see `_dashboard_window`):
+    its five flow KPIs — kelishilgan / yuborilgan / kelgan kg, hamkorga to'langan and
+    foyda — are a slice of the chosen period, and this file's fixtures deliberately
+    date themselves into Iyul 2026 and earlier. Asking for the month would be checking
+    an all-time sum against a one-month figure. The window itself is pinned in
+    tests/test_dashboard.py; here the question is whether the arithmetic adds up."""
+    resp = client.get("/?davr=all")
     assert resp.status_code == 200
     return resp
 

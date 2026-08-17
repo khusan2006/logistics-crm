@@ -201,35 +201,74 @@ class TestLogistScreens:
         assert names("/logists/?state=holding") == ["Ushlab turgan"]
         assert names("/logists/?state=owed") == ["Qarzdor"]
 
-    def test_detail_lists_money_and_yuklar_newest_first(self, admin_client, db):
-        """One timeline: what we sent, what they handed a driver, and the loads they
-        arranged. An advance three days after a truck was given to them only reads
-        as one story when the two sit next to each other."""
-        logist = _logist()
-        shipment = _shipment(logist)                       # jo'natilgan 2026-07-05
-        _send(logist, "10000", date="2026-07-01")          # avval pul yubordik
-        _advance(shipment, logist, "500", date="2026-07-08")   # keyin haydovchiga berdi
-        rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
-        assert [r["kind"] for r in rows] == ["out", "yuk", "in"]
-        assert [r["date"] for r in rows] == [
-            _date(2026, 7, 8), _date(2026, 7, 5), _date(2026, 7, 1)]
-        assert rows[0]["amount"] == Decimal("500.00")
+    def test_the_two_daftar_are_kept_apart_each_newest_first(self, admin_client, db):
+        """Yuborilgan pul and Sarflangan pul are two lists, not two columns of one.
 
-    def test_a_yuk_row_carries_no_money_of_its_own(self, admin_client, db):
-        """The driver's advance is its own row; the load itself moves nothing, so a
-        zero in Kirim or Chiqim would read as a payment of nothing."""
+        They were one timeline ordered by date, which reads as a bank statement — and
+        answering either question it holds ("have we funded them enough", "what has
+        that money bought") meant reading past every row belonging to the other, on a
+        line where one of the two money columns was blank by construction."""
         logist = _logist()
-        _shipment(logist)
-        rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
-        assert [r["kind"] for r in rows] == ["yuk"]
-        assert "amount" not in rows[0]
-        assert "method_code" not in rows[0]
+        shipment = _shipment(logist)
+        _send(logist, "10000", date="2026-07-01")
+        _send(logist, "4000", date="2026-07-09")
+        _advance(shipment, logist, "500", date="2026-07-08")
+
+        ctx = admin_client.get(f"/logists/{logist.pk}/").context
+        sent, spent = list(ctx["sent_page"]), list(ctx["spent_page"])
+        assert [r["date"] for r in sent] == [_date(2026, 7, 9), _date(2026, 7, 1)]
+        assert [r["amount"] for r in sent] == [Decimal("4000.00"), Decimal("10000.00")]
+        assert [r["date"] for r in spent] == [_date(2026, 7, 8)]
+        assert [r["amount"] for r in spent] == [Decimal("500.00")]
+
+    def test_neither_daftar_carries_the_other_side_s_rows(self, admin_client, db):
+        """The whole point of the split: nothing appears on both, and nothing that
+        moved money is missing from both."""
+        logist = _logist()
+        shipment = _shipment(logist)
+        payment = _send(logist, "10000", date="2026-07-01")
+        advance = _advance(shipment, logist, "500", date="2026-07-08")
+
+        ctx = admin_client.get(f"/logists/{logist.pk}/").context
+        assert [r["obj"].pk for r in ctx["sent_page"]] == [payment.pk]
+        assert [r["obj"].pk for r in ctx["spent_page"]] == [advance.pk]
+
+    def test_a_load_with_no_advance_yet_is_still_on_the_page(self, admin_client, db):
+        """A yuk moves no money of ours on its own, so it is no longer a row on a
+        money daftar — a zero summa would read as a payment of nothing. It belongs to
+        Qaysi yuklarga, which now seeds from every load assigned to them so the one
+        still WAITING for an advance is not the single load missing from the page."""
+        logist = _logist()
+        shipment = _shipment(logist)
+
+        ctx = admin_client.get(f"/logists/{logist.pk}/").context
+        assert list(ctx["sent_page"]) == [] and list(ctx["spent_page"]) == []
+        assert [r["shipment"].pk for r in ctx["loads"]] == [shipment.pk]
+        # Nothing paid on it yet, and the table says so rather than printing a zero.
+        assert ctx["loads"][0]["paid"] == []
+        assert "hali yo'q" in admin_client.get(f"/logists/{logist.pk}/").content.decode()
 
     def test_a_logist_with_no_loads_still_shows_only_their_money(self, admin_client, db):
         logist = _logist()
-        _send(logist, "10000", date="2026-07-01")
-        rows = list(admin_client.get(f"/logists/{logist.pk}/").context["page"])
-        assert [r["kind"] for r in rows] == ["in"]
+        payment = _send(logist, "10000", date="2026-07-01")
+        ctx = admin_client.get(f"/logists/{logist.pk}/").context
+        assert [r["obj"].pk for r in ctx["sent_page"]] == [payment.pk]
+        assert list(ctx["spent_page"]) == [] and ctx["loads"] == []
+
+    def test_each_daftar_pages_on_its_own(self, admin_client, db):
+        """?ipage and ?opage, the two names the kassa's pair use: paging the to'lovlar
+        must not scroll the advances out from under the reader."""
+        logist = _logist()
+        shipment = _shipment(logist)
+        for i in range(25):
+            _send(logist, "100", date=f"2026-07-{i % 28 + 1:02d}")
+        _advance(shipment, logist, "500", date="2026-07-08")
+
+        ctx = admin_client.get(f"/logists/{logist.pk}/", {"ipage": 2}).context
+        assert ctx["sent_page"].number == 2 and len(ctx["sent_page"].object_list) == 5
+        # The other daftar stayed where it was.
+        assert ctx["spent_page"].number == 1
+        assert [r["amount"] for r in ctx["spent_page"]] == [Decimal("500.00")]
 
     def test_the_money_they_are_holding_is_read_on_their_own_screen(self, admin_client, db):
         logist = _logist()
