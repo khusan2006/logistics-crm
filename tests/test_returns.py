@@ -11,13 +11,24 @@ from conftest import payment_rows, return_rows
 
 from crm.models import (
     AuditLog, Contract, ContractLine, Currency, Customer, Partner, PaymentAllocation,
-    Return, ReturnBatch, ReturnSettlement, Sale, Shipment, ShipmentExpense,
-    ShipmentLine, ShipmentStatus, kassa_cash_by_currency, pending_refunds,
+    RefundAllocation, Return, ReturnBatch, ReturnSettlement, Sale, Shipment,
+    ShipmentExpense,
+    ShipmentLine, ShipmentStatus, kassa_cash_by_currency, kassa_cash_by_method,
+    pending_refunds,
 )
+from crm.templatetags.crm_extras import usd
 
 
 def _customer(name="Alisher Mebel"):
     return Customer.objects.create(name=name, phone="1", address="Toshkent")
+
+
+def _pay(settlement, amount=None, date="2026-07-25", method=None):
+    """POST payload for the "To'lash" modal. The summa defaults to the whole promise,
+    which is what the form itself fills in — a test only spells out a part when the
+    part is the point."""
+    return {"amount": str(amount if amount is not None else settlement.amount_own),
+            "method": method or settlement.method, "date": date}
 
 
 def _lot(kg="10000", brand="LLDPE", contract_price="1.00", expense="2000.00"):
@@ -243,7 +254,8 @@ def test_paying_a_promised_refund_moves_the_kassa(admin_client, db):
     settlement = ReturnSettlement.objects.get()
     cash_before = dict(kassa_cash_by_currency())[Currency.USD]
 
-    resp = admin_client.post(f"/return-settlements/{settlement.pk}/pay/")
+    resp = admin_client.post(f"/return-settlements/{settlement.pk}/pay/",
+                             _pay(settlement))
     assert resp.status_code == 302
 
     settlement.refresh_from_db()
@@ -265,7 +277,8 @@ def test_a_settled_refund_cannot_be_paid_twice(admin_client, db):
         (sale, "1000"), customer=customer, date="2026-07-19", settle="cash"))
     settlement = ReturnSettlement.objects.get()
 
-    assert admin_client.post(f"/return-settlements/{settlement.pk}/pay/").status_code == 404
+    assert admin_client.post(f"/return-settlements/{settlement.pk}/pay/",
+                             _pay(settlement)).status_code == 404
 
 
 # ── bitta vazvratda bir nechta sotuv, ikkita valyuta ───────────────────────────
@@ -618,6 +631,125 @@ def test_a_settle_choice_posted_by_a_customer_who_cannot_overpay_changes_nothing
     assert not pending_refunds()
 
 
+# ── har bir yo'l faqat o'zi so'ragan narsani ko'rsatadi ──────────────────────
+
+def _route_tag(html, marker):
+    """The opening tag `_return_rows.html` drew for one route's field or note."""
+    at = html.index(marker)
+    return html[html.rindex("<", 0, at):html.index(">", at) + 1]
+
+
+def _route_text(html, marker):
+    """What that element says, figures and all."""
+    at = html.index(marker)
+    return html[at:html.index("</span>", at)]
+
+
+def test_the_modal_opens_folded_on_the_avans_route(admin_client, db):
+    """Avans is the initial answer, and it needs neither a usul nor a day: money that
+    stays in the pool leaves the till by no route and on no date. Both are SERVED
+    hidden — folding them with script after paint would flash all three answers'
+    fields on every open."""
+    lot = _lot()
+    customer = _customer()
+    _paid_sale(admin_client, lot, customer)
+
+    html = admin_client.get(f"/returns/new/?customer={customer.pk}").content.decode()
+    assert "hidden" in _route_tag(html, 'data-settle-for="cash owed"')   # To'lov usuli
+    assert "hidden" in _route_tag(html, 'data-settle-for="owed"')        # qaysi kuni
+    assert "hidden" not in _route_tag(html, 'data-settle-for="advance"')
+
+
+def test_the_promise_route_is_the_only_one_asked_for_a_day(admin_client, db):
+    """A re-render after a rejected POST comes back on the route the operator chose,
+    not on the initial — otherwise the day they were being asked for folds away
+    under the error telling them to fill it in."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+
+    resp = admin_client.post("/returns/new/", return_rows(
+        (sale, "1000"), customer=customer, date="2026-07-19",
+        settle="owed", due_date=""))                    # a promise with no day
+    html = resp.content.decode()
+    assert "hidden" not in _route_tag(html, 'data-settle-for="owed"')
+    assert "hidden" not in _route_tag(html, 'data-settle-for="cash owed"')
+    assert "hidden" in _route_tag(html, 'data-settle-for="advance"')
+
+
+def test_the_avans_route_names_the_heap_the_money_joins(admin_client, db):
+    """A mijoz already holding credit is being topped up, and the note says by how
+    much they are already up — the figure is on Qarzlar, which is not the screen the
+    operator is on."""
+    lot = _lot()
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")
+    admin_client.post("/customer-payments/new/", payment_rows(
+        {"amount": "7000.00"}, customer=customer, date="2026-07-18"))
+    assert sale.total == Decimal("6400.00")             # …so $600 is left over
+
+    html = admin_client.get(f"/returns/new/?customer={customer.pk}").content.decode()
+    assert "$600" in _route_text(html, 'data-settle-for="advance"')
+
+
+def test_a_customer_with_no_avans_is_told_so(admin_client, db):
+    lot = _lot()
+    customer = _customer()
+    _paid_sale(admin_client, lot, customer)
+
+    html = admin_client.get(f"/returns/new/?customer={customer.pk}").content.decode()
+    note = _route_text(html, 'data-settle-for="advance"')
+    assert "avansida pul yo'q" in note
+
+
+def test_the_cash_route_names_what_is_in_the_heap_it_empties(admin_client, db):
+    """Handing money back empties ONE of the three heaps, and which one is what the
+    operator is choosing a line above — so that heap's qoldiq is printed beside the
+    choice, and only that heap's."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+
+    resp = admin_client.post("/returns/new/", return_rows(
+        (sale, "999999"), customer=customer, date="2026-07-19",   # over the ceiling
+        settle="cash", method="card"))
+    html = resp.content.decode()
+    karta = dict(next(m for m in kassa_cash_by_method()
+                      if m["code"] == "card")["split_full"])
+    assert usd(karta[Currency.USD]) in _route_text(html, 'data-settle-method="card"')
+    assert "hidden" not in _route_tag(html, 'data-settle-method="card"')
+    assert "hidden" in _route_tag(html, 'data-settle-method="cash"')
+    assert "hidden" in _route_tag(html, 'data-settle-method="transfer"')
+
+
+def test_the_heaps_are_not_shown_where_no_money_is_leaving(admin_client, db):
+    """The till figure belongs to the cash route alone. A promise moves nothing today
+    and an avans moves nothing at all, so quoting the till under either would be
+    answering a question neither asks."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+
+    resp = admin_client.post("/returns/new/", return_rows(
+        (sale, "999999"), customer=customer, date="2026-07-19",
+        settle="owed", due_date="2026-07-25"))
+    html = resp.content.decode()
+    for code in ("cash", "card", "transfer"):
+        assert "hidden" in _route_tag(html, f'data-settle-method="{code}"')
+
+
+def test_a_customer_who_cannot_overpay_is_asked_none_of_it(admin_client, db):
+    """The whole block goes with the question: no routes, no heaps, no till figures
+    on a screen where no money can move."""
+    lot = _lot()
+    customer = _customer()
+    _sale(admin_client, lot, customer, kg="4000", price="1.60")      # unpaid
+
+    html = admin_client.get(f"/returns/new/?customer={customer.pk}").content.decode()
+    assert 'data-settle-for="advance"' not in html
+    assert 'data-settle-method="cash"' not in html
+
+
 # ── sotuvlar ro'yxati qaytgan kg ni ko'rsatadi ────────────────────────────────
 
 def test_the_sales_list_shows_what_came_back(admin_client, db):
@@ -898,7 +1030,9 @@ def test_a_cash_refund_appears_in_the_kassa_ledger(admin_client, db):
 
     html = admin_client.get("/kassa/?davr=all").content.decode().replace(" ", " ")
     assert "Doran pochcha" in html
-    assert "Vazvrat ·" in html                        # named for what it was
+    # Badged for what it was, in the blue every vazvrat figure wears — the title
+    # beside it is free to say only WHOSE money went back.
+    assert '<span class="badge badge-info">Vazvrat</span>' in html
 
 
 def test_a_promised_refund_stays_out_of_the_ledger(admin_client, db):
@@ -935,7 +1069,7 @@ def test_changed_today_finds_an_old_sale(admin_client, db):
     shown = {s.pk for g in resp.context["groups"] for s in g["sales"]}
     assert shown == {old.pk}                          # only what moved today
     assert resp.context["changed_count"] == 1
-    assert "Bugun o'zgargan" in resp.content.decode()
+    assert "Yangilanganlar" in resp.content.decode()
 
     # Unfiltered, both are there — the toggle narrows, it does not reorder.
     everything = {s.pk for g in admin_client.get("/sales/").context["groups"]
@@ -974,3 +1108,167 @@ def test_the_chip_names_where_the_money_went(admin_client, db):
     assert "mijoz avansiga o&#x27;tdi" in html
     assert "kassadan qaytarildi" in html              # already handed over
     assert "kassadan qaytariladi" in html             # promised for a later day
+
+
+# ── biz qarzdormiz: qismli to'lov, tahrir, avansga o'tkazish ──────────────────
+#
+# A promise is not always kept in one go, on the day we said, in the form we said.
+# Until these three existed the only way to correct any of that was to undo the whole
+# vazvrat and enter it again — which rewrites history to move a date.
+
+def _promised(admin_client, customer, sale, kg="1000", due="2026-07-25"):
+    admin_client.post("/returns/new/", return_rows(
+        (sale, kg), customer=customer, date="2026-07-19",
+        settle="owed", due_date=due))
+    return ReturnSettlement.objects.get()
+
+
+def test_a_promise_can_be_paid_in_part(admin_client, db):
+    """The kassa does not always hold the whole promise on the day it falls due.
+    Paying some of it leaves the rest standing as the promise it already was."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)      # $1 600
+    cash_before = dict(kassa_cash_by_currency())[Currency.USD]
+
+    resp = admin_client.post(f"/return-settlements/{settlement.pk}/pay/",
+                             _pay(settlement, amount="600"))
+    assert resp.status_code == 302
+
+    settlement.refresh_from_db()
+    assert settlement.amount == Decimal("1000.00")            # …the remainder
+    assert settlement.is_pending
+    assert settlement.due_date.isoformat() == "2026-07-25"    # the day did not move
+    paid = ReturnSettlement.objects.exclude(pk=settlement.pk).get()
+    assert paid.amount == Decimal("600.00") and paid.paid_date is not None
+    # Only the part that actually went out left the kassa.
+    assert dict(kassa_cash_by_currency())[Currency.USD] == cash_before - Decimal("600.00")
+    assert [s.amount for s in pending_refunds()] == [Decimal("1000.00")]
+
+
+def test_the_two_halves_of_a_split_promise_add_back_up(admin_client, db):
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+    whole, whole_uzs = settlement.amount, settlement.amount_uzs
+
+    admin_client.post(f"/return-settlements/{settlement.pk}/pay/",
+                      _pay(settlement, amount="333.33"))
+
+    settlement.refresh_from_db()
+    paid = ReturnSettlement.objects.exclude(pk=settlement.pk).get()
+    assert paid.amount + settlement.amount == whole
+    assert paid.amount_uzs + settlement.amount_uzs == whole_uzs
+
+
+def test_paying_the_whole_promise_writes_no_second_row(admin_client, db):
+    """The row WAS the promise; paying it in full is a date on that row, not a new
+    one beside it — two rows would count the same money twice."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+
+    admin_client.post(f"/return-settlements/{settlement.pk}/pay/", _pay(settlement))
+
+    assert ReturnSettlement.objects.count() == 1
+    settlement.refresh_from_db()
+    assert settlement.paid_date.isoformat() == "2026-07-25"
+
+
+def test_a_promise_cannot_be_overpaid(admin_client, db):
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+
+    resp = admin_client.post(f"/return-settlements/{settlement.pk}/pay/",
+                             _pay(settlement, amount="99999"))
+    assert resp.status_code == 200                            # re-rendered, not saved
+    settlement.refresh_from_db()
+    assert settlement.is_pending
+    assert ReturnSettlement.objects.count() == 1
+
+
+def test_the_day_of_a_promise_can_be_moved(admin_client, db):
+    """We said Friday, the money is not there, the mijoz agrees to Monday. Moving the
+    day is not the same as forgetting it."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+
+    resp = admin_client.post(f"/return-settlements/{settlement.pk}/edit/",
+                             {"method": "card", "due_date": "2026-08-30"})
+    assert resp.status_code == 302
+
+    settlement.refresh_from_db()
+    assert settlement.due_date.isoformat() == "2026-08-30"
+    assert settlement.method == "card"
+    assert settlement.amount == Decimal("1600.00")            # the summa is not typed
+    assert settlement.is_pending                              # still owed
+
+
+def test_a_promise_can_become_the_customers_advance(admin_client, db):
+    """The mijoz agrees to leave it against their next sotuv. Nothing leaves the
+    kassa and the promise stops existing — which is the same state the avans route
+    writes, because leaving the money in the pool IS that route."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+    cash_before = dict(kassa_cash_by_currency())[Currency.USD]
+
+    resp = admin_client.post(f"/return-settlements/{settlement.pk}/to-advance/")
+    assert resp.status_code == 302
+
+    assert not ReturnSettlement.objects.exists()
+    assert not RefundAllocation.objects.exists()              # back in the pool
+    assert not pending_refunds()
+    assert dict(kassa_cash_by_currency())[Currency.USD] == cash_before
+    # …and the money is theirs to spend again: a mijoz holding credit reads as a
+    # negative balance, the same way the avans route leaves them.
+    customer.refresh_from_db()
+    assert customer.balance == Decimal("-1600.00")
+
+
+def test_an_advance_from_a_moved_promise_pays_the_next_sale(admin_client, db):
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+    admin_client.post(f"/return-settlements/{settlement.pk}/to-advance/")
+
+    later = _sale(admin_client, lot, customer, kg="1000", price="1.60",
+                  date="2026-07-30")
+    later.refresh_from_db()
+    assert later.remaining == Decimal("0.00")                 # paid out of the avans
+
+
+def test_a_settled_promise_offers_none_of_the_three(admin_client, db):
+    """Money that has gone is not a promise any more: it cannot be paid again, moved
+    to another day, or turned into credit."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+    admin_client.post(f"/return-settlements/{settlement.pk}/pay/", _pay(settlement))
+
+    for action in ("pay", "edit", "to-advance"):
+        assert admin_client.get(
+            f"/return-settlements/{settlement.pk}/{action}/").status_code == 404
+
+
+def test_the_owed_table_offers_all_three(admin_client, db):
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    settlement = _promised(admin_client, customer, sale)
+
+    html = admin_client.get("/returns/").content.decode()
+    assert f"/return-settlements/{settlement.pk}/pay/" in html
+    assert f"/return-settlements/{settlement.pk}/edit/" in html
+    assert f"/return-settlements/{settlement.pk}/to-advance/" in html
+    assert "To'lashimiz kerak bo'lgan sana" in html

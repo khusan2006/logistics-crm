@@ -17,21 +17,32 @@
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
     {% if changed %}<input type="hidden" name="changed" value="{{ changed }}">{% endif %}
+    {% if new %}<input type="hidden" name="new" value="{{ new }}">{% endif %}
   </form>
   {% comment %}
-  A vazvrat changes a sotuv from OUTSIDE it, and this list is ordered by the SOTUV's
-  date — so correcting a sotuv from three weeks ago moves a row pages away from where
-  the operator is standing, and the change is invisible on the screen it changed. The
-  toggle is the way back to it; it clears itself when pressed while on, like the QR
-  toggles on Yuklar.
+  The day's two questions, as two lenses over a list that is ordered by the SOTUV's
+  own sana and therefore answers neither on its own.
+
+  Yangilanganlar (blue) — a vazvrat, an edit or an undone vazvrat touched this sotuv
+  today. Correcting a sotuv from three weeks ago moves a row pages away from where
+  the operator is standing, so without this the change is invisible on the screen it
+  changed. Yangi sotuvlar (green) — entered today, whatever sana was typed on it.
+
+  Blue for moved, green for new, the same two colours the row chips carry, so the
+  toggle and the rows it finds read as one thing. Each clears itself when pressed
+  while on, and turns the other off: they are two ways of looking, not two filters
+  to combine — "changed today AND new today" is a question nobody asks.
   {% endcomment %}
-  {% if changed_count or changed %}
-  <a class="btn btn-sm {% if changed %}{% else %}btn-ghost{% endif %}"
-     href="{% if changed %}{% querystring changed=None page=None %}{% else %}{% querystring changed='today' page=None %}{% endif %}"
-     title="Bugun vazvrat tegib o'tgan sotuvlar">
-    Bugun o'zgargan{% if changed_count %} ({{ changed_count }}){% endif %}
+  <a class="btn btn-sm btn-blue{% if changed %} is-on{% endif %}"
+     href="{% if changed %}{% querystring changed=None page=None %}{% else %}{% querystring changed='today' new=None page=None %}{% endif %}"
+     title="Bugun vazvrat, tahrir yoki bekor qilish tegib o'tgan sotuvlar">
+    Yangilanganlar{% if changed_count %} ({{ changed_count }}){% endif %}
   </a>
-  {% endif %}
+  <a class="btn btn-sm btn-green{% if new %} is-on{% endif %}"
+     href="{% if new %}{% querystring new=None page=None %}{% else %}{% querystring new='today' changed=None page=None %}{% endif %}"
+     title="Bugun kiritilgan sotuvlar">
+    Yangi sotuvlar{% if new_count %} ({{ new_count }}){% endif %}
+  </a>
   {% include "crm/_daterange.html" %}
 </div>
 
@@ -87,11 +98,17 @@
     <td>
       {% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}
       {% comment %}
-      Only on the day of the change: a marker that never goes away marks nothing.
-      The title says WHAT moved, so the chip is a pointer rather than a puzzle.
+      Only on the day itself: a marker that never goes away marks nothing. Blue for a
+      sotuv that MOVED today — vazvrat, tahrir, bekor qilish — with the title naming
+      what moved, so the chip is a pointer rather than a puzzle; green for one that is
+      new today. A row can wear both: entered this morning and corrected after lunch.
+      The colours are the toggles' own, above.
       {% endcomment %}
-      {% if g.changed_today %}
-      <div><span class="badge badge-ok" title="{{ g.changed_today|join:' · ' }}">yangilandi</span></div>
+      {% if g.changed_today or g.new_today %}
+      <div>
+        {% if g.new_today %}<span class="badge badge-ok" title="Bugun kiritilgan sotuv">yangi</span>{% endif %}
+        {% if g.changed_today %}<span class="badge badge-info" title="{{ g.changed_today|join:' · ' }}">yangilandi</span>{% endif %}
+      </div>
       {% endif %}
     </td>
     <td>{% for s in g.sales %}<div class="cell-line">#{{ s.line.shipment_id }} · {{ s.line.brand }}</div>{% endfor %}</td>

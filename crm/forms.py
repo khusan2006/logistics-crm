@@ -1784,10 +1784,21 @@ class ReturnBatchForm(forms.ModelForm):
     #: and it is only asked at all when money can actually come back.
     settlement_fields = ("settle", "method", "due_date")
 
+    #: Which of the three answers each field belongs to. The routes do not ask for
+    #: the same things: money left in the avans leaves the till by no usul and on no
+    #: day, cash handed over needs the heap it comes out of, and a promise needs the
+    #: day it is promised for — the day IS the promise. A field named for no route
+    #: here is always shown. Read by `_return_rows.html`, which hides the rest.
+    settle_routes = {"method": [SETTLE_CASH, SETTLE_OWED], "due_date": [SETTLE_OWED]}
+
     class Meta:
         model = ReturnBatch
         fields = ["customer", "date", "note"]
         widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
+        # Named on the form rather than on the model: a bare "Sana" on a modal that
+        # also lists four sotuv sanasi and asks for a refund day is the one date on
+        # the screen that does not say which date it is.
+        labels = {"date": "Vazvrat sanasi"}
 
     @staticmethod
     def returnable_value_by_currency(customer):
@@ -1939,12 +1950,29 @@ class ReturnBatchForm(forms.ModelForm):
 
 
 def _customer_payer_field(field):
-    """Point a mijoz select at the balance-annotated options.
+    """Point a mijoz select at the balance-annotated options, and make it searchable.
 
     balance walks sotuvlar (minus qaytarishlar) and past to'lovlar in Python, so the
-    rows every option needs are fetched once rather than per mijoz."""
+    rows every option needs are fetched once rather than per mijoz.
+
+    `data-combobox` for the same reason the sotuv picker carries it: the list runs to
+    hundreds of names and a native select can only be SCROLLED, so every screen that
+    starts by picking a mijoz started with a hunt down an alphabetical wall. Typing
+    filters; typing nothing still drops the whole list, so it is the select it always
+    was for anybody who would rather look than type.
+
+    No quick-add here, unlike the sotuv picker: a mijoz who has never bought anything
+    has nothing to pay for and nothing to bring back, so a "yangi mijoz" button on
+    these three forms would only ever create a dead row."""
     field.queryset = Customer.objects.prefetch_related("sales__returns", "customer_payments")
     field.label_from_instance = customer_option_label
+    field.widget.attrs.setdefault("data-combobox", "")
+    field.widget.attrs.setdefault("data-placeholder", "Mijozni tanlang")
+    # "" and not None, for the reason spelled out in `_customer_phone_field`: None
+    # DELETES the empty row and books the form against whoever sorts first. Blank
+    # keeps it and the picker skips a label-less option, so the box reads as its
+    # placeholder rather than as a row of dashes.
+    field.empty_label = ""
 
 
 #: The "which qarz" picker. Its VALUE is the currency being settled, so the modal's
@@ -3319,3 +3347,69 @@ def customs_shipment_option_label(shipment):
     sent = " · ".join(_unit(currency, amount)
                       for currency, amount in shipment.customs_sent_by_currency())
     return f"{label} · {sent} yuborilgan" if sent else label
+
+
+class ReturnSettlementPayForm(forms.Form):
+    """Handing a mijoz back money we promised them on a vazvrat.
+
+    Asks for a SUMMA rather than just confirming, because the kassa does not always
+    hold the whole promise on the day it falls due. Paying part of it leaves the rest
+    standing as the promise it already was — same due date, same mijoz — so a debt
+    that is being worked off never quietly disappears from "Biz qarzdormiz".
+
+    The figure is in the vazvrat's own valyuta and nothing else: the promise was
+    struck when the goods came back, and paying a so'm promise in dollars at today's
+    kurs hands over a sum nobody agreed to."""
+
+    amount = forms.DecimalField(label="To'lanadigan summa", max_digits=18,
+                                decimal_places=2, min_value=Decimal("0.01"))
+    method = forms.ChoiceField(label="To'lov usuli", choices=PayMethod.choices)
+    date = forms.DateField(label="To'langan sana", widget=date_widget(),
+                           initial=timezone.localdate)
+
+    def __init__(self, *args, settlement=None, **kwargs):
+        self.settlement = settlement
+        super().__init__(*args, **kwargs)
+        _group_thousands(self.fields["amount"])
+        no_future_date(self.fields["date"])
+        if settlement is not None:
+            self.fields["amount"].initial = settlement.amount_own
+            self.fields["method"].initial = settlement.method
+            self.fields["amount"].widget.attrs["data-suffix"] = currency_suffix(
+                settlement.currency)
+
+    def clean_amount(self):
+        amount = self.cleaned_data["amount"]
+        owed = self.settlement.amount_own
+        if amount > owed:
+            raise forms.ValidationError(
+                f"Bu vazvratdan qolgani {som(owed) if self.settlement.currency == Currency.UZS else usd(owed)}"
+                f" — undan ko'p qaytarib bo'lmaydi.")
+        return amount
+
+    @property
+    def is_full(self):
+        """Whether this pays the promise off entirely — the case that needs no new
+        row, only a date on the one that is already there."""
+        return self.cleaned_data["amount"] >= self.settlement.amount_own
+
+
+class ReturnSettlementEditForm(forms.ModelForm):
+    """Correcting a promise we have not kept yet: how it will be paid, and when.
+
+    The SUMMA is not here on purpose. It is what the vazvrat worked out when the
+    goods came back, and letting it be typed over would let "Biz qarzdormiz"
+    disagree with the vazvrat it came from — pay less than the whole thing instead,
+    which leaves an honest remainder, or undo the vazvrat and enter it again."""
+
+    class Meta:
+        model = ReturnSettlement
+        fields = ["method", "due_date"]
+        labels = {"due_date": "To'lashimiz kerak bo'lgan sana"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["due_date"].widget = date_widget()
+        self.fields["due_date"].required = True
+        self.fields["due_date"].help_text = (
+            "Muddatga ulgurmasangiz shu yerdan keyingi kunga suring")

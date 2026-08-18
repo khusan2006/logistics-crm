@@ -39,6 +39,11 @@
   --danger-soft: #fbe0e0;
   --violet: #6d3bd4;
   --violet-soft: #ece3fb;
+  /* A day we promised somebody THEIR money back. Not the gold of a deadline we set
+     ourselves and not yet the red of one we have missed — its own colour, because
+     it is the one date on the page that is somebody else's claim on us. */
+  --pink: #c2185b;
+  --pink-soft: #fce4ec;
 
   /* Ink for text sitting ON a filled block of the colour beside it — the mashina
      count inside a progress bar. Both fills are dark enough here for white; the
@@ -104,6 +109,8 @@ html[data-theme="dark"] {
   --danger-soft: #321B1A;
   --violet: #b191f7;
   --violet-soft: #2b2440;
+  --pink: #f48fb1;
+  --pink-soft: #3a2230;
 
   /* The gold is a bright yellow here, not the olive of the light theme — white
      on it is barely there, so the ink flips to near-black. */
@@ -1095,6 +1102,12 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 .badge-toadvance { background: var(--violet-soft); color: var(--violet); }
 .badge-torefund { background: var(--danger-soft); color: var(--danger); }
 
+/* "Biz qarzdormiz": the money we have told a mijoz is theirs and have not handed
+   over. The sum is red because it is an obligation, not a figure to admire; the day
+   is pink while it is ahead of us and red once it is behind. */
+.amt-owed { color: var(--danger); font-weight: 600; }
+.badge-due { background: var(--pink-soft); color: var(--pink); }
+
 /* Signed money — income green, outflow red, sale (receivable) blue */
 .amt-in { color: var(--success); }
 .amt-out { color: var(--danger); }
@@ -1140,6 +1153,15 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 
 .btn-danger { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
 .btn-danger:hover { background: var(--danger); color: #fff; }
+
+/* Sotuvlar' two "what happened today" lenses. Coloured rather than ghost, because
+   the colour IS the meaning — blue for a sotuv that moved, green for one that is new
+   — and it is the same pair the row chips wear. Soft while off, filled solid while
+   on, so a glance at the bar says which lens the list is being read through. */
+.btn-blue { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.btn-blue:hover, .btn-blue.is-on { background: var(--accent); color: #fff; }
+.btn-green { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.btn-green:hover, .btn-green.is-on { background: var(--success); color: #fff; }
 
 .btn-violet { background: var(--violet); color: #fff; border-color: transparent; }
 .btn-violet:hover { background: color-mix(in srgb, var(--violet) 82%, #000); color: #fff; }
@@ -1248,9 +1270,46 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
   color: var(--text);
 }
 
+/* A stack of five actions, folded behind one arrow (Kassa). The buttons are dropped
+   from the flow rather than faded in place — left in it they hold the corner open
+   and the page is read around a menu that is shut. */
+.fab-stack--menu > .fab:not(.fab--menu) { display: none; }
+.fab-stack--menu:hover > .fab,
+.fab-stack--menu:focus-within > .fab,
+.fab-stack--menu.is-open > .fab {
+  display: inline-flex;
+  /* Opening animates, closing does not: a menu that folds away slowly is in the way
+     for exactly as long as the animation lasts.
+     No fill-mode on purpose — the rise is a flourish over styles that already stand
+     on their own, so a browser that never runs it shows the buttons rather than
+     holding them at the keyframe where they are invisible. */
+  animation: fab-rise 0.15s ease-out;
+}
+/* The toggle is round — an arrow, not a labelled action, and a pill around a single
+   glyph reads as a button missing its text. */
+.fab--menu { padding: 14px; }
+.fab--menu svg { transition: transform 0.18s; }
+/* Open, whichever way it was opened: the arrow always says what pressing it does. */
+.fab-stack--menu:hover > .fab--menu svg,
+.fab-stack--menu:focus-within > .fab--menu svg,
+.fab-stack--menu.is-open > .fab--menu svg { transform: rotate(180deg); }
+
+@keyframes fab-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+/* The rise is a flourish, not information — off where the reader asked for less. */
+@media (prefers-reduced-motion: reduce) {
+  .fab-stack--menu:hover > .fab,
+  .fab-stack--menu:focus-within > .fab,
+  .fab-stack--menu.is-open > .fab { animation: none; }
+  .fab--menu svg { transition: none; }
+}
+
 @media (max-width: 560px) {
   .fab-stack { right: 18px; bottom: 18px; gap: 10px; }
   .fab { padding: 12px 16px; }
+  .fab--menu { padding: 13px; }
 }
 
 /* ============================================================
@@ -1444,6 +1503,43 @@ input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 .deadline-preview[hidden] { display: none; }
 ul.errorlist { color: var(--danger); margin: 5px 0 0; padding-left: 16px; font-size: 13px; list-style: none; }
 ul.errorlist li::before { content: "⚠ "; }
+
+/* Vazvrat: what the typed kg come to, under the box that was typed in. One short
+   unbreakable line — the cell is only as wide as a kg box, and a figure allowed to
+   wrap there turned into three ragged lines and grew the row by 59px. Where the
+   money then goes is said once, in the summary under the table. */
+.return-line {
+  margin-top: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.return-line[hidden] { display: none; }
+/* The summary's two halves keep the colours they wear everywhere else: blue is what
+   came off the qarz, violet is what became the mijoz's again. */
+.return-back { color: var(--violet); }
+.return-total {
+  display: block;
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.return-total[hidden] { display: none; }
+
+/* Vazvrat: the fields and notes that belong to one money route only. The class beats
+   the UA rule for [hidden], so restate it — same reason as .lineset-field below. */
+.settle-only[hidden] { display: none; }
+/* The line under a route: what is in the heap the money is joining or leaving. Reads
+   as a live figure rather than as help text, so it carries the accent the deadline
+   preview uses instead of the faint hint grey. */
+.settle-note { display: block; margin-top: 6px; color: var(--text-muted); font-size: 12.5px; }
+.settle-note strong { color: var(--accent); }
 
 /* Live bank-commission breakdown in the debt-payment form */
 .transfer-only[hidden] { display: none; }

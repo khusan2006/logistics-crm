@@ -26,24 +26,38 @@ owed in August — hiding it because the window moved is how a debt gets forgott
         <th class="sticky-col">Mijoz</th>
         <th>Summa</th>
         <th>Usul</th>
-        <th>Qaysi kuni</th>
+        <th>To'lashimiz kerak bo'lgan sana</th>
         <th>Vazvrat sanasi</th>
         <th></th>
       </tr>
       {% for s in owed %}
       <tr>
         <td class="sticky-col">{{ s.batch.customer.name }}</td>
-        <td>{% money_in s.amount_own s.currency %}</td>
+        {# Red: money out of the kassa that has not left yet, not a figure to read past. #}
+        <td class="amt-owed">{% money_in s.amount_own s.currency %}</td>
         <td>{% include "crm/_method_badge.html" with code=s.method label=s.get_method_display %}</td>
-        {# Past its day and still unpaid is the one state that needs shouting about. #}
+        {% comment %}
+        Pink while the day is still ahead of us, red the moment it is behind — the one
+        state on this table that needs shouting about.
+        {% endcomment %}
         <td>
           {% if s.is_overdue %}
           <span class="badge badge-danger">{{ s.due_date }} — muddati o'tdi</span>
-          {% else %}{{ s.due_date|default:"—" }}{% endif %}
+          {% elif s.due_date %}
+          <span class="badge badge-due">{{ s.due_date }}</span>
+          {% else %}—{% endif %}
         </td>
         <td>{{ s.batch.date }}</td>
+        {% comment %}
+        Four things can happen to a promise, and until now the table offered one of
+        them. We pay it — in full or in part, because the kassa does not always hold
+        all of it on the day we said. We move the day. Or the mijoz agrees to leave
+        it with us as their avans, and then no money moves at all.
+        {% endcomment %}
         <td class="row-actions">
-          <a class="btn btn-ghost" href="{% url 'return_settlement_pay' s.pk %}" data-modal>To'landi</a>
+          <a class="btn btn-sm" href="{% url 'return_settlement_pay' s.pk %}" data-modal>To'lash</a>
+          <a class="btn btn-sm btn-ghost" href="{% url 'return_settlement_edit' s.pk %}" data-modal title="Summa, usul yoki sanani o'zgartirish">Tahrirlash</a>
+          <a class="btn btn-sm btn-ghost" href="{% url 'return_settlement_to_advance' s.pk %}" data-modal title="Qarzimizni mijozning avansiga o'tkazish">Avansiga</a>
         </td>
       </tr>
       {% endfor %}
@@ -62,6 +76,7 @@ owed in August — hiding it because the window moved is how a debt gets forgott
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
   </form>
+  {# The davr bar draws the Excel button itself, from the view's `export_url`. #}
   {% include "crm/_daterange.html" %}
 </div>
 

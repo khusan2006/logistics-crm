@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 from datetime import date as _date, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from urllib.parse import urlparse
@@ -29,7 +30,7 @@ from .forms import (
     CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm,
-    ReturnBatchForm,
+    ReturnBatchForm, ReturnSettlementEditForm, ReturnSettlementPayForm,
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
@@ -2668,7 +2669,38 @@ def _changed_today(returns):
     return notes
 
 
-def _sale_groups(sales):
+#: What counts as "a sotuv moved today" beyond a vazvrat: an edit, and the undoing
+#: of a vazvrat — both of which change the figures on a row that is otherwise sitting
+#: wherever its own sana put it, pages away from the operator who changed it.
+#: `create` is deliberately not here: a sotuv entered today is NEW, not changed, and
+#: it has its own lens beside this one.
+CHANGED_ACTIONS = (AuditLog.Action.UPDATE, AuditLog.Action.RETURN,
+                   AuditLog.Action.DELETE)
+
+
+def _edited_today(sale_ids):
+    """{sotuv pk: [what the trail says happened today]} for edits and undone
+    vazvratlar — the half of "yangilandi" that leaves no vazvrat row behind.
+
+    One query for the whole page rather than one per row: the summaries are already
+    written, so this only has to fetch the ones dated today."""
+    notes = defaultdict(list)
+    rows = (AuditLog.objects
+            .filter(target_type="Sotuv", target_id__in=list(sale_ids),
+                    action__in=CHANGED_ACTIONS,
+                    created_at__date=timezone.localdate())
+            # A vazvrat writes its own line on the sotuv, and `_changed_today` below
+            # says the same thing off the vazvrat row itself. Taking it from there
+            # keeps the money wording ("mijoz avansiga o'tdi") that this trail does
+            # not carry, so the two never print the same event twice.
+            .exclude(action=AuditLog.Action.RETURN)
+            .order_by("created_at", "id"))
+    for row in rows:
+        notes[row.target_id].append(row.summary)
+    return notes
+
+
+def _sale_groups(sales, edited=None):
     """Fold the rows entered together into one block each — one row on Sotuvlar —
     keeping the list's order.
 
@@ -2710,7 +2742,18 @@ def _sale_groups(sales):
         # chip marks the rows that moved TODAY so the change is noticed on the day it
         # is made; after that the figures are simply the figures, and a permanent
         # marker on every sotuv that ever had a vazvrat would mark nothing at all.
-        block["changed_today"] = _changed_today(block["returns"])
+        #
+        # An edit is the same kind of event and gets the same chip: the operator who
+        # corrected a kg this morning is looking for "what did I touch", not for
+        # "which of the things I touched was a vazvrat".
+        block["changed_today"] = _changed_today(block["returns"]) + [
+            note for row in rows for note in (edited or {}).get(row.pk, [])]
+        # …and the other lens: entered today, whatever sana was typed on it. Green
+        # rather than blue, because a new sotuv is not a corrected one — the chip
+        # answers "is this row new or did it move" at a glance.
+        block["new_today"] = any(
+            timezone.localtime(row.created_at).date() == timezone.localdate()
+            for row in rows)
         # What the sotuv means as a whole. The per-kg figures stay per mahsulot in
         # their own column, but these are only ever read summed — the mijoz owes one
         # qarz, not one per lot the granula happened to come off.
@@ -2729,16 +2772,47 @@ def _sale_groups(sales):
     return blocks
 
 
-def changed_today_count():
-    """How many sotuvlar a vazvrat touched today — the number on the toggle.
+def _changed_today_q():
+    """The filter behind "Yangilanganlar": a sotuv a vazvrat, an edit or an undone
+    vazvrat touched today.
+
+    Two sources because a change reaches a sotuv two ways — a vazvrat leaves a row of
+    its own, an edit leaves only a trail entry — and the operator asking "what did I
+    touch today" means both."""
+    today = timezone.localdate()
+    touched = (AuditLog.objects
+               .filter(target_type="Sotuv", action__in=CHANGED_ACTIONS,
+                       created_at__date=today)
+               .values_list("target_id", flat=True))
+    return Q(returns__created_at__date=today) | Q(pk__in=list(touched))
+
+
+def _new_today_q():
+    """The filter behind "Yangi sotuvlar": entered today.
+
+    On when it was ENTERED, not on the sana typed on it. A sotuv written up this
+    morning for last Friday is new work today, and it is the day's work the lens is
+    for — the sana itself is what the davr bar above already filters on."""
+    return Q(created_at__date=timezone.localdate())
+
+
+def _today_row_count(condition):
+    """How many ROWS the list would draw for one of the two lenses — the number on
+    its toggle.
 
     Counted as the list DRAWS them: sotuvlar typed in one go are folded into a
     single row (see `_sale_groups`), so counting the rows behind them would promise
     more lines than the screen then shows."""
-    rows = (Sale.objects
-            .filter(returns__created_at__date=timezone.localdate())
-            .distinct().values_list("pk", "group"))
+    rows = Sale.objects.filter(condition).distinct().values_list("pk", "group")
     return len({group or ("sale", pk) for pk, group in rows})
+
+
+def changed_today_count():
+    return _today_row_count(_changed_today_q())
+
+
+def new_today_count():
+    return _today_row_count(_new_today_q())
 
 
 def _filter_sales(request):
@@ -2749,11 +2823,16 @@ def _filter_sales(request):
     export ends up "showing a different figure" from the list it was taken from."""
     q = request.GET.get("q", "").strip()
     date_from, date_to = _date_window(request)
-    # A vazvrat changes a sotuv from OUTSIDE it, and this list is ordered by the
-    # SOTUV's date — so correcting a sotuv from three weeks ago moves a row that is
-    # pages away from where the operator is standing. Without a way to ask "what did
-    # I just change", the change is invisible on the screen it changed.
+    # A vazvrat or an edit changes a sotuv from OUTSIDE it, and this list is ordered
+    # by the SOTUV's date — so correcting a sotuv from three weeks ago moves a row
+    # that is pages away from where the operator is standing. Without a way to ask
+    # "what did I just change", the change is invisible on the screen it changed.
+    #
+    # `new` is the twin question, and the one asked far more often: what went out
+    # today. Two lenses rather than one toggle with two settings, because they answer
+    # different questions and are read at different moments of the day.
     changed = request.GET.get("changed", "").strip()
+    new = request.GET.get("new", "").strip()
     # Both the list and its Excel print a tannarx and a foyda per row, and each of
     # those reaches through the sotuv's slices into their yuklar and kelishuvlar —
     # so the same rows the doska loads are loaded here (`PRICED_SALE_PREFETCH`).
@@ -2780,12 +2859,13 @@ def _filter_sales(request):
     if date_to:
         sales = sales.filter(date__lte=date_to)
     if changed == "today":
-        # Narrowed on the day the VAZVRAT was entered, which is a different date from
-        # the sotuv's own and is the whole point — the sotuvlar this finds are old by
+        # Narrowed on the day the CHANGE was made, which is a different date from the
+        # sotuv's own and is the whole point — the sotuvlar this finds are old by
         # definition. The davr above still applies to the sotuv sanasi, so the two
         # can be combined, and the toggle clears itself when pressed while on.
-        sales = sales.filter(
-            returns__created_at__date=timezone.localdate()).distinct()
+        sales = sales.filter(_changed_today_q()).distinct()
+    elif new == "today":
+        sales = sales.filter(_new_today_q()).distinct()
     return sales, q, date_from, date_to
 
 
@@ -2803,11 +2883,16 @@ def sale_list(request):
     counted rows the page is not showing would be the worse of the two lies."""
     sales, q, date_from, date_to = _filter_sales(request)
     page = Paginator(sales, 20).get_page(request.GET.get("page"))
+    rows = page.object_list
     return render(request, "crm/sale_list.html",
-                  {"page": page, "groups": _sale_groups(page.object_list), "q": q,
+                  {"page": page, "q": q,
+                   "groups": _sale_groups(
+                       rows, edited=_edited_today([s.pk for s in rows])),
                    "export_url": reverse("sale_list_export"),
                    "changed": request.GET.get("changed", "").strip(),
+                   "new": request.GET.get("new", "").strip(),
                    "changed_count": changed_today_count(),
+                   "new_count": new_today_count(),
                    "date_from": date_from, "date_to": date_to,
                    "daterange": _daterange_bar(request, date_from, date_to)})
 
@@ -3587,11 +3672,25 @@ def _return_rows_context(customer, form=None, focus_sale_id=""):
 
     The settlement fields are handed over as bound fields rather than left to the
     generic renderer: they belong under the table, and on a mijoz whose qarz would
-    swallow anything they returned they are not on the form at all."""
+    swallow anything they returned they are not on the form at all.
+
+    Each one arrives with the ROUTES it belongs to (see `ReturnBatchForm.
+    settle_routes`) and the route chosen right now, so the block is SERVED with the
+    right half already showing. Folding it with script after paint would flash all
+    three answers' fields on every open and on every validation error."""
     if form is None:
         form = ReturnBatchForm(initial={"customer": customer.pk} if customer else None)
-    fields = [form[name] for name in ReturnBatchForm.settlement_fields
-              if name in form.fields]
+    fields = [{"field": form[name],
+               "routes": ReturnBatchForm.settle_routes.get(name, [])}
+              for name in ReturnBatchForm.settlement_fields if name in form.fields]
+
+    def chosen(name, fallback):
+        # `settle` and `method` are both optional, so an unanswered form reads as
+        # the empty string; the note under each has to name what will actually
+        # happen, which is the initial the form would fall back to anyway.
+        value = form[name].value() if name in form.fields else ""
+        return value or fallback
+
     return {
         "return_sales": _returnable_sales(customer),
         "focus_sale_id": focus_sale_id,
@@ -3599,6 +3698,22 @@ def _return_rows_context(customer, form=None, focus_sale_id=""):
                           if customer else []),
         "can_overpay": ReturnBatchForm.can_overpay(customer) if customer else False,
         "settlement_fields": fields,
+        "settle_route": chosen("settle", ReturnBatchForm.SETTLE_ADVANCE),
+        "settle_method": chosen("method", PayMethod.CASH),
+        # What the mijoz is ALREADY holding in credit. The avans route adds to this
+        # heap, and an operator choosing it is entitled to see what they are adding
+        # to rather than opening Qarzlar in another tab to find out.
+        "customer_advance": ([(currency, -amount) for currency, amount
+                              in customer_balance_by_currency(customer)
+                              if amount < 0] if customer else []),
+        # Where the till stands per usul, for the route that empties it. Money handed
+        # back comes out of ONE of the three heaps, and which one is what the operator
+        # is choosing two lines above — so the heap is printed beside the choice.
+        #
+        # Read only when the money question is asked at all: it is a pass over the
+        # money tables, and on a mijoz whose qarz swallows every vazvrat there is no
+        # cash route to inform.
+        "kassa_by_method": kassa_cash_by_method() if fields else [],
     }
 
 
@@ -3775,18 +3890,10 @@ def _money_list(pairs):
                        for currency, amount in pairs)
 
 
-@role_required(User.Role.ADMIN)
-def return_list(request):
-    """Vazvrat bo'limi: every visit a mijoz made with goods, and what is still owed
-    on it.
-
-    Two tables, deliberately in this order. The top one is money we PROMISED and
-    have not handed over — a short list that should normally be empty, and the only
-    thing on this page anybody has to act on. Under it, the visits themselves.
-
-    The davr narrows the visits, not the promises: an unpaid promise made in June is
-    still owed in August, and hiding it because the window moved is how a debt gets
-    forgotten."""
+def _filter_returns(request):
+    """The vazvrat list's own filters, in one place — the page and its Excel button
+    both come through here, which is what makes the file hold exactly the rows that
+    were on the screen."""
     q = request.GET.get("q", "").strip()
     date_from, date_to = _date_window(request)
 
@@ -3800,7 +3907,63 @@ def return_list(request):
         batches = batches.filter(date__gte=date_from)
     if date_to:
         batches = batches.filter(date__lte=date_to)
+    return batches, q, date_from, date_to
 
+
+def _returns_table(batches):
+    """A vazvrat visit per row, in the money each line was struck in.
+
+    One row per BATCH and per currency inside it, because a visit that handed back a
+    dollar sotuv and a so'm sotuv is two figures that must never be added: the file
+    leaves the app with no row context to correct anybody who sums the column.
+
+    The kg is the visit's own; it is repeated on a two-currency visit rather than
+    split, and the currency column is what says the row is a slice of one visit."""
+    headers = ["Sana", "Mijoz", "Tovar", "Valyuta", "Kg", "Qiymati",
+               "Qarzdan ayirildi", "Avansga", "Pul qaytdi", "Kim", "Izoh"]
+
+    def rows():
+        for batch in batches:
+            value = dict(batch.total_by_currency())
+            to_debt = dict(batch.to_debt_by_currency())
+            advance = dict(batch.advance_by_currency())
+            refund = dict(batch.refund_by_currency())
+            goods = " · ".join(
+                f"{line.sale.line.contract_line.brand} "
+                f"{_kg(line.kg)} kg (#{line.sale_id})" for line in batch.lines.all())
+            for currency in sorted(set(value) | set(to_debt) | set(advance) | set(refund)):
+                yield [
+                    batch.date, batch.customer.name, goods,
+                    Currency(currency).label, batch.total_kg,
+                    value.get(currency), to_debt.get(currency),
+                    advance.get(currency), refund.get(currency),
+                    batch.created_by.username if batch.created_by else "",
+                    batch.note,
+                ]
+
+    return headers, rows(), {"Kg": KG}
+
+
+@role_required(User.Role.ADMIN)
+def return_list_export(request):
+    batches, _q, _from, _to = _filter_returns(request)
+    headers, table, formats = _returns_table(batches)
+    return xlsx_response("vazvratlar.xlsx", headers, table, "Vazvrat", formats)
+
+
+@role_required(User.Role.ADMIN)
+def return_list(request):
+    """Vazvrat bo'limi: every visit a mijoz made with goods, and what is still owed
+    on it.
+
+    Two tables, deliberately in this order. The top one is money we PROMISED and
+    have not handed over — a short list that should normally be empty, and the only
+    thing on this page anybody has to act on. Under it, the visits themselves.
+
+    The davr narrows the visits, not the promises: an unpaid promise made in June is
+    still owed in August, and hiding it because the window moved is how a debt gets
+    forgotten."""
+    batches, q, date_from, date_to = _filter_returns(request)
     rows = list(batches)
     paginator = Paginator(rows, 50)
     page = paginator.get_page(request.GET.get("page"))
@@ -3813,6 +3976,7 @@ def return_list(request):
         "date_to": date_to,
         "owed": owed,
         "owed_totals": pending_refunds_by_currency(owed),
+        "export_url": reverse("return_list_export"),
         "total_count": len(rows),
     })
 
@@ -3829,22 +3993,132 @@ def return_settlement_pay(request, pk):
         ReturnSettlement.objects.select_related("batch__customer"), pk=pk)
     if not settlement.is_pending:
         raise Http404
-    if request.method == "POST":
-        settlement.paid_date = timezone.localdate()
-        settlement.save(update_fields=["paid_date"])
+    form = ReturnSettlementPayForm(request.POST or None, settlement=settlement)
+    if request.method == "POST" and form.is_valid():
+        paid_own = form.cleaned_data["amount"]
+        method, day = form.cleaned_data["method"], form.cleaned_data["date"]
+        with transaction.atomic():
+            if form.is_full:
+                # The whole promise, so nothing new is written: the row WAS the
+                # promise, and paying it is the day it stopped being one. A fresh
+                # chiqim row instead would leave the promise standing beside the
+                # payment and count the same money twice.
+                settlement.paid_date, settlement.method = day, method
+                settlement.save(update_fields=["paid_date", "method"])
+                paid = settlement
+            else:
+                paid = _split_settlement(settlement, paid_own, method, day,
+                                         request.user)
         AuditLog.record(
             request.user, AuditLog.Action.PAYMENT, "Vazvrat", settlement.batch_id,
             f"Vazvrat puli qaytarildi: {settlement.batch.customer.name} — "
-            f"{_money_list([(settlement.currency, settlement.amount_own)])}")
-        messages.success(request, "Vazvrat puli qaytarildi — kassadan chiqim yozildi")
+            f"{_money_list([(paid.currency, paid.amount_own)])}"
+            + ("" if form.is_full else
+               f"; qolgani {_money_list([(settlement.currency, settlement.amount_own)])}"))
+        messages.success(
+            request,
+            "Vazvrat puli qaytarildi — kassadan chiqim yozildi" if form.is_full else
+            f"{_money_list([(paid.currency, paid.amount_own)])} qaytarildi · "
+            f"{_money_list([(settlement.currency, settlement.amount_own)])} qarzimiz qoldi")
         return form_reload(request, reverse("return_list"))
+    return form_response(request, form, "Vazvrat pulini qaytarish",
+                         invalid=request.method == "POST",
+                         extra_context={"settlement": settlement})
+
+
+def _split_settlement(settlement, paid_own, method, day, user):
+    """Pay part of a promise: a paid row for what went out, and the original left
+    standing for what did not.
+
+    Both money columns are cut by the SAME ratio rather than each being worked out
+    from a kurs — the pair already describes one sum at one rate, and re-rating
+    either side here would invent a second one. The remainder is taken as a
+    subtraction, so the two rows always add back up to the promise exactly.
+
+    The `RefundAllocation` rows stay where they are, untouched. They exist to keep
+    money we have handed back out of the mijoz's spendable avans, and splitting the
+    promise in two changes nothing about how much that is — only about how many
+    rows it is written on."""
+    ratio = paid_own / settlement.amount_own
+    paid_usd = (settlement.amount * ratio).quantize(Decimal("0.01"),
+                                                    rounding=ROUND_HALF_UP)
+    paid_uzs = (settlement.amount_uzs * ratio).quantize(Decimal("0.01"),
+                                                        rounding=ROUND_HALF_UP)
+    paid = ReturnSettlement.objects.create(
+        batch=settlement.batch, route=ReturnSettlement.Route.CASH,
+        currency=settlement.currency, exchange_rate=settlement.exchange_rate,
+        amount=paid_usd, amount_uzs=paid_uzs, method=method, paid_date=day,
+        note=settlement.note, created_by=user)
+    settlement.amount -= paid_usd
+    settlement.amount_uzs -= paid_uzs
+    settlement.save(update_fields=["amount", "amount_uzs"])
+    return paid
+
+
+@role_required(User.Role.ADMIN)
+def return_settlement_edit(request, pk):
+    """Correct a promise we have not kept yet — how it will be paid, and when.
+
+    The day is the one that moves most: we said Friday, the money is not there, and
+    the mijoz agrees to Monday. Moving it is not the same as forgetting it, which is
+    what happened while the only way to change a date was to undo the whole vazvrat
+    and enter it again."""
+    settlement = get_object_or_404(
+        ReturnSettlement.objects.select_related("batch__customer"), pk=pk)
+    if not settlement.is_pending:
+        raise Http404
+    was = settlement.due_date
+    form = ReturnSettlementEditForm(request.POST or None, instance=settlement)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        AuditLog.record(
+            request.user, AuditLog.Action.UPDATE, "Vazvrat", settlement.batch_id,
+            f"Vazvrat qarzi o'zgartirildi: {settlement.batch.customer.name} — "
+            f"{was} → {settlement.due_date}, {settlement.get_method_display()}")
+        messages.success(request, "Saqlandi")
+        return form_reload(request, reverse("return_list"))
+    return form_response(request, form, "Vazvrat qarzini tahrirlash",
+                         invalid=request.method == "POST",
+                         extra_context={"settlement": settlement})
+
+
+@role_required(User.Role.ADMIN)
+def return_settlement_to_advance(request, pk):
+    """Turn money we owe a mijoz into money they have with us.
+
+    The mijoz agrees to leave it against their next sotuv instead of taking it, so
+    nothing leaves the kassa and the promise stops existing. That is the SAME state
+    the avans route of the vazvrat form writes — which writes no row at all, because
+    leaving the freed money in the pool IS that route (see `ReturnSettlement`). So
+    this deletes the promise rather than restating it as one.
+
+    Deleting it takes its `RefundAllocation` rows with it, which is exactly what
+    hands the money back to the mijoz's spendable pool; the sweep then places it on
+    whatever they still owe."""
+    settlement = get_object_or_404(
+        ReturnSettlement.objects.select_related("batch__customer"), pk=pk)
+    if not settlement.is_pending:
+        raise Http404
+    customer = settlement.batch.customer
     amount = _money_list([(settlement.currency, settlement.amount_own)])
+    if request.method == "POST":
+        with transaction.atomic():
+            batch_id = settlement.batch_id
+            settlement.delete()
+            reconcile_customer_allocations(customer)
+        AuditLog.record(request.user, AuditLog.Action.UPDATE, "Vazvrat", batch_id,
+                        f"Vazvrat puli mijoz avansiga o'tkazildi: {customer.name} — "
+                        f"{amount}")
+        messages.success(request, f"{amount} {customer.name} avansiga o'tkazildi — "
+                                  f"kassadan pul chiqmaydi")
+        return form_reload(request, reverse("return_list"))
     return render_confirm(
         request,
-        "Vazvrat pulini qaytarish",
-        f"“{settlement.batch.customer.name}” mijozga {amount} qaytarildi deb "
-        f"belgilanadi va shu summa kassadan chiqim bo'ladi. Davom etasizmi?",
-        "Ha, qaytarildi",
+        "Avansiga o'tkazish",
+        f"“{customer.name}” mijozga qarzimiz {amount} uning AVANSIGA o'tkaziladi: "
+        f"kassadan pul chiqmaydi, bu summa uning keyingi savdolariga ishlatiladi. "
+        f"Davom etasizmi?",
+        "Ha, avansiga o'tkazilsin",
         cancel_url_name="return_list",
     )
 
@@ -4551,7 +4825,8 @@ def _kassa_ledger_rows(window):
             # Never crossed: a vazvrat is refunded in the money its sotuv was agreed
             # in, so there is no kurs on this row doing any work.
             "crossed": False,
-            "title": f"Vazvrat · {r.batch.customer.name}",
+            # The badge beside it already says "Vazvrat", so the title says WHOSE.
+            "title": r.batch.customer.name,
             "method_code": r.method, "method": r.get_method_display(),
             "currency": r.currency, "exchange_rate": r.exchange_rate,
             "amount_uzs": r.amount_uzs, "amount": r.amount,
@@ -5596,6 +5871,10 @@ LEDGER_KINDS = {
     "fee_expense": "Perechisleniya foizi", "logist": "Logistga", "customs": "Bojxona",
     "expense": "Yuk xarajati", "exchange": "Konvertatsiya",
     "other": "Boshqa chiqim", "fee_other": "Perechisleniya foizi",
+    # Missing until now, which is why a refund could not be found by typing the one
+    # word an operator would type for it — and why the Excel printed the raw "refund"
+    # in a Turi column where every other row is in Uzbek.
+    "refund": "Vazvrat",
 }
 
 
