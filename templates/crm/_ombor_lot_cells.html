@@ -13,7 +13,12 @@ broken page rather than as a limit, same as the kelishuv kod does for a tarjimon
 <td>{{ lot.shipment.contract.partner.name }}</td>
 <td>{{ lot.arrived }}</td>
 <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
-<td class="num">{{ lot.sold_kg|floatformat:"-3" }}</td>
+{% comment %}
+Same pair as the marka row above: what left this lot, and the part of it that came
+back on a vazvrat and is on the shelf again.
+{% endcomment %}
+<td class="num">{{ lot.sold_kg|floatformat:"-3" }}
+  {% if lot.returned_kg %}<div class="vz load-sub">+{{ lot.returned_kg|floatformat:"-3" }} qaytdi</div>{% endif %}</td>
 <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
 {% if user.is_admin_role %}
 <td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>

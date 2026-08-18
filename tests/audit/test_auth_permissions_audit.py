@@ -36,7 +36,7 @@ from django.test import Client
 from accounts.models import User
 from crm.models import (
     AuditLog, Currency, Customer, CustomerPayment, Logist, LogistPayment, Partner,
-    Reservation, Return, Sale, ShipmentExpense, ShipmentLeg, ShipmentStatus,
+    Reservation, Return, ReturnBatch, ReturnSettlement, Sale, ShipmentExpense, ShipmentLeg, ShipmentStatus,
     SupplierPayment, fifo_lots, stock_value, transit_value,
 )
 
@@ -72,8 +72,18 @@ def world(db, admin_user):
     sale = Sale.objects.create(
         customer=customer, line=lot, kg=Decimal("100"), price=Decimal("1.5000"),
         exchange_rate=Decimal("12000"), created_by=admin_user)
-    ret = Return.objects.create(sale=sale, kg=Decimal("10"), price=sale.price,
-                                exchange_rate=Decimal("12000"), created_by=admin_user)
+    # A vazvrat as the app now writes one: a visit (the batch), its lines, and the
+    # money row a paid-for return generates. The old bare `Return` with no batch is
+    # still what a pre-vazvrat row looks like, so `ret` stays the line itself.
+    return_batch = ReturnBatch.objects.create(customer=customer, date=date(2026, 3, 2),
+                                              created_by=admin_user)
+    ret = Return.objects.create(sale=sale, batch=return_batch, kg=Decimal("10"),
+                                price=sale.price, exchange_rate=Decimal("12000"),
+                                created_by=admin_user)
+    return_settlement = ReturnSettlement.objects.create(
+        batch=return_batch, route=ReturnSettlement.Route.CASH, amount=Decimal("15"),
+        exchange_rate=Decimal("12000"), due_date=date(2026, 3, 10),
+        created_by=admin_user)
     reservation = Reservation.objects.create(
         customer=customer, brand="LLDPE", kg=Decimal("50"), created_by=admin_user)
     customer_payment = CustomerPayment.objects.create(
@@ -84,6 +94,7 @@ def world(db, admin_user):
         "supplier_payment": supplier_payment, "shipment": shipment, "lot": lot,
         "leg": leg, "expense": expense, "logist": logist,
         "logist_payment": logist_payment, "sale": sale, "return": ret,
+        "return_batch": return_batch, "return_settlement": return_settlement,
         "reservation": reservation, "customer_payment": customer_payment,
         "status": ShipmentStatus.objects.exclude(is_arrival=True).first(),
         "user": admin_user,
@@ -112,7 +123,8 @@ ADMIN_ONLY_WRITE_ROUTES = [
     ("reservation_create", None), ("reservation_edit", "reservation"),
     ("reservation_delete", "reservation"), ("reservation_cancel", "reservation"),
     ("reservation_close", "reservation"),
-    ("return_create", None), ("return_delete", "return"),
+    ("return_create", None), ("return_batch_delete", "return_batch"),
+    ("return_settlement_pay", "return_settlement"),
     ("customer_payment_create", None), ("customer_payment_edit", "customer_payment"),
     ("customer_payment_delete", "customer_payment"),
     ("user_create", None), ("user_edit", "user"),

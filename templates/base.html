@@ -124,6 +124,10 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="16" cy="14" r="1.5"/></svg></span>
           <span>Kassa</span>
         </a>
+        <a class="nav-item {% if 'return' in url_name %}active{% endif %}" href="{% url 'return_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></span>
+          <span>Vazvrat</span>
+        </a>
         {% endif %}
       </div>
       {% endif %}
@@ -1137,6 +1141,43 @@
         kg.addEventListener('input', function () {
           clearTimeout(timer);
           timer = setTimeout(refresh, 350);
+        });
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
+  // Vazvrat rows ([data-return-lines]): the table of what a mijoz is holding is
+  // fetched when the mijoz select changes, rather than every mijoz's sotuvlar being
+  // shipped into the page. That keeps the modal the same size for a mijoz with four
+  // sotuvlar and one with forty, and — the reason that matters — means the kg ceiling
+  // printed on a row came from the same query the form will check it against.
+  (function () {
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-return-lines]').forEach(function (box) {
+        if (box.dataset.returnReady) { return; }
+        box.dataset.returnReady = '1';
+        var form = box.closest('form');
+        var select = form && form.querySelector('[name="customer"]');
+        var url = box.getAttribute('data-return-lines');
+        if (!select || !url) { return; }
+        var seq = 0;
+        select.addEventListener('change', function () {
+          // A slower earlier request must not overwrite a newer answer — the same
+          // guard the FIFO preview uses.
+          var mine = ++seq;
+          fetch(url + '?customer=' + encodeURIComponent(select.value || ''),
+                { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (html) {
+              if (mine !== seq) { return; }
+              box.innerHTML = html;
+              // The new boxes are data-money inputs that have never been through the
+              // formatter, so they would take "1 000" and submit it as typed.
+              if (window.enhanceMoneyInputs) { window.enhanceMoneyInputs(box); }
+            })
+            .catch(function () { /* leave the old rows up rather than blanking them */ });
         });
       });
     }

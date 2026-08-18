@@ -1,0 +1,98 @@
+{% load crm_extras %}
+{% comment %}
+Everything in the vazvrat modal that depends on WHICH mijoz is chosen: what they are
+holding, and — only when it can arise — what to do with money that comes back. Served
+on its own by `return_rows` when the mijoz select changes, and included by
+`_return_lines.html` on first paint, so both paths draw the same block.
+{% endcomment %}
+
+{% comment %}
+The mijoz's state, before anything is typed. It answers the question an operator
+would otherwise answer wrongly by guessing: does returning goods here shrink a qarz,
+or hand money back? Everything below reads differently depending on the answer.
+{% endcomment %}
+{% if return_sales %}
+<p class="field-hint" style="margin-bottom: 10px; line-height: 1.55;">
+  {% if customer_debt %}
+    <span class="badge badge-warning">Qarzdor</span>
+    Bu mijozning ochiq qarzi
+    {% for currency, amount in customer_debt %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}.
+    Qaytgan tovar avval shu qarzdan kamayadi{% if can_overpay %}; qarzdan ortiqchasi mijozga qaytariladi{% else %}, kassadan pul chiqmaydi{% endif %}.
+  {% else %}
+    <span class="badge badge-ok">Qarzsiz</span>
+    Bu mijozning ochiq qarzi yo'q — qaytgan tovarning puli to'liq mijozga qaytadi.
+  {% endif %}
+</p>
+{% endif %}
+
+{% comment %}
+One row per SOTUV, never one per marka. The same marka goes out to the same mijoz at
+several narx, so "5 000 kg qaytdi" has no value until it is tied to the row it came
+off. That tie is also why there is no narx box: the price is the sotuv's own, and a
+vazvrat can never be worth more per kg than the sotuv it reverses.
+{% endcomment %}
+{% if return_sales %}
+<label class="muted" style="display:block; margin-bottom: 6px;">
+  Qaytgan tovarni o'z qatoriga yozing — narxi o'sha sotuvdan olinadi
+</label>
+<div class="table-wrap">
+  <table>
+    <tr>
+      <th>Sana</th>
+      <th>Marka</th>
+      <th>Sotilgan</th>
+      <th>Narx</th>
+      <th>Qarzi</th>
+      <th>Qaytarish mumkin</th>
+      <th>Qaytdi (kg)</th>
+    </tr>
+    {% for s in return_sales %}
+    <tr{% if focus_sale_id == s.pk|stringformat:"s" %} class="is-focus"{% endif %}>
+      <td>{{ s.date }}</td>
+      <td>{{ s.line.contract_line.brand }}</td>
+      <td>{{ s.kg|floatformat:"-3" }} kg</td>
+      <td>{% rate s.price s.price_uzs s.currency %}</td>
+      {% comment %}
+      What this sotuv still owes, in its own money — the figure that decides where the
+      vazvrat lands, printed before anything is typed rather than explained in a
+      message afterwards.
+      {% endcomment %}
+      <td>
+        {% if s.remaining_own > 0 %}{% money s.remaining s.remaining_uzs s.currency %}
+        {% else %}<span class="badge badge-ok">to'langan</span>{% endif %}
+      </td>
+      <td>{{ s.returnable_kg|floatformat:"-3" }} kg</td>
+      <td><input type="text" data-money name="ret_{{ s.pk }}"
+                 autocomplete="off" placeholder="0"></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% comment %}
+Asked only when a vazvrat here COULD leave money owed back — see
+`ReturnBatchForm.can_overpay`. On a mijoz whose qarz would swallow anything they
+returned, the fields are not on the form at all, and asking "what shall we do with
+the part they already paid for" of somebody who has paid nothing is a question with
+no answer.
+
+Under the table rather than above it because that is the order the answer is worked
+out in: first what came back, then what it does to the money.
+{% endcomment %}
+{% if settlement_fields %}
+<fieldset class="fieldgroup" style="margin-top: 14px;">
+  <legend>Mijoz to'lab bo'lgan qismi</legend>
+  {% for field in settlement_fields %}
+  <p>
+    <label for="{{ field.id_for_label }}">{{ field.label }}:</label>
+    {{ field }}
+    {% if field.help_text %}<span class="helptext">{{ field.help_text }}</span>{% endif %}
+    {% if field.errors %}<ul class="errorlist">{% for e in field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+  </p>
+  {% endfor %}
+</fieldset>
+{% endif %}
+
+{% else %}
+<p class="muted">Bu mijozda qaytariladigan tovar yo'q.</p>
+{% endif %}

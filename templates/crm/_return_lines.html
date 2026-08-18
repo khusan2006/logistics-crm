@@ -1,0 +1,8 @@
+{% comment %}
+The stable wrapper the vazvrat rows live in. It carries the URL the rows are re-fetched
+from, so it must NOT be part of what gets replaced — the JS swaps this box's contents
+when the mijoz changes and would otherwise throw away the address it swaps from.
+{% endcomment %}
+<div class="stacked" style="margin-top: 10px;" data-return-lines="{{ return_rows_url }}">
+  {% include "crm/_return_rows.html" %}
+</div>

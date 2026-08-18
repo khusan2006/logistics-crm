@@ -10,10 +10,11 @@ from .models import (
     LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
     CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
     LogistPayment, OtherExpense, Partner,
-    FeeBearer, PayMethod, Reservation, Return, Sale, Shipment, ShipmentExpense, ShipmentLeg,
+    FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
+    Sale, Shipment, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
-    customer_balance_by_currency, latest_exchange_rate,
+    customer_balance_by_currency, latest_exchange_rate, _by_currency,
 )
 from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
@@ -1702,51 +1703,239 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
         return kg
 
 
-class ReturnForm(PriceEntryFormMixin, forms.ModelForm):
-    """Sale comes from the view (URL `?sale=`), not from the form — the field list
-    deliberately excludes it."""
+def own_side_pair(currency, pair):
+    """The half of a (usd, so'm) pair that `currency` is kept in."""
+    usd, uzs = pair
+    return uzs if currency == Currency.UZS else usd
+
+
+def parse_return_rows(post):
+    """[(sale_id, kg)] typed into the vazvrat table — boxes named `ret_<sale_id>`.
+
+    Read straight off POST rather than through a formset, the same way the to'lov
+    modal reads its taqsimlash boxes: these are not free-form rows the operator adds
+    and removes, they are a fixed list drawn from the mijoz's own sotuvlar, each one
+    identified by the sotuv it reverses. Blanks and zeros are dropped, so returning
+    one line out of forty submits one row.
+
+    Nothing here is trusted — the ids are looked up against the chosen mijoz's own
+    sotuvlar in `ReturnBatchForm.clean`, so a tampered id finds nothing."""
+    rows = []
+    for key, value in post.items():
+        if not key.startswith("ret_"):
+            continue
+        value = (value or "").strip().replace(" ", "").replace(" ", "")
+        if not value:
+            continue
+        try:
+            sale_id = int(key[len("ret_"):])
+            kg = Decimal(value.replace(",", "."))
+        except (ValueError, ArithmeticError):
+            continue
+        if kg > 0:
+            rows.append((sale_id, kg))
+    return rows
+
+
+class ReturnBatchForm(forms.ModelForm):
+    """Vazvrat: what a mijoz brought back in one visit, and where the money goes.
+
+    The operator picks the MIJOZ and then types kg against that mijoz's SOTUVLAR —
+    never against a bare marka. That is not a layout preference. The same marka goes
+    out to the same mijoz at several narx (one of them across 23 sotuv from $1.4167
+    to $1.65), so "5 000 kg 2102 campaund qaytdi" has no value until it is tied to
+    the row it came off. Tying it to the row also means the narx is never typed, so
+    a vazvrat cannot be worth more per kg than the sotuv it reverses.
+
+    The money follows ONE rule, and that rule covers all three cases an operator
+    thinks in: the vazvrat cancels open qarz first, and only what is left over is
+    money the mijoz had already paid and is owed back. Goods still unpaid therefore
+    just shrink the qarz and move no money; goods paid in full hand the whole value
+    back; a part-paid sotuv splits itself without anybody having to choose.
+
+    Split per CURRENCY, because a visit can hand back a dollar sotuv and a so'm
+    sotuv together and the two never blend — see `ReturnSettlement`."""
+
+    SETTLE_ADVANCE = "advance"
+    SETTLE_CASH = "cash"
+    SETTLE_OWED = "owed"
+
+    settle = forms.ChoiceField(
+        label="Mijoz to'lab bo'lgan qismi",
+        choices=[
+            (SETTLE_ADVANCE, "Mijoz avansida qolsin — keyingi savdolariga ishlatiladi"),
+            (SETTLE_CASH, "Hozir kassadan qaytarildi"),
+            (SETTLE_OWED, "Hozir pul yo'q — keyin qaytaramiz"),
+        ],
+        initial=SETTLE_ADVANCE,
+        widget=forms.RadioSelect,
+        # Optional on purpose: an unanswered question leaves the money in the avans,
+        # which is where it already is. Paying cash out by default would be the
+        # riskier silence.
+        required=False)
+    method = forms.ChoiceField(label="To'lov usuli", choices=PayMethod.choices,
+                               initial=PayMethod.CASH, required=False)
+    due_date = forms.DateField(
+        label="Qaysi kuni qaytaramiz", required=False, widget=date_widget(),
+        help_text="Pul topilgan kuni ro'yxatdan “To'landi” bosiladi")
+
+    #: Drawn by `_return_rows.html` under the table rather than up in the field list.
+    #: The question is about what the typed rows come to, so it belongs after them —
+    #: and it is only asked at all when money can actually come back.
+    settlement_fields = ("settle", "method", "due_date")
 
     class Meta:
-        model = Return
-        fields = ["kg", "currency", "price", "exchange_rate", "date", "restock", "note"]
-        widgets = {
-            "date": date_widget(),
-            "note": forms.Textarea(attrs={"rows": 2}),
-        }
+        model = ReturnBatch
+        fields = ["customer", "date", "note"]
+        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
 
-    def __init__(self, *args, sale=None, **kwargs):
+    @staticmethod
+    def returnable_value_by_currency(customer):
+        """[(currency, qiymat)] of everything this mijoz could still send back, at
+        the narx each sotuv was struck at."""
+        entries = []
+        for sale in customer.sales.all():
+            left = sale.returnable_kg
+            if left > 0:
+                entries.append((sale.currency,
+                                (left * sale.price_own).quantize(
+                                    Decimal("0.01"), rounding=ROUND_HALF_UP)))
+        return _by_currency(entries)
+
+    @staticmethod
+    def open_debt_by_currency(customer):
+        """[(currency, qarz)] this mijoz still owes on their sotuvlar."""
+        return _by_currency((s.currency, max(Decimal("0"), s.remaining_own))
+                            for s in customer.sales.all())
+
+    @classmethod
+    def can_overpay(cls, customer):
+        """True when SOME vazvrat this mijoz could make would leave money owed back
+        to them.
+
+        If everything they are holding is worth no more than what they still owe,
+        then no vazvrat of any size can hand money over — the qarz swallows all of
+        it. Asking how to settle an excess that cannot exist is asking a question
+        with no answer, so the form drops it entirely rather than defaulting it.
+        Per currency, because a dollar qarz cannot swallow a so'm vazvrat."""
+        if customer is None:
+            return True
+        debts = dict(cls.open_debt_by_currency(customer))
+        return any(value > debts.get(currency, Decimal("0"))
+                   for currency, value in cls.returnable_value_by_currency(customer))
+
+    def current_customer(self):
+        """The mijoz the form is about right now — from the POST when bound, from
+        the initial when the modal was opened on a sotuv."""
+        raw = (self.data.get("customer") if self.is_bound
+               else self.initial.get("customer"))
+        if not raw:
+            return None
+        return Customer.objects.filter(pk=raw).first()
+
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.sale = sale or getattr(self.instance, "sale", None)
-        # Default to the sale's own narx AND its currency + kurs: crediting a so'm
-        # sale back at today's rate would refund a different sum than was charged.
-        if self.sale and not self.instance.pk:
-            self.initial.setdefault("price", self.sale.price)
-            self.initial.setdefault("currency", self.sale.currency)
-            self.initial.setdefault("exchange_rate", self.sale.exchange_rate)
-            if self.sale.currency == Currency.UZS:
-                self.initial["price"] = self.sale.price_uzs
+        _customer_payer_field(self.fields["customer"])
+        customer = self.current_customer()
+        if customer is not None and not self.can_overpay(customer):
+            for name in self.settlement_fields:
+                self.fields.pop(name, None)
+        self.fields["date"].widget = date_widget()
+        self.fields["date"].initial = timezone.localdate
+        no_future_date(self.fields["date"])
+        #: [(sale, kg, qarzdan_usd, qarzdan_uzs)] the operator asked for — filled by
+        #: clean(), written by the view.
+        self.rows = []
+        #: {currency: summa} that cancelled qarz, and that is owed back.
+        self.to_debt = {}
+        self.excess = {}
+
+    @property
+    def rendered_fields(self):
+        """The generic renderer's protocol (see `_form_fields.html`), used here to
+        HOLD BACK the settlement fields so the rows partial can draw them under the
+        table. Everything else keeps its declared order."""
+        return [{"group": False, "field": self[name]} for name in self.fields
+                if name not in self.settlement_fields]
+
+    @property
+    def total_excess(self):
+        """Whether ANY money is owed back, in any currency — the one question the
+        settlement radio depends on. Summed across heaps only to answer yes or no;
+        no figure derived from it is ever shown."""
+        return sum((own_side_pair(currency, pair)
+                    for currency, pair in self.excess.items()), Decimal("0"))
 
     def clean(self):
         cleaned = super().clean()
-        kg = cleaned.get("kg")
-        if self.sale is None:
-            raise forms.ValidationError("Sotuv topilmadi")
-        if kg is not None and kg <= 0:
-            self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if kg is not None and kg > 0:
-            already_returned = sum(
-                (r.kg for r in self.sale.returns.exclude(pk=self.instance.pk)), Decimal("0"))
-            available = self.sale.kg - already_returned
-            if kg > available:
-                self.add_error("kg", f"Qaytarish sotilgan kg dan oshmasligi kerak ({available} kg)")
-        return cleaned
+        customer = cleaned.get("customer")
+        if customer is None:
+            return cleaned
 
-    def save(self, commit=True):
-        obj = super().save(commit=False)
-        obj.sale = self.sale
-        if commit:
-            obj.save()
-        return obj
+        sales = {s.pk: s for s in customer.sales
+                 .select_related("line__contract_line")
+                 .prefetch_related("returns", "allocations")}
+        for sale_id, kg in parse_return_rows(self.data):
+            sale = sales.get(sale_id)
+            if sale is None:
+                # A stale or tampered id. Refused rather than skipped: silently
+                # dropping a row the operator can see on screen would save a vazvrat
+                # smaller than the one they pressed the button on.
+                raise forms.ValidationError("Sotuv bu mijozga tegishli emas.")
+            left = sale.returnable_kg
+            if kg > left:
+                self.add_error(
+                    None,
+                    f"#{sale.pk} · {sale.line.contract_line.brand}: ko'pi bilan "
+                    f"{_clean_number(left)} kg qaytarish mumkin "
+                    f"(sotilgan {_clean_number(sale.kg)} kg).")
+                continue
+            # The split, in the sotuv's own money. Worked out here rather than in the
+            # view so one place decides it and the modal can print it back before
+            # anything is saved.
+            value_usd = (kg * sale.price).quantize(Decimal("0.01"),
+                                                   rounding=ROUND_HALF_UP)
+            value_uzs = (kg * sale.price_uzs).quantize(Decimal("0.01"),
+                                                       rounding=ROUND_HALF_UP)
+            value = value_uzs if sale.is_som else value_usd
+            open_debt = max(Decimal("0"), sale.remaining_own)
+            to_debt = min(value, open_debt)
+            self.to_debt[sale.currency] = self.to_debt.get(
+                sale.currency, Decimal("0")) + to_debt
+            # Both columns of the qarz half, as the same fraction of this line's pair
+            # — the rule every derived figure in the app follows, so the two halves
+            # can never disagree about the kurs.
+            debt_share = (to_debt / value) if value else Decimal("0")
+            self.rows.append((
+                sale, kg,
+                (value_usd * debt_share).quantize(Decimal("0.01"),
+                                                  rounding=ROUND_HALF_UP),
+                (value_uzs * debt_share).quantize(Decimal("0.01"),
+                                                  rounding=ROUND_HALF_UP)))
+            if value <= to_debt or not value:
+                continue
+            # Both columns of the excess, taken as the same FRACTION of this line's
+            # pair rather than each converted on its own: the two halves of a stored
+            # figure have to agree about what the kurs was that day, and the only
+            # kurs that has any standing here is the sotuv's own.
+            share = (value - to_debt) / value
+            usd, uzs = self.excess.get(sale.currency, (Decimal("0"), Decimal("0")))
+            self.excess[sale.currency] = (
+                usd + (value_usd * share).quantize(Decimal("0.01"),
+                                                   rounding=ROUND_HALF_UP),
+                uzs + (value_uzs * share).quantize(Decimal("0.01"),
+                                                   rounding=ROUND_HALF_UP))
+
+        if not self.rows and not self.errors:
+            self.add_error(None, "Hech bo'lmasa bitta qatorga qaytgan kg ni kiriting.")
+
+        settle = cleaned.get("settle") or self.SETTLE_ADVANCE
+        cleaned["settle"] = settle
+        # Only asked when there IS money to hand back; on an unpaid sotuv the whole
+        # vazvrat lands on the qarz and the question has no answer.
+        if self.total_excess > 0 and settle == self.SETTLE_OWED and not cleaned.get("due_date"):
+            self.add_error("due_date", "Qaysi kuni qaytarishni belgilang.")
+        return cleaned
 
 
 def _customer_payer_field(field):

@@ -114,6 +114,22 @@ that says nothing on almost every load of this page.
 {% endif %}
 
 {% comment %}
+The mirror of the note above, for money owed the other way: a vazvrat we settled by
+promising cash rather than paying it. Same rule — still in the safe, so never netted
+off Kassada — but this one carries a DAY, so the nearest one is named. Someone deciding
+whether we can pay a hamkor today needs to see both of the claims on the same till.
+{% endcomment %}
+{% if refund_split %}
+<p class="ktiles-foot kassa-pending">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+  <a href="{% url 'return_list' %}">Vazvrat bo'yicha qaytariladi</a>:
+  {% for currency, amount in refund_split %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
+  — {{ refund_count }} ta mijozga va'da qilingan{% if refund_due %}, eng yaqini {{ refund_due }}{% endif %}.
+  Pul hozircha kassada, berilgan kuni chiqim bo'ladi.
+</p>
+{% endif %}
+
+{% comment %}
 The Hozirgi holat board that used to sit here — Omborda, Yo'lda, Mijozlar qarzi and
 the six avans/qarz rows under three headings — is gone. Every one of those figures is
 the subject of a screen of its own, which is where it is read and acted on, and none

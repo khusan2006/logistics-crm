@@ -11,11 +11,11 @@ from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 
-from conftest import line_data
+from conftest import line_data, return_rows
 
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, PaymentAllocation,
-    Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
+    Partner, Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
     allocate_customer_payment, convert_pair,
 )
 
@@ -448,19 +448,14 @@ def test_restocked_return_reverses_both_revenue_and_profit(admin_client, db):
     sale = Sale.objects.get()
     assert sale.profit == Decimal("320.00")            # (2.00 − 1.20) × 400
 
-    admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "400", "currency": "usd", "exchange_rate": "12000", "price": "2.00",
-        "date": "2026-07-19", "restock": "on", "note": ""})
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "400"), customer=c, date="2026-07-19"))
     sale.refresh_from_db()
     assert sale.net_total == Decimal("0.00")
     assert sale.profit == Decimal("0.00")
     assert ShipmentLine.objects.get(pk=lot.pk).available_kg == Decimal("1000.000")
 
 
-@pytest.mark.xfail(reason="BUG: Sale._returned_profit only counts restocked returns, so a "
-                          "scrapped (restock=False) return credits the mijoz in full while "
-                          "foyda keeps the whole margin AND the cost of the lost goods",
-                   strict=False)
 def test_non_restocked_return_removes_the_profit_it_credited(admin_client, db):
     """A qaytarish that is NOT put back on the shelf: the mijoz is credited the full
     kg × narx (net_total → 0) but the granula is gone, so the cost was still
@@ -472,9 +467,13 @@ def test_non_restocked_return_removes_the_profit_it_credited(admin_client, db):
     sale = Sale.objects.get()
     assert sale.profit == Decimal("320.00")
 
-    admin_client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": "400", "currency": "usd", "exchange_rate": "12000", "price": "2.00",
-        "date": "2026-07-19", "restock": "", "note": ""})
+    # Written straight to the model: a vazvrat entered through the app always puts
+    # the granula back on the shelf, so this state can only be reached by a row that
+    # says the goods were scrapped. The question is what the FOYDA does about it.
+    Return.objects.create(sale=sale, kg=Decimal("400"), price=Decimal("2.00"),
+                          price_uzs=Decimal("24000"), currency="usd",
+                          exchange_rate=Decimal("12000"), date="2026-07-19",
+                          restock=False)
     sale.refresh_from_db()
     assert sale.net_total == Decimal("0.00")           # every dollar credited back
     assert ShipmentLine.objects.get(pk=lot.pk).available_kg == Decimal("600.000")

@@ -49,7 +49,13 @@
     <td>{{ g.partners|join:", " }}</td>
     <td>{{ g.arrived_last }}</td>
     <td class="num">{{ g.kirim|floatformat:"-3" }}</td>
-    <td class="num">{{ g.sold|floatformat:"-3" }}</td>
+    {% comment %}
+    Sotilgan is every kg that left; the line under it is the part that came back on a
+    vazvrat and is on the shelf again. It is why Kirim − Sotilgan does not equal
+    Sotish mumkin on a marka that has had one.
+    {% endcomment %}
+    <td class="num">{{ g.sold|floatformat:"-3" }}
+      {% if g.returned %}<div class="vz load-sub">+{{ g.returned|floatformat:"-3" }} qaytdi</div>{% endif %}</td>
     {% comment %}
     Sotish mumkin is the whole physical shelf, because that is the ceiling the sotuv
     form enforces. Bronlangan sits beside it rather than coming out of it: the bron is

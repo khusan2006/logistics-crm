@@ -103,40 +103,105 @@ found by scrolling Sotuvlar.
 </div>
 {% endif %}
 
+{% comment %}
+Vazvrat, read at the MIJOZ's level rather than this receipt's.
+
+Somebody on this page is not asking "was this one sotuv returned" — they are asking
+how much of what we handed this person has come back and how much is still out there.
+The three figures answer that; the table under them is every visit they made, with the
+sotuv each line came off, so a vazvrat can always be read back to the narx it was
+valued at.
+
+The button opens the SAME modal the Vazvrat bo'limi opens, with this mijoz already
+chosen and this sotuv's row highlighted. Two doors, one code path — a second vazvrat
+form would drift into a second answer.
+{% endcomment %}
 <div class="card">
-  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
-    <h3 style="margin: 0;">Qaytarishlar</h3>
-    <a class="btn" href="{% url 'return_create' %}?sale={{ sale.pk }}" data-modal>+ Qaytarish</a>
+  {% comment %}
+  `load-panel-head` rather than `row-actions`: the latter is not a flex container, so
+  the h3 inside it kept its own line and the button dropped underneath. This is the
+  same header row the yuk panel uses.
+  {% endcomment %}
+  <div class="load-panel-head" style="margin-bottom: 14px;">
+    <h3 style="margin: 0;">Vazvrat — {{ sale.customer.name }}</h3>
+    <a class="btn" href="{% url 'return_create' %}?sale={{ sale.pk }}" data-modal>+ Vazvrat</a>
   </div>
-  {% if sale.returns.all %}
+
+  <div class="kpi-grid" style="margin-bottom: 14px;">
+    <div class="kpi">
+      <div class="kpi-head"><span class="kpi-label">Jami berilgan</span></div>
+      <div class="kpi-value">{{ cust_sold_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+    </div>
+    {% comment %}
+    The kg and the money are one fact seen twice, so they carry one colour — the same
+    blue the vazvrat's figures carry everywhere else.
+    {% endcomment %}
+    <div class="kpi">
+      <div class="kpi-head"><span class="kpi-label">Qaytardi</span></div>
+      <div class="kpi-value vz">{{ cust_returned_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+      {% for currency, amount in cust_returned_value %}
+      <div class="kpi-note vz">{% money_in amount currency %}</div>
+      {% endfor %}
+    </div>
+    <div class="kpi">
+      <div class="kpi-head"><span class="kpi-label">Qo'lida bor</span></div>
+      <div class="kpi-value">{{ cust_holding_kg|floatformat:"0g" }}<span class="unit">kg</span></div>
+    </div>
+  </div>
+
+  {% if cust_return_batches %}
   <div class="table-wrap">
     <table>
       <tr>
         <th>Sana</th>
+        <th>Tovar</th>
         <th>Kg</th>
-        <th>Narx</th>
-        <th>Summa</th>
-        <th>Restock?</th>
+        <th>Qiymati</th>
+        <th>Puli</th>
         <th>Izoh</th>
-        <th></th>
       </tr>
-      {% for r in sale.returns.all %}
-      <tr>
-        <td>{{ r.date }}</td>
-        <td>{{ r.kg|floatformat:"-3" }}</td>
-        <td>{% rate r.price r.price_uzs r.currency %}</td>
-        <td>{% money r.amount r.amount_uzs r.currency %}</td>
-        <td>{% if r.restock %}Ha{% else %}Yo'q{% endif %}</td>
-        <td>{{ r.note|default:"—" }}</td>
-        <td class="row-actions">
-          <a class="btn btn-ghost" href="{% url 'return_delete' r.pk %}" data-modal>O'chirish</a>
+      {% for b in cust_return_batches %}
+      <tr{% if b.customer_id == sale.customer_id %}{% endif %}>
+        <td>{{ b.date }}</td>
+        <td>
+          {% for line in b.lines.all %}
+          <div class="cell-line">
+            {{ line.sale.line.contract_line.brand }} · {{ line.kg|floatformat:"-3" }} kg
+            <span class="muted">(#{{ line.sale_id }}{% if line.sale_id == sale.pk %} — shu sotuv{% endif %})</span>
+          </div>
+          {% endfor %}
         </td>
+        <td>{{ b.total_kg|floatformat:"-3" }} kg</td>
+        <td>
+          {% for currency, amount in b.total_by_currency %}
+          <div class="cell-line">{% money_in amount currency %}</div>
+          {% endfor %}
+        </td>
+        {% comment %}
+        Where the money went, which is the half a kg figure cannot show: onto the qarz,
+        into the avans, or out of the kassa — and if it has not gone out yet, that too.
+        {% endcomment %}
+        <td>
+          {% for currency, amount in b.to_debt_by_currency %}
+          <div class="cell-line"><span class="badge badge-todebt">−{% money_in amount currency %}</span> qarzdan ayirildi</div>
+          {% endfor %}
+          {% for currency, amount in b.advance_by_currency %}
+          <div class="cell-line"><span class="badge badge-toadvance">{% money_in amount currency %}</span> avansga</div>
+          {% endfor %}
+          {% for s in b.settlements.all %}
+          <div class="cell-line">
+            <span class="badge badge-torefund">{% money_in s.amount_own s.currency %}</span>
+            {% if s.is_pending %}{{ s.due_date }} kuni qaytariladi{% else %}naqd qaytarildi{% endif %}
+          </div>
+          {% endfor %}
+        </td>
+        <td>{{ b.note|default:"—" }}</td>
       </tr>
       {% endfor %}
     </table>
   </div>
   {% else %}
-  <p class="muted">Hali qaytarish qilinmagan.</p>
+  <p class="muted">Bu mijoz hali vazvrat qilmagan.</p>
   {% endif %}
 </div>
 
@@ -184,7 +249,12 @@ its own and would otherwise look like it appeared from nowhere.
         <td>{{ h.at|date:"d.m.y H:i" }}</td>
         <td>{{ h.action }}</td>
         <td>
-          {% if h.before %}<span class="muted">{{ h.before|floatformat:"-3" }}</span> →
+          {% comment %}
+          A vazvrat's kg is not where the sotuv landed, it is what came back, so it is
+          drawn with a minus and never as an arrow between two states.
+          {% endcomment %}
+          {% if h.returned %}<strong class="late">−{{ h.returned|floatformat:"-3" }}</strong>
+          {% elif h.before %}<span class="muted">{{ h.before|floatformat:"-3" }}</span> →
           <strong>{{ h.after|floatformat:"-3" }}</strong>
           {% elif h.after %}<strong>{{ h.after|floatformat:"-3" }}</strong>
           {% else %}<span class="muted">—</span>{% endif %}

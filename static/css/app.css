@@ -1082,6 +1082,18 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
 /* Blue badge — for events that are neither a plain income nor an outflow (e.g. a
    new sale / receivable), so they don't read the same green as a debt payment */
 .badge-info { background: var(--accent-soft); color: var(--accent); }
+/* Where a vazvrat's money went. Three destinations, three colours, so a glance
+   answers the question the figure alone cannot: blue came off the qarz and moved
+   nothing, violet is sitting as the mijoz's avans, red left the kassa. Read
+   together on one row they are also a check — the three must add up to the value
+   that came back. */
+.badge-todebt { background: var(--accent-soft); color: var(--accent); }
+/* Plain text — a kg figure, a sub-line — that moved because of a vazvrat. Same blue
+   as the badge, so a returned quantity and the money it took off the qarz read as
+   the one event they are. */
+.vz { color: var(--accent); }
+.badge-toadvance { background: var(--violet-soft); color: var(--violet); }
+.badge-torefund { background: var(--danger-soft); color: var(--danger); }
 
 /* Signed money — income green, outflow red, sale (receivable) blue */
 .amt-in { color: var(--success); }
@@ -2611,7 +2623,7 @@ ul.errorlist li::before { content: "⚠ "; }
 /* Yuk cell toggles the inline panel — show it's clickable, mark the open row */
 .load-toggle { cursor: pointer; }
 .load-toggle:hover .leg-expand { background: var(--surface-hover); }
-.load-row.is-expanded td, .stock-row.is-expanded td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.load-row.is-expanded td, .stock-row.is-expanded td, .sale-row.is-expanded td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
 /* Only the ombor table gets the accent bar on its left edge. A yuk's edge belongs
    to kechikkan + QR kod, and the pseudo-element bar draws over an inset shadow —
    so the same rule here would be a dead one. The open row is marked by its tinted
@@ -2622,11 +2634,11 @@ ul.errorlist li::before { content: "⚠ "; }
 .leg-expand { width: 24px; height: 24px; padding: 0; margin-right: 7px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent); font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transition: transform .15s ease, background .15s ease, color .15s ease; }
 .leg-expand:hover { background: var(--surface-hover); }
 .leg-expand.is-open { transform: rotate(90deg); background: var(--accent); border-color: var(--accent); color: #fff; }
-.legs-detail > td, .stock-detail > td { background: var(--surface-2); padding: 0; box-shadow: inset 3px 0 0 var(--accent); }
+.legs-detail > td, .stock-detail > td, .sale-detail > td { background: var(--surface-2); padding: 0; box-shadow: inset 3px 0 0 var(--accent); }
 /* Pinned to the scroll container's visible width (JS sets the exact width),
    so the panel never runs past the horizontal-scroll edge. white-space resets
    the global `td { nowrap }` so panel text wraps inside the pinned width. */
-.legs-detail .legs-inline, .stock-detail .legs-inline { position: sticky; left: 0; box-sizing: border-box; padding: 14px 18px 16px; white-space: normal; }
+.legs-detail .legs-inline, .stock-detail .legs-inline, .sale-detail .legs-inline { position: sticky; left: 0; box-sizing: border-box; padding: 14px 18px 16px; white-space: normal; }
 .legs-inline-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .legs-inline-table { width: 100%; background: var(--surface); border-radius: 10px; }
 .legs-inline-table th, .legs-inline-table td { padding: 7px 10px; font-size: 13px; }

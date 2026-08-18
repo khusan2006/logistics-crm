@@ -102,8 +102,15 @@ urlpatterns = [
     path("reservations/<int:pk>/delete/", crm_views.reservation_delete, name="reservation_delete"),
     path("reservations/<int:pk>/cancel/", crm_views.reservation_cancel, name="reservation_cancel"),
     path("reservations/<int:pk>/close/", crm_views.reservation_close, name="reservation_close"),
+    path("returns/", crm_views.return_list, name="return_list"),
     path("returns/new/", crm_views.return_create, name="return_create"),
-    path("returns/<int:pk>/delete/", crm_views.return_delete, name="return_delete"),
+    # The rows for one mijoz, fetched by the modal when the mijoz select changes.
+    path("returns/rows/", crm_views.return_rows, name="return_rows"),
+    # `batch` before the int route so the word cannot be read as a pk.
+    path("returns/batch/<int:pk>/delete/", crm_views.return_batch_delete,
+         name="return_batch_delete"),
+    path("return-settlements/<int:pk>/pay/", crm_views.return_settlement_pay,
+         name="return_settlement_pay"),
     path("customer-payments/", crm_views.customer_payment_list, name="customer_payment_list"),
     path("customer-payments/new/", crm_views.customer_payment_create, name="customer_payment_create"),
     path("customer-payments/<int:pk>/", crm_views.customer_payment_detail, name="customer_payment_detail"),

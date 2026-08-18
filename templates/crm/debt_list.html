@@ -26,6 +26,46 @@ how a debtor is looked up.
   {% include "crm/_daterange.html" %}
 </div>
 
+{% comment %}
+The debts that run the other way — a mijoz who returned goods they had already paid
+for and is waiting on their money. Above the table on purpose: it is a short list,
+it is money going OUT, and somebody reading this page is deciding who to chase and
+who to pay. Outside the davr filter, like the same block on Vazvrat.
+{% endcomment %}
+{% if owed %}
+<div class="card" style="margin-bottom: 16px;">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 12px;">
+    <h3 style="margin: 0;">Biz qarzdormiz</h3>
+    <div>
+      {% for currency, amount in owed_totals %}
+      <span class="badge badge-warning">{% money_in amount currency %}</span>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <tr><th class="sticky-col">Mijoz</th><th>Summa</th><th>Qaysi kuni</th><th></th></tr>
+      {% for row in owed %}
+      <tr>
+        <td class="sticky-col">
+          <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a>
+        </td>
+        <td>
+          {% for currency, amount in row.amounts %}
+          <div class="cell-line"><span class="badge badge-warning">{% money_in amount currency %}</span></div>
+          {% endfor %}
+        </td>
+        <td>{{ row.due|default:"—" }}</td>
+        <td class="row-actions">
+          <a class="btn btn-ghost" href="{% url 'return_list' %}">Vazvratda ko'rish</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
 {% if page.object_list %}
 <div class="table-wrap">
 <table>

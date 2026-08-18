@@ -8,6 +8,7 @@
     {% include "crm/_form_fields.html" %}
     {% if lines %}{% include "crm/_line_fields.html" %}{% endif %}
     {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
+    {% if return_rows_url %}{% include "crm/_return_lines.html" %}{% endif %}
     {# same live FIFO preview the modal gets — see _modal.html #}
     {% if shift_preview_url %}
     <div data-shift-preview="{{ shift_preview_url }}"></div>
