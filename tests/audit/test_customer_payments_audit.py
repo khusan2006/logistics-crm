@@ -16,7 +16,7 @@ from decimal import Decimal
 import pytest
 from django.db.models import Sum
 
-from conftest import payment_rows
+from conftest import payment_rows, return_rows
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
     PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus,
@@ -568,10 +568,8 @@ def test_a_return_on_a_paid_sotuv_frees_the_excess_instead_of_over_capping(admin
     payment = _create_payment(admin_client, customer, amount="1000")
     assert _alloc_sum(sale=paid) == Decimal("1000.00")
 
-    resp = admin_client.post(f"/returns/new/?sale={paid.pk}", {
-        "sale": paid.pk, "kg": "400", "currency": "usd", "price": "1.00",
-        "exchange_rate": "12000", "date": "2026-07-12", "restock": "on", "note": "",
-    })
+    resp = admin_client.post("/returns/new/", return_rows(
+        (paid, "400"), customer=customer, date="2026-07-12"))
     assert resp.status_code == 302
 
     paid.refresh_from_db()

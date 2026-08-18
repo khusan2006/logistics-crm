@@ -29,8 +29,17 @@
   <tr>
     <td class="sticky-col">{{ s.date }}</td>
     <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
-    <td>{{ s.kg|floatformat:"-3" }}</td>
-    <td>{% money s.total s.total_uzs s.currency %}</td>
+    {% comment %}
+    Net of vazvratlar, the same as Sotuvlar and for the same reason: this table sits
+    directly above a Qoldiq built on the net figure, so a gross Kg and Jami beside it
+    disagree by exactly the amount that came back — and the mijoz reading it is being
+    told their returned goods are still theirs to pay for.
+    {% endcomment %}
+    <td>
+      {{ s.net_kg|floatformat:"-3" }}
+      {% if s.returned_kg %}<div class="muted">{{ s.returned_kg|floatformat:"-3" }} kg qaytdi</div>{% endif %}
+    </td>
+    <td>{% money s.net_total s.net_total_uzs s.currency %}</td>
     <td>{% money s.paid s.paid_uzs s.currency %}</td>
     <td class="late">{% money s.remaining s.remaining_uzs s.currency %}</td>
     <td>

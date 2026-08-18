@@ -124,6 +124,10 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="16" cy="14" r="1.5"/></svg></span>
           <span>Kassa</span>
         </a>
+        <a class="nav-item {% if 'return' in url_name %}active{% endif %}" href="{% url 'return_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></span>
+          <span>Vazvrat</span>
+        </a>
         {% endif %}
       </div>
       {% endif %}
@@ -192,7 +196,13 @@
     <main class="content">
       {% block content %}{% endblock %}
     </main>
-    {% if user.is_authenticated %}<div class="fab-stack">{% block fab %}{% endblock %}</div>{% endif %}
+    {% comment %}
+    One action per page needs no menu and gets none. A page with five of them (Kassa)
+    adds `fab-stack--menu` and puts a `.fab--menu` toggle first in its block — first,
+    because the stack is drawn column-reverse and the toggle belongs at the bottom,
+    where the single button used to be.
+    {% endcomment %}
+    {% if user.is_authenticated %}<div class="fab-stack{% block fab_class %}{% endblock %}">{% block fab %}{% endblock %}</div>{% endif %}
   </div>
 </div>
 
@@ -1142,6 +1152,183 @@
     }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
     enhance(document);
+  })();
+
+  // Vazvrat rows ([data-return-lines]): the table of what a mijoz is holding is
+  // fetched when the mijoz select changes, rather than every mijoz's sotuvlar being
+  // shipped into the page. That keeps the modal the same size for a mijoz with four
+  // sotuvlar and one with forty, and — the reason that matters — means the kg ceiling
+  // printed on a row came from the same query the form will check it against.
+  (function () {
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-return-lines]').forEach(function (box) {
+        if (box.dataset.returnReady) { return; }
+        box.dataset.returnReady = '1';
+        var form = box.closest('form');
+        var select = form && form.querySelector('[name="customer"]');
+        var url = box.getAttribute('data-return-lines');
+        if (!select || !url) { return; }
+        var seq = 0;
+        select.addEventListener('change', function () {
+          // A slower earlier request must not overwrite a newer answer — the same
+          // guard the FIFO preview uses.
+          var mine = ++seq;
+          fetch(url + '?customer=' + encodeURIComponent(select.value || ''),
+                { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (html) {
+              if (mine !== seq) { return; }
+              box.innerHTML = html;
+              // The new boxes are data-money inputs that have never been through the
+              // formatter, so they would take "1 000" and submit it as typed.
+              if (window.enhanceMoneyInputs) { window.enhanceMoneyInputs(box); }
+              // …and the table that came with them has never been measured, so the
+              // grab hand would be offered on the mijoz the modal opened with and on
+              // nobody chosen after them.
+              if (window.refreshDraggableTables) { window.refreshDraggableTables(box); }
+              // Fresh boxes are empty, so this clears last mijoz's preview rather
+              // than leaving their figures standing under somebody else's sotuvlar.
+              if (window.refreshReturnPreview) { window.refreshReturnPreview(box); }
+            })
+            .catch(function () { /* leave the old rows up rather than blanking them */ });
+        });
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
+  // Vazvrat money routes ([data-settle]): the three answers to "what about the part
+  // the mijoz had already paid for" do not ask for the same things, so each one
+  // shows only its own fields — the usul the cash comes out of, the day a promise
+  // falls due — and the note under it names the heap the money is moving to or from.
+  //
+  // The block is SERVED folded (the hidden attributes are written server-side from
+  // the route the form is on), so this only has to keep up with clicks. Delegated
+  // rather than bound per element: the rows partial is swapped out whole whenever the
+  // mijoz changes, and a listener bound to the old radios would go with it.
+  (function () {
+    function apply(group) {
+      var picked = group.querySelector('[name=settle]:checked');
+      var route = picked ? picked.value : 'advance';
+      var methodEl = group.querySelector('[name=method]');
+      var method = methodEl ? methodEl.value : '';
+      Array.prototype.forEach.call(group.querySelectorAll('[data-settle-for]'), function (el) {
+        var shown = el.getAttribute('data-settle-for').split(' ').indexOf(route) !== -1;
+        // A per-usul line is the chosen heap's own; the others stay down even on
+        // the route that draws them.
+        var only = el.getAttribute('data-settle-method');
+        el.hidden = !(shown && (!only || only === method));
+      });
+    }
+    function applyAll(root) {
+      Array.prototype.forEach.call((root || document).querySelectorAll('[data-settle]'), apply);
+    }
+    document.addEventListener('change', function (e) {
+      if (e.target.name !== 'settle' && e.target.name !== 'method') { return; }
+      var group = e.target.closest('[data-settle]');
+      if (group) { apply(group); }
+    });
+    document.addEventListener('modal:loaded', function (e) { applyAll(e.detail || document); });
+    if (document.readyState !== 'loading') { applyAll(document); }
+    else { document.addEventListener('DOMContentLoaded', function () { applyAll(document); }); }
+  })();
+
+  // Vazvrat: what the typed kg come to, as they are typed. Each box carries its
+  // sotuv's narx and what that sotuv still owes, so the split every vazvrat makes —
+  // qarzdan ayiriladi first, and only the rest goes back to the mijoz — can be shown
+  // per row and summed per currency without asking the server between keystrokes.
+  //
+  // The same rule the form applies on POST, in the same order. It is a preview, not
+  // a second opinion: the figures the modal prints and the figures it saves come out
+  // of one arithmetic.
+  (function () {
+    function num(v) { return parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0; }
+    function fmt(n, currency) {
+      if (currency === 'usd') { return window.fmtUsd(n); }
+      // toFixed(2) FIRST, always: the trailing-zero trim below would otherwise eat
+      // the zeroes of a round number and turn 1 800 000 into 18.
+      var s = Math.abs(n).toFixed(2).replace(/\.?0+$/, '');
+      var parts = s.split('.');
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+      return (n < 0 ? '-' : '') + parts.join('.') + " so'm";
+    }
+    function refresh(box) {
+      var totals = {};       // {currency: {value, debt, customer}}
+      Array.prototype.forEach.call(box.querySelectorAll('[data-return-kg]'), function (input) {
+        var line = input.parentNode.querySelector('[data-return-line]');
+        var kg = num(input.value);
+        var currency = input.getAttribute('data-currency');
+        var value = kg * num(input.getAttribute('data-price'));
+        // The sotuv's own qarz swallows the value first; what is left is money the
+        // mijoz had already paid, and that is theirs again.
+        var debt = Math.min(value, num(input.getAttribute('data-debt')));
+        var customer = value - debt;
+        if (line) {
+          // The FIGURE only, on one unbreakable line. The row's box is as narrow as
+          // a kg box, and spelling the split out under it wrapped into three ragged
+          // lines and grew the row from 70px to 129px — so where the money goes is
+          // said once, properly, in the summary under the table.
+          line.hidden = !(kg > 0);
+          line.textContent = kg > 0 ? fmt(value, currency) : '';
+        }
+        if (kg <= 0) { return; }
+        var t = totals[currency] || (totals[currency] = { value: 0, debt: 0, customer: 0 });
+        t.value += value; t.debt += debt; t.customer += customer;
+      });
+      var out = box.querySelector('[data-return-total]');
+      if (!out) { return; }
+      var currencies = Object.keys(totals);
+      out.hidden = !currencies.length;
+      // Each heap in its own money and never added across them — the same rule the
+      // whole vazvrat is built on.
+      out.innerHTML = currencies.map(function (currency) {
+        var t = totals[currency];
+        var parts = ['Jami qaytadi: <strong>' + fmt(t.value, currency) + '</strong>'];
+        if (t.debt > 0) { parts.push('<span class="vz">qarzdan −' + fmt(t.debt, currency) + '</span>'); }
+        if (t.customer > 0) { parts.push('<span class="return-back">mijozga ' + fmt(t.customer, currency) + '</span>'); }
+        return parts.join(' · ');
+      }).join('<br>');
+    }
+    function refreshAll(root) {
+      Array.prototype.forEach.call((root || document).querySelectorAll('[data-return-lines]'), refresh);
+    }
+    document.addEventListener('input', function (e) {
+      if (!e.target.hasAttribute || !e.target.hasAttribute('data-return-kg')) { return; }
+      var box = e.target.closest('[data-return-lines]');
+      if (box) { refresh(box); }
+    });
+    // The rows are swapped out whole when the mijoz changes, and a re-render after a
+    // validation error brings typed kg back with it — both need one pass.
+    window.refreshReturnPreview = refreshAll;
+    document.addEventListener('modal:loaded', function (e) { refreshAll(e.detail || document); });
+    if (document.readyState !== 'loading') { refreshAll(document); }
+    else { document.addEventListener('DOMContentLoaded', function () { refreshAll(document); }); }
+  })();
+
+  // The kassa's action menu ([data-fab-toggle]): five buttons folded behind one
+  // arrow. Hovering the arrow opens them — that part is CSS and needs no script —
+  // and pressing it PINS them open so the pointer can leave without putting them
+  // away. Pressing it again, Escape, or a press anywhere else closes it.
+  (function () {
+    function stack() { return document.querySelector('.fab-stack--menu'); }
+    function set(box, open) {
+      box.classList.toggle('is-open', open);
+      var btn = box.querySelector('[data-fab-toggle]');
+      if (btn) { btn.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+    }
+    document.addEventListener('click', function (e) {
+      var box = stack();
+      if (!box) { return; }
+      if (e.target.closest('[data-fab-toggle]')) { set(box, !box.classList.contains('is-open')); }
+      // Anything else puts it away — including one of its own actions, which opens a
+      // modal the menu would otherwise stay pinned open behind.
+      else if (box.classList.contains('is-open')) { set(box, false); }
+    });
+    document.addEventListener('keydown', function (e) {
+      var box = e.key === 'Escape' ? stack() : null;
+      if (box && box.classList.contains('is-open')) { set(box, false); }
+    });
   })();
 
   // Inline quick-add (data-quick-add-url): a "+ <label>" button next to a select
@@ -2145,6 +2332,12 @@
         e.stopPropagation();
       }
     }, true);
+
+    // Exported because `modal:loaded` is not the only way a table arrives: the
+    // vazvrat modal SWAPS its table out whenever the mijoz changes, and the one
+    // that replaces it has never been measured. Without this the grab hand was
+    // offered on the table the modal opened with and on no other.
+    window.refreshDraggableTables = refresh;
 
     window.addEventListener('resize', function () { refresh(); });
     document.addEventListener('modal:loaded', function (e) { refresh(e.detail || document); });

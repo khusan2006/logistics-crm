@@ -16,7 +16,33 @@
       {# Clears the search term only — the chosen davr stays where it is. #}
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
+    {% if changed %}<input type="hidden" name="changed" value="{{ changed }}">{% endif %}
+    {% if new %}<input type="hidden" name="new" value="{{ new }}">{% endif %}
   </form>
+  {% comment %}
+  The day's two questions, as two lenses over a list that is ordered by the SOTUV's
+  own sana and therefore answers neither on its own.
+
+  Yangilanganlar (blue) — a vazvrat, an edit or an undone vazvrat touched this sotuv
+  today. Correcting a sotuv from three weeks ago moves a row pages away from where
+  the operator is standing, so without this the change is invisible on the screen it
+  changed. Yangi sotuvlar (green) — entered today, whatever sana was typed on it.
+
+  Blue for moved, green for new, the same two colours the row chips carry, so the
+  toggle and the rows it finds read as one thing. Each clears itself when pressed
+  while on, and turns the other off: they are two ways of looking, not two filters
+  to combine — "changed today AND new today" is a question nobody asks.
+  {% endcomment %}
+  <a class="btn btn-sm btn-blue{% if changed %} is-on{% endif %}"
+     href="{% if changed %}{% querystring changed=None page=None %}{% else %}{% querystring changed='today' new=None page=None %}{% endif %}"
+     title="Bugun vazvrat, tahrir yoki bekor qilish tegib o'tgan sotuvlar">
+    Yangilanganlar{% if changed_count %} ({{ changed_count }}){% endif %}
+  </a>
+  <a class="btn btn-sm btn-green{% if new %} is-on{% endif %}"
+     href="{% if new %}{% querystring new=None page=None %}{% else %}{% querystring new='today' changed=None page=None %}{% endif %}"
+     title="Bugun kiritilgan sotuvlar">
+    Yangi sotuvlar{% if new_count %} ({{ new_count }}){% endif %}
+  </a>
   {% include "crm/_daterange.html" %}
 </div>
 
@@ -50,19 +76,77 @@
   per lot the granula came off.
   {% endcomment %}
   {% for g in groups %}
-  <tr>
-    <td class="sticky-col">{{ g.first.date }}</td>
+  <tr class="sale-row"{% if g.returns %} data-sale="{{ g.first.pk }}"{% endif %}>
+    {% comment %}
+    The caret appears only on a sotuv that HAS vazvratlar — an expander that opens an
+    empty panel teaches the operator to stop pressing it. Same control as the one on
+    Yuklar, and it toggles the same way: the whole cell is the hit area, the row
+    beneath it holds the detail.
+    {% endcomment %}
+    <td class="sticky-col{% if g.returns %} sale-toggle{% endif %}"
+        {% if g.returns %}data-sale="{{ g.first.pk }}" title="Vazvratlarni ochish"{% endif %}>
+      {% if g.returns %}
+      <button type="button" class="leg-expand" data-sale="{{ g.first.pk }}"
+              title="Vazvratlar">&#9656;</button>
+      {% endif %}
+      {{ g.first.date }}
+    </td>
     {% comment %}
     Plain text for a skladchi: the sotuv's own page is admin-only and carries the
     narx, so a link there would be a 403 dressed up as a way in.
     {% endcomment %}
-    <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}</td>
+    <td>
+      {% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}
+      {% comment %}
+      Only on the day itself: a marker that never goes away marks nothing. Blue for a
+      sotuv that MOVED today — vazvrat, tahrir, bekor qilish — with the title naming
+      what moved, so the chip is a pointer rather than a puzzle; green for one that is
+      new today. A row can wear both: entered this morning and corrected after lunch.
+      The colours are the toggles' own, above.
+      {% endcomment %}
+      {% if g.changed_today or g.new_today %}
+      <div>
+        {% if g.new_today %}<span class="badge badge-ok" title="Bugun kiritilgan sotuv">yangi</span>{% endif %}
+        {% if g.changed_today %}<span class="badge badge-info" title="{{ g.changed_today|join:' · ' }}">yangilandi</span>{% endif %}
+      </div>
+      {% endif %}
+    </td>
     <td>{% for s in g.sales %}<div class="cell-line">#{{ s.line.shipment_id }} · {{ s.line.brand }}</div>{% endfor %}</td>
-    <td>{% for s in g.sales %}<div class="cell-line">{{ s.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    {% comment %}
+    The kg the mijoz kept. A row whose granula partly came back says so underneath
+    rather than quietly printing a smaller number, which would read as a typo — and
+    the money columns beside it are net of the same vazvrat.
+    {% endcomment %}
+    <td>
+      {% for s in g.sales %}
+      <div class="cell-line">
+        {{ s.net_kg|floatformat:"-3" }}
+        {% comment %}
+        Under the figure rather than beside it: inline, the note stretched the Kg
+        column wide enough to push the money columns off the edge of the table.
+        {% endcomment %}
+        {% if s.returned_kg %}
+        <div class="vz load-sub">−{{ s.returned_kg|floatformat:"-3" }} qaytdi</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </td>
     {% if user.is_admin_role %}
     <td>{% for s in g.sales %}<div class="cell-line">{% rate s.cost_price s.cost_price_uzs s.currency %}</div>{% endfor %}</td>
     <td>{% for s in g.sales %}<div class="cell-line">{% rate s.price s.price_uzs s.currency %}</div>{% endfor %}</td>
-    <td>{% money g.total g.total_uzs g.first.currency %}</td>
+    {% comment %}
+    Jami is already net of the vazvrat; the line under it says how much of that came
+    off the QARZ, which is the half an operator is asked about. The rest of a
+    vazvrat's value was money the mijoz had already paid, and it went back to them
+    rather than settling anything — so the two figures differ, and only one of them
+    belongs under a debt column.
+    {% endcomment %}
+    <td>
+      {% money g.total g.total_uzs g.first.currency %}
+      {% for currency, amount in g.returned_to_debt %}
+      <div class="vz load-sub" title="Vazvrat qarzdan shuncha ayirdi">−{% money_in amount currency %} qarzdan</div>
+      {% endfor %}
+    </td>
     <td>{% money g.profit g.profit_uzs g.first.currency %}</td>
     <td{% if g.owing %} class="late"{% endif %}>{% money g.remaining g.remaining_uzs g.first.currency %}</td>
     {% comment %}
@@ -80,6 +164,58 @@
     </td>
     {% endif %}
   </tr>
+  {% comment %}
+  The vazvratlar of this sotuv, opened from the caret — the same inline panel Yuklar
+  uses for its bosqichlar. It lives here rather than on the sotuv's own page because
+  the question it answers ("why is this row smaller than it was sold at") is asked
+  while reading the LIST.
+  {% endcomment %}
+  {% if g.returns %}
+  <tr class="sale-detail" data-sale="{{ g.first.pk }}" hidden>
+    <td colspan="{% if user.is_admin_role %}10{% else %}4{% endif %}">
+      <div class="legs-inline">
+        <div class="load-panel-head">
+          <strong>Vazvratlar</strong>
+          <span class="muted">{{ g.first.customer.name }} ·
+            {{ g.returned_kg|floatformat:"-3" }} kg qaytgan</span>
+          {% if user.is_admin_role %}
+          <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
+             href="{% url 'return_list' %}">Vazvrat bo'limi &rarr;</a>
+          {% endif %}
+        </div>
+        <table class="legs-inline-table">
+          <tr>
+            <th>Sana</th><th>Marka</th><th>Kg</th><th>Qiymati</th>
+            <th>Qarzdan ayirildi</th><th>Mijozga</th><th>Izoh</th>
+          </tr>
+          {% for s, r in g.returns %}
+          <tr>
+            <td>{{ r.date }}</td>
+            <td>{{ s.line.contract_line.brand }}</td>
+            <td>{{ r.kg|floatformat:"-3" }} kg</td>
+            <td>{% money_in r.amount_own r.currency %}</td>
+            <td>
+              {% if r.to_debt_own %}<span class="badge badge-todebt">−{% money_in r.to_debt_own r.currency %}</span>
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            {% comment %}
+            What did NOT go on the qarz: goods the mijoz had already paid for, so the
+            money is theirs again — as avans, or out of the kassa. The vazvrat row
+            itself does not know which; the Vazvrat bo'limi does, and the link above
+            goes there.
+            {% endcomment %}
+            <td>
+              {% if r.to_customer_own %}{% money_in r.to_customer_own r.currency %}
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td class="muted">{{ r.note|default:"—" }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </td>
+  </tr>
+  {% endif %}
   {% endfor %}
 </table>
 </div>
@@ -87,4 +223,41 @@
 {% else %}
 <p class="muted">Sotuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
+
+<script>
+// The vazvrat panel, opened from the caret — the same control Yuklar uses for its
+// bosqichlar, and deliberately the same behaviour: the whole Sana cell is the hit
+// area, and the panel is a hidden row rather than anything that moves the table.
+(function () {
+  function sizePanels() {
+    var wrap = document.querySelector('.table-wrap');
+    if (!wrap) { return; }
+    // The panel sits inside a horizontally scrolling table, so it is pinned to the
+    // VISIBLE width; left to itself its content would run off past the scroll edge.
+    document.querySelectorAll('.sale-detail .legs-inline').forEach(function (panel) {
+      panel.style.width = wrap.clientWidth + 'px';
+    });
+  }
+  window.addEventListener('resize', sizePanels);
+  sizePanels();
+
+  function toggle(saleId) {
+    var detail = document.querySelector('.sale-detail[data-sale="' + saleId + '"]');
+    var btn = document.querySelector('.leg-expand[data-sale="' + saleId + '"]');
+    if (!detail || !btn) { return; }
+    var willOpen = detail.hidden;
+    sizePanels();
+    detail.hidden = !willOpen;
+    btn.classList.toggle('is-open', willOpen);
+    btn.closest('tr').classList.toggle('is-expanded', willOpen);
+  }
+
+  document.querySelectorAll('.sale-toggle').forEach(function (cell) {
+    cell.addEventListener('click', function (e) {
+      if (e.target.closest('a')) { return; }   // a link in the cell keeps its own job
+      toggle(cell.getAttribute('data-sale'));
+    });
+  });
+})();
+</script>
 {% endblock %}

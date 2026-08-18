@@ -7,6 +7,7 @@
   {% include "crm/_form_fields.html" %}
   {% if lines %}{% include "crm/_line_fields.html" %}{% endif %}
   {% if alloc_sales %}{% include "crm/_payment_alloc_fields.html" %}{% endif %}
+  {% if return_rows_url %}{% include "crm/_return_lines.html" %}{% endif %}
   {% comment %}
   Correcting an old sotuv moves FIFO's answer for the whole marka. The JS fills this
   from a dry run as the kg is typed, so what shifts is on screen before Saqlash is

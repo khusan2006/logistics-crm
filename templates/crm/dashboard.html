@@ -21,6 +21,20 @@ anybody is owed, and a qoldiq is what is on the floor now or it is nothing. The 
 draws the same line between its daftar and its till, for the same reason — see
 crm/kassa.html.
 {% endcomment %}
+{% comment %}
+Above everything, and outside the davr: money we told a mijoz was theirs and have not
+handed over. It is the one thing on this board that is somebody's to DO rather than to
+read, and it is small enough to be forgotten — which is exactly why an overdue one
+says so rather than sitting quietly in a list.
+{% endcomment %}
+{% if owed_refunds %}
+<div class="cprog-note cprog-note--warn" style="margin-bottom: 16px;">
+  <a href="{% url 'return_list' %}">Vazvrat bo'yicha {{ owed_refunds|length }} ta mijozga qaytarilishi kerak</a>:
+  {% for currency, amount in owed_refund_split %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
+  {% if owed_refund_overdue %}— shundan {{ owed_refund_overdue }} tasining muddati o'tib ketgan{% endif %}
+</div>
+{% endif %}
+
 <div class="listbar">
   <div class="section-eyebrow">Davr natijalari</div>
   {% include "crm/_daterange.html" %}

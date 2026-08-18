@@ -1,0 +1,174 @@
+{% load crm_extras %}
+{% comment %}
+Everything in the vazvrat modal that depends on WHICH mijoz is chosen: what they are
+holding, and — only when it can arise — what to do with money that comes back. Served
+on its own by `return_rows` when the mijoz select changes, and included by
+`_return_lines.html` on first paint, so both paths draw the same block.
+{% endcomment %}
+
+{% comment %}
+The mijoz's state, before anything is typed. It answers the question an operator
+would otherwise answer wrongly by guessing: does returning goods here shrink a qarz,
+or hand money back? Everything below reads differently depending on the answer.
+{% endcomment %}
+{% if return_sales %}
+<p class="field-hint" style="margin-bottom: 10px; line-height: 1.55;">
+  {% if customer_debt %}
+    <span class="badge badge-warning">Qarzdor</span>
+    Bu mijozning ochiq qarzi
+    {% for currency, amount in customer_debt %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}.
+    Qaytgan tovar avval shu qarzdan kamayadi{% if can_overpay %}; qarzdan ortiqchasi mijozga qaytariladi{% else %}, kassadan pul chiqmaydi{% endif %}.
+  {% else %}
+    <span class="badge badge-ok">Qarzsiz</span>
+    Bu mijozning ochiq qarzi yo'q — qaytgan tovarning puli to'liq mijozga qaytadi.
+  {% endif %}
+  {% comment %}
+  The avans belongs on the STATE line, not only under the avans route: on a mijoz
+  whose qarz would swallow any vazvrat the money question is not asked at all (see
+  `ReturnBatchForm.can_overpay`), so a figure that only lived under that radio was
+  invisible on exactly the screens where somebody went looking for it.
+  {% endcomment %}
+  {% if customer_advance %}
+    <span class="badge badge-toadvance">Avans</span>
+    Mijozning avansida
+    {% for currency, amount in customer_advance %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
+    turibdi.
+  {% endif %}
+</p>
+{% endif %}
+
+{% comment %}
+One row per SOTUV, never one per marka. The same marka goes out to the same mijoz at
+several narx, so "5 000 kg qaytdi" has no value until it is tied to the row it came
+off. That tie is also why there is no narx box: the price is the sotuv's own, and a
+vazvrat can never be worth more per kg than the sotuv it reverses.
+{% endcomment %}
+{% if return_sales %}
+<label class="muted" style="display:block; margin-bottom: 6px;">
+  Qaytgan tovarni o'z qatoriga yozing — narxi o'sha sotuvdan olinadi
+</label>
+<div class="table-wrap">
+  <table>
+    <tr>
+      <th>Sana</th>
+      <th>Marka</th>
+      <th>Sotilgan</th>
+      <th>Narx</th>
+      <th>Qarzi</th>
+      <th>Qaytarish mumkin</th>
+      <th>Qaytdi (kg)</th>
+    </tr>
+    {% for s in return_sales %}
+    <tr{% if focus_sale_id == s.pk|stringformat:"s" %} class="is-focus"{% endif %}>
+      <td>{{ s.date }}</td>
+      <td>{{ s.line.contract_line.brand }}</td>
+      <td>{{ s.kg|floatformat:"-3" }} kg</td>
+      <td>{% rate s.price s.price_uzs s.currency %}</td>
+      {% comment %}
+      What this sotuv still owes, in its own money — the figure that decides where the
+      vazvrat lands, printed before anything is typed rather than explained in a
+      message afterwards.
+      {% endcomment %}
+      <td>
+        {% if s.remaining_own > 0 %}{% money s.remaining s.remaining_uzs s.currency %}
+        {% else %}<span class="badge badge-ok">to'langan</span>{% endif %}
+      </td>
+      <td>{{ s.returnable_kg|floatformat:"-3" }} kg</td>
+      {% comment %}
+      The narx and what this sotuv still owes ride along on the box, so the money a
+      typed kg comes to can be worked out as it is typed rather than after saving.
+      `stringformat:"f"` and not the plain value: the page is served in uz, where a
+      localised decimal reads "1,65" — and 1,65 parsed as a number is 1.
+      {% endcomment %}
+      <td><input type="text" data-money name="ret_{{ s.pk }}"
+                 autocomplete="off" placeholder="0"
+                 data-return-kg
+                 data-price="{{ s.price_own|stringformat:'f' }}"
+                 data-debt="{{ s.remaining_own|stringformat:'f' }}"
+                 data-currency="{{ s.currency }}">
+        <div class="return-line" data-return-line hidden></div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% comment %}
+What the typed kg COME TO, worked out as they are typed. Without it the operator
+enters a quantity and finds out what it did to the money only after saving — and the
+one thing they are asked about below (what to do with the part the mijoz already paid
+for) is a question about a figure that was nowhere on the screen.
+
+Filled by base.html from the narx and qarz each box carries; empty until something is
+typed, because a row of zeroes is not a preview of anything.
+{% endcomment %}
+<p class="return-total" data-return-total hidden></p>
+
+{% comment %}
+Asked only when a vazvrat here COULD leave money owed back — see
+`ReturnBatchForm.can_overpay`. On a mijoz whose qarz would swallow anything they
+returned, the fields are not on the form at all, and asking "what shall we do with
+the part they already paid for" of somebody who has paid nothing is a question with
+no answer.
+
+Under the table rather than above it because that is the order the answer is worked
+out in: first what came back, then what it does to the money.
+{% endcomment %}
+{% comment %}
+Each answer shows only what IT needs — see `ReturnBatchForm.settle_routes`. Money left
+in the avans leaves the till by no usul and on no day; cash handed over comes out of
+one of the three heaps, so the heap is named and its qoldiq printed beside the choice;
+a promise needs the day it is promised for, and that day is the only thing the other
+two routes cannot be asked for, because they both happen today.
+
+Served folded rather than folded by script after paint: the `hidden` attributes below
+are written from the route the form is already on, so an open — or a re-render after a
+validation error — never flashes all three answers' fields.
+{% endcomment %}
+{% if settlement_fields %}
+<fieldset class="fieldgroup" style="margin-top: 14px;" data-settle>
+  <legend>Mijoz to'lab bo'lgan qismi</legend>
+  {% for row in settlement_fields %}
+  <p{% if row.routes %} class="settle-only" data-settle-for="{{ row.routes|join:" " }}"{% if settle_route not in row.routes %} hidden{% endif %}{% endif %}>
+    <label for="{{ row.field.id_for_label }}">{{ row.field.label }}:</label>
+    {{ row.field }}
+    {% if row.field.help_text %}<span class="helptext">{{ row.field.help_text }}</span>{% endif %}
+    {% if row.field.errors %}<ul class="errorlist">{% for e in row.field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+
+    {% if row.field.name == "settle" %}
+    {% comment %}
+    The avans route's own line: the heap this vazvrat is about to join. A mijoz who
+    is already holding credit and one who is not read differently — the first is
+    being topped up, the second is having an avans opened.
+    {% endcomment %}
+    <span class="settle-note settle-only" data-settle-for="advance"{% if settle_route != "advance" %} hidden{% endif %}>
+      {% if customer_advance %}
+        Hozir mijoz avansida
+        {% for currency, amount in customer_advance %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
+        turibdi — qaytgan tovarning puli shunga qo'shiladi.
+      {% else %}
+        Hozir mijoz avansida pul yo'q — qaytgan tovarning puli uning avansi bo'lib qoladi.
+      {% endif %}
+    </span>
+
+    {% elif row.field.name == "method" %}
+    {% comment %}
+    One line per usul, only the chosen one shown: what is in that heap right now.
+    Both currencies are drawn even when a side is empty, for the reason the Kassa
+    tiles draw them — a missing line reads as "not counted", not as "none".
+    {% endcomment %}
+    {% for m in kassa_by_method %}
+    <span class="settle-note settle-only" data-settle-for="cash" data-settle-method="{{ m.code }}"{% if settle_route != "cash" or settle_method != m.code %} hidden{% endif %}>
+      Hozir {{ m.label|lower }}da:
+      {% for currency, amount in m.split_full %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
+    </span>
+    {% endfor %}
+    {% endif %}
+  </p>
+  {% endfor %}
+</fieldset>
+{% endif %}
+
+{% else %}
+<p class="muted">Bu mijozda qaytariladigan tovar yo'q.</p>
+{% endif %}

@@ -28,7 +28,10 @@ EXPORT_URLS = {
         "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
     ],
     "/reports/export/sales.xlsx": [
-        "Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Valyuta", "Kurs", "Tan narx ($)",
+        # Kg is net of vazvratlar, like the screen; what left the shelf and what came
+        # back are their own columns beside it.
+        "Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Sotilgan kg", "Qaytgan kg",
+        "Valyuta", "Kurs", "Tan narx ($)",
         "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
         "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)",
     ],

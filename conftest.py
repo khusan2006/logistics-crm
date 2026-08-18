@@ -125,6 +125,20 @@ def payment_rows(*entries, customer, date="2026-07-20", debt_currency=""):
     return data
 
 
+def return_rows(*entries, customer, date="2026-07-20", settle="advance",
+                method="cash", due_date="", note=""):
+    """POST payload for the vazvrat modal: the shared mijoz, sana and how the money
+    is settled, plus one `ret_<sale_id>` box per sotuv goods came back off.
+
+    Each entry is `(sale, kg)`. The narx is never posted — it is read off the sotuv,
+    which is the whole reason the boxes are keyed by sotuv rather than by marka."""
+    data = {"customer": getattr(customer, "pk", customer), "date": date,
+            "settle": settle, "method": method, "due_date": due_date, "note": note}
+    for sale, kg in entries:
+        data[f"ret_{getattr(sale, 'pk', sale)}"] = str(kg)
+    return data
+
+
 def supplier_payment_rows(*entries, contract, date="2026-07-02", contract_line=None):
     """POST payload for the hamkor to'lov modal: the shared kelishuv, marka and sana,
     plus one row per way the money left. The twin of `payment_rows` on the incoming

@@ -1,4 +1,7 @@
+from datetime import timedelta
 from decimal import Decimal
+
+from django.utils import timezone
 
 from conftest import line_data
 from crm.models import (
@@ -786,3 +789,111 @@ class TestTheOneRowView:
             **line_data({"brand": "PVC", "kg": "100", "price": "1.50"})})
         html = admin_client.get("/sales/?q=PVC").content.decode()
         assert "Boshqa mijoz" in html and "Ikki marka" not in html
+
+
+# ── kunning ikki oynasi: yangilanganlar va yangi sotuvlar ─────────────────────
+#
+# The list is ordered by the SOTUV's own sana, so neither question it is opened with
+# in the morning — "what went out today", "what did I correct today" — can be read off
+# it. The two lenses answer one each, and a row can wear both chips.
+
+def _sale_today(admin_client, lot, customer, kg="1000", date="2026-07-18"):
+    admin_client.post(f"/sales/new/?lot={lot.pk}", {
+        "customer": customer.pk, "kg": kg,
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60",
+        "date": date, "debt_deadline": "", "note": "",
+    })
+    return Sale.objects.get(line=lot, kg=Decimal(kg))
+
+
+def _entered_earlier(sale):
+    """Push the row's entry back a week. `created_at` is auto_now_add, so a test
+    cannot write an old one on the way in — and without an old row the two lenses
+    have nothing to tell apart."""
+    Sale.objects.filter(pk=sale.pk).update(
+        created_at=timezone.now() - timedelta(days=7))
+    return sale
+
+
+def test_a_sale_entered_today_reads_as_new(admin_client, db):
+    lot = _lot()
+    _sale_today(admin_client, lot, _customer())
+
+    resp = admin_client.get("/sales/?new=today")
+    assert resp.context["new_count"] == 1
+    assert len(resp.context["groups"]) == 1
+    assert resp.context["groups"][0]["new_today"]
+    assert "yangi" in resp.content.decode()
+
+
+def test_a_sale_entered_earlier_is_not_new_today(admin_client, db):
+    """The sana typed on it is not the question: this one is dated within the davr
+    and still is not today's work."""
+    lot = _lot()
+    _entered_earlier(_sale_today(admin_client, lot, _customer()))
+
+    resp = admin_client.get("/sales/?new=today")
+    assert resp.context["new_count"] == 0
+    assert not resp.context["groups"]
+
+
+def test_an_edited_sale_reads_as_changed(admin_client, db):
+    """An edit reaches an old sotuv from another screen and leaves the row where its
+    own sana put it — pages away. This is the way back to it."""
+    lot = _lot()
+    customer = _customer()
+    sale = _entered_earlier(_sale_today(admin_client, lot, customer))
+
+    admin_client.post(f"/sales/{sale.pk}/edit/", {
+        "customer": customer.pk, "line": lot.pk, "kg": "900",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60",
+        "date": "2026-07-18", "debt_deadline": "", "note": "",
+    })
+
+    resp = admin_client.get("/sales/?changed=today")
+    assert resp.context["changed_count"] == 1
+    assert len(resp.context["groups"]) == 1
+    notes = resp.context["groups"][0]["changed_today"]
+    assert any("tahrirlandi" in note for note in notes)
+    assert "yangilandi" in resp.content.decode()
+
+
+def test_an_untouched_sale_is_in_neither_lens(admin_client, db):
+    lot = _lot()
+    _entered_earlier(_sale_today(admin_client, lot, _customer()))
+
+    assert admin_client.get("/sales/?new=today").context["new_count"] == 0
+    assert admin_client.get("/sales/?changed=today").context["changed_count"] == 0
+    # …but it is still on the list itself, which no lens is narrowing.
+    assert len(admin_client.get("/sales/").context["groups"]) == 1
+
+
+def test_the_two_lenses_answer_different_questions(admin_client, db):
+    """A sotuv entered today and one corrected today are different rows, and each
+    toggle finds only its own."""
+    lot = _lot()
+    customer = _customer()
+    old = _entered_earlier(_sale_today(admin_client, lot, customer, kg="1000"))
+    _sale_today(admin_client, lot, customer, kg="2000")          # today's work
+    admin_client.post(f"/sales/{old.pk}/edit/", {
+        "customer": customer.pk, "line": lot.pk, "kg": "900",
+        "currency": "usd", "exchange_rate": "12000", "price": "1.60",
+        "date": "2026-07-18", "debt_deadline": "", "note": "",
+    })
+
+    changed = admin_client.get("/sales/?changed=today")
+    assert [g["first"].pk for g in changed.context["groups"]] == [old.pk]
+    new = admin_client.get("/sales/?new=today")
+    assert old.pk not in [g["first"].pk for g in new.context["groups"]]
+    assert len(new.context["groups"]) == 1
+
+
+def test_pressing_one_lens_turns_the_other_off(admin_client, db):
+    """Two ways of looking, not two filters to combine — "changed today AND new
+    today" is a question nobody asks, so each link clears the other."""
+    lot = _lot()
+    _sale_today(admin_client, lot, _customer())
+
+    html = admin_client.get("/sales/?changed=today").content.decode()
+    assert "new=today" in html          # the green link is offered…
+    assert "changed=today&amp;new=today" not in html and "new=today&amp;changed=today" not in html

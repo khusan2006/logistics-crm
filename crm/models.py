@@ -606,13 +606,34 @@ class Customer(models.Model):
         return sum((p.settled_amount_uzs for p in self.customer_payments.all()), Decimal("0"))
 
     @property
+    def refunded_total(self):
+        """Vazvrat money going back as CASH rather than staying as avans.
+
+        It stops being an avans the moment we say it is leaving the kassa: the mijoz
+        no longer holds credit to spend on their next sotuv, they hold a payout we
+        owe them. Counted from the PROMISE and not from the payment — whether the
+        cash has physically gone yet is the kassa's question, not this balance's, and
+        a mijoz waiting on their money has no avans either way."""
+        if not hasattr(self, "return_batches"):
+            return Decimal("0")
+        return sum((s.amount for b in self.return_batches.all()
+                    for s in b.settlements.all() if s.is_cash), Decimal("0"))
+
+    @property
+    def refunded_total_uzs(self):
+        if not hasattr(self, "return_batches"):
+            return Decimal("0")
+        return sum((s.amount_uzs for b in self.return_batches.all()
+                    for s in b.settlements.all() if s.is_cash), Decimal("0"))
+
+    @property
     def balance(self):
         """Positive = customer owes us (qarz); negative = advance (avans)."""
-        return self.sales_total - self.paid_total
+        return self.sales_total - self.paid_total + self.refunded_total
 
     @property
     def balance_uzs(self):
-        return self.sales_total_uzs - self.paid_total_uzs
+        return self.sales_total_uzs - self.paid_total_uzs + self.refunded_total_uzs
 
     def __str__(self):
         return self.name
@@ -1958,7 +1979,32 @@ def customer_balance_by_currency(customer):
     entries = [(sale.currency, sale.remaining_own) for sale in customer.sales.all()]
     entries += [(payment.currency, -unspent_payment_amount(payment))
                 for payment in customer.customer_payments.all()]
+    # No vazvrat term here, deliberately. This figure is built from what each sotuv
+    # still owes and what each to'lov has left UNSPENT, and a cash refund has
+    # already come off that pool as a `RefundAllocation`. Adding it again would
+    # count one refund twice. Its gross twin `Customer.balance` does need the term,
+    # because that one is built from totals the pool never touches.
     return _by_currency(entries)
+
+
+def pending_refunds():
+    """Vazvrat money promised to a mijoz and not yet handed over — our qarz to them.
+
+    Deliberately NOT a kassa chiqim: the till still physically holds it. But it is
+    spoken for, and "we have it" and "we may spend it" are different facts — which is
+    why the kassa prints it beside the cash figure rather than inside it. The same
+    list is what puts a mijoz on Qarzlar as the side WE owe."""
+    return list(ReturnSettlement.objects
+                .filter(route=ReturnSettlement.Route.CASH, paid_date__isnull=True)
+                .select_related("batch__customer")
+                .order_by("due_date", "pk"))
+
+
+def pending_refunds_by_currency(rows=None):
+    """[(currency, summa)] still owed to mijozlar, each heap in its own money."""
+    if rows is None:
+        rows = pending_refunds()
+    return _by_currency((s.currency, s.amount_own) for s in rows)
 
 
 def customer_advance_total():
@@ -2016,10 +2062,17 @@ def kassa_row_sets():
         # `select_related("shipment")` on the xarajatlar: `total_out` now asks each
         # one whether its truck has landed (see `is_pending`), which without it is a
         # query per expense on every screen that counts the till.
+        # A vazvrat refund counts from the day the money LEFT, so only the settled
+        # ones are here: a payout we have promised but not made has not moved the
+        # till, and putting it here would spend it twice — once when promised and
+        # again when handed over. The unpaid ones surface as `pending_refunds`.
         "outgoing": [*SupplierPayment.objects.all(),
                      *ShipmentExpense.objects.select_related("shipment"),
                      *LogistPayment.objects.all(), *CustomsPayment.objects.all(),
-                     *OtherExpense.objects.all()],
+                     *OtherExpense.objects.all(),
+                     *ReturnSettlement.objects.filter(
+                         route=ReturnSettlement.Route.CASH,
+                         paid_date__isnull=False).select_related("batch__customer")],
         # Its own side, deliberately neither of the other two: a konvertatsiya is not
         # money arriving or leaving, so nothing that counts kirim or chiqim may pick
         # it up. It only ever moves one heap into another.
@@ -2664,6 +2717,37 @@ class Sale(MoneyEntry):
         return sum((r.amount_uzs for r in self.returns.all()), Decimal("0"))
 
     @property
+    def returned_kg(self):
+        """kg of this sotuv that have already come back."""
+        if not hasattr(self, "returns"):
+            return Decimal("0")
+        return sum((r.kg for r in self.returns.all()), Decimal("0"))
+
+    @property
+    def net_kg(self):
+        """kg that STAYED sold — what the mijoz actually took away and kept.
+
+        `kg` is what left the shelf on the day and never moves; this is what the
+        sotuv amounts to now. Every screen that reads a sotuv as a fact about a
+        mijoz wants this one, which is why Sotuvlar prints it: a list still showing
+        2 010 kg after 10 of them came back is telling the operator the vazvrat did
+        not happen."""
+        return self.kg - self.returned_kg
+
+    @property
+    def returnable_kg(self):
+        """The ceiling a vazvrat may take back — the same figure as `net_kg`, named
+        for the question the vazvrat form asks of it: a sotuv already returned in
+        full offers nothing rather than offering its original kg a second time."""
+        return self.net_kg
+
+    @property
+    def price_own(self):
+        """1 kg narxi in the money this sotuv was agreed in — what a vazvrat line
+        off this sotuv is worth per kg, and never a converted twin."""
+        return own_side(self, self.price, self.price_uzs)
+
+    @property
     def net_total(self):
         return self.total - self.returned_amount
 
@@ -2776,14 +2860,36 @@ class Sale(MoneyEntry):
 
     @property
     def profit(self):
-        return ((self.price - self.cost_price) * self.kg).quantize(Decimal("0.01")) - self._returned_profit
+        """What this sotuv earned after vazvratlar — revenue less the cost of the
+        goods that stayed sold.
+
+        Written as net revenue minus net cost rather than as a margin with the
+        returned margin taken back off it, because the two sides do NOT move
+        together. A vazvrat always cancels its revenue; it only cancels the cost when
+        the granula came back on the shelf to be sold again. Scrapped goods were
+        still bought and paid for, so their tannarx stays — which is what makes a
+        write-off show up here as the loss it is.
+
+        The margin form could not say that: subtracting `(narx − tannarx) × kg` for
+        restocked rows only meant a scrapped vazvrat credited the mijoz in full and
+        left the foyda untouched at the whole original margin."""
+        return (self.net_total - self.net_cost).quantize(Decimal("0.01"))
 
     @property
-    def _returned_profit(self):
-        if not hasattr(self, "returns"):  # relation lands in Task 5
+    def net_cost(self):
+        """Tannarx of the kg that are still out there — what was bought, less what
+        came back onto the shelf."""
+        return ((self.cost_price * self.kg).quantize(Decimal("0.01"))
+                - self._restocked_cost)
+
+    @property
+    def _restocked_cost(self):
+        """Tannarx of the vazvrat kg that went back into the lot. Only restocked
+        rows: goods written off relieve nobody of what they cost."""
+        if not hasattr(self, "returns"):
             return Decimal("0")
-        return sum(((r.price - self.cost_price) * r.kg for r in self.returns.all() if r.restock),
-                  Decimal("0"))
+        return sum(((self.cost_price * r.kg).quantize(Decimal("0.01"))
+                    for r in self.returns.all() if r.restock), Decimal("0"))
 
     def __str__(self):
         return f"Sotuv #{self.pk} · {self.customer} · {self.kg} kg"
@@ -2834,6 +2940,82 @@ class SaleLot(models.Model):
         return f"Sotuv #{self.sale_id} · lot #{self.line_id} · {self.kg} kg"
 
 
+class ReturnBatch(models.Model):
+    """Vazvrat: one visit, one document — everything a mijoz brought back at once.
+
+    A qaytarish used to hang off ONE sotuv and was reached from that sotuv's page.
+    But a mijoz does not come back with "the 12-iyul sotuv"; they come back with
+    goods, which may have gone out on four different days at three different narx.
+    The batch is that visit; its `lines` are the sotuvlar the goods are traced to.
+
+    The lines still point at a SOTUV rather than at a marka, and that is the whole
+    reason this model exists rather than a marka box on a form: the same marka is
+    routinely sold to the same mijoz at several narx — one mijoz carries 23 sotuv of
+    2102 campaund across four prices, from $1.4167 to $1.65. "5 000 kg qaytdi"
+    therefore has no single value; only the sotuv it came off does. The operator
+    picks rows and the narx is read off the row, never typed."""
+
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
+                                 related_name="return_batches", verbose_name="Mijoz")
+    date = models.DateField("Sana", default=timezone.localdate)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="return_batches",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Vazvrat"
+        verbose_name_plural = "Vazvratlar"
+
+    def __str__(self):
+        return f"Vazvrat #{self.pk} · {self.customer.name}"
+
+    @property
+    def total_kg(self):
+        return sum((r.kg for r in self.lines.all()), Decimal("0"))
+
+    def total_by_currency(self):
+        """[(currency, qiymat)] — what came back, each sotuv counted in its own money."""
+        return _by_currency((r.currency, r.amount_own) for r in self.lines.all())
+
+    def refund_by_currency(self):
+        """[(currency, summa)] the mijoz gets back — the part their qarz did not soak up."""
+        return _by_currency((s.currency, s.amount_own) for s in self.settlements.all())
+
+    def to_debt_by_currency(self):
+        """[(currency, summa)] that cancelled open qarz and moved no money.
+
+        Summed off the LINES, where it was written down at the time. It used to be
+        derived as "everything that was not refunded in cash", which quietly counted
+        an avans as a paid-off qarz — a vazvrat that handed a mijoz credit was
+        reported as one that had settled a debt."""
+        return _by_currency((r.currency, r.to_debt_own) for r in self.lines.all())
+
+    def advance_by_currency(self):
+        """[(currency, summa)] left sitting as the mijoz's avans.
+
+        What the qarz did not soak up and no cash row took away — the third of the
+        three places a vazvrat's value can land, and the one that has no row of its
+        own precisely because nothing moved."""
+        refunds = dict(self.refund_by_currency())
+        to_debt = dict(self.to_debt_by_currency())
+        return _by_currency(
+            (currency, amount - to_debt.get(currency, Decimal("0"))
+             - refunds.get(currency, Decimal("0")))
+            for currency, amount in self.total_by_currency())
+
+    @property
+    def pending_settlements(self):
+        """The rows still owed to the mijoz — cash we said would go out and has not."""
+        return [s for s in self.settlements.all() if s.is_pending]
+
+    @property
+    def is_pending(self):
+        return bool(self.pending_settlements)
+
+
 class Return(MoneyEntry):
     """Qaytarish: goods coming back from a sale. Credits the customer's debt at the
     sale price (kg * price) regardless of restock; if restocked, the kg flows back
@@ -2846,7 +3028,22 @@ class Return(MoneyEntry):
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE,
                              related_name="returns", verbose_name="Sotuv")
+    # The visit this line was part of. Nullable because a qaytarish entered before
+    # vazvratlar became a document of their own belongs to no visit, and inventing
+    # one for it would be inventing a fact; blank therefore means "single-sotuv
+    # qaytarish, entered the old way" rather than "unknown".
+    batch = models.ForeignKey(ReturnBatch, on_delete=models.CASCADE, null=True,
+                              blank=True, related_name="lines", verbose_name="Vazvrat")
     kg = models.DecimalField("Qaytarilgan kg", max_digits=12, decimal_places=3)
+    # How much of this line's value went straight onto the qarz. STORED, not
+    # derived: it depends on what the sotuv owed AT THE MOMENT the goods came back,
+    # and that is history — the next to'lov moves the qoldiq and the answer with it.
+    # The rest of the value is money the mijoz had already paid; whether it stayed
+    # as avans or left the kassa is the `ReturnSettlement`'s business, not this row's.
+    to_debt = models.DecimalField("Qarzdan ayirildi (USD)", max_digits=14,
+                                  decimal_places=2, default=0)
+    to_debt_uzs = models.DecimalField("Qarzdan ayirildi (so'm)", max_digits=18,
+                                      decimal_places=2, default=0)
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
                                     decimal_places=2, default=0)
@@ -2871,8 +3068,154 @@ class Return(MoneyEntry):
     def amount_uzs(self):
         return (self.kg * self.price_uzs).quantize(Decimal("0.01"))
 
+    @property
+    def amount_own(self):
+        """The value of this line in the money its sotuv was agreed in — the only
+        side a vazvrat may be settled on."""
+        return own_side(self, self.amount, self.amount_uzs)
+
+    @property
+    def to_debt_own(self):
+        return own_side(self, self.to_debt, self.to_debt_uzs)
+
+    @property
+    def to_customer_own(self):
+        """The part that did NOT cancel qarz — money the mijoz had already paid, so
+        it is theirs again. It left as cash or stayed as avans; this row only knows
+        that it was not a qarz."""
+        return self.amount_own - self.to_debt_own
+
     def __str__(self):
         return f"Qaytarish #{self.pk} · sotuv #{self.sale_id} · {self.kg} kg"
+
+
+class ReturnSettlement(CashEntry):
+    """The money side of a vazvrat: what the mijoz gets back once the qarz on the
+    returned goods has been cancelled.
+
+    A vazvrat cancels open qarz first, and that part moves no money — there is
+    nothing to record here for it. Only the EXCESS lands in this table: goods the
+    mijoz had already paid for, so the money became theirs again the moment the
+    goods came back.
+
+    One row per CURRENCY, not one per vazvrat. A single visit can hand back a dollar
+    sotuv and a so'm sotuv together, and the two never blend: refunding a so'm sotuv
+    in dollars at today's kurs gives back a sum nobody ever paid.
+
+    Three outcomes, two fields:
+
+    * `ADVANCE` — parked as avans and spent on their next sotuv. No cash moves.
+    * `CASH` with `paid_date` — handed over that day; the kassa loses it then.
+    * `CASH` without `paid_date` — WE owe them, and `due_date` is the day we
+      promised. The kassa has not lost it yet, but it is money that must go out.
+
+    The third is not a third kind of row: it is the second one before it has
+    happened, which is why "To'landi" only fills a date in rather than creating
+    anything new. It is also why the kassa reads `paid_date` and not `route` — money
+    promised is not money gone."""
+
+    class Route(models.TextChoices):
+        ADVANCE = "advance", "Mijoz avansiga"
+        CASH = "cash", "Kassadan qaytarish"
+
+    batch = models.ForeignKey(ReturnBatch, on_delete=models.CASCADE,
+                              related_name="settlements", verbose_name="Vazvrat")
+    route = models.CharField("Qaytarish yo'li", max_length=8, choices=Route.choices,
+                             default=Route.ADVANCE)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    # The day we said the money would go out. Set only on a CASH row that was not
+    # paid on the spot — the promise IS the row, so a promise with no day is not one.
+    due_date = models.DateField("Qaytarish sanasi", null=True, blank=True)
+    # The day it actually left. Empty on a CASH row means we still owe it.
+    paid_date = models.DateField("To'langan sana", null=True, blank=True)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="return_settlements",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Vazvrat hisob-kitobi"
+        verbose_name_plural = "Vazvrat hisob-kitoblari"
+
+    def __str__(self):
+        return f"Vazvrat #{self.batch_id} · {self.get_route_display()}"
+
+    @property
+    def is_cash(self):
+        return self.route == self.Route.CASH
+
+    @property
+    def is_pending(self):
+        """Money we have said is going out of the kassa and has not gone yet — our
+        qarz to the mijoz."""
+        return self.is_cash and self.paid_date is None
+
+    @property
+    def is_overdue(self):
+        return (self.is_pending and self.due_date is not None
+                and self.due_date < timezone.localdate())
+
+    @property
+    def amount_own(self):
+        return own_side(self, self.amount, self.amount_uzs)
+
+    @property
+    def date(self):
+        """The day this row belongs to on a ledger: when the money left, or — while
+        it has not — the day we promised it. The kassa only ever counts the paid
+        ones, so this never dates an outflow that has not happened."""
+        return self.paid_date or self.due_date
+
+    @property
+    def total_out(self):
+        """What the kassa loses: the refund, plus the bank's cut when we carry it."""
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def total_out_uzs(self):
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+
+class RefundAllocation(models.Model):
+    """Which to'lov a vazvrat refund was taken OUT of — the outgoing twin of
+    `PaymentAllocation`.
+
+    A refund hands back money the mijoz had already paid. Cancelling the sotuv's
+    qarz frees that money into their avans pool (see `trim_sale_allocations`), and
+    without this row it would STAY there: the next sotuv's sweep would quietly spend
+    money we had already counted out over the counter, and the mijoz would be paid
+    for one vazvrat twice — once in cash, once in goods.
+
+    Only CASH refunds are allocated. An avans refund is money that is MEANT to stay
+    in the pool; that is the whole difference between the two routes."""
+
+    settlement = models.ForeignKey(ReturnSettlement, on_delete=models.CASCADE,
+                                   related_name="allocations",
+                                   verbose_name="Vazvrat hisob-kitobi")
+    # Named as a string: `CustomerPayment` is declared further down the file, and a
+    # vazvrat has to sit beside the rest of the return models rather than be moved
+    # away from them to satisfy an import order.
+    payment = models.ForeignKey("CustomerPayment", on_delete=models.PROTECT,
+                                related_name="refund_allocations",
+                                verbose_name="Mijoz to'lovi")
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Vazvrat taqsimoti"
+        verbose_name_plural = "Vazvrat taqsimotlari"
+
+    def __str__(self):
+        return f"Vazvrat #{self.settlement.batch_id} ← to'lov #{self.payment_id}"
 
 
 class KapitalKind(models.TextChoices):
@@ -3361,6 +3704,12 @@ def unspent_payment_pair(payment):
     for alloc in payment.allocations.all():
         allocated += alloc.amount
         allocated_uzs += alloc.amount_uzs
+    # Money handed back over the counter is spent just as surely as money put on a
+    # sotuv — see `RefundAllocation`. Counted here rather than only in
+    # `Customer.balance` so the SWEEP cannot spend it a second time.
+    for refund in payment.refund_allocations.all():
+        allocated += refund.amount
+        allocated_uzs += refund.amount_uzs
     return (payment.settled_amount - allocated,
             payment.settled_amount_uzs - allocated_uzs)
 
@@ -3788,6 +4137,48 @@ def trim_sale_allocations(sale):
                     Decimal("0.01"), rounding=ROUND_HALF_UP)
                 alloc.save(update_fields=["amount", "amount_uzs"])
                 over = Decimal("0")
+
+
+def allocate_refund(settlement):
+    """Take a cash vazvrat refund out of the to'lovlar it is giving back, oldest
+    first. Returns whatever could not be placed.
+
+    The mirror image of `reconcile_customer_allocations`: that one spends a mijoz's
+    unspent money on their qarz, this one spends it out of the door. Both draw on
+    the same pool, which is exactly why this has to exist — money handed back that
+    is not booked as spent stays spendable, and the next sotuv takes it.
+
+    A `settlement` is duck-compatible with a `sale` for the two currency helpers
+    below: both are asked only for `currency`, so the conversion rules a qarz gets
+    are the rules a refund gets, and neither invents a kurs of its own.
+
+    The remainder is normally zero — `trim_sale_allocations` freed exactly this much
+    a moment ago. It can be a tiyin or two when the refund and the to'lov are in
+    different currencies, and that residue is simply left in the pool: it is the
+    mijoz's money either way, and rounding it out of existence is worse than leaving
+    it where it already sat."""
+    customer = settlement.batch.customer
+    left_own = settlement.amount_own
+    for payment in customer.customer_payments.order_by("date", "id"):
+        if left_own <= 0:
+            break
+        pool_own = unspent_payment_amount(payment)
+        if pool_own <= 0:
+            continue
+        take_own = min(_in_sale_currency(payment, settlement, pool_own), left_own)
+        if take_own <= 0:
+            continue
+        # Capped at the pool for the same reason `_place` caps it: crossing a
+        # currency rounds twice, and both rounds going the same way would take out
+        # more than the to'lov ever held.
+        spent_own = min(_in_payment_currency(payment, settlement, take_own), pool_own)
+        if spent_own <= 0:
+            continue
+        amount, amount_uzs = allocation_pair(payment, spent_own)
+        RefundAllocation.objects.create(settlement=settlement, payment=payment,
+                                        amount=amount, amount_uzs=amount_uzs)
+        left_own -= take_own
+    return left_own
 
 
 class ShipmentExpense(CashEntry):

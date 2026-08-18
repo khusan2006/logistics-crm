@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Vazvrat · GranulaLog{% endblock %}
+{% block topbar_title %}Vazvrat{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'return_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi vazvrat</a>{% endblock %}
+{% block content %}
+
+{% comment %}
+Money we PROMISED and have not handed over, first and outside the davr filter. It is
+the only thing on this page anybody has to ACT on, and a promise made in June is still
+owed in August — hiding it because the window moved is how a debt gets forgotten.
+{% endcomment %}
+{% if owed %}
+<div class="card" style="margin-bottom: 16px;">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 12px;">
+    <h3 style="margin: 0;">Biz qarzdormiz</h3>
+    <div>
+      {% for currency, amount in owed_totals %}
+      <span class="badge badge-warning">{% money_in amount currency %}</span>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <tr>
+        <th class="sticky-col">Mijoz</th>
+        <th>Summa</th>
+        <th>Usul</th>
+        <th>To'lashimiz kerak bo'lgan sana</th>
+        <th>Vazvrat sanasi</th>
+        <th></th>
+      </tr>
+      {% for s in owed %}
+      <tr>
+        <td class="sticky-col">{{ s.batch.customer.name }}</td>
+        {# Red: money out of the kassa that has not left yet, not a figure to read past. #}
+        <td class="amt-owed">{% money_in s.amount_own s.currency %}</td>
+        <td>{% include "crm/_method_badge.html" with code=s.method label=s.get_method_display %}</td>
+        {% comment %}
+        Pink while the day is still ahead of us, red the moment it is behind — the one
+        state on this table that needs shouting about.
+        {% endcomment %}
+        <td>
+          {% if s.is_overdue %}
+          <span class="badge badge-danger">{{ s.due_date }} — muddati o'tdi</span>
+          {% elif s.due_date %}
+          <span class="badge badge-due">{{ s.due_date }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ s.batch.date }}</td>
+        {% comment %}
+        Four things can happen to a promise, and until now the table offered one of
+        them. We pay it — in full or in part, because the kassa does not always hold
+        all of it on the day we said. We move the day. Or the mijoz agrees to leave
+        it with us as their avans, and then no money moves at all.
+        {% endcomment %}
+        <td class="row-actions">
+          <a class="btn btn-sm" href="{% url 'return_settlement_pay' s.pk %}" data-modal>To'lash</a>
+          <a class="btn btn-sm btn-ghost" href="{% url 'return_settlement_edit' s.pk %}" data-modal title="Summa, usul yoki sanani o'zgartirish">Tahrirlash</a>
+          <a class="btn btn-sm btn-ghost" href="{% url 'return_settlement_to_advance' s.pk %}" data-modal title="Qarzimizni mijozning avansiga o'tkazish">Avansiga</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="listbar">
+  <form method="get" class="searchbar" role="search" data-live-search>
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    <div class="toolbar-search{% if q %} is-active{% endif %}">
+      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Mijoz yoki izoh bo'yicha qidirish…" autocomplete="off" aria-label="Vazvrat qidirish">
+      {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    </div>
+  </form>
+  {# The davr bar draws the Excel button itself, from the view's `export_url`. #}
+  {% include "crm/_daterange.html" %}
+</div>
+
+{% if page.object_list %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Sana</th>
+    <th>Mijoz</th>
+    <th>Tovar</th>
+    <th>Kg</th>
+    <th>Qiymati</th>
+    <th>Qarzdan ayirildi</th>
+    <th>Avansga</th>
+    <th>Pul qaytdi</th>
+    <th>Kim</th>
+    <th></th>
+  </tr>
+  {% for b in page %}
+  <tr>
+    <td class="sticky-col">{{ b.date }}</td>
+    <td>{{ b.customer.name }}</td>
+    {% comment %}
+    Every line of the visit, each naming the sotuv it came off — the same tie the form
+    made when the kg were typed, so a vazvrat can always be read back to its narx.
+    {% endcomment %}
+    <td>
+      {% for line in b.lines.all %}
+      <div class="cell-line">
+        {{ line.sale.line.contract_line.brand }} · {{ line.kg|floatformat:"-3" }} kg
+        <span class="muted">(#{{ line.sale_id }})</span>
+      </div>
+      {% endfor %}
+    </td>
+    <td class="vz">{{ b.total_kg|floatformat:"-3" }} kg</td>
+    {% comment %}
+    Three money columns, each a list rather than a total: a visit can hand back a
+    dollar sotuv and a so'm sotuv at once, and the two never blend into one figure.
+    {% endcomment %}
+    <td>
+      {% for currency, amount in b.total_by_currency %}
+      <div class="cell-line">{% money_in amount currency %}</div>
+      {% endfor %}
+    </td>
+    {% comment %}
+    Three columns because there are three different places the value can land, and
+    lumping any two of them reads as a fact about the mijoz that is not true. This
+    column used to print "avansda" whenever no cash row existed, which said a mijoz
+    had been handed credit when what had actually happened was their qarz shrinking.
+    {% endcomment %}
+    <td>
+      {% for currency, amount in b.to_debt_by_currency %}
+      <div class="cell-line"><span class="badge badge-todebt">−{% money_in amount currency %}</span></div>
+      {% empty %}<span class="muted">—</span>
+      {% endfor %}
+    </td>
+    <td>
+      {% for currency, amount in b.advance_by_currency %}
+      <div class="cell-line"><span class="badge badge-toadvance">{% money_in amount currency %}</span></div>
+      {% empty %}<span class="muted">—</span>
+      {% endfor %}
+    </td>
+    <td>
+      {% for s in b.settlements.all %}
+      <div class="cell-line">
+        <span class="badge badge-torefund">{% money_in s.amount_own s.currency %}</span>
+        {% if s.is_pending %}<span class="badge badge-warning">kutilmoqda</span>{% endif %}
+      </div>
+      {% empty %}<span class="muted">—</span>
+      {% endfor %}
+    </td>
+    <td>{{ b.created_by.get_full_name|default:b.created_by.username|default:"—" }}</td>
+    <td class="row-actions">
+      <a class="icon-action act-delete" href="{% url 'return_batch_delete' b.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% include "crm/_pagination.html" with label="vazvrat" %}
+{% else %}
+<p class="muted">Vazvrat topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+{% endif %}
+{% endblock %}

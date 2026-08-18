@@ -2,7 +2,19 @@
 {% load crm_extras %}
 {% block title %}Kassa · GranulaLog{% endblock %}
 {% block topbar_title %}Kassa{% endblock %}
+{% block fab_class %} fab-stack--menu{% endblock %}
 {% block fab %}
+{% comment %}
+Five actions is a wall, and it stood over the bottom-right corner of every reading of
+this page whether anything was being entered or not. They fold behind this one arrow:
+hovering it opens them upward, pressing it pins them open, and pressing it again —
+the arrow now pointing down — puts them away.
+
+First in the block on purpose: `.fab-stack` is drawn column-reverse, so the first
+child sits at the BOTTOM, exactly where the primary button was before.
+{% endcomment %}
+<button type="button" class="fab fab--menu" data-fab-toggle aria-expanded="false"
+        aria-label="Amallar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg></button>
 <a class="fab" href="{% url 'customer_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>Kirim (mijozdan)</a>
 <a class="fab fab--muted" href="{% url 'supplier_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Chiqim (hamkorga)</a>
 {% comment %}
@@ -110,6 +122,22 @@ that says nothing on almost every load of this page.
   {% for currency, amount in pending_split %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
   — yo'ldagi yuklarning transport va gruzchi haqi. Yuk omborga kelganda kassadan
   chiqadi, hozircha pul kassada turibdi.
+</p>
+{% endif %}
+
+{% comment %}
+The mirror of the note above, for money owed the other way: a vazvrat we settled by
+promising cash rather than paying it. Same rule — still in the safe, so never netted
+off Kassada — but this one carries a DAY, so the nearest one is named. Someone deciding
+whether we can pay a hamkor today needs to see both of the claims on the same till.
+{% endcomment %}
+{% if refund_split %}
+<p class="ktiles-foot kassa-pending">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+  <a href="{% url 'return_list' %}">Vazvrat bo'yicha qaytariladi</a>:
+  {% for currency, amount in refund_split %}<strong>{% money_in amount currency %}</strong>{% if not forloop.last %} · {% endif %}{% endfor %}
+  — {{ refund_count }} ta mijozga va'da qilingan{% if refund_due %}, eng yaqini {{ refund_due }}{% endif %}.
+  Pul hozircha kassada, berilgan kuni chiqim bo'ladi.
 </p>
 {% endif %}
 
@@ -228,7 +256,12 @@ unrelated toolbars and pushed the daftar a row further down every screen.
       {% for t in outflow_page %}
       <tr{% if t.count > 1 %} class="ledger-split"{% endif %}>
         <td>{{ t.date|date:"d.m.Y" }}</td>
-        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% elif t.kind == 'other' %}<span class="badge badge-warning">Boshqa</span>{% elif t.kind == 'kapital' %}<span class="badge badge-remit">Kapital</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}{% if t.count > 1 %}<span class="split-tag">bitta to'lov · {{ t.count }} usul</span>{% endif %}</td>
+        {% comment %}
+        Vazvrat wears the blue every returned kg and every qarzdan ayirildi wears
+        elsewhere in the app — money going back to a mijoz is its own kind of chiqim,
+        not the "Ustama" the catch-all was calling it.
+        {% endcomment %}
+        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% elif t.kind == 'other' %}<span class="badge badge-warning">Boshqa</span>{% elif t.kind == 'kapital' %}<span class="badge badge-remit">Kapital</span>{% elif t.kind == 'refund' %}<span class="badge badge-info">Vazvrat</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}{% if t.count > 1 %}<span class="split-tag">bitta to'lov · {{ t.count }} usul</span>{% endif %}</td>
         <td>{% for s in t.rows %}<div class="cell-line">{% include "crm/_method_badge.html" with code=s.method_code label=s.method %}</div>{% endfor %}</td>
         {# Same rule as Kirim: an inherited kurs decided nothing, so it is not shown. #}
         <td class="num muted">{% for s in t.rows %}<div class="cell-line">{% if s.crossed %}{{ s.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</div>{% endfor %}</td>

@@ -122,8 +122,10 @@ class TestNoNarxAnywhere:
         _sale(admin_client, _stock(), customer_name="Alisher Mebel", kg="120", price="7.77")
         html = skladchi_client.get("/sales/").content.decode()
         assert "Alisher Mebel" in html and "120" in html
+        # In the TABLE, for the reason `_table` exists: base.html carries the app's
+        # own money JS, and a page-wide search for a column name finds its source.
         for column in ["Tan narx", "Sotuv narxi", "Jami", "Foyda", "Qoldiq"]:
-            assert column not in html, column
+            assert column not in _table(html), column
         assert "7.77" not in html and "$" not in _table(html)
 
     def test_sotuvlar_offers_no_actions(self, skladchi_client, admin_client, db):
@@ -131,7 +133,10 @@ class TestNoNarxAnywhere:
         html = skladchi_client.get("/sales/").content.decode()
         assert f"/sales/{sale.pk}/edit/" not in html
         assert f"/sales/{sale.pk}/delete/" not in html
-        assert "Yangi sotuv" not in html
+        # The create button, by its URL rather than its label: "Yangi sotuvlar" is
+        # also the name of a FILTER on this page, and a skladchi may read that one —
+        # narrowing a list they are allowed to see is not an action on it.
+        assert "/sales/new/" not in html
 
     def test_an_admin_still_sees_all_of_it(self, admin_client, db):
         """The gates are on the role, not on the page — the admin's view is the one

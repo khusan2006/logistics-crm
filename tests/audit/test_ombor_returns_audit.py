@@ -13,6 +13,8 @@ from decimal import Decimal
 
 import pytest
 
+from conftest import return_rows
+
 from crm.models import (
     Contract, ContractLine, Currency, Customer, Partner, Reservation, Return, Sale,
     Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -85,14 +87,30 @@ def _sell(client, lot, customer, kg="400", price="2.00", currency=USD,
     return Sale.objects.filter(line=lot).order_by("-pk").first()
 
 
-def _give_back(client, sale, kg="100", price="2.00", currency=USD, rate="12000",
-               restock=True, date="2026-07-19"):
-    """A qaytarish through the real view."""
-    return client.post(f"/returns/new/?sale={sale.pk}", {
-        "kg": str(kg), "currency": currency, "price": str(price),
-        "exchange_rate": str(rate), "date": date,
-        "restock": "on" if restock else "", "note": "",
-    })
+def _scrap(sale, kg="100"):
+    """A vazvrat whose goods did NOT come back on the shelf.
+
+    Written straight to the model on purpose: a vazvrat entered through the app
+    always restocks, because that is the rule the business works to. The row still
+    exists in the schema, so what it does to the ombor and the foyda is still worth
+    pinning down — it just cannot be reached through a form any more."""
+    return Return.objects.create(
+        sale=sale, kg=Decimal(kg), price=sale.price, price_uzs=sale.price_uzs,
+        currency=sale.currency, exchange_rate=sale.exchange_rate,
+        date="2026-07-19", restock=False)
+
+
+def _give_back(client, sale, kg="100", date="2026-07-19", settle="advance",
+               due_date=""):
+    """A vazvrat through the real view.
+
+    No narx and no valyuta: both are read off the sotuv the kg are booked against,
+    which is what stops a vazvrat being worth more per kg than the sotuv it
+    reverses. Goods always go back on the shelf — that is the rule the business
+    works to, so there is no restock flag to pass either."""
+    return client.post("/returns/new/", return_rows(
+        (sale, kg), customer=sale.customer, date=date, settle=settle,
+        due_date=due_date))
 
 
 def _reserve(client, brand, customer, kg="500", price="", rate="12000",
@@ -160,7 +178,7 @@ def test_lot_remaining_is_arrived_minus_sold(admin_client):
 def test_restocked_return_puts_the_kg_back_on_the_lot(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400")
-    assert _give_back(admin_client, sale, kg="100", restock=True).status_code == 302
+    assert _give_back(admin_client, sale, kg="100").status_code == 302
 
     lot.refresh_from_db()
     assert lot.returned_kg == Decimal("100.000")
@@ -173,7 +191,7 @@ def test_restocked_return_puts_the_kg_back_on_the_lot(admin_client):
 def test_non_restocked_return_leaves_the_shelf_alone(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400")
-    assert _give_back(admin_client, sale, kg="100", restock=False).status_code == 302
+    _scrap(sale, kg="100")
 
     lot.refresh_from_db()
     assert lot.returned_kg == Decimal("0")
@@ -214,7 +232,7 @@ def test_deleting_a_sotuv_that_has_a_return_restores_the_whole_lot(admin_client)
     leave its kg counted twice (once released, once still 'returned')."""
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400")
-    _give_back(admin_client, sale, kg="100", restock=True)
+    _give_back(admin_client, sale, kg="100")
     assert Return.objects.count() == 1
 
     assert admin_client.post(f"/sales/{sale.pk}/delete/").status_code == 302
@@ -246,7 +264,7 @@ def test_deleting_a_bron_drops_the_promise(admin_client):
 def test_ombor_columns_reconcile_after_a_restocked_return(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400")
-    _give_back(admin_client, sale, kg="100", restock=True)
+    _give_back(admin_client, sale, kg="100")
 
     g = _group(admin_client, "LLDPE")
     # Nothing is bronned, so the columns on screen must add up on their own.
@@ -263,26 +281,29 @@ def test_return_typed_in_som_keeps_the_som_side_exact(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400", price="20000",
                  currency=UZS, rate="12345")
-    assert _give_back(admin_client, sale, kg="100", price="20000",
-                      currency=UZS, rate="12345").status_code == 302
+    assert _give_back(admin_client, sale, kg="100").status_code == 302
 
     ret = Return.objects.get()
     assert ret.currency == UZS
-    assert ret.price_uzs == Decimal("20000.00")          # typed, untouched
+    assert ret.price_uzs == Decimal("20000.00")          # the sotuv's own, untouched
     assert ret.price == Decimal("1.6201")                # derived
     assert ret.amount_uzs == Decimal("2000000.00")       # 100 kg × 20 000
     assert ret.amount == Decimal("162.01")
 
 
-def test_return_typed_in_dollars_keeps_the_dollar_side_exact(admin_client):
+def test_return_takes_the_dollar_narx_off_its_sotuv(admin_client):
+    """The narx is never typed. It is copied off the sotuv the kg came from, which is
+    what makes it impossible for a vazvrat to be worth more per kg than the sotuv it
+    reverses — the hole a free-typed narx box left open."""
     lot = _lot(kg="1000")
-    sale = _sell(admin_client, lot, _customer(), kg="400")
-    assert _give_back(admin_client, sale, kg="100", price="1.6667",
-                      currency=USD, rate="12345").status_code == 302
+    sale = _sell(admin_client, lot, _customer(), kg="400", price="1.6667",
+                 rate="12345")
+    assert _give_back(admin_client, sale, kg="100").status_code == 302
 
     ret = Return.objects.get()
     assert ret.currency == USD
-    assert ret.price == Decimal("1.6667")                # typed, untouched
+    assert ret.price == Decimal("1.6667")                # the sotuv's, exactly
+    assert ret.exchange_rate == Decimal("12345.00")      # and its kurs, exactly
     assert ret.price_uzs == Decimal("20575.41")          # 1.6667 × 12345
     assert ret.amount == Decimal("166.67")
 
@@ -291,9 +312,9 @@ def test_som_price_rounds_at_the_4dp_quantum_not_the_2dp_one(admin_client):
     """A per-kg narx keeps four decimals — rounding it to cents would move a
     24-tonne lot by dollars. 1 so'm at 12 000 is 0.0000833…$ → 0.0001."""
     lot = _lot(kg="1000")
-    sale = _sell(admin_client, lot, _customer(), kg="400")
-    assert _give_back(admin_client, sale, kg="100", price="1", currency=UZS,
-                      rate="12000").status_code == 302
+    sale = _sell(admin_client, lot, _customer(), kg="400", price="1", currency=UZS,
+                 rate="12000")
+    assert _give_back(admin_client, sale, kg="100").status_code == 302
 
     ret = Return.objects.get()
     assert ret.price == Decimal("0.0001")
@@ -308,22 +329,20 @@ def test_som_qaytarish_saves_as_som_and_the_form_reopens_in_som(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400", price="20000",
                  currency=UZS, rate="12500")
-    _give_back(admin_client, sale, kg="100", price="20000", currency=UZS,
-               rate="12500")
+    _give_back(admin_client, sale, kg="100")
 
     ret = Return.objects.get()
     assert ret.currency == UZS and ret.is_som is True
     assert ret.price_uzs == Decimal("20000.00")
+    assert ret.exchange_rate == Decimal("12500.00")
 
-    # Re-opening the modal for the same sotuv must offer so'm again, pre-filled
-    # with the SO'M narx — not the derived dollar figure with So'm selected.
-    resp = admin_client.get(f"/returns/new/?sale={sale.pk}")
-    form = resp.context["form"]
-    assert form.initial["currency"] == UZS
-    assert form.initial["price"] == sale.price_uzs == Decimal("20000.00")
-    assert form.initial["exchange_rate"] == Decimal("12500.00")
-    html = resp.content.decode()
-    assert 'value="uzs" selected' in html
+    # The modal asks no currency and no narx at all: it prints the sotuv's own, in
+    # the sotuv's own money, and takes only kg. There is nowhere for the two to
+    # drift apart any more.
+    html = admin_client.get(f"/returns/new/?sale={sale.pk}").content.decode()
+    assert "20 000" in html.replace("\u00a0", " ")
+    assert 'name="price"' not in html
+    assert 'name="currency"' not in html
 
 
 def test_som_sale_returned_in_full_zeroes_both_sides(admin_client):
@@ -334,8 +353,7 @@ def test_som_sale_returned_in_full_zeroes_both_sides(admin_client):
                  currency=UZS, rate="12345")
     assert sale.total_uzs == Decimal("8000000.00")
 
-    assert _give_back(admin_client, sale, kg="400", price="20000",
-                      currency=UZS, rate="12345").status_code == 302
+    assert _give_back(admin_client, sale, kg="400").status_code == 302
     sale.refresh_from_db()
     assert sale.net_total_uzs == Decimal("0.00")
     assert sale.net_total == Decimal("0.00")
@@ -444,7 +462,7 @@ def test_editing_an_unrelated_field_on_the_yuk_moves_no_money(admin_client):
 def test_a_return_does_not_move_when_its_sotuv_is_resaved_untouched(admin_client):
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400")
-    _give_back(admin_client, sale, kg="100", restock=True)
+    _give_back(admin_client, sale, kg="100")
     ret = Return.objects.get()
     frozen = (ret.kg, ret.price, ret.price_uzs, ret.currency, ret.amount)
 
@@ -469,8 +487,7 @@ def test_a_som_sotuv_with_a_qaytarish_survives_an_untouched_resave(admin_client)
     lot = _lot(kg="1000")
     sale = _sell(admin_client, lot, _customer(), kg="400", price="20000",
                  currency=UZS, rate="12345")
-    _give_back(admin_client, sale, kg="100", price="20000", currency=UZS,
-               rate="12345")
+    _give_back(admin_client, sale, kg="100")
     assert sale.total_uzs == Decimal("8000000.00")
 
     page = admin_client.get(f"/sales/{sale.pk}/edit/")
@@ -498,33 +515,31 @@ def test_return_refuses_zero_and_negative_kg(admin_client, kg):
     assert not Return.objects.exists()
 
 
-def test_return_refuses_a_missing_kurs(admin_client):
-    """Money with no kurs has only one of its two values and could never join a
-    so'm total — convert_pair's contract, enforced at the form."""
+def test_a_posted_narx_or_kurs_is_ignored(admin_client):
+    """The old form asked for a narx, a valyuta and a kurs, and had to refuse a blank
+    kurs, a zero narx and a negative one. None of those questions exist now: all three
+    are read off the sotuv, so a tampered POST carrying its own figures changes
+    nothing. The refusals were guarding a door that has been walled up."""
     lot = _lot(kg="1000")
-    sale = _sell(admin_client, lot, _customer(), kg="400")
-    for rate in ("0", ""):
-        resp = _give_back(admin_client, sale, kg="100", currency=UZS, rate=rate)
-        assert resp.status_code == 200
-        assert "kurs" in resp.content.decode().lower()
-    assert not Return.objects.exists()
+    sale = _sell(admin_client, lot, _customer(), kg="400", price="2.00",
+                 rate="12000")
+    data = return_rows((sale, "100"), customer=sale.customer, date="2026-07-19")
+    data.update({"price": "999", "currency": UZS, "exchange_rate": "0"})
+    assert admin_client.post("/returns/new/", data).status_code == 302
 
-
-def test_return_refuses_a_blank_or_zero_narx(admin_client):
-    lot = _lot(kg="1000")
-    sale = _sell(admin_client, lot, _customer(), kg="400")
-    for price in ("", "0", "-1"):
-        assert _give_back(admin_client, sale, kg="100", price=price).status_code == 200
-    assert not Return.objects.exists()
+    ret = Return.objects.get()
+    assert ret.price == Decimal("2.0000")               # the sotuv's, not the POST's
+    assert ret.currency == USD
+    assert ret.exchange_rate == Decimal("12000.00")
 
 
 def test_a_tiny_kurs_still_round_trips(admin_client):
-    """A kurs of 0.01 is nonsense in the market but legal in the column, and the
-    typed side must still survive it."""
+    """A kurs of 0.01 is nonsense in the market but legal in the column. The vazvrat
+    inherits it from the sotuv, and the sotuv's own side must survive the trip."""
     lot = _lot(kg="1000")
-    sale = _sell(admin_client, lot, _customer(), kg="400")
-    assert _give_back(admin_client, sale, kg="100", price="1", currency=UZS,
-                      rate="0.01").status_code == 302
+    sale = _sell(admin_client, lot, _customer(), kg="400", price="1", currency=UZS,
+                 rate="0.01")
+    assert _give_back(admin_client, sale, kg="100").status_code == 302
     ret = Return.objects.get()
     assert ret.price_uzs == Decimal("1.00")
     assert ret.price == Decimal("100.0000")              # 1 / 0.01
@@ -674,19 +689,12 @@ def test_inherited_narx_lot_reports_the_kelishuv_som_tannarx(admin_client):
     assert g["cost_min_uzs"] == Decimal("13000.00")
 
 
-@pytest.mark.xfail(reason="BUG: Sale._returned_profit (crm/models.py:1465) only "
-                          "reverses margin on RESTOCKED returns. A qaytarish that "
-                          "is not restocked still credits the mijoz the full sale "
-                          "value while the goods stay consumed, so profit keeps the "
-                          "whole margin — 800$ revenue minus 480$ cost reports 320$ "
-                          "profit on a sotuv that actually earned 120$",
-                   strict=False)
 def test_profit_drops_by_the_credit_when_a_return_is_not_restocked(admin_client):
     lot = _lot(kg="1000", lot_typed="1.20")
     sale = _sell(admin_client, lot, _customer(), kg="400", price="2.00")
     assert sale.profit == Decimal("320.00")             # (2.00 − 1.20) × 400
 
-    _give_back(admin_client, sale, kg="100", price="2.00", restock=False)
+    _scrap(sale, kg="100")
     sale.refresh_from_db()
     # 400 kg cost us 480; we keep 600 of the 800 revenue → 120 earned.
     assert sale.net_total == Decimal("600.00")
@@ -698,7 +706,7 @@ def test_profit_drops_by_the_margin_when_a_return_is_restocked(admin_client):
     came back, so only their margin is reversed."""
     lot = _lot(kg="1000", lot_typed="1.20")
     sale = _sell(admin_client, lot, _customer(), kg="400", price="2.00")
-    _give_back(admin_client, sale, kg="100", price="2.00", restock=True)
+    _give_back(admin_client, sale, kg="100")
 
     sale.refresh_from_db()
     assert sale.profit == Decimal("240.00")             # (2.00 − 1.20) × 300
