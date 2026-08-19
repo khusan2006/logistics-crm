@@ -31,6 +31,7 @@ from .forms import (
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm,
     ReturnBatchForm, ReturnSettlementEditForm, ReturnSettlementPayForm,
+    parse_return_rows, returns_without,
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
@@ -3631,19 +3632,42 @@ def reservation_close(request, pk):
     )
 
 
-def _returnable_sales(customer):
+def _returnable_sales(customer, editing=None, typed=None):
     """This mijoz's sotuvlar that still have kg standing on them, oldest first.
 
     A sotuv already returned in full drops out rather than showing a zero box: the
     table is the list of what the mijoz is HOLDING, and a row that can take nothing
-    back is only somewhere for a typo to land."""
+    back is only somewhere for a typo to land.
+
+    `editing` is the vazvrat being corrected. Its own kg are added back before the
+    ceiling is read, so a visit that took a sotuv down to zero still shows that
+    sotuv — with the kg it took — instead of vanishing from the form that is meant
+    to fix it. See `returns_without`.
+
+    `typed` re-fills the boxes: what the operator entered when the form comes back
+    with an error, or what the vazvrat already says when it is opened to be
+    corrected. Without it a rejected form used to hand back an empty table and the
+    kg had to be typed again from memory."""
     if customer is None:
         return []
+    typed = typed or {}
     sales = (customer.sales
              .select_related("line__contract_line", "customer")
-             .prefetch_related("returns", "allocations")
+             .prefetch_related(returns_without(editing), "allocations")
              .order_by("date", "id"))
-    return [s for s in sales if s.returnable_kg > 0]
+    rows = [s for s in sales if s.returnable_kg > 0 or s.pk in typed]
+    for sale in rows:
+        # Formatted here rather than in the template: the page is served in uz,
+        # where a Decimal rendered by Django reads "4000,000" — and 4000,000 typed
+        # back into a number box is 4. Trailing zeros go for the same reason the
+        # operator would not have typed them.
+        value = typed.get(sale.pk)
+        if value in (None, ""):
+            sale.typed_kg = ""
+        else:
+            text = f"{Decimal(value):f}"
+            sale.typed_kg = text.rstrip("0").rstrip(".") if "." in text else text
+    return rows
 
 
 def _return_customer(form, request):
@@ -3663,7 +3687,8 @@ def _return_customer(form, request):
     return Customer.objects.filter(pk=customer_id).first()
 
 
-def _return_rows_context(customer, form=None, focus_sale_id=""):
+def _return_rows_context(customer, form=None, focus_sale_id="", editing=None,
+                        typed=None):
     """Everything in the modal that depends on WHICH mijoz is chosen.
 
     Built in one function because the block is drawn twice — once with the page and
@@ -3692,7 +3717,7 @@ def _return_rows_context(customer, form=None, focus_sale_id=""):
         return value or fallback
 
     return {
-        "return_sales": _returnable_sales(customer),
+        "return_sales": _returnable_sales(customer, editing=editing, typed=typed),
         "focus_sale_id": focus_sale_id,
         "customer_debt": (ReturnBatchForm.open_debt_by_currency(customer)
                           if customer else []),
@@ -3769,7 +3794,8 @@ def return_create(request):
         customer = _return_customer(form, request)
         context = _return_rows_context(
             customer, form=form,
-            focus_sale_id=str(focus_sale.pk) if focus_sale else "")
+            focus_sale_id=str(focus_sale.pk) if focus_sale else "",
+            typed=_typed_return_kg(request))
         context["return_rows_url"] = reverse("return_rows")
         return form_response(request, form, "Vazvrat", invalid=invalid,
                              extra_context=context)
@@ -3783,37 +3809,7 @@ def return_create(request):
             batch = form.save(commit=False)
             batch.created_by = request.user
             batch.save()
-            for sale, kg, to_debt, to_debt_uzs in form.rows:
-                # narx, valyuta and kurs are copied off the sotuv and never typed: a
-                # vazvrat cannot be worth more per kg than the sotuv it reverses, and
-                # a so'm sotuv credited back at today's kurs would refund a sum
-                # nobody ever paid.
-                Return.objects.create(
-                    batch=batch, sale=sale, kg=kg, price=sale.price,
-                    price_uzs=sale.price_uzs, currency=sale.currency,
-                    exchange_rate=sale.exchange_rate, date=batch.date,
-                    restock=True, to_debt=to_debt, to_debt_uzs=to_debt_uzs,
-                    created_by=request.user)
-                # Re-read rather than reuse the form's copy: that one arrived with
-                # `returns` prefetched, so it still believes it has no vazvrat on it
-                # and `net_total` — the very figure the trim measures against —
-                # would come back unchanged, leaving a paid sotuv sitting at a
-                # permanent negative qoldiq.
-                trim_sale_allocations(Sale.objects.get(pk=sale.pk))
-                # Recorded against the SOTUV as well as against the vazvrat below.
-                # A sotuv's own Tarix reads the trail of its own pk, so without this
-                # the goods came back and the one page that tells the story of that
-                # sotuv said nothing about it.
-                AuditLog.record(
-                    request.user, AuditLog.Action.RETURN, "Sotuv", sale.pk,
-                    f"Vazvrat: {_kg(kg)} kg qaytdi "
-                    f"({sale.line.contract_line.brand}) — "
-                    f"{_money_list([(sale.currency, own_side(sale, to_debt, to_debt_uzs))])}"
-                    f" qarzdan ayirildi")
-            settlements = _settle_return_batch(batch, form, settle, request.user)
-            if settle == ReturnBatchForm.SETTLE_ADVANCE:
-                # Left in the pool, so let their other open sotuvlar claim it.
-                reconcile_customer_allocations(customer)
+            settlements = _write_return_batch(batch, form, settle, request.user)
         AuditLog.record(
             request.user, AuditLog.Action.RETURN, "Vazvrat", batch.pk,
             f"Vazvrat: {customer.name} — {_kg(batch.total_kg)} kg, "
@@ -3821,6 +3817,69 @@ def return_create(request):
         messages.success(request, _return_message(batch, settlements, settle))
         return form_success(request, reverse("return_list"))
     return respond()
+
+
+def _write_return_batch(batch, form, settle, user):
+    """Fill an empty vazvrat in: its lines, then its money. Returns the settlements.
+
+    Shared by entering a vazvrat and by correcting one, so the two can never drift
+    into settling the same goods differently. The caller owns the transaction and
+    hands over a batch whose lines are gone — see `_restore_return_batch`."""
+    for sale, kg, to_debt, to_debt_uzs in form.rows:
+        # narx, valyuta and kurs are copied off the sotuv and never typed: a
+        # vazvrat cannot be worth more per kg than the sotuv it reverses, and
+        # a so'm sotuv credited back at today's kurs would refund a sum
+        # nobody ever paid.
+        Return.objects.create(
+            batch=batch, sale=sale, kg=kg, price=sale.price,
+            price_uzs=sale.price_uzs, currency=sale.currency,
+            exchange_rate=sale.exchange_rate, date=batch.date,
+            restock=True, to_debt=to_debt, to_debt_uzs=to_debt_uzs,
+            created_by=user)
+        # Re-read rather than reuse the form's copy: that one arrived with
+        # `returns` prefetched, so it still believes it has no vazvrat on it
+        # and `net_total` — the very figure the trim measures against —
+        # would come back unchanged, leaving a paid sotuv sitting at a
+        # permanent negative qoldiq.
+        trim_sale_allocations(Sale.objects.get(pk=sale.pk))
+        # Recorded against the SOTUV as well as against the vazvrat below.
+        # A sotuv's own Tarix reads the trail of its own pk, so without this
+        # the goods came back and the one page that tells the story of that
+        # sotuv said nothing about it.
+        AuditLog.record(
+            user, AuditLog.Action.RETURN, "Sotuv", sale.pk,
+            f"Vazvrat: {_kg(kg)} kg qaytdi "
+            f"({sale.line.contract_line.brand}) — "
+            f"{_money_list([(sale.currency, own_side(sale, to_debt, to_debt_uzs))])}"
+            f" qarzdan ayirildi")
+    settlements = _settle_return_batch(batch, form, settle, user)
+    if settle == ReturnBatchForm.SETTLE_ADVANCE:
+        # Left in the pool, so let their other open sotuvlar claim it.
+        reconcile_customer_allocations(batch.customer)
+    return settlements
+
+
+def _restore_return_batch(batch):
+    """Empty a vazvrat and put the world back the way it was before it.
+
+    Exactly what deleting one does, minus the batch row itself: the lines going
+    takes the kg off the shelf and puts the qarz back, and the settlements going
+    takes their `RefundAllocation` with them, which hands the mijoz's avans back.
+    The sweep then re-places money that has become spendable again.
+
+    Kept apart from the delete view because correcting a vazvrat has to measure the
+    NEW rows against the restored world, not against the one the old rows made.
+    `trim_sale_allocations` really removed allocations when the vazvrat was entered,
+    and no amount of filtering a prefetch brings those back — only re-running the
+    sweep does. So the restore happens first and the form is judged afterwards."""
+    customer = batch.customer
+    sales = [line.sale for line in batch.lines.select_related("sale")]
+    batch.settlements.all().delete()
+    batch.lines.all().delete()
+    for sale in sales:
+        apply_customer_advance(sale)
+    reconcile_customer_allocations(customer)
+    return sales
 
 
 def _settle_return_batch(batch, form, settle, user):
@@ -4121,6 +4180,97 @@ def return_settlement_to_advance(request, pk):
         "Ha, avansiga o'tkazilsin",
         cancel_url_name="return_list",
     )
+
+
+def _typed_return_kg(request):
+    """{sotuv: kg} the operator has just submitted, so a rejected form is handed
+    back with its table still filled in."""
+    if request.method != "POST":
+        return None
+    return dict(parse_return_rows(request.POST))
+
+
+@role_required(User.Role.ADMIN)
+def return_batch_edit(request, pk):
+    """Correct a vazvrat — which sotuvlar it came off, how many kg, and where the
+    money went.
+
+    Until this existed the only way to fix one mistyped kg was to delete the whole
+    visit and enter every line again, and a visit whose refund had already been
+    paid could not be fixed at all.
+
+    Done as an undo followed by a redo, in one transaction, over the same two
+    helpers the create and delete views use — so a corrected vazvrat is settled by
+    exactly the code that settles a new one, and there is no second money rule to
+    keep in step. The restore runs BEFORE the form is judged, because the figure
+    every line is measured against — what the sotuv still owed — only reads true
+    once this visit's own effect is off it. An invalid form therefore rolls the
+    restore back and nothing has moved.
+
+    Refused once the refund has actually been handed over, for the reason the delete
+    view refuses: cash over the counter cannot be un-handed by a screen. The promise
+    itself is still correctable — see `return_settlement_edit`."""
+    batch = get_object_or_404(
+        ReturnBatch.objects.select_related("customer")
+        .prefetch_related("settlements", "lines__sale"), pk=pk)
+    paid = [s for s in batch.settlements.all() if s.is_cash and s.paid_date]
+    if paid:
+        return render_confirm(
+            request, "Vazvratni tahrirlash",
+            "Bu vazvrat puli allaqachon kassadan qaytarilgan, shuning uchun uni "
+            "o'zgartirib bo'lmaydi.",
+            "Yopish", cancel_url_name="return_list")
+
+    settled = batch.settlements.all()
+    initial = {"customer": batch.customer_id}
+    if settled:
+        row = settled[0]
+        initial["settle"] = (ReturnBatchForm.SETTLE_OWED if row.is_pending
+                             else ReturnBatchForm.SETTLE_CASH)
+        initial["method"] = row.method
+        initial["due_date"] = row.due_date
+    else:
+        initial["settle"] = ReturnBatchForm.SETTLE_ADVANCE
+
+    form = ReturnBatchForm(instance=batch, initial=initial, editing=batch)
+
+    def respond(bound_form, invalid=False):
+        typed = _typed_return_kg(request)
+        if typed is None:
+            typed = {line.sale_id: line.kg for line in batch.lines.all()}
+        context = _return_rows_context(
+            batch.customer, form=bound_form, editing=batch, typed=typed)
+        context["return_rows_url"] = reverse("return_rows")
+        return form_response(request, bound_form, f"Vazvrat #{batch.pk} — tahrirlash",
+                             invalid=invalid, extra_context=context)
+
+    if request.method != "POST":
+        return respond(form)
+
+    invalid = False
+    with transaction.atomic():
+        _restore_return_batch(batch)
+        form = ReturnBatchForm(request.POST, instance=batch, editing=batch)
+        if form.is_valid():
+            settle = form.cleaned_data["settle"]
+            batch = form.save()
+            settlements = _write_return_batch(batch, form, settle, request.user)
+        else:
+            # Put the vazvrat back exactly as it was. Marked here and answered
+            # below, because rendering the form asks the database questions and a
+            # block already marked for rollback refuses to answer any.
+            transaction.set_rollback(True)
+            invalid = True
+
+    if invalid:
+        return respond(form, invalid=True)
+
+    AuditLog.record(
+        request.user, AuditLog.Action.UPDATE, "Vazvrat", batch.pk,
+        f"Vazvrat tahrirlandi: {batch.customer.name} — {_kg(batch.total_kg)} kg, "
+        f"{len(form.rows)} ta sotuvdan; {_settle_label(settle, settlements)}")
+    messages.success(request, "Vazvrat yangilandi")
+    return form_reload(request, reverse("return_list"))
 
 
 @role_required(User.Role.ADMIN)

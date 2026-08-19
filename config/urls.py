@@ -107,6 +107,8 @@ urlpatterns = [
     # The rows for one mijoz, fetched by the modal when the mijoz select changes.
     path("returns/rows/", crm_views.return_rows, name="return_rows"),
     # `batch` before the int route so the word cannot be read as a pk.
+    path("returns/batch/<int:pk>/edit/", crm_views.return_batch_edit,
+         name="return_batch_edit"),
     path("returns/batch/<int:pk>/delete/", crm_views.return_batch_delete,
          name="return_batch_delete"),
     path("return-settlements/<int:pk>/pay/", crm_views.return_settlement_pay,

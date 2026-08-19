@@ -3,6 +3,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
+from django.db.models import Prefetch
 from django.urls import reverse_lazy
 from django.utils import timezone
 
@@ -1709,6 +1710,25 @@ def own_side_pair(currency, pair):
     return uzs if currency == Currency.UZS else usd
 
 
+def returns_without(batch):
+    """`returns`, read as if `batch` had never been entered.
+
+    Every figure a vazvrat form measures against — `returnable_kg`, `remaining_own`,
+    `net_total` — is summed off `sale.returns.all()` in Python, so filtering the
+    prefetch is enough to answer the one question editing asks: what would this
+    sotuv look like if THIS visit were taken back out?
+
+    Without it a vazvrat could not even be saved unchanged. The ceiling on each row
+    already has the batch's own kg subtracted from it, so re-submitting the same
+    number reads as returning it twice.
+
+    `None` means "as things stand", which is what creating a new vazvrat wants."""
+    rows = Return.objects.all()
+    if batch is not None:
+        rows = rows.exclude(batch_id=getattr(batch, "pk", batch))
+    return Prefetch("returns", queryset=rows)
+
+
 def parse_return_rows(post):
     """[(sale_id, kg)] typed into the vazvrat table — boxes named `ret_<sale_id>`.
 
@@ -1835,6 +1855,18 @@ class ReturnBatchForm(forms.ModelForm):
         return any(value > debts.get(currency, Decimal("0"))
                    for currency, value in cls.returnable_value_by_currency(customer))
 
+    def editing_customer_sales(self):
+        """The mijoz's sotuvlar as this form sees them — with the batch being
+        corrected taken out. Used by the view to draw the rows, so the ceiling on
+        screen is the one `clean()` will enforce."""
+        customer = self.current_customer()
+        if customer is None:
+            return []
+        return (customer.sales
+                .select_related("line__contract_line", "customer")
+                .prefetch_related(returns_without(self.editing), "allocations")
+                .order_by("date", "id"))
+
     def current_customer(self):
         """The mijoz the form is about right now — from the POST when bound, from
         the initial when the modal was opened on a sotuv."""
@@ -1844,7 +1876,11 @@ class ReturnBatchForm(forms.ModelForm):
             return None
         return Customer.objects.filter(pk=raw).first()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, editing=None, **kwargs):
+        #: The vazvrat being corrected, or None when a new one is being entered.
+        #: Everything this form measures has to be read with this batch taken back
+        #: out — see `returns_without`.
+        self.editing = editing
         super().__init__(*args, **kwargs)
         _customer_payer_field(self.fields["customer"])
         customer = self.current_customer()
@@ -1885,7 +1921,7 @@ class ReturnBatchForm(forms.ModelForm):
 
         sales = {s.pk: s for s in customer.sales
                  .select_related("line__contract_line")
-                 .prefetch_related("returns", "allocations")}
+                 .prefetch_related(returns_without(self.editing), "allocations")}
         for sale_id, kg in parse_return_rows(self.data):
             sale = sales.get(sale_id)
             if sale is None:
