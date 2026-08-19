@@ -35,7 +35,8 @@ from .forms import (
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
-    ShipmentDriverForm, ShipmentExtendForm, ShipmentForm, ShipmentLineFormSet,
+    ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
+    ShipmentLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
     SupplierPaymentFormSet, SupplierPaymentTargetForm,
     LogistPaymentFormSet, LogistPaymentTargetForm,
@@ -2409,6 +2410,86 @@ def shipment_extend(request, pk):
             return form_reload(request, reverse("shipment_list"))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
+
+
+def _latest_delay(shipment):
+    """The most recent uzaytirish on a yuk — the only one whose date still has
+    anything to say. `delays` is ordered newest-first, so this is simply the head."""
+    return shipment.delays.first()
+
+
+@role_required(User.Role.ADMIN)
+def shipment_delay_edit(request, pk):
+    """Fix an uzaytirish: its sabab, and — on the most recent one — its date.
+
+    Correcting the latest date moves the yuk's own eta with it, because that eta IS
+    the latest extension: leaving them apart would put a yuk on the kechikkanlar
+    board by one date while its own history showed another."""
+    delay = get_object_or_404(
+        ShipmentDelay.objects.select_related("shipment"), pk=pk)
+    shipment = delay.shipment
+    latest = _latest_delay(shipment)
+    is_latest = latest is not None and latest.pk == delay.pk
+    form = ShipmentDelayForm(request.POST or None, instance=delay, latest=is_latest)
+    title = f"Yuk #{shipment.pk} — uzaytirishni tuzatish"
+
+    if request.method == "POST":
+        if form.is_valid():
+            was_eta, was_reason = delay.new_eta, delay.reason
+            with transaction.atomic():
+                delay = form.save()
+                if is_latest:
+                    shipment.eta = delay.new_eta
+                    shipment.save(update_fields=["eta"])
+            moved = is_latest and delay.new_eta != was_eta
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                (f"Uzaytirish tuzatildi: {was_eta} → {delay.new_eta} "
+                 f"({delay.reason})") if moved else
+                f"Uzaytirish sababi tuzatildi: {was_reason} → {delay.reason}")
+            messages.success(request, "Uzaytirish tuzatildi")
+            return form_reload(request,
+                               reverse("shipment_detail", args=[shipment.pk]))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def shipment_delay_delete(request, pk):
+    """Take back an uzaytirish — the yuk's eta goes back to what it was before it.
+
+    Only the most recent one. Every earlier row's `new_eta` is the next row's
+    `old_eta`, so removing one from the middle would leave a chain that steps from a
+    date to a date it never stepped from. Taking back the last step is the one undo
+    that leaves a true history behind."""
+    delay = get_object_or_404(
+        ShipmentDelay.objects.select_related("shipment"), pk=pk)
+    shipment = delay.shipment
+    latest = _latest_delay(shipment)
+    if latest is None or latest.pk != delay.pk:
+        return render_confirm(
+            request, "Uzaytirishni bekor qilish",
+            "Faqat eng oxirgi uzaytirishni bekor qilish mumkin — undan keyingilari "
+            "shu sanadan boshlangan.",
+            "Yopish", cancel_url_name="shipment_list")
+
+    if request.method == "POST":
+        with transaction.atomic():
+            shipment.eta = delay.old_eta
+            shipment.save(update_fields=["eta"])
+            delay.delete()
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Yuk", shipment.pk,
+            f"Uzaytirish bekor qilindi — muddat {shipment.eta or '—'} ga qaytdi")
+        messages.success(request, "Uzaytirish bekor qilindi")
+        return form_reload(request, reverse("shipment_detail", args=[shipment.pk]))
+
+    return render_confirm(
+        request, "Uzaytirishni bekor qilish",
+        f"Muddat {delay.old_eta or '—'} ga qaytariladi. Bu yozuv tarixdan "
+        f"o'chiriladi.",
+        "Ha, bekor qilish", confirm_class="btn-danger",
+        cancel_url_name="shipment_list")
 
 
 @require_POST

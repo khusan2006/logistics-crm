@@ -75,6 +75,10 @@ urlpatterns = [
     path("shipments/<int:pk>/qr/", crm_views.shipment_set_qr, name="shipment_set_qr"),
     path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
     path("shipments/<int:pk>/extend/", crm_views.shipment_extend, name="shipment_extend"),
+    path("delays/<int:pk>/edit/", crm_views.shipment_delay_edit,
+         name="shipment_delay_edit"),
+    path("delays/<int:pk>/delete/", crm_views.shipment_delay_delete,
+         name="shipment_delay_delete"),
     # The tarjimon's one write on a yuk — see crm.views.shipment_driver_edit.
     path("shipments/<int:pk>/driver/", crm_views.shipment_driver_edit, name="shipment_driver_edit"),
     path("legs/new/", crm_views.leg_create, name="leg_create"),

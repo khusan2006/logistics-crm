@@ -286,13 +286,32 @@
       <th>Eski &rarr; Yangi sana</th>
       <th>Sabab</th>
       <th>Kim</th>
+      <th></th>
     </tr>
+    {% comment %}
+    `delays` is ordered newest-first, so forloop.first IS the latest extension — the
+    only one whose date still decides the yuk's eta, and so the only one that can be
+    taken back. The sabab on every row is correctable, which is why the pencil is
+    not hidden on the rest.
+    {% endcomment %}
     {% for d in shipment.delays.all %}
     <tr>
       <td>{{ d.created_at|date:"Y-m-d H:i" }}</td>
       <td>{{ d.old_eta|default:"—" }} &rarr; {{ d.new_eta }}</td>
       <td>{{ d.reason }}</td>
       <td>{{ d.created_by }}</td>
+      <td class="row-actions">
+        {% if user.is_admin_role %}
+        <a class="icon-action act-edit" href="{% url 'shipment_delay_edit' d.pk %}" data-modal title="Tuzatish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </a>
+        {% if forloop.first %}
+        <a class="icon-action act-delete" href="{% url 'shipment_delay_delete' d.pk %}" data-modal title="Bekor qilish">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        </a>
+        {% endif %}
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table>

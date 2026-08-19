@@ -12,7 +12,7 @@ from .models import (
     CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
     LogistPayment, OtherExpense, Partner,
     FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
-    Sale, Shipment, ShipmentExpense, ShipmentLeg,
+    Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate, _by_currency,
@@ -1130,6 +1130,35 @@ class ShipmentExtendForm(forms.Form):
     new_eta = forms.DateField(label="Yangi kelish sanasi",
                               widget=date_widget())
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
+
+
+class ShipmentDelayForm(forms.ModelForm):
+    """Correct an uzaytirish that was entered wrong.
+
+    Only the LATEST one may have its DATE changed. Extensions are a chain — each
+    row's `old_eta` is the row before it's `new_eta`, and the yuk's own eta is
+    simply the last `new_eta` — so moving a date in the middle would either break
+    that chain or rewrite every row after it, and rewriting rows that recorded what
+    happened on the day is not correcting them.
+
+    The sabab carries none of that, so it stays correctable on every row: a reason
+    typed in haste is the thing most often wrong, and it is the half a kechikish
+    report is read for."""
+
+    class Meta:
+        model = ShipmentDelay
+        fields = ["new_eta", "reason"]
+        labels = {"new_eta": "Yangi kelish sanasi", "reason": "Kechikish sababi"}
+
+    def __init__(self, *args, latest=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        if latest:
+            self.fields["new_eta"].widget = date_widget()
+        else:
+            # Not the last word on this yuk's eta, so the date is not this form's to
+            # move. Dropped rather than disabled: a disabled field posts nothing and
+            # a ModelForm would then write it away as empty.
+            self.fields.pop("new_eta")
 
 
 class ShipmentQrForm(forms.Form):
