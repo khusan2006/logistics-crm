@@ -1,8 +1,8 @@
 from decimal import Decimal
 
 from crm.models import (
-    Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus, allocate_customer_payment, apply_customer_advance,
-    unspent_payment_amount,
+    Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus, allocate_customer_payment, apply_customer_advance,
+    unspent_payment_amount, unspent_payment_pair,
 )
 
 
@@ -318,3 +318,54 @@ def test_edit_payment_decrease_reallocates(admin_client, db):
     assert alloc == Decimal("1000.00")           # stale $3,000 allocation dropped
     assert alloc <= payment.amount               # invariant holds after decrease
     assert sale.remaining == Decimal("2000.00")
+
+
+def _som_payment(customer, amount_uzs, rate, fee_percent, date="2026-08-07"):
+    """A to'lov that arrived in so'm, carrying a bank foiz — the shape that strands a
+    tail when it is spent against a dollar qarz."""
+    amount_uzs = Decimal(amount_uzs)
+    return CustomerPayment.objects.create(
+        customer=customer, date=date, currency=Currency.UZS,
+        amount=(amount_uzs / Decimal(rate)).quantize(Decimal("0.01")),
+        amount_uzs=amount_uzs, exchange_rate=Decimal(rate),
+        fee_percent=Decimal(fee_percent), method="cash",
+    )
+
+
+def test_som_payment_against_dollar_debt_leaves_no_tail(db):
+    """A so'm to'lov spent against a dollar qarz must land on exactly zero.
+
+    so'm → dollar → so'm rounds to whole tiyin at both ends. When the trip comes back
+    SHORT the remainder is worth less than a tiyin in the sotuv's money, so no sweep
+    can ever place it: it used to sit forever as an "avans" of 39.20 so'm printed
+    beside the $3 088.99 the mijoz really owed."""
+    customer = _customer()
+    lot = _lot(kg="40000")
+    sale = _sale(customer, lot, "20000", "1.00", "2026-07-17")   # $20 000 qarz
+    payment = _som_payment(customer, "100000000", "12000", "2")
+
+    allocate_customer_payment(payment)
+
+    # Nothing left on either column — the mijoz holds no avans they never made.
+    assert unspent_payment_amount(payment) == Decimal("0")
+    assert unspent_payment_pair(payment) == (Decimal("0"), Decimal("0"))
+    # And the sotuv was credited what the to'lov was worth, not a tiyin more.
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("20000.00") - payment.settled_amount
+
+
+def test_som_payment_tail_never_overpays_the_sale(db):
+    """The tail is swallowed on the to'lov's side only. A sotuv smaller than the
+    to'lov still stops at zero, and the change stays a real avans rather than being
+    forced onto it."""
+    customer = _customer()
+    lot = _lot(kg="40000")
+    sale = _sale(customer, lot, "1000", "1.00", "2026-07-17")    # $1 000 qarz
+    payment = _som_payment(customer, "100000000", "12000", "2")
+
+    allocate_customer_payment(payment)
+
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("0")
+    # The rest is genuinely the mijoz's money, and is left as an avans untouched.
+    assert unspent_payment_amount(payment) > Decimal("0")
