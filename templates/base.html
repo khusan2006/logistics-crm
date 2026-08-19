@@ -12,6 +12,14 @@
         if (localStorage.getItem('theme') === 'dark') {
           document.documentElement.setAttribute('data-theme', 'dark');
         }
+        // Same reason for the dragged menyu width: applied after paint the sidebar
+        // visibly jumps on every page. Set unconditionally — `--sidebar-user` is
+        // only read by the wide layout, so the rail and the drawer stay the sizes
+        // they were designed at without this having to know the breakpoints.
+        var w = localStorage.getItem('sidebar-w');
+        if (w) {
+          document.documentElement.style.setProperty('--sidebar-user', w + 'px');
+        }
       } catch (e) {}
     })();
   </script>
@@ -158,6 +166,13 @@
       </div>
       {% endif %}
     </nav>
+
+    {% comment %}
+    Drag to widen the menyu. A separator rather than a button: it has a value the
+    operator sets, and screen readers announce it as one.
+    {% endcomment %}
+    <div class="sidebar-grip" data-sidebar-grip role="separator" aria-orientation="vertical"
+         aria-label="Menyu kengligi" title="Kengligini o'zgartirish uchun torting" tabindex="0"></div>
   </aside>
   {% endwith %}
 {% endif %}
@@ -2003,6 +2018,64 @@
     });
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && sidebar.classList.contains('open')) { closeNav(); }
+    });
+  })();
+
+  // Drag the sidebar wider or narrower. The handle is display:none below the
+  // icon-rail breakpoint, so there is nothing here that has to know about it: the
+  // width is written to `--sidebar-user`, which only the wide layout reads.
+  (function () {
+    var grip = document.querySelector('[data-sidebar-grip]');
+    if (!grip) { return; }
+    var root = document.documentElement;
+    var MIN = 190, MAX = 420, DEFAULT = 244;
+
+    function clamp(px) { return Math.max(MIN, Math.min(MAX, Math.round(px))); }
+
+    function apply(px, remember) {
+      root.style.setProperty('--sidebar-user', px + 'px');
+      if (remember) { try { localStorage.setItem('sidebar-w', px); } catch (e) {} }
+    }
+
+    function current() {
+      var px = parseInt(getComputedStyle(root).getPropertyValue('--sidebar-user'), 10);
+      return isNaN(px) ? DEFAULT : px;
+    }
+
+    grip.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      var startX = e.clientX, startW = current();
+      // Capture so the drag survives the pointer leaving the 7px handle, which it
+      // does immediately. Guarded because a pointer that has already gone — a
+      // cancelled touch, a released button — makes both calls throw, and a throw
+      // here would strand the page in its resizing state.
+      try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+      document.body.classList.add('sidebar-resizing');
+
+      function move(ev) { apply(clamp(startW + (ev.clientX - startX)), false); }
+      function up() {
+        try { grip.releasePointerCapture(e.pointerId); } catch (err) {}
+        document.body.classList.remove('sidebar-resizing');
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        apply(current(), true);
+      }
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+
+    // Back to the width it ships at, for anyone who has dragged themselves somewhere
+    // they cannot read.
+    grip.addEventListener('dblclick', function () { apply(DEFAULT, true); });
+
+    // The same handle from the keyboard, which is the half a drag cannot give.
+    grip.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 24 : 8;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); apply(clamp(current() - step), true); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); apply(clamp(current() + step), true); }
+      else if (e.key === 'Home') { e.preventDefault(); apply(DEFAULT, true); }
     });
   })();
 
