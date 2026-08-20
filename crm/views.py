@@ -5005,21 +5005,27 @@ def _kassa_ledger_rows(window):
             "currency": p.currency, "exchange_rate": p.exchange_rate,
             "amount_uzs": p.fee_amount_uzs, "amount": p.fee_amount,
         })
-    # Expenses a holder funded — a logist or a bojxonachi — are deliberately absent
-    # from this ledger: the cash they cost left as the top-up above, and listing them
-    # here would show the same money going out twice.
-    #
     # `cash_date`, not `date`: a transport bill is settled when the truck is unloaded,
     # so that is the day the till lost it and the day this daftar has to file it under
     # — otherwise the period total and the balance it is meant to explain disagree.
     # Pending rows never arrive here at all; `_cash_range` dropped them upstream.
+    #
+    # A xarajat somebody's float paid — a logist's, a tamojni's — is LISTED but not
+    # counted (`counted: False`, which `_ledger_split` skips). The cash it cost left
+    # as the top-up above, so adding it to the chiqim would show one payment leaving
+    # twice; leaving it off the page entirely, which is what this daftar used to do,
+    # made a bojxona entered this morning vanish from the one screen it is looked for
+    # on. So the row is here, saying whose money it was and that the till did not
+    # move — the figure is visible, the total stays the till's.
     for e in expenses:
-        if not e.from_kassa:
-            continue
+        held = None if e.from_kassa else e.paid_by
         outflow_rows.append({
-            "kind": "expense", "pk": e.pk, "date": e.cash_date, "obj": e,
+            "kind": "expense" if held is None else "expense_held",
+            "counted": held is None,
+            "pk": e.pk, "date": e.cash_date, "obj": e,
             "group": e.group, "crossed": e.crosses_currency,
-            "title": f"{e.get_category_display()} · yuk #{e.shipment_id}",
+            "title": f"{e.get_category_display()} · yuk #{e.shipment_id}"
+                     + (f" · {held.name} to'ladi" if held is not None else ""),
             "method_code": e.method, "method": e.get_method_display(),
             "currency": e.currency, "exchange_rate": e.exchange_rate,
             "amount_uzs": e.amount_uzs, "amount": e.amount,
@@ -5314,10 +5320,16 @@ def kassa(request):
     # the kurs of any single row. `net_in`/`net_in_uzs` stay in the context — the Oqim
     # waterfall and the audit tests close on them — but the page shows the heaps.
     def _ledger_split(rows):
+        """The daftar's headline, out of the rows it is printed above.
+
+        `counted` is what keeps it equal to the till: a xarajat somebody's float paid
+        is on the page so it can be found, but the money left when we topped that
+        person up, and adding it here would make the heading disagree with both the
+        kassa card and the row it is standing over."""
         return _by_currency(
             (r["currency"],
              r["amount_uzs"] if r["currency"] == Currency.UZS else r["amount"])
-            for r in rows)
+            for r in rows if r.get("counted", True))
 
     income_split = _ledger_split(income_rows)
     outflow_split = _ledger_split(outflow_rows)
@@ -6096,6 +6108,9 @@ def _konvertatsiya_table(rows):
 
 # How each ledger row reads in the export — the same words the badges on the page use.
 LEDGER_KINDS = {
+    # Listed in the file for the same reason it is on the page — and named so that a
+    # column summed in Excel cannot be mistaken for what left the till.
+    "expense_held": "Xarajat (kassadan chiqmagan)",
     "customer": "Mijoz to'lovi", "kapital": "Kapital", "supplier": "Hamkor to'lovi",
     "commission": "Vositachi", "fee": "Perechisleniya foizi",
     "fee_logist": "Perechisleniya foizi", "fee_customs": "Perechisleniya foizi",

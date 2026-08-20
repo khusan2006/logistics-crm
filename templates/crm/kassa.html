@@ -261,11 +261,22 @@ unrelated toolbars and pushed the daftar a row further down every screen.
         elsewhere in the app — money going back to a mijoz is its own kind of chiqim,
         not the "Ustama" the catch-all was calling it.
         {% endcomment %}
-        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% elif t.kind == 'other' %}<span class="badge badge-warning">Boshqa</span>{% elif t.kind == 'kapital' %}<span class="badge badge-remit">Kapital</span>{% elif t.kind == 'refund' %}<span class="badge badge-info">Vazvrat</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}{% if t.count > 1 %}<span class="split-tag">bitta to'lov · {{ t.count }} usul</span>{% endif %}</td>
+        <td>{% if t.kind == 'supplier' %}<span class="badge badge-remit">Hamkor</span>{% elif t.kind == 'expense' %}<span class="badge badge-ok">Xarajat</span>{% elif t.kind == 'other' %}<span class="badge badge-warning">Boshqa</span>{% elif t.kind == 'kapital' %}<span class="badge badge-remit">Kapital</span>{% elif t.kind == 'refund' %}<span class="badge badge-info">Vazvrat</span>{% elif t.kind == 'expense_held' %}<span class="badge badge-neutral">Xarajat · kassadan chiqmagan</span>{% else %}<span class="badge">Ustama</span>{% endif %} {{ t.title }}{% if t.count > 1 %}<span class="split-tag">bitta to'lov · {{ t.count }} usul</span>{% endif %}</td>
         <td>{% for s in t.rows %}<div class="cell-line">{% include "crm/_method_badge.html" with code=s.method_code label=s.method %}</div>{% endfor %}</td>
         {# Same rule as Kirim: an inherited kurs decided nothing, so it is not shown. #}
         <td class="num muted">{% for s in t.rows %}<div class="cell-line">{% if s.crossed %}{{ s.exchange_rate|floatformat:"0g" }}{% else %}—{% endif %}</div>{% endfor %}</td>
+        {% comment %}
+        A row somebody's float paid carries no minus and no red: the money left when
+        that person was topped up, and a figure drawn like the ones above it would be
+        read as a second payment out of the safe — the very double-count this daftar
+        leaves out of its total. The badge says which it is; the summa is here to be
+        found, not to be added.
+        {% endcomment %}
+        {% if t.kind == 'expense_held' %}
+        <td class="num muted">{% for s in t.rows %}<div class="cell-line">{% money s.amount s.amount_uzs s.currency %}</div>{% endfor %}</td>
+        {% else %}
         <td class="num amt-out">{% for s in t.rows %}<div class="cell-line"><strong>−{% money s.amount s.amount_uzs s.currency %}</strong></div>{% endfor %}</td>
+        {% endif %}
         <td class="row-actions">
           {% comment %}
           One pair per MOVEMENT, stacked beside the summa it belongs to. A folded

@@ -403,7 +403,9 @@ def test_the_kassa_loses_the_top_up_and_the_foiz_and_nothing_else(admin_client, 
     ctx = admin_client.get("/kassa/?davr=all").context
     assert ctx["net_out"] == Decimal("10200.00")
     rows = ctx["outflow_page"].paginator.object_list
-    assert sum(r["amount"] for r in rows) == Decimal("10200.00")
+    # Only the rows that MOVED it: the avans is listed beside them (so it can be
+    # found) carrying counted=False, and the till's figure must not pick it up.
+    assert sum(r["amount"] for r in rows if r.get("counted", True))         == Decimal("10200.00")
     assert ctx["waterfall"][-1]["running"] == ctx["cash_total"] == Decimal("-10200.00")
 
 

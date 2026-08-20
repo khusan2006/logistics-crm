@@ -342,14 +342,26 @@ class TestKassaCountsTheMoneyOnce:
         assert expense.total_out == Decimal("0")
         assert expense.total_out_uzs == Decimal("0")
 
-    def test_the_clearing_is_absent_from_the_chiqim_ledger(self, admin_client, db):
+    def test_the_clearing_is_listed_in_the_chiqim_ledger_but_not_counted(
+            self, admin_client, db):
+        """It is ON the page — a bojxona entered this morning is looked for here, and
+        a daftar it never reaches sends the operator hunting for a figure they have
+        just typed. It is not IN the figure: the till lost the 40 mln when we sent
+        it, and counting the clearing again would spend that money twice."""
         agent = _agent()
         shipment = _shipment()
         _send(agent, "40000000", shipment)
         _cleared(shipment, agent, "37000000")
-        rows = admin_client.get("/kassa/?davr=all").context["outflow_page"].paginator.object_list
-        assert {r["kind"] for r in rows} == {"customs"}
-        assert sum(r["amount_uzs"] for r in rows) == Decimal("40000000.00")
+        ctx = admin_client.get("/kassa/?davr=all").context
+        rows = ctx["outflow_page"].paginator.object_list
+        assert {r["kind"] for r in rows} == {"customs", "expense_held"}
+        held = next(r for r in rows if r["kind"] == "expense_held")
+        assert held["counted"] is False
+        assert held["amount_uzs"] == Decimal("37000000.00")
+        assert "Bahrom aka to'ladi" in held["title"]
+        # ...and the heading over them still says only what left the safe.
+        assert ctx["outflow_split"] == [(UZS, Decimal("40000000.00"))]
+        assert sum(r["amount_uzs"] for r in rows if r.get("counted", True))             == Decimal("40000000.00")
 
     def test_the_waterfall_still_closes_on_the_cash_total(self, admin_client, db):
         agent = _agent()
