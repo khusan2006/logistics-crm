@@ -118,19 +118,15 @@ class TestKassaCountsTheMoneyOnce:
         assert expense.from_kassa is True
         assert expense.total_out == Decimal("3200.00")
 
-    def test_driver_advance_is_listed_but_not_counted(self, admin_client, db):
-        """Listed so the avans can be found on the screen it is looked for on, and
-        left out of the total because the till lost that money as the top-up."""
+    def test_driver_advance_is_absent_from_the_chiqim_ledger(self, admin_client, db):
         logist = _logist()
         shipment = _shipment(logist)
         _send(logist, "10000")
         _advance(shipment, logist, "500")
-        ctx = admin_client.get("/kassa/?davr=all").context
-        rows = ctx["outflow_page"].paginator.object_list
-        assert {"logist", "expense_held"} <= {r["kind"] for r in rows}
-        held = next(r for r in rows if r["kind"] == "expense_held")
-        assert held["counted"] is False and held["amount"] == Decimal("500.00")
-        assert sum(r["amount"] for r in rows if r.get("counted", True))             == Decimal("10000.00")
+        rows = admin_client.get("/kassa/?davr=all").context["outflow_page"].paginator.object_list
+        kinds = {r["kind"] for r in rows}
+        assert "logist" in kinds
+        assert sum(r["amount"] for r in rows) == Decimal("10000.00")
 
     def test_the_waterfall_still_closes_on_the_cash_total(self, admin_client, db):
         logist = _logist()
