@@ -895,6 +895,19 @@ class TestOneDaftarAtATime:
         # ...and pressing it again goes back to the whole page.
         assert 'href="?"' in html
 
+    def test_qoldiq_opens_both_daftar_with_the_loads_out_of_the_way(
+            self, admin_client, db):
+        """Qoldiq IS the difference between the two, so it shows the two that make
+        it. Not the same as the whole page: there they sit under the loads jadval,
+        here they are straight under the tiles."""
+        agent = self._seed()
+        html = self._page(admin_client, agent, daftar="ikkalasi").content.decode()
+        assert self.SENT in html and self.SPENT in html
+        assert "Qaysi yuklarga" not in html
+        # ...side by side, the way they are read against each other.
+        assert "grid-2 ledger-pair" in html
+        assert "ktile--cash is-active" in html
+
     def test_an_unknown_daftar_falls_back_to_both(self, admin_client, db):
         """The value rides the query string, so it can arrive as anything."""
         html = self._page(admin_client, self._seed(), daftar="xato").content.decode()

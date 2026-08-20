@@ -6920,13 +6920,20 @@ def customs_detail(request, pk):
         for expense in agent.expenses.all()]
     for rows in (sent_rows, spent_rows):
         rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
-    # Which daftar the page is opened ON. Both, by default — they are read against
-    # each other. Either one alone puts that table directly under the tiles: the
-    # Qaysi yuklarga jadval sits between them and the top of the page, so "what did
-    # we send them" meant scrolling past every load first. Clicking the tile that
-    # names the daftar is how it is asked for, the same way the ro'yxat tiles filter.
+    # Which daftar the page is opened ON — one tile, one view:
+    #
+    #   ""            the whole page: Qaysi yuklarga, then the two daftar beside it
+    #   "yuborilgan"  that daftar alone, straight under the tiles
+    #   "sarflangan"  the same for the other one
+    #   "ikkalasi"    BOTH, still straight under the tiles (the Qoldiq tile)
+    #
+    # The last one is not the same as the default. Both daftar are what the reader
+    # usually wants — they are compared against each other — but under the loads
+    # jadval, which is as long as the bojxonachi has yuklar, so getting to them
+    # meant scrolling past all of them first. Qoldiq opens the pair that MAKES that
+    # qoldiq, with nothing in front of them.
     daftar = request.GET.get("daftar", "")
-    if daftar not in ("yuborilgan", "sarflangan"):
+    if daftar not in ("yuborilgan", "sarflangan", "ikkalasi"):
         daftar = ""
     return render(request, "crm/customs_detail.html", {
         "agent": agent,

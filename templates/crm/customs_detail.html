@@ -14,7 +14,13 @@ actually moved in, so the headline has to be bucketed the same way or it would n
 be a total of what is underneath it.
 {% endcomment %}
 <div class="ktiles">
-  <div class="ktile ktile--cash">
+  {% comment %}
+  Qoldiq opens BOTH daftar — it is the difference between them, so the two tables
+  that make it up are what it has to show. Not the same as the whole page: there
+  they sit under the loads jadval, here they are straight under the tiles.
+  {% endcomment %}
+  <a class="ktile ktile--cash{% if daftar == 'ikkalasi' %} is-active{% endif %}"
+     href="{% if daftar == 'ikkalasi' %}?{% else %}?daftar=ikkalasi{% endif %}">
     <div class="ktile-label">Qoldiq</div>
     {% for currency, amount in agent.balance_by_currency %}
     <div class="ktile-num {% if amount < 0 %}late{% else %}avans{% endif %}">{% money_in amount currency %}</div>
@@ -24,8 +30,10 @@ be a total of what is underneath it.
       {% elif agent.held_by_currency %}bizning pulimiz shu odamda turibdi
       {% elif agent.owed_by_currency %}o'z pulidan qo'shgan — biz qarzdormiz
       {% else %}hisob teng{% endif %}
+      {% if daftar == 'ikkalasi' %} · hammasini ko'rish uchun yana bosing
+      {% else %} · ikkala daftarni ko'rish uchun bosing{% endif %}
     </div>
-  </div>
+  </a>
   {% comment %}
   Each of these two IS the button for its own daftar: pressed, the page shows that
   table alone, directly under the tiles. The daftar sit below the Qaysi yuklarga
@@ -78,7 +86,7 @@ per-currency heap, and the Qoldiq tile above is the difference between them.
 Each pages on its own (?ipage / ?opage) — see .ledger-pair, the same shape the kassa
 draws.
 {% endcomment %}
-<div class="{% if not daftar %}grid-2 {% endif %}ledger-pair">
+<div class="{% if not daftar or daftar == 'ikkalasi' %}grid-2 {% endif %}ledger-pair">
   {% if daftar != 'sarflangan' %}
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
