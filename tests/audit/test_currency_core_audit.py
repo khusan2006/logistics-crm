@@ -69,8 +69,12 @@ def create_payment(client, customer, **row):
     return resp
 
 
-def create_expense(client, shipment, category="customs", **shared):
-    """One xarajat through the real turkum grid."""
+def create_expense(client, shipment, category="declarant", **shared):
+    """One xarajat through the real turkum grid.
+
+    A deklarant by default rather than a bojxona: the bojxona box asks which tamojni
+    paid (money we sent them beforehand), and these tests are about the kurs the
+    grid stores, not about whose float a row comes off."""
     data = {"shipment": shipment.pk, "date": "2026-07-22", "currency": "usd",
             "method": "cash", "exchange_rate": "12000", "fee_percent": "0",
             "note": ""}

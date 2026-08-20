@@ -299,7 +299,9 @@ def test_resaving_a_som_expense_moves_nothing_and_the_kassa_holds(admin_client):
     _post(admin_client, "/expenses/new/", {
         "shipment": ship.pk, "date": "2026-07-12", "currency": "uzs",
         "method": "cash", "exchange_rate": "12000", "fee_percent": "0", "note": "",
-        "amount_customs": "6000000",
+        # A deklarant, not a bojxona: this reads the kassa's own figure, and a
+        # bojxona is spent out of what a tamojni holds rather than out of the till.
+        "amount_declarant": "6000000",
     })
     e = ShipmentExpense.objects.get()
     before = _money(e)
@@ -341,13 +343,13 @@ def test_a_per_box_som_override_sticks_on_the_expense_grid(admin_client):
     assert _post(admin_client, "/expenses/new/", {
         "shipment": ship.pk, "date": "2026-07-12", "currency": "usd",
         "method": "cash", "exchange_rate": "12000", "fee_percent": "0", "note": "",
-        "amount_customs": "100", "amount_transport": "2400000",
+        "amount_declarant": "100", "amount_transport": "2400000",
         "currency_transport": "uzs",
     }).status_code == 204
 
     rows = {e.category: e for e in ShipmentExpense.objects.all()}
-    assert rows["customs"].currency == Currency.USD
-    assert (rows["customs"].amount, rows["customs"].amount_uzs) == (
+    assert rows["declarant"].currency == Currency.USD
+    assert (rows["declarant"].amount, rows["declarant"].amount_uzs) == (
         Decimal("100.00"), Decimal("1200000.00"))
     assert rows["transport"].currency == Currency.UZS
     assert (rows["transport"].amount, rows["transport"].amount_uzs) == (

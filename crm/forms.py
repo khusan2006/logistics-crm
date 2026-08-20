@@ -2588,15 +2588,22 @@ def payer_choices(category):
     offering both in both boxes turns a two-item pick into a scan of every outside
     party in the books for a choice that only ever had one right answer.
 
-    The kassa is first and is what the box rests on. It is not a placeholder — it is
-    the answer for most xarajatlar, and the one this form gave for its whole life
-    before the picker existed."""
+    The kassa is first in the transport box and is what it rests on. It is not a
+    placeholder there — it is the answer for most xarajatlar, and the one this form
+    gave for its whole life before the picker existed.
+
+    The bojxona box does not offer it at all. Clearing money reaches bojxona through
+    a tamojni: we send it to them before the yuk is cleared and it is spent out of
+    what they hold, so "kassadan to'landi" on a bojxona never named a payer — it was
+    the picker being left alone. That box lists the tamojnilar and nothing else, and
+    its blank entry is a prompt to name one rather than an answer standing beside
+    them; a figure typed without one is refused (ExpenseGridForm.clean)."""
     if category == ShipmentExpense.Category.CUSTOMS:
-        rows = CustomsAgent.objects.all()
-        prefix = "customs"
-    elif category == ShipmentExpense.Category.TRANSPORT:
-        rows = Logist.objects.all()
-        prefix = "logist"
+        return [("", "Tamojnini tanlang"),
+                *((f"customs:{row.pk}", row.name)
+                  for row in CustomsAgent.objects.all())]
+    if category == ShipmentExpense.Category.TRANSPORT:
+        rows, prefix = Logist.objects.all(), "logist"
     else:
         rows, prefix = (), ""
     return [("", "Kassadan to'landi"),
@@ -2957,6 +2964,16 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         for value, amount in entered:
             if amount is not None and amount <= 0:
                 self.add_error(self.field_name(value), "Musbat son kiriting")
+        # A bojxona figure with nobody named would be written as a kassa row — the
+        # one answer its box no longer offers. Asked here rather than by making the
+        # field required, so a blank box on a turkum nobody typed into stays blank
+        # and a cleared bojxona (its row being deleted) is not made to name a payer
+        # on the way out.
+        customs = ShipmentExpense.Category.CUSTOMS
+        if (dict(self.entries).get(customs)
+                and not cleaned.get(self.payer_name(customs))):
+            self.add_error(self.payer_name(customs),
+                           "Qaysi tamojni to'lagan — tanlang")
         return cleaned
 
     def row_money(self, category, typed, rate):
@@ -3066,6 +3083,20 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         self.fields["logist"].empty_label = "Kassadan to'landi"
         self.fields["customs_agent"].empty_label = "Kassadan to'landi"
         self.fields["customs_agent"].label_from_instance = customs_agent_option_label
+        # On a bojxona the bojxonachi box lists the tamojnilar alone. The money for
+        # a clearing goes to one of them first and is spent out of what they hold,
+        # so the kassa was never an answer here — a row carrying it is one where the
+        # box was left alone, which is what clean() now refuses. The blank entry
+        # stays, as a prompt: every bojxona already in the books predates this rule,
+        # and a box with no blank would open on whichever tamojni sorts first and
+        # move real money onto them the moment anything else on the row was saved.
+        #
+        # Every other turkum keeps the kassa: a gruzchi or a yo'l xarajati really is
+        # paid straight out of it.
+        if self.instance.category == ShipmentExpense.Category.CUSTOMS:
+            self.fields["customs_agent"].empty_label = "Tamojnini tanlang"
+            self.fields["customs_agent"].help_text = "Bu bojxonani qaysi tamojni to'ladi"
+            self.fields["logist"].help_text = "Bojxonani logist to'lagan bo'lsa"
         # Default to whoever is already carrying money for this load: the logist who
         # runs it, or the bojxonachi we sent its clearing money to. Picking the wrong
         # one silently moves money between two people's accounts, and leaving it
@@ -3095,6 +3126,13 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         if cleaned.get("logist") and cleaned.get("customs_agent"):
             self.add_error("customs_agent",
                            "Bittasini tanlang — yo logist, yo bojxonachi to'lagan")
+        # Nobody named on a bojxona means the kassa paid it, and the kassa does not
+        # pay bojxona — the tamojni it was sent to does. Read off the SUBMITTED
+        # turkum rather than the row's own, so a xarajat switched to Bojxona in this
+        # box is asked the same question as one that opened as one.
+        elif (cleaned.get("category") == ShipmentExpense.Category.CUSTOMS
+              and not cleaned.get("logist") and not cleaned.get("customs_agent")):
+            self.add_error("customs_agent", "Qaysi tamojni to'lagan — tanlang")
         return cleaned
 
     def save(self, commit=True):

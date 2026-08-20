@@ -475,15 +475,16 @@ class TestTheGridCanSayWhoPaid:
         ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["cash_total_uzs"] == Decimal("-40000000.00")
 
-    def test_left_alone_it_still_bills_the_kassa(self, admin_client, db):
-        """The default is the behaviour this form has always had, so a grid nobody
-        touched differently keeps working exactly as before."""
+    def test_a_bojxona_with_nobody_named_is_sent_back(self, admin_client, db):
+        """The kassa does not pay bojxona — the tamojni we sent the money to does.
+        A figure typed with the box left alone used to be written as a kassa row;
+        that row never meant the till paid, only that the picker was skipped, so it
+        is now refused instead of recorded."""
+        _agent()
         shipment = _shipment()
         admin_client.post("/expenses/new/",
                           self._grid(shipment, amount_customs="37000000"))
-        expense = ShipmentExpense.objects.get()
-        assert expense.from_kassa is True
-        assert expense.customs_agent_id is None
+        assert not ShipmentExpense.objects.exists()
 
     def test_it_reaches_bojxona_and_transport_only(self, admin_client, db):
         """One picker over a grid of seven. A gruzchi and a sertifikat come out of
@@ -527,14 +528,14 @@ class TestTheGridCanSayWhoPaid:
         deliberate, visible edit — unlike one shared answer being applied to rows it
         was never asked about, which is why the shared version never rewrote."""
         agent = _agent()
+        other = _agent("Nazarbe Tamojni")
         shipment = _shipment()
         existing = _cleared(shipment, agent, "37000000")
         admin_client.post("/expenses/new/", self._grid(
-            shipment, payer_customs="", amount_customs="37000000",
+            shipment, payer_customs=f"customs:{other.pk}", amount_customs="37000000",
             **{"row_customs": existing.pk}))
         existing.refresh_from_db()
-        assert existing.customs_agent_id is None
-        assert existing.from_kassa is True
+        assert existing.customs_agent_id == other.pk
 
     def test_the_untouched_turkumlar_still_leave_the_kassa(self, admin_client, db):
         agent = _agent()
@@ -573,17 +574,21 @@ class TestTheGridCanSayWhoPaid:
         logist = Logist.objects.create(name="Sardor aka")
         form = ExpenseGridForm(initial={})
         assert form.fields["payer_customs"].choices == [
-            ("", "Kassadan to'landi"), (f"customs:{agent.pk}", "Bahrom aka")]
+            ("", "Tamojnini tanlang"), (f"customs:{agent.pk}", "Bahrom aka")]
         assert form.fields["payer_transport"].choices == [
             ("", "Kassadan to'landi"), (f"logist:{logist.pk}", "Sardor aka")]
 
-    def test_both_boxes_rest_on_the_kassa(self, db):
+    def test_transport_rests_on_the_kassa_and_bojxona_asks(self, db):
+        """A logist paying transport is the exception; the kassa is the answer that
+        box rests on. A bojxona has no such answer — it is always spent out of what
+        a tamojni holds — so its blank entry asks rather than tells."""
         from crm.forms import ExpenseGridForm
         _agent()
         Logist.objects.create(name="Sardor")
         form = ExpenseGridForm(initial={})
-        assert form.fields["payer_customs"].choices[0] == ("", "Kassadan to'landi")
         assert form.fields["payer_transport"].choices[0] == ("", "Kassadan to'landi")
+        assert form.fields["payer_customs"].choices[0] == ("", "Tamojnini tanlang")
+        assert "Kassadan to'landi" not in dict(form.fields["payer_customs"].choices).values()
         assert form.fields["payer_customs"].initial == ""
         assert form.fields["payer_transport"].initial == ""
 
