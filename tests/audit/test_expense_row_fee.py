@@ -18,6 +18,7 @@ from crm.models import Contract, ContractLine, Partner, PayMethod, Shipment, Shi
 pytestmark = pytest.mark.django_db
 
 CUSTOMS = "amount_customs"
+DECLARANT = "amount_declarant"
 LOADER = "amount_loader"
 
 
@@ -31,6 +32,20 @@ def shipment(db):
     return Shipment.objects.create(contract=contract, status=ShipmentStatus.arrival())
 
 
+def _tamojni_payer(data):
+    """Name a tamojni on a bojxona box, the way the modal now makes the operator.
+
+    A bojxona is spent out of what a tamojni holds, so the grid refuses a figure
+    with nobody on it (see ExpenseGridForm.clean). These payloads are about the
+    grid's money — valyuta, kurs, foiz, which row gets rewritten — so they name one
+    and move on rather than each carrying the same two lines."""
+    from crm.models import CustomsAgent
+    if data.get("amount_customs") and not data.get("payer_customs"):
+        agent, _ = CustomsAgent.objects.get_or_create(name="Bahrom aka")
+        data["payer_customs"] = f"customs:{agent.pk}"
+    return data
+
+
 def _post(shipment, **fields):
     """The grid's payload: shared pickers plus whichever boxes are filled."""
     data = {
@@ -39,7 +54,7 @@ def _post(shipment, **fields):
         "method": PayMethod.CASH, "fee_percent": "0", "note": "",
     }
     data.update({k: str(v) for k, v in fields.items()})
-    return data
+    return _tamojni_payer(data)
 
 
 def _rows(shipment, admin_user, **fields):
@@ -109,13 +124,15 @@ def test_a_cash_row_beside_a_wired_one_is_charged_nothing(shipment, admin_user):
 def test_a_foiz_on_a_cash_row_is_ignored_not_charged(shipment, admin_user):
     """Belt and braces: even if a foiz reaches a naqd row, CashEntry.fee_amount
     drops it. The UI hides the box, but the server must not depend on that."""
+    # Asked of a deklarant: total_out is the kassa's side, and a bojxona is paid
+    # out of what a tamojni holds, so it is 0 there whatever the foiz says.
     rows = _rows(shipment, admin_user,
-                 **{CUSTOMS: "1000", "method_customs": PayMethod.CASH,
-                    "fee_customs": "5"})
+                 **{DECLARANT: "1000", "method_declarant": PayMethod.CASH,
+                    "fee_declarant": "5"})
 
-    assert rows["customs"].fee_percent == Decimal("5")
-    assert rows["customs"].fee_amount == Decimal("0")
-    assert rows["customs"].total_out == Decimal("1000")
+    assert rows["declarant"].fee_percent == Decimal("5")
+    assert rows["declarant"].fee_amount == Decimal("0")
+    assert rows["declarant"].total_out == Decimal("1000")
 
 
 # --- validation -------------------------------------------------------------

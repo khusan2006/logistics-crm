@@ -3753,9 +3753,42 @@ def _place(payment, sale, take_own, pool_own=None):
     if spent_own <= 0:
         return Decimal("0")
     amount, amount_uzs = allocation_pair(payment, spent_own)
+    if pool_own is not None:
+        spent_own, amount, amount_uzs = _absorb_tail(
+            payment, sale, spent_own, Decimal(pool_own), amount, amount_uzs)
     PaymentAllocation.objects.create(payment=payment, sale=sale,
                                      amount=amount, amount_uzs=amount_uzs)
     return spent_own
+
+
+def _absorb_tail(payment, sale, spent_own, pool_own, amount, amount_uzs):
+    """Let a slice swallow the tail of its to'lov that nothing could ever place.
+
+    The mirror of the cap in `_place`, for the round trip that lands SHORT. Crossing
+    a currency rounds twice and the pair above only guards the direction that comes
+    back with MORE than was there; coming back with LESS strands a tail worth under
+    one tiyin in the sotuv's money. 97 999 959.20 so'm against a dollar qarz is taken
+    as $8 166.66 and returns as 97 999 920 — 39.20 so'm left behind. No later sweep
+    can reach it, because in the sotuv's money it converts to 0.00, so it sits
+    forever as an avans the mijoz never made, printed beside the qarz they really do
+    have.
+
+    Swallowed only when doing so does not move the SOTUV's column. The tail is worth
+    nothing on that side by definition, so the slice grows in the to'lov's own money
+    alone and the sotuv can never be credited a tiyin it was not owed. On a pair
+    where the wider share would round the sotuv's side up anyway, the tail is left
+    alone — a crumb on the mijoz's card is the cheaper of the two wrongs."""
+    tail = pool_own - spent_own
+    if tail <= 0 or _in_sale_currency(payment, sale, tail) > 0:
+        return spent_own, amount, amount_uzs
+    whole = allocation_pair(payment, pool_own)
+    # The sotuv's side is whichever column is NOT the to'lov's own currency, and the
+    # two differ here by construction: a same-currency tail returns above, unconverted
+    # and non-zero.
+    sale_side = 0 if payment.is_som else 1
+    if whole[sale_side] != (amount, amount_uzs)[sale_side]:
+        return spent_own, amount, amount_uzs
+    return pool_own, whole[0], whole[1]
 
 
 def _in_payment_currency(payment, sale, amount_own):

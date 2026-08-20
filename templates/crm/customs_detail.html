@@ -14,7 +14,13 @@ actually moved in, so the headline has to be bucketed the same way or it would n
 be a total of what is underneath it.
 {% endcomment %}
 <div class="ktiles">
-  <div class="ktile ktile--cash">
+  {% comment %}
+  Qoldiq opens BOTH daftar — it is the difference between them, so the two tables
+  that make it up are what it has to show. Not the same as the whole page: there
+  they sit under the loads jadval, here they are straight under the tiles.
+  {% endcomment %}
+  <a class="ktile ktile--cash{% if daftar == 'ikkalasi' %} is-active{% endif %}"
+     href="{% if daftar == 'ikkalasi' %}?{% else %}?daftar=ikkalasi{% endif %}">
     <div class="ktile-label">Qoldiq</div>
     {% for currency, amount in agent.balance_by_currency %}
     <div class="ktile-num {% if amount < 0 %}late{% else %}avans{% endif %}">{% money_in amount currency %}</div>
@@ -24,22 +30,34 @@ be a total of what is underneath it.
       {% elif agent.held_by_currency %}bizning pulimiz shu odamda turibdi
       {% elif agent.owed_by_currency %}o'z pulidan qo'shgan — biz qarzdormiz
       {% else %}hisob teng{% endif %}
+      {% if daftar == 'ikkalasi' %} · hammasini ko'rish uchun yana bosing
+      {% else %} · ikkala daftarni ko'rish uchun bosing{% endif %}
     </div>
-  </div>
-  <div class="ktile ktile--in">
+  </a>
+  {% comment %}
+  Each of these two IS the button for its own daftar: pressed, the page shows that
+  table alone, directly under the tiles. The daftar sit below the Qaysi yuklarga
+  jadval — which is as long as the bojxonachi has loads — so reading "what did we
+  send them" used to start with scrolling past all of them. Pressed again it goes
+  back to the whole page; the tile carries `is-active` while it is the one showing,
+  so the way out is the same thing that was clicked to get in.
+  {% endcomment %}
+  <a class="ktile ktile--in{% if daftar == 'yuborilgan' %} is-active{% endif %}"
+     href="{% if daftar == 'yuborilgan' %}?{% else %}?daftar=yuborilgan{% endif %}">
     <div class="ktile-label">Yuborilgan pul</div>
     {% for currency, amount in agent.received_by_currency %}
     <div class="ktile-num">{% money_in amount currency %}</div>
     {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
-    <div class="ktile-note">kassadan chiqqan pul</div>
-  </div>
-  <div class="ktile ktile--out">
+    <div class="ktile-note">kassadan chiqqan pul{% if daftar == 'yuborilgan' %} · hammasini ko'rish uchun yana bosing{% else %} · ko'rish uchun bosing{% endif %}</div>
+  </a>
+  <a class="ktile ktile--out{% if daftar == 'sarflangan' %} is-active{% endif %}"
+     href="{% if daftar == 'sarflangan' %}?{% else %}?daftar=sarflangan{% endif %}">
     <div class="ktile-label">Sarflangan pul</div>
     {% for currency, amount in agent.spent_by_currency %}
     <div class="ktile-num">{% money_in amount currency %}</div>
     {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
-    <div class="ktile-note">bojxonada — yuklarning tannarxiga kirgan</div>
-  </div>
+    <div class="ktile-note">bojxonada — yuklarning tannarxiga kirgan{% if daftar == 'sarflangan' %} · hammasini ko'rish uchun yana bosing{% else %} · ko'rish uchun bosing{% endif %}</div>
+  </a>
 </div>
 <p class="ktiles-foot">
   {% if agent.phone %}{{ agent.phone }} · {% endif %}{{ agent.expenses.count }} ta xarajat kiritilgan.
@@ -48,7 +66,46 @@ be a total of what is underneath it.
   <a href="{% url 'customs_loads' %}">yuklar bo'yicha hisobda</a>.
 </p>
 
+{% comment %}
+One bar over the whole hisob: which reading is on screen, what is being looked for in
+it, and which davr it is set to — the switch, the qidiruv and the ‹ davr › in the row
+`.listbar` draws on every other ro'yxat in the app.
+
+Above BOTH readings rather than on the daftar alone, because both obey it (see
+`_customs_daftar`): a Qaysi yuklarga still showing the whole year beside a daftar cut
+to Avgust would be two periods on one screen with nothing saying which was which.
+{% endcomment %}
+<div class="listbar">
+  <div class="viewswitch">
+    <a class="viewswitch-opt{% if not daftar %} is-on{% endif %}"
+       href="{% querystring daftar=None ipage=None opage=None %}">Qaysi yuklarga</a>
+    <a class="viewswitch-opt{% if daftar %} is-on{% endif %}"
+       href="{% querystring daftar='ikkalasi' ipage=None opage=None %}">Kirim / Chiqim</a>
+  </div>
+  <form method="get" class="searchbar" role="search" data-live-search>
+    {# The davr and the daftar being read ride along, or searching would drop them. #}
+    {% if daftar %}<input type="hidden" name="daftar" value="{{ daftar }}">{% endif %}
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    <div class="toolbar-search{% if q %} is-active{% endif %}">
+      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Yuk, izoh, usul, sana yoki summa bo'yicha qidirish…" autocomplete="off" aria-label="Hisob varaqasidan qidirish">
+      {% if q %}<a href="{% querystring q=None ipage=None opage=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    </div>
+  </form>
+  {% include "crm/_daterange.html" %}
+</div>
+
+{% if not daftar %}
 {% include "crm/_holder_loads.html" with loads=loads paid_label="Bojxonada sarflagan" show_sent=1 %}
+{% comment %}
+The partial draws nothing at all when it is handed nothing, which on a filtered page
+reads as a jadval that went missing rather than as an answer.
+{% endcomment %}
+{% if not loads and narrowed %}
+<p class="field-hint" style="margin:-4px 0 16px;">Bu davrda hech bir yukka pul harakati bo'lmagan.</p>
+{% endif %}
+{% endif %}
 
 {% comment %}
 Two daftar rather than one Hisob varaqasi with a Kirim and a Chiqim column.
@@ -66,11 +123,12 @@ per-currency heap, and the Qoldiq tile above is the difference between them.
 Each pages on its own (?ipage / ?opage) — see .ledger-pair, the same shape the kassa
 draws.
 {% endcomment %}
-<div class="grid-2 ledger-pair">
+<div class="{% if not daftar or daftar == 'ikkalasi' %}grid-2 {% endif %}ledger-pair">
+  {% if daftar != 'sarflangan' %}
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Yuborilgan pul</h2>
-      <span class="ledger-total amt-in">{% for currency, amount in agent.received_by_currency %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "uzs" %}</span>{% endfor %}</span>
+      <span class="ledger-total amt-in">{% for currency, amount in sent_heap %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "uzs" %}</span>{% endfor %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Biz kassadan shu bojxonachiga yuborgan pul — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -90,16 +148,18 @@ draws.
           <a class="icon-action danger" href="{% url 'customs_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
         </td>
       </tr>
-      {% empty %}<tr><td colspan="5" class="muted">Bu bojxonachiga hali pul yuborilmagan.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="5" class="muted">{% if narrowed %}Bu davrda pul yuborilmagan.{% else %}Bu bojxonachiga hali pul yuborilmagan.{% endif %}</td></tr>{% endfor %}
     </table>
     </div>
     {% include "crm/_pagination.html" with page=sent_page label="to'lov" param="ipage" %}
   </div>
+  {% endif %}
 
+  {% if daftar != 'yuborilgan' %}
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Sarflangan pul</h2>
-      <span class="ledger-total amt-out">{% for currency, amount in agent.spent_by_currency %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "uzs" %}</span>{% endfor %}</span>
+      <span class="ledger-total amt-out">{% for currency, amount in spent_heap %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "uzs" %}</span>{% endfor %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Yuklarni rasmiylashtirishga ketgan haqiqiy xarajat — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -122,11 +182,12 @@ draws.
           <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
         </td>
       </tr>
-      {% empty %}<tr><td colspan="5" class="muted">Hali xarajat kiritilmagan.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="5" class="muted">{% if narrowed %}Bu davrda xarajat yo'q.{% else %}Hali xarajat kiritilmagan.{% endif %}</td></tr>{% endfor %}
     </table>
     </div>
     {% include "crm/_pagination.html" with page=spent_page label="xarajat" param="opage" %}
   </div>
+  {% endif %}
 </div>
 
 {% endblock %}

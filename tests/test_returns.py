@@ -1272,3 +1272,131 @@ def test_the_owed_table_offers_all_three(admin_client, db):
     assert f"/return-settlements/{settlement.pk}/edit/" in html
     assert f"/return-settlements/{settlement.pk}/to-advance/" in html
     assert "To'lashimiz kerak bo'lgan sana" in html
+
+
+# ── vazvratni tuzatish ─────────────────────────────────────────────────────────
+#
+# Until this existed a single mistyped kg cost the whole visit: delete it and enter
+# every line again. The tests below are the four things that has to get right —
+# the qarz follows the correction, the same figure can be re-saved, a rejected form
+# changes nothing, and cash already handed over is not un-handed by a screen.
+
+def test_edit_shrinks_the_return_and_gives_the_debt_back(admin_client, db):
+    """1 000 kg came back, 400 of them by mistake. The qarz has to follow."""
+    lot = _lot()
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "1000"), customer=customer, date="2026-07-20"))
+    batch = ReturnBatch.objects.get()
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("4800.00")      # 6400 − 1000×1.60
+
+    resp = admin_client.post(f"/returns/batch/{batch.pk}/edit/", return_rows(
+        (sale, "600"), customer=customer, date="2026-07-20"))
+    assert resp.status_code == 302
+
+    sale.refresh_from_db()
+    assert sale.remaining == Decimal("5440.00")      # 6400 − 600×1.60
+    assert Return.objects.count() == 1
+    assert Return.objects.get().kg == Decimal("600.000")
+    assert sale.returnable_kg == Decimal("3400.000")
+
+
+def test_edit_can_save_the_same_kg_again(admin_client, db):
+    """The ceiling on each row already has this vazvrat's own kg taken off it, so a
+    form re-submitted unchanged has to read as unchanged — not as returning the same
+    goods twice."""
+    lot = _lot()
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "4000"), customer=customer, date="2026-07-20"))   # the whole sotuv
+    batch = ReturnBatch.objects.get()
+
+    resp = admin_client.post(f"/returns/batch/{batch.pk}/edit/", return_rows(
+        (sale, "4000"), customer=customer, date="2026-07-20"))
+    assert resp.status_code == 302
+
+    sale.refresh_from_db()
+    assert Return.objects.count() == 1
+    assert Return.objects.get().kg == Decimal("4000.000")
+    assert sale.remaining == Decimal("0.00")
+
+
+def test_edit_opens_with_the_kg_it_already_holds(admin_client, db):
+    """A sotuv returned in FULL would drop off the table — it can take nothing more
+    back. Opened for correction it has to be there, carrying its own figure."""
+    lot = _lot()
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "4000"), customer=customer, date="2026-07-20"))
+    batch = ReturnBatch.objects.get()
+
+    page = admin_client.get(f"/returns/batch/{batch.pk}/edit/").content.decode()
+    assert f'name="ret_{sale.pk}"' in page
+    assert 'value="4000"' in page
+
+
+def test_rejected_edit_leaves_the_vazvrat_exactly_as_it_was(admin_client, db):
+    """The correction undoes the visit before it judges the new rows, so a form that
+    fails has to put every one of them back."""
+    lot = _lot()
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60")
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "1000"), customer=customer, date="2026-07-20"))
+    batch = ReturnBatch.objects.get()
+
+    # More than the sotuv ever held — refused.
+    resp = admin_client.post(f"/returns/batch/{batch.pk}/edit/", return_rows(
+        (sale, "9999"), customer=customer, date="2026-07-20"))
+    assert resp.status_code == 200
+
+    sale.refresh_from_db()
+    assert Return.objects.count() == 1
+    assert Return.objects.get().kg == Decimal("1000.000")
+    assert sale.remaining == Decimal("4800.00")
+
+
+def test_edit_refused_once_the_refund_has_been_handed_over(admin_client, db):
+    """Cash over the counter cannot be un-handed by a screen — the same rule the
+    delete view follows."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "1000"), customer=customer, date="2026-07-19",
+        settle="owed", due_date="2026-07-25"))
+    settlement = ReturnSettlement.objects.get()
+    admin_client.post(f"/return-settlements/{settlement.pk}/pay/", _pay(settlement))
+    batch = ReturnBatch.objects.get()
+
+    resp = admin_client.post(f"/returns/batch/{batch.pk}/edit/", return_rows(
+        (sale, "600"), customer=customer, date="2026-07-19"))
+
+    assert Return.objects.get().kg == Decimal("1000.000")
+    # Django escapes the apostrophes, so the assertion holds on to the half of the
+    # sentence that has none.
+    assert "kassadan qaytarilgan" in resp.content.decode()
+
+
+def test_edit_moves_the_refund_with_the_kg(admin_client, db):
+    """A paid-for sotuv hands money back. Correct the kg and the promise has to be
+    re-cut to match — not left standing at the old figure."""
+    lot = _lot()
+    customer = _customer()
+    sale = _paid_sale(admin_client, lot, customer)
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "1000"), customer=customer, date="2026-07-19",
+        settle="owed", due_date="2026-07-25"))
+    assert ReturnSettlement.objects.get().amount == Decimal("1600.00")
+
+    batch = ReturnBatch.objects.get()
+    resp = admin_client.post(f"/returns/batch/{batch.pk}/edit/", return_rows(
+        (sale, "500"), customer=customer, date="2026-07-19",
+        settle="owed", due_date="2026-07-25"))
+    assert resp.status_code == 302
+    assert ReturnSettlement.objects.count() == 1
+    assert ReturnSettlement.objects.get().amount == Decimal("800.00")   # 500 × 1.60

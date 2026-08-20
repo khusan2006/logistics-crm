@@ -70,7 +70,14 @@
   --shadow: 0 1px 2px rgba(20, 30, 50, 0.08);
   --shadow-lg: 0 12px 32px rgba(20, 30, 50, 0.16);
 
-  --sidebar-w: 244px;
+  /* What the operator dragged the menyu to, and what the layout actually uses.
+     Kept as two variables so the responsive rules below can still win: an inline
+     `--sidebar-w` on <html> would outrank every media query and freeze the sidebar
+     at a desktop width on a phone. The choice is written to `--sidebar-user`, which
+     only the wide layout reads, and the rail and drawer set `--sidebar-w` outright
+     and ignore it. */
+  --sidebar-user: 244px;
+  --sidebar-w: var(--sidebar-user);
 }
 
 /* ============================================================
@@ -166,6 +173,41 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; letter-spacing: -0.01e
   top: 0;
   height: 100vh;
 }
+
+/* Drag handle on the sidebar's own edge. Sits ON the border rather than beside it,
+   so the column the operator is aiming at is the line they can already see, and
+   overhangs a couple of px into the content because a 1px target is not one.
+   `.sidebar` is sticky, which is a positioning context, so absolute lands here. */
+.sidebar-grip {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-grip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 1px;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.sidebar-grip:hover::after,
+.sidebar-grip:focus-visible::after,
+body.sidebar-resizing .sidebar-grip::after { opacity: 1; width: 2px; }
+.sidebar-grip:focus-visible { outline: none; }
+
+/* While dragging, the pointer is outside the handle half the time — the cursor and
+   the ban on selecting text have to hold across the whole page or the drag reads as
+   a botched attempt to highlight the table underneath. */
+body.sidebar-resizing { cursor: col-resize; user-select: none; }
 
 .brand {
   display: flex;
@@ -2395,6 +2437,8 @@ ul.errorlist li::before { content: "⚠ "; }
 
 @media (max-width: 1000px) {
   :root { --sidebar-w: 68px; }
+  /* The rail and the drawer are sized by these rules, so there is nothing to drag. */
+  .sidebar-grip { display: none; }
   .brand { justify-content: center; padding: 18px 0; }
   .brand-text { display: none; }
   .nav-group-label { display: none; }
@@ -3237,3 +3281,46 @@ form.stacked .lineset-field--fee_bearer label {
 }
 .fieldgroup--out > legend { color: var(--danger); }
 .fieldgroup--in > legend { color: var(--success); }
+
+/* A ktile that IS a button for the panel below it: while that panel is the one
+   showing, the tile it was opened from stays lit, so the way back is the same
+   thing that was pressed to get in (bojxonachi/logist hisob varaqasi). */
+.ktile.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.ktile.is-active .ktile-label { color: var(--accent); }
+
+/* The same choice as those tiles, said in words: which of the two readings of a
+   hisob is on screen — the per-yuk jadval, or the two money daftar. A row of link
+   "tabs" rather than a `.seg`, because `.seg` is a radio group inside a form and this
+   is navigation: each option is a URL somebody can bookmark or open in a new tab.
+
+   Sits between the tiles and the panel it switches, so the label is next to the thing
+   it names — and the lit option is the way back out, the same rule .ktile.is-active
+   follows one card up. */
+.viewswitch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.viewswitch-opt {
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.viewswitch-opt:hover { background: var(--surface-hover); color: var(--text); }
+.viewswitch-opt.is-on {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+}
+/* In the bar it shares with the qidiruv and the ‹ davr ›, the row owns the spacing —
+   the same rule `.listbar > .searchbar` and `> .daterange-bar` already follow. */
+.listbar > .viewswitch { margin-bottom: 0; }
+@media (max-width: 620px) { .viewswitch { display: flex; } .viewswitch-opt { flex: 1; text-align: center; } }

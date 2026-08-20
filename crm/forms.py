@@ -3,6 +3,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
+from django.db.models import Prefetch
 from django.urls import reverse_lazy
 from django.utils import timezone
 
@@ -11,7 +12,7 @@ from .models import (
     CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
     LogistPayment, OtherExpense, Partner,
     FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
-    Sale, Shipment, ShipmentExpense, ShipmentLeg,
+    Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
     customer_balance_by_currency, latest_exchange_rate, _by_currency,
@@ -1131,6 +1132,35 @@ class ShipmentExtendForm(forms.Form):
     reason = forms.CharField(label="Kechikish sababi", max_length=255)
 
 
+class ShipmentDelayForm(forms.ModelForm):
+    """Correct an uzaytirish that was entered wrong.
+
+    Only the LATEST one may have its DATE changed. Extensions are a chain — each
+    row's `old_eta` is the row before it's `new_eta`, and the yuk's own eta is
+    simply the last `new_eta` — so moving a date in the middle would either break
+    that chain or rewrite every row after it, and rewriting rows that recorded what
+    happened on the day is not correcting them.
+
+    The sabab carries none of that, so it stays correctable on every row: a reason
+    typed in haste is the thing most often wrong, and it is the half a kechikish
+    report is read for."""
+
+    class Meta:
+        model = ShipmentDelay
+        fields = ["new_eta", "reason"]
+        labels = {"new_eta": "Yangi kelish sanasi", "reason": "Kechikish sababi"}
+
+    def __init__(self, *args, latest=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        if latest:
+            self.fields["new_eta"].widget = date_widget()
+        else:
+            # Not the last word on this yuk's eta, so the date is not this form's to
+            # move. Dropped rather than disabled: a disabled field posts nothing and
+            # a ModelForm would then write it away as empty.
+            self.fields.pop("new_eta")
+
+
 class ShipmentQrForm(forms.Form):
     """When the kod actually reached the driver.
 
@@ -1709,6 +1739,25 @@ def own_side_pair(currency, pair):
     return uzs if currency == Currency.UZS else usd
 
 
+def returns_without(batch):
+    """`returns`, read as if `batch` had never been entered.
+
+    Every figure a vazvrat form measures against — `returnable_kg`, `remaining_own`,
+    `net_total` — is summed off `sale.returns.all()` in Python, so filtering the
+    prefetch is enough to answer the one question editing asks: what would this
+    sotuv look like if THIS visit were taken back out?
+
+    Without it a vazvrat could not even be saved unchanged. The ceiling on each row
+    already has the batch's own kg subtracted from it, so re-submitting the same
+    number reads as returning it twice.
+
+    `None` means "as things stand", which is what creating a new vazvrat wants."""
+    rows = Return.objects.all()
+    if batch is not None:
+        rows = rows.exclude(batch_id=getattr(batch, "pk", batch))
+    return Prefetch("returns", queryset=rows)
+
+
 def parse_return_rows(post):
     """[(sale_id, kg)] typed into the vazvrat table — boxes named `ret_<sale_id>`.
 
@@ -1835,6 +1884,18 @@ class ReturnBatchForm(forms.ModelForm):
         return any(value > debts.get(currency, Decimal("0"))
                    for currency, value in cls.returnable_value_by_currency(customer))
 
+    def editing_customer_sales(self):
+        """The mijoz's sotuvlar as this form sees them — with the batch being
+        corrected taken out. Used by the view to draw the rows, so the ceiling on
+        screen is the one `clean()` will enforce."""
+        customer = self.current_customer()
+        if customer is None:
+            return []
+        return (customer.sales
+                .select_related("line__contract_line", "customer")
+                .prefetch_related(returns_without(self.editing), "allocations")
+                .order_by("date", "id"))
+
     def current_customer(self):
         """The mijoz the form is about right now — from the POST when bound, from
         the initial when the modal was opened on a sotuv."""
@@ -1844,7 +1905,11 @@ class ReturnBatchForm(forms.ModelForm):
             return None
         return Customer.objects.filter(pk=raw).first()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, editing=None, **kwargs):
+        #: The vazvrat being corrected, or None when a new one is being entered.
+        #: Everything this form measures has to be read with this batch taken back
+        #: out — see `returns_without`.
+        self.editing = editing
         super().__init__(*args, **kwargs)
         _customer_payer_field(self.fields["customer"])
         customer = self.current_customer()
@@ -1885,7 +1950,7 @@ class ReturnBatchForm(forms.ModelForm):
 
         sales = {s.pk: s for s in customer.sales
                  .select_related("line__contract_line")
-                 .prefetch_related("returns", "allocations")}
+                 .prefetch_related(returns_without(self.editing), "allocations")}
         for sale_id, kg in parse_return_rows(self.data):
             sale = sales.get(sale_id)
             if sale is None:
@@ -2523,15 +2588,22 @@ def payer_choices(category):
     offering both in both boxes turns a two-item pick into a scan of every outside
     party in the books for a choice that only ever had one right answer.
 
-    The kassa is first and is what the box rests on. It is not a placeholder — it is
-    the answer for most xarajatlar, and the one this form gave for its whole life
-    before the picker existed."""
+    The kassa is first in the transport box and is what it rests on. It is not a
+    placeholder there — it is the answer for most xarajatlar, and the one this form
+    gave for its whole life before the picker existed.
+
+    The bojxona box does not offer it at all. Clearing money reaches bojxona through
+    a tamojni: we send it to them before the yuk is cleared and it is spent out of
+    what they hold, so "kassadan to'landi" on a bojxona never named a payer — it was
+    the picker being left alone. That box lists the tamojnilar and nothing else, and
+    its blank entry is a prompt to name one rather than an answer standing beside
+    them; a figure typed without one is refused (ExpenseGridForm.clean)."""
     if category == ShipmentExpense.Category.CUSTOMS:
-        rows = CustomsAgent.objects.all()
-        prefix = "customs"
-    elif category == ShipmentExpense.Category.TRANSPORT:
-        rows = Logist.objects.all()
-        prefix = "logist"
+        return [("", "Tamojnini tanlang"),
+                *((f"customs:{row.pk}", row.name)
+                  for row in CustomsAgent.objects.all())]
+    if category == ShipmentExpense.Category.TRANSPORT:
+        rows, prefix = Logist.objects.all(), "logist"
     else:
         rows, prefix = (), ""
     return [("", "Kassadan to'landi"),
@@ -2892,6 +2964,16 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         for value, amount in entered:
             if amount is not None and amount <= 0:
                 self.add_error(self.field_name(value), "Musbat son kiriting")
+        # A bojxona figure with nobody named would be written as a kassa row — the
+        # one answer its box no longer offers. Asked here rather than by making the
+        # field required, so a blank box on a turkum nobody typed into stays blank
+        # and a cleared bojxona (its row being deleted) is not made to name a payer
+        # on the way out.
+        customs = ShipmentExpense.Category.CUSTOMS
+        if (dict(self.entries).get(customs)
+                and not cleaned.get(self.payer_name(customs))):
+            self.add_error(self.payer_name(customs),
+                           "Qaysi tamojni to'lagan — tanlang")
         return cleaned
 
     def row_money(self, category, typed, rate):
@@ -3001,6 +3083,25 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         self.fields["logist"].empty_label = "Kassadan to'landi"
         self.fields["customs_agent"].empty_label = "Kassadan to'landi"
         self.fields["customs_agent"].label_from_instance = customs_agent_option_label
+        # On a bojxona the bojxonachi box lists the tamojnilar alone. The money for
+        # a clearing goes to one of them first and is spent out of what they hold,
+        # so the kassa was never an answer here — a row carrying it is one where the
+        # box was left alone, which is what clean() now refuses. The blank entry
+        # stays, as a prompt: every bojxona already in the books predates this rule,
+        # and a box with no blank would open on whichever tamojni sorts first and
+        # move real money onto them the moment anything else on the row was saved.
+        #
+        # Every other turkum keeps the kassa: a gruzchi or a yo'l xarajati really is
+        # paid straight out of it.
+        #
+        # No exception for the rows already in the books, by the owner's decision:
+        # they are being gone through and given their tamojni one by one, and a box
+        # that still offered the old answer would let one slip back through the
+        # correction pass unnoticed.
+        if self.instance.category == ShipmentExpense.Category.CUSTOMS:
+            self.fields["customs_agent"].empty_label = "Tamojnini tanlang"
+            self.fields["customs_agent"].help_text = "Bu bojxonani qaysi tamojni to'ladi"
+            self.fields["logist"].help_text = "Bojxonani logist to'lagan bo'lsa"
         # Default to whoever is already carrying money for this load: the logist who
         # runs it, or the bojxonachi we sent its clearing money to. Picking the wrong
         # one silently moves money between two people's accounts, and leaving it
@@ -3030,6 +3131,13 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         if cleaned.get("logist") and cleaned.get("customs_agent"):
             self.add_error("customs_agent",
                            "Bittasini tanlang — yo logist, yo bojxonachi to'lagan")
+        # Nobody named on a bojxona means the kassa paid it, and the kassa does not
+        # pay bojxona — the tamojni it was sent to does. Read off the SUBMITTED
+        # turkum rather than the row's own, so a xarajat switched to Bojxona in this
+        # box is asked the same question as one that opened as one.
+        elif (cleaned.get("category") == ShipmentExpense.Category.CUSTOMS
+              and not cleaned.get("logist") and not cleaned.get("customs_agent")):
+            self.add_error("customs_agent", "Qaysi tamojni to'lagan — tanlang")
         return cleaned
 
     def save(self, commit=True):

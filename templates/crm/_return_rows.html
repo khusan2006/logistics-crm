@@ -80,7 +80,13 @@ vazvrat can never be worth more per kg than the sotuv it reverses.
       `stringformat:"f"` and not the plain value: the page is served in uz, where a
       localised decimal reads "1,65" — and 1,65 parsed as a number is 1.
       {% endcomment %}
+      {% comment %}
+      `typed_kg` is what the box already holds: the kg this vazvrat records when it
+      is opened to be corrected, or the kg just submitted when the form comes back
+      with an error. Empty on a new vazvrat, which is every other time.
+      {% endcomment %}
       <td><input type="text" data-money name="ret_{{ s.pk }}"
+                 value="{{ s.typed_kg|default_if_none:'' }}"
                  autocomplete="off" placeholder="0"
                  data-return-kg
                  data-price="{{ s.price_own|stringformat:'f' }}"

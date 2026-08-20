@@ -14,9 +14,14 @@ that gap is the thing nobody could see before.
 
 import re
 from decimal import Decimal
+from html import unescape
+from io import BytesIO
+from urllib.parse import parse_qs
 
 import pytest
+from openpyxl import load_workbook
 
+from crm.exports import MONEY
 from crm.models import (
     Contract, ContractLine, Currency, CustomsAgent, CustomsPayment, Logist,
     Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -90,6 +95,24 @@ def _cleared_usd(shipment, agent, usd="3700", category="customs", **kw):
         currency="usd", exchange_rate=RATE,
         amount=amount, amount_uzs=amount * RATE,
         method="cash", customs_agent=agent, **kw)
+
+
+def _grid_payload(shipment, **over):
+    """The whole grid posted back. Payer boxes exist on Bojxona and Transport only,
+    so a test that wants one passes payer_customs=/payer_transport=."""
+    body = {"shipment": shipment.pk, "date": "2026-07-08", "currency": "uzs",
+            "method": "cash", "exchange_rate": str(RATE), "fee_percent": "0",
+            "note": ""}
+    for category, _label in ShipmentExpense.Category.choices:
+        body[f"amount_{category}"] = ""
+        body[f"currency_{category}"] = ""
+        body[f"method_{category}"] = ""
+        body[f"fee_{category}"] = ""
+        body[f"row_{category}"] = ""
+    body["payer_customs"] = ""
+    body["payer_transport"] = ""
+    body.update(over)
+    return body
 
 
 class TestBalance:
@@ -437,21 +460,7 @@ class TestTheGridCanSayWhoPaid:
     had already been funded had that same money leaving twice."""
 
     def _grid(self, shipment, **over):
-        """The whole grid posted back. Payer boxes exist on Bojxona and Transport
-        only, so a test that wants one passes payer_customs=/payer_transport=."""
-        body = {"shipment": shipment.pk, "date": "2026-07-08", "currency": "uzs",
-                "method": "cash", "exchange_rate": str(RATE), "fee_percent": "0",
-                "note": ""}
-        for category, _label in ShipmentExpense.Category.choices:
-            body[f"amount_{category}"] = ""
-            body[f"currency_{category}"] = ""
-            body[f"method_{category}"] = ""
-            body[f"fee_{category}"] = ""
-            body[f"row_{category}"] = ""
-        body["payer_customs"] = ""
-        body["payer_transport"] = ""
-        body.update(over)
-        return body
+        return _grid_payload(shipment, **over)
 
     def test_a_clearing_entered_here_can_come_out_of_the_float(self, admin_client, db):
         agent = _agent()
@@ -475,15 +484,16 @@ class TestTheGridCanSayWhoPaid:
         ctx = admin_client.get("/kassa/?davr=all").context
         assert ctx["cash_total_uzs"] == Decimal("-40000000.00")
 
-    def test_left_alone_it_still_bills_the_kassa(self, admin_client, db):
-        """The default is the behaviour this form has always had, so a grid nobody
-        touched differently keeps working exactly as before."""
+    def test_a_bojxona_with_nobody_named_is_sent_back(self, admin_client, db):
+        """The kassa does not pay bojxona — the tamojni we sent the money to does.
+        A figure typed with the box left alone used to be written as a kassa row;
+        that row never meant the till paid, only that the picker was skipped, so it
+        is now refused instead of recorded."""
+        _agent()
         shipment = _shipment()
         admin_client.post("/expenses/new/",
                           self._grid(shipment, amount_customs="37000000"))
-        expense = ShipmentExpense.objects.get()
-        assert expense.from_kassa is True
-        assert expense.customs_agent_id is None
+        assert not ShipmentExpense.objects.exists()
 
     def test_it_reaches_bojxona_and_transport_only(self, admin_client, db):
         """One picker over a grid of seven. A gruzchi and a sertifikat come out of
@@ -527,14 +537,14 @@ class TestTheGridCanSayWhoPaid:
         deliberate, visible edit — unlike one shared answer being applied to rows it
         was never asked about, which is why the shared version never rewrote."""
         agent = _agent()
+        other = _agent("Nazarbe Tamojni")
         shipment = _shipment()
         existing = _cleared(shipment, agent, "37000000")
         admin_client.post("/expenses/new/", self._grid(
-            shipment, payer_customs="", amount_customs="37000000",
+            shipment, payer_customs=f"customs:{other.pk}", amount_customs="37000000",
             **{"row_customs": existing.pk}))
         existing.refresh_from_db()
-        assert existing.customs_agent_id is None
-        assert existing.from_kassa is True
+        assert existing.customs_agent_id == other.pk
 
     def test_the_untouched_turkumlar_still_leave_the_kassa(self, admin_client, db):
         agent = _agent()
@@ -573,17 +583,21 @@ class TestTheGridCanSayWhoPaid:
         logist = Logist.objects.create(name="Sardor aka")
         form = ExpenseGridForm(initial={})
         assert form.fields["payer_customs"].choices == [
-            ("", "Kassadan to'landi"), (f"customs:{agent.pk}", "Bahrom aka")]
+            ("", "Tamojnini tanlang"), (f"customs:{agent.pk}", "Bahrom aka")]
         assert form.fields["payer_transport"].choices == [
             ("", "Kassadan to'landi"), (f"logist:{logist.pk}", "Sardor aka")]
 
-    def test_both_boxes_rest_on_the_kassa(self, db):
+    def test_transport_rests_on_the_kassa_and_bojxona_asks(self, db):
+        """A logist paying transport is the exception; the kassa is the answer that
+        box rests on. A bojxona has no such answer — it is always spent out of what
+        a tamojni holds — so its blank entry asks rather than tells."""
         from crm.forms import ExpenseGridForm
         _agent()
         Logist.objects.create(name="Sardor")
         form = ExpenseGridForm(initial={})
-        assert form.fields["payer_customs"].choices[0] == ("", "Kassadan to'landi")
         assert form.fields["payer_transport"].choices[0] == ("", "Kassadan to'landi")
+        assert form.fields["payer_customs"].choices[0] == ("", "Tamojnini tanlang")
+        assert "Kassadan to'landi" not in dict(form.fields["payer_customs"].choices).values()
         assert form.fields["payer_customs"].initial == ""
         assert form.fields["payer_transport"].initial == ""
 
@@ -698,6 +712,89 @@ class TestTheGridCanSayWhoPaid:
         assert form.initial.get("payer_transport", "") == ""
 
 
+class TestEveryBojxonaNamesItsTamojni:
+    """The kassa is not an answer on this picker for ANY bojxona — including the ones
+    already in the books.
+
+    They were entered before the rule and are being gone through and given their
+    tamojni one by one (the owner's call): a box that still offered the old answer
+    would let one slip back through that pass unnoticed, and the row would go on
+    reading as money the till paid out when it was a tamojni's float that paid."""
+
+    def _single(self, shipment, **over):
+        body = {"shipment": shipment.pk, "date": "2026-07-08", "category": "customs",
+                "logist": "", "customs_agent": "", "currency": "uzs",
+                "amount": "37000000", "exchange_rate": str(RATE), "method": "cash",
+                "fee_percent": "0", "note": ""}
+        body.update(over)
+        return body
+
+    def test_the_box_never_offers_the_kassa_not_even_on_an_old_row(self, db):
+        from crm.forms import ShipmentExpenseForm
+        _agent()
+        row = _cleared(_shipment(), None, "37000000")
+        assert row.from_kassa is True
+        form = ShipmentExpenseForm(instance=row)
+        labels = [label for _value, label in form.fields["customs_agent"].choices]
+        assert labels[0] == "Tamojnini tanlang"
+        assert not any("Kassadan" in str(label) for label in labels)
+
+    def test_an_old_row_is_refused_until_it_names_one(self, db):
+        """Which is the point: the correction pass cannot be half-done."""
+        from crm.forms import ShipmentExpenseForm
+        _agent()
+        row = _cleared(_shipment(), None, "37000000")
+        form = ShipmentExpenseForm(data=self._single(row.shipment), instance=row)
+        assert not form.is_valid()
+        assert "customs_agent" in form.errors
+
+    def test_naming_one_moves_it_onto_that_tamojni(self, db):
+        from crm.forms import ShipmentExpenseForm
+        agent = _agent()
+        row = _cleared(_shipment(), None, "37000000")
+        form = ShipmentExpenseForm(
+            data=self._single(row.shipment, customs_agent=agent.pk), instance=row)
+        assert form.is_valid(), form.errors
+        form.save()
+        row.refresh_from_db()
+        assert row.customs_agent_id == agent.pk
+        assert row.from_kassa is False
+        # ...and that is what puts it in the tamojni's Sarflangan pul.
+        assert agent.spent_by_currency() == [(UZS, Decimal("37000000.00"))]
+
+    def test_a_row_that_names_a_tamojni_cannot_be_handed_back_to_the_kassa(self, db):
+        from crm.forms import ShipmentExpenseForm
+        agent = _agent()
+        row = _cleared(_shipment(), agent, "37000000")
+        form = ShipmentExpenseForm(data=self._single(row.shipment), instance=row)
+        assert not form.is_valid()
+        assert "customs_agent" in form.errors
+
+    def test_the_grid_refuses_a_blank_bojxona_however_it_was_drawn(self, db):
+        """New box or a box standing for an old kassa row — same answer."""
+        from crm.forms import ExpenseGridForm
+        _agent()
+        shipment = _shipment()
+        blank = ExpenseGridForm(_grid_payload(shipment, amount_customs="37000000"),
+                                shipment=shipment)
+        assert not blank.is_valid()
+        assert "payer_customs" in blank.errors
+
+        row = _cleared(shipment, None, "37000000")
+        drawn = ExpenseGridForm(
+            _grid_payload(shipment, amount_customs="39000000",
+                          **{"row_customs": row.pk}), shipment=shipment)
+        assert not drawn.is_valid()
+        assert "payer_customs" in drawn.errors
+
+    def test_the_grid_box_on_an_old_row_opens_asking(self, db):
+        from crm.forms import ExpenseGridForm
+        shipment = _shipment()
+        _cleared(shipment, None, "37000000")
+        form = ExpenseGridForm(shipment=shipment, initial={"shipment": shipment.pk})
+        assert form.fields["payer_customs"].choices[0] == ("", "Tamojnini tanlang")
+
+
 class TestPaymentForm:
     def _body(self, agent, **over):
         body = {"agent": agent.pk, "shipment": "", "date": "2026-07-01",
@@ -752,6 +849,224 @@ class TestPaymentForm:
         form = CustomsPaymentForm(data=self._body(agent, shipment=shipment.pk))
         assert form.is_valid(), form.errors
         assert form.save(commit=False).shipment_id == shipment.pk
+
+
+class TestOneDaftarAtATime:
+    """The two daftar sit under Qaysi yuklarga, which is as long as the bojxonachi
+    has loads — so reading "what did we send them" started with scrolling past all
+    of them. Each tile opens its own daftar directly under the tiles."""
+
+    def _page(self, admin_client, agent, **params):
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        resp = admin_client.get(f"/customs/{agent.pk}/" + (f"?{query}" if query else ""))
+        assert resp.status_code == 200
+        return resp
+
+    def _seed(self):
+        agent = _agent()
+        shipment = _shipment()
+        _send(agent, "40000000", shipment)
+        _cleared(shipment, agent, "37000000")
+        return agent
+
+    #: What each daftar's own hint says, which is the one string on the page that
+    #: belongs to that table and to nothing else.
+    SENT = "Biz kassadan shu bojxonachiga yuborgan pul"
+    SPENT = "Yuklarni rasmiylashtirishga ketgan haqiqiy xarajat"
+    #: The loads jadval itself. Matched on its table rather than on the words "Qaysi
+    #: yuklarga": those also name the switch that leads BACK to it, which is drawn on
+    #: every reading of the page — including the ones this table is out of the way on.
+    LOADS = 'class="loads-table"'
+
+    def test_by_default_both_are_shown_against_each_other(self, admin_client, db):
+        html = self._page(admin_client, self._seed()).content.decode()
+        assert self.SENT in html and self.SPENT in html
+        assert self.LOADS in html
+
+    def test_one_tile_shows_that_daftar_alone_and_moves_the_loads_out_of_the_way(
+            self, admin_client, db):
+        agent = self._seed()
+        sent = self._page(admin_client, agent, daftar="yuborilgan").content.decode()
+        assert self.SENT in sent and self.SPENT not in sent
+        assert self.LOADS not in sent
+
+        spent = self._page(admin_client, agent, daftar="sarflangan").content.decode()
+        assert self.SPENT in spent and self.SENT not in spent
+        assert self.LOADS not in spent
+
+    def test_the_tile_it_was_opened_from_stays_lit(self, admin_client, db):
+        """The way back is the same thing that was pressed to get in, so it has to
+        be visible which one that was."""
+        agent = self._seed()
+        html = self._page(admin_client, agent, daftar="sarflangan").content.decode()
+        assert "ktile--out is-active" in html
+        assert "ktile--in is-active" not in html
+        # ...and pressing it again goes back to the whole page.
+        assert 'href="?"' in html
+
+    def test_qoldiq_opens_both_daftar_with_the_loads_out_of_the_way(
+            self, admin_client, db):
+        """Qoldiq IS the difference between the two, so it shows the two that make
+        it. Not the same as the whole page: there they sit under the loads jadval,
+        here they are straight under the tiles."""
+        agent = self._seed()
+        html = self._page(admin_client, agent, daftar="ikkalasi").content.decode()
+        assert self.SENT in html and self.SPENT in html
+        assert self.LOADS not in html
+        # ...side by side, the way they are read against each other.
+        assert "grid-2 ledger-pair" in html
+        assert "ktile--cash is-active" in html
+
+    def test_an_unknown_daftar_falls_back_to_both(self, admin_client, db):
+        """The value rides the query string, so it can arrive as anything."""
+        html = self._page(admin_client, self._seed(), daftar="xato").content.decode()
+        assert self.SENT in html and self.SPENT in html
+        assert admin_client.get(f"/customs/{self._seed().pk}/?daftar=").status_code == 200
+
+    def test_paging_a_daftar_stays_in_it(self, admin_client, db):
+        """`page_url` rebuilds the whole query string, so this is a guard rather than
+        a mechanism — a page link that dropped it would bounce the reader back up to
+        the loads table mid-read."""
+        agent = _agent()
+        for _ in range(21):
+            _cleared(_shipment(), agent, "1000000")
+        html = self._page(admin_client, agent, daftar="sarflangan").content.decode()
+        assert "daftar=sarflangan&amp;opage=2" in html
+
+
+class TestTheDaftarNarrow:
+    """The hisob is opened to answer "what moved, and when" — so the page carries the
+    same davr bar, search box and Excel button every other ro'yxat in the app has.
+
+    One bar over BOTH readings, by the owner's decision: Qaysi yuklarga and the two
+    daftar answer for the same davr and the same qidiruv. A jadval still showing the
+    whole year beside a daftar cut to Avgust would be two periods on one screen with
+    nothing saying which was which. The price is that a narrowed load row states the
+    PERIOD's yuborilgan, sarflagan and farq rather than the load's own — and Hammasi,
+    which the page opens on, is where the whole story is."""
+
+    SENT = TestOneDaftarAtATime.SENT
+    SPENT = TestOneDaftarAtATime.SPENT
+    LOADS = TestOneDaftarAtATime.LOADS
+
+    def _seed(self):
+        """One clearing in Iyul and one in Avgust, out of one to'lov sent in Iyul."""
+        agent = _agent()
+        july, august = _shipment(), _shipment()
+        _send(agent, "80000000", july, date="2026-07-01")
+        _cleared(july, agent, "37000000", date="2026-07-08")
+        _cleared(august, agent, "41000000", date="2026-08-08")
+        return agent
+
+    def _rows(self, admin_client, agent, **params):
+        resp = admin_client.get(f"/customs/{agent.pk}/", params)
+        assert resp.status_code == 200
+        return resp
+
+    def test_the_davr_cuts_the_daftar_to_it(self, admin_client, db):
+        resp = self._rows(admin_client, self._seed(), **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert [r["amount_uzs"] for r in resp.context["spent_page"]] == [Decimal("41000000")]
+        # The Iyul to'lov is out of the window too — one bar over both daftar.
+        assert list(resp.context["sent_page"]) == []
+
+    def test_a_head_totals_the_rows_under_it(self, admin_client, db):
+        """The heap in the card head is read off the rows the table is SHOWING. A
+        figure that went on saying 78 mln over a table adding up to 41 is not a total
+        of anything on the screen."""
+        resp = self._rows(admin_client, self._seed(), **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert resp.context["spent_heap"] == [(UZS, Decimal("41000000"))]
+        assert resp.context["sent_heap"] == []
+
+    def test_the_tiles_keep_saying_the_whole_hisob(self, admin_client, db):
+        """A qoldiq is what this person is holding right now, not what a chosen davr
+        came to — narrowing it would answer a question nobody asked at the tiles."""
+        agent = self._seed()
+        self._rows(admin_client, agent, **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert agent.spent_by_currency() == [(UZS, Decimal("78000000"))]
+        assert agent.balance_by_currency() == [(UZS, Decimal("2000000"))]
+
+    def test_qaysi_yuklarga_narrows_with_them(self, admin_client, db):
+        """The bar sits above the jadval as well as above the daftar, so the yuklar
+        on screen are the ones money moved on in the chosen davr."""
+        agent = self._seed()
+        whole = self._rows(admin_client, agent)
+        assert len(whole.context["loads"]) == 2
+        august = self._rows(admin_client, agent, **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert len(august.context["loads"]) == 1
+        row = august.context["loads"][0]
+        # And the row is the period's, not the load's: the Iyul to'lov that funded
+        # this truck is outside the window, so its Yuborilgan side is empty here.
+        assert row["paid"] == [(UZS, Decimal("41000000"))]
+        assert row["sent"] == []
+
+    def test_an_emptied_jadval_says_so(self, admin_client, db):
+        """`_holder_loads.html` draws nothing at all when handed nothing, which on a
+        filtered page reads as a table that went missing rather than as an answer."""
+        html = self._rows(admin_client, self._seed(),
+                          **{"from": "2026-01-01", "to": "2026-01-31"}).content.decode()
+        assert self.LOADS not in html
+        assert "Bu davrda hech bir yukka pul harakati bo'lmagan" in html
+
+    def test_the_search_narrows_the_jadval_to_the_row_it_found(self, admin_client, db):
+        loads = self._rows(admin_client, self._seed(), q="41 000 000").context["loads"]
+        assert [r["paid"] for r in loads] == [[(UZS, Decimal("41000000"))]]
+
+    def test_the_search_box_reads_every_column_of_a_row(self, admin_client, db):
+        """The kassa's own box over the kassa's own row shape — the daftar are built
+        the same way, so a sana, a turkum or a bare figure finds a row here too."""
+        agent = self._seed()
+        for needle, expected in [("41 000 000", [Decimal("41000000")]),
+                                 ("08.07.2026", [Decimal("37000000")]),
+                                 ("bojxona", [Decimal("41000000"), Decimal("37000000")])]:
+            rows = self._rows(admin_client, agent, q=needle).context["spent_page"]
+            assert [r["amount_uzs"] for r in rows] == expected, needle
+
+    def test_an_empty_daftar_says_which_kind_of_empty_it_is(self, admin_client, db):
+        """"Nothing was ever sent" and "the davr you picked holds nothing" are two
+        different answers, and the second one is fixed by changing the davr."""
+        agent = self._seed()
+        html = self._rows(admin_client, agent, q="yo'q-narsa").content.decode()
+        assert "Bu davrda pul yuborilmagan" in html
+        assert "Bu bojxonachiga hali pul yuborilmagan" not in html
+
+    def test_the_switch_leads_to_the_daftar_and_back(self, admin_client, db):
+        """The tiles already open a daftar, but each of them is one figure's button —
+        this row is the one that says in words which reading is on screen."""
+        agent = self._seed()
+        whole = self._rows(admin_client, agent).content.decode()
+        assert 'href="?daftar=ikkalasi"' in whole and self.LOADS in whole
+        both = self._rows(admin_client, agent, daftar="ikkalasi").content.decode()
+        assert self.SENT in both and self.SPENT in both and self.LOADS not in both
+        # ...and the way back is in the same row it was pressed from.
+        assert 'viewswitch-opt is-on' in both and 'href="?"' in both
+
+    def test_the_switch_keeps_the_davr_and_the_search(self, admin_client, db):
+        """Pressing it is a change of view, not of filter — a link that dropped them
+        would silently widen the tables the reader had just narrowed."""
+        html = self._rows(admin_client, self._seed(), q="bojxona",
+                          **{"from": "2026-08-01", "to": "2026-08-31"}).content.decode()
+        # Parsed rather than matched as a string: `{% querystring %}` keeps the order
+        # the params arrived in, which is the client's and not this page's business.
+        href = re.findall(r'href="([^"]*daftar=ikkalasi[^"]*)"', html)[-1]
+        assert parse_qs(unescape(href).lstrip("?")) == {
+            "q": ["bojxona"], "from": ["2026-08-01"], "to": ["2026-08-31"],
+            "daftar": ["ikkalasi"]}
+
+    def test_the_file_is_what_the_screen_is_showing(self, admin_client, db):
+        """Same davr, same qidiruv — the button downloads the table, not the model."""
+        agent = self._seed()
+        resp = admin_client.get(f"/customs/{agent.pk}/hisob.xlsx",
+                                {"from": "2026-08-01", "to": "2026-08-31"})
+        assert resp.status_code == 200
+        assert "nazarbe" not in resp["Content-Disposition"]
+        wb = load_workbook(BytesIO(resp.content))
+        assert wb.sheetnames == ["Yuborilgan", "Sarflangan"]
+        sent, spent = wb["Yuborilgan"], wb["Sarflangan"]
+        # Header only: the to'lov was sent in Iyul.
+        assert sent.max_row == 1
+        assert [c.value for c in spent[2]][-1] == 41000000
+        # Money as a number Excel can sum, not as a formatted string.
+        assert spent.cell(row=2, column=6).number_format == MONEY
 
 
 class TestCustomsScreens:

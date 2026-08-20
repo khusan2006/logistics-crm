@@ -10,6 +10,20 @@ from crm.models import (
 )
 
 
+def _tamojni_payer(data):
+    """Name a tamojni on a bojxona box, the way the modal now makes the operator.
+
+    A bojxona is spent out of what a tamojni holds, so the grid refuses a figure
+    with nobody on it (see ExpenseGridForm.clean). These payloads are about the
+    grid's money — valyuta, kurs, foiz, which row gets rewritten — so they name one
+    and move on rather than each carrying the same two lines."""
+    from crm.models import CustomsAgent
+    if data.get("amount_customs") and not data.get("payer_customs"):
+        agent, _ = CustomsAgent.objects.get_or_create(name="Bahrom aka")
+        data["payer_customs"] = f"customs:{agent.pk}"
+    return data
+
+
 def grid(shipment, date="2026-07-10", currency="usd", method="cash",
          exchange_rate="12000", note="", fee_percent="0", **amounts):
     """POST payload for the xarajat modal: shared settings plus one amount per
@@ -19,7 +33,7 @@ def grid(shipment, date="2026-07-10", currency="usd", method="cash",
             "fee_percent": fee_percent}
     for category, value in amounts.items():
         data[f"amount_{category}"] = str(value)
-    return data
+    return _tamojni_payer(data)
 
 
 def opened(shipment, **over):
@@ -32,7 +46,7 @@ def opened(shipment, **over):
             for name in form.fields}
     data["shipment"] = shipment.pk
     data.update({k: ("" if v is None else str(v)) for k, v in over.items()})
-    return data
+    return _tamojni_payer(data)
 
 
 @pytest.fixture
@@ -147,8 +161,10 @@ def test_the_sana_is_required(admin_client, shipment):
 
 
 def test_the_fee_rides_on_each_row(admin_client, shipment):
+    # A deklarant rather than a bojxona: total_out is what left the KASSA, and a
+    # bojxona is spent out of what a tamojni already holds, so it leaves nothing.
     admin_client.post("/expenses/new/", grid(
-        shipment, method="transfer", fee_percent="2", customs="1000"))
+        shipment, method="transfer", fee_percent="2", declarant="1000"))
     expense = ShipmentExpense.objects.get()
     assert expense.fee_amount == Decimal("20.00")
     assert expense.total_out == Decimal("1020.00")

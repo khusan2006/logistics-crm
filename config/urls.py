@@ -61,6 +61,8 @@ urlpatterns = [
     path("customs/new/", crm_views.customs_create, name="customs_create"),
     path("customs/loads/", crm_views.customs_loads, name="customs_loads"),
     path("customs/<int:pk>/", crm_views.customs_detail, name="customs_detail"),
+    path("customs/<int:pk>/hisob.xlsx", crm_views.customs_detail_export,
+         name="customs_detail_export"),
     path("customs/<int:pk>/edit/", crm_views.customs_edit, name="customs_edit"),
     path("customs/<int:pk>/delete/", crm_views.customs_delete, name="customs_delete"),
     path("customs-payments/new/", crm_views.customs_payment_create, name="customs_payment_create"),
@@ -75,6 +77,10 @@ urlpatterns = [
     path("shipments/<int:pk>/qr/", crm_views.shipment_set_qr, name="shipment_set_qr"),
     path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
     path("shipments/<int:pk>/extend/", crm_views.shipment_extend, name="shipment_extend"),
+    path("delays/<int:pk>/edit/", crm_views.shipment_delay_edit,
+         name="shipment_delay_edit"),
+    path("delays/<int:pk>/delete/", crm_views.shipment_delay_delete,
+         name="shipment_delay_delete"),
     # The tarjimon's one write on a yuk — see crm.views.shipment_driver_edit.
     path("shipments/<int:pk>/driver/", crm_views.shipment_driver_edit, name="shipment_driver_edit"),
     path("legs/new/", crm_views.leg_create, name="leg_create"),
@@ -107,6 +113,8 @@ urlpatterns = [
     # The rows for one mijoz, fetched by the modal when the mijoz select changes.
     path("returns/rows/", crm_views.return_rows, name="return_rows"),
     # `batch` before the int route so the word cannot be read as a pk.
+    path("returns/batch/<int:pk>/edit/", crm_views.return_batch_edit,
+         name="return_batch_edit"),
     path("returns/batch/<int:pk>/delete/", crm_views.return_batch_delete,
          name="return_batch_delete"),
     path("return-settlements/<int:pk>/pay/", crm_views.return_settlement_pay,

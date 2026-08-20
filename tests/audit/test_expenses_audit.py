@@ -26,6 +26,20 @@ from crm.models import (
 
 # --- payload helpers -------------------------------------------------------
 
+def _tamojni_payer(data):
+    """Name a tamojni on a bojxona box, the way the modal now makes the operator.
+
+    A bojxona is spent out of what a tamojni holds, so the grid refuses a figure
+    with nobody on it (see ExpenseGridForm.clean). These payloads are about the
+    grid's money — valyuta, kurs, foiz, which row gets rewritten — so they name one
+    and move on rather than each carrying the same two lines."""
+    from crm.models import CustomsAgent
+    if data.get("amount_customs") and not data.get("payer_customs"):
+        agent, _ = CustomsAgent.objects.get_or_create(name="Bahrom aka")
+        data["payer_customs"] = f"customs:{agent.pk}"
+    return data
+
+
 def grid(shipment, date="2026-07-10", currency="usd", method="cash",
          exchange_rate="12000", note="", fee_percent="0", **amounts):
     """POST payload for the xarajat grid modal — the same shape tests/test_expenses.py
@@ -35,7 +49,7 @@ def grid(shipment, date="2026-07-10", currency="usd", method="cash",
             "fee_percent": fee_percent}
     for category, value in amounts.items():
         data[f"amount_{category}"] = str(value)
-    return data
+    return _tamojni_payer(data)
 
 
 def rendered_edit_payload(expense, **over):
@@ -392,9 +406,11 @@ def test_the_kassa_som_outflow_equals_the_som_rows_of_its_own_ledger(
         admin_client, shipment):
     """The same consistency check through the real page, with a clean kurs so the
     slice-vs-reconvert difference cannot hide behind rounding."""
+    # A deklarant, because the row has to be one the KASSA pays: a bojxona comes
+    # out of the float a tamojni is already holding and never reaches this ledger.
     admin_client.post("/expenses/new/",
                       grid(shipment, currency="uzs", exchange_rate="12500",
-                           method="transfer", fee_percent="2", customs="1250000"))
+                           method="transfer", fee_percent="2", declarant="1250000"))
     ctx = admin_client.get("/kassa/?davr=all").context
     rows = [r for r in ctx["outflow_page"].object_list if r["kind"].endswith("expense")]
     assert len(rows) == 2                              # the xarajat and its foiz
@@ -520,7 +536,9 @@ def test_the_grid_never_saves_a_logist_funded_row(admin_client, shipment):
                                  amount=Decimal("1000"), amount_uzs=Decimal("12000000"),
                                  exchange_rate=Decimal("12000"), method="cash")
     assert "logist" not in ExpenseGridForm().fields
-    admin_client.post("/expenses/new/", grid(shipment, customs="300"))
+    # A deklarant: the bojxona box does name its payer now (a tamojni), so the
+    # turkum that still shows this gap is one with no picker at all.
+    admin_client.post("/expenses/new/", grid(shipment, declarant="300"))
     grid_row = ShipmentExpense.objects.get()
     assert grid_row.logist_id is None and grid_row.from_kassa is True
     # the single-row form, on the same yuk, pre-selects the logist instead
