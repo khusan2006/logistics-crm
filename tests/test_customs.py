@@ -719,14 +719,14 @@ class TestTheGridCanSayWhoPaid:
         assert form.initial.get("payer_transport", "") == ""
 
 
-class TestABojxonaFromBeforeTheRule:
-    """The kassa is no longer an answer on the bojxonachi picker — but every bojxona
-    ALREADY in the books was entered when it was, and there are dozens of them.
+class TestEveryBojxonaNamesItsTamojni:
+    """The kassa is not an answer on this picker for ANY bojxona — including the ones
+    already in the books.
 
-    Refusing those rows would mean no sana, no summa and no izoh on any of them
-    could be corrected without first naming a tamojni, which moves real money onto a
-    real person's balance to fix a typo. So a row recorded with nobody on it keeps
-    its own answer, spelled out as the old one; everything else names a tamojni."""
+    They were entered before the rule and are being gone through and given their
+    tamojni one by one (the owner's call): a box that still offered the old answer
+    would let one slip back through that pass unnoticed, and the row would go on
+    reading as money the till paid out when it was a tamojni's float that paid."""
 
     def _single(self, shipment, **over):
         body = {"shipment": shipment.pk, "date": "2026-07-08", "category": "customs",
@@ -736,28 +736,40 @@ class TestABojxonaFromBeforeTheRule:
         body.update(over)
         return body
 
-    def test_the_box_says_what_the_row_says(self, db):
+    def test_the_box_never_offers_the_kassa_not_even_on_an_old_row(self, db):
         from crm.forms import ShipmentExpenseForm
         _agent()
         row = _cleared(_shipment(), None, "37000000")
+        assert row.from_kassa is True
         form = ShipmentExpenseForm(instance=row)
-        assert form.fields["customs_agent"].empty_label == "Kassadan to'landi (avvalgidek)"
+        labels = [label for _value, label in form.fields["customs_agent"].choices]
+        assert labels[0] == "Tamojnini tanlang"
+        assert not any("Kassadan" in str(label) for label in labels)
 
-    def test_correcting_its_sana_does_not_move_the_money(self, db):
+    def test_an_old_row_is_refused_until_it_names_one(self, db):
+        """Which is the point: the correction pass cannot be half-done."""
         from crm.forms import ShipmentExpenseForm
         _agent()
+        row = _cleared(_shipment(), None, "37000000")
+        form = ShipmentExpenseForm(data=self._single(row.shipment), instance=row)
+        assert not form.is_valid()
+        assert "customs_agent" in form.errors
+
+    def test_naming_one_moves_it_onto_that_tamojni(self, db):
+        from crm.forms import ShipmentExpenseForm
+        agent = _agent()
         row = _cleared(_shipment(), None, "37000000")
         form = ShipmentExpenseForm(
-            data=self._single(row.shipment, date="2026-07-09"), instance=row)
+            data=self._single(row.shipment, customs_agent=agent.pk), instance=row)
         assert form.is_valid(), form.errors
         form.save()
         row.refresh_from_db()
-        assert str(row.date) == "2026-07-09"
-        assert row.from_kassa is True
+        assert row.customs_agent_id == agent.pk
+        assert row.from_kassa is False
+        # ...and that is what puts it in the tamojni's Sarflangan pul.
+        assert agent.spent_by_currency() == [(UZS, Decimal("37000000.00"))]
 
     def test_a_row_that_names_a_tamojni_cannot_be_handed_back_to_the_kassa(self, db):
-        """The exception is for rows the rule arrived too late for, not a way out of
-        it: money already on somebody's balance stays there."""
         from crm.forms import ShipmentExpenseForm
         agent = _agent()
         row = _cleared(_shipment(), agent, "37000000")
@@ -765,45 +777,29 @@ class TestABojxonaFromBeforeTheRule:
         assert not form.is_valid()
         assert "customs_agent" in form.errors
 
-    def test_a_brand_new_bojxona_still_has_to_name_one(self, db):
-        """Nothing recorded to inherit an answer from."""
+    def test_the_grid_refuses_a_blank_bojxona_however_it_was_drawn(self, db):
+        """New box or a box standing for an old kassa row — same answer."""
         from crm.forms import ExpenseGridForm
         _agent()
         shipment = _shipment()
-        form = ExpenseGridForm(_grid_payload(shipment, amount_customs="37000000"),
-                               shipment=shipment)
-        assert not form.is_valid()
-        assert "payer_customs" in form.errors
+        blank = ExpenseGridForm(_grid_payload(shipment, amount_customs="37000000"),
+                                shipment=shipment)
+        assert not blank.is_valid()
+        assert "payer_customs" in blank.errors
 
-    def test_the_grid_box_opens_on_the_old_answer_and_saves_as_drawn(
-            self, admin_client, db):
-        from crm.forms import ExpenseGridForm
-        _agent()
-        shipment = _shipment()
         row = _cleared(shipment, None, "37000000")
-        form = ExpenseGridForm(shipment=shipment, initial={"shipment": shipment.pk})
-        assert form.fields["payer_customs"].choices[0] == (
-            "", "Kassadan to'landi (avvalgidek)")
-
-        admin_client.post("/expenses/new/", _grid_payload(
-            shipment, amount_customs="39000000", **{"row_customs": row.pk}))
-        row.refresh_from_db()
-        assert row.amount_uzs == Decimal("39000000.00")
-        assert row.from_kassa is True
-
-    def test_the_blank_does_not_travel_to_another_row(self, admin_client, db):
-        """The exception is pinned to the row the box was drawn for. A payload
-        naming a DIFFERENT row's pk gets the ordinary answer, so it cannot be used
-        to blank a bojxona that names somebody."""
-        from crm.forms import ExpenseGridForm
-        agent = _agent()
-        shipment = _shipment()
-        theirs = _cleared(shipment, agent, "37000000")
-        form = ExpenseGridForm(
+        drawn = ExpenseGridForm(
             _grid_payload(shipment, amount_customs="39000000",
-                          **{"row_customs": theirs.pk}), shipment=shipment)
-        assert not form.is_valid()
-        assert "payer_customs" in form.errors
+                          **{"row_customs": row.pk}), shipment=shipment)
+        assert not drawn.is_valid()
+        assert "payer_customs" in drawn.errors
+
+    def test_the_grid_box_on_an_old_row_opens_asking(self, db):
+        from crm.forms import ExpenseGridForm
+        shipment = _shipment()
+        _cleared(shipment, None, "37000000")
+        form = ExpenseGridForm(shipment=shipment, initial={"shipment": shipment.pk})
+        assert form.fields["payer_customs"].choices[0] == ("", "Tamojnini tanlang")
 
 
 class TestPaymentForm:

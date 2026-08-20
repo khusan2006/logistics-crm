@@ -2910,14 +2910,6 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         current = payer_value(row) if row is not None else ""
         if current and current not in {value for value, _label in choices}:
             choices.append((current, f"{row.paid_by.name} (avvalgi)"))
-        # A bojxona already in the books with nobody on it comes from before the
-        # kassa stopped being an answer here. Its box says what the ROW says rather
-        # than asking for a tamojni, so a figure corrected beside it can be saved
-        # without first moving real money onto somebody's balance. Only this row is
-        # allowed it — a bojxona typed into an empty box still names one.
-        if (category == ShipmentExpense.Category.CUSTOMS and row is not None
-                and row.from_kassa and choices and choices[0][0] == ""):
-            choices[0] = ("", "Kassadan to'landi (avvalgidek)")
         return choices
 
     def row_payer(self, category):
@@ -2979,21 +2971,10 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         # on the way out.
         customs = ShipmentExpense.Category.CUSTOMS
         if (dict(self.entries).get(customs)
-                and not cleaned.get(self.payer_name(customs))
-                and not self.drawn_as_kassa_bojxona(cleaned.get(self.row_name(customs)))):
+                and not cleaned.get(self.payer_name(customs))):
             self.add_error(self.payer_name(customs),
                            "Qaysi tamojni to'lagan — tanlang")
         return cleaned
-
-    def drawn_as_kassa_bojxona(self, pk):
-        """True when the bojxona box was drawn for a row already recorded with
-        nobody on it — the one case a blank payer is an answer rather than a skipped
-        pick, because it is the answer that row already carries.
-
-        Matched against the row the box actually showed (row_customs), so a blank
-        arriving with somebody else's pk, or with none at all, is still refused."""
-        row = self.recorded.get(ShipmentExpense.Category.CUSTOMS)
-        return bool(pk and row is not None and row.pk == pk and row.from_kassa)
 
     def row_money(self, category, typed, rate):
         """What a filled box means in money, converted at its own valyuta.
@@ -3113,20 +3094,12 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         # Every other turkum keeps the kassa: a gruzchi or a yo'l xarajati really is
         # paid straight out of it.
         #
-        # One exception, and it is the row this rule arrived too late for: a bojxona
-        # ALREADY recorded with nobody on it. Every one of those was entered when
-        # the kassa was the answer here, and refusing them would mean no sana and no
-        # summa on them could be corrected without first moving real money onto a
-        # tamojni. Such a row keeps its own answer, spelled out as the old one.
-        self.kassa_bojxona_as_recorded = bool(
-            self.instance.pk
-            and self.instance.category == ShipmentExpense.Category.CUSTOMS
-            and self.instance.logist_id is None
-            and self.instance.customs_agent_id is None)
+        # No exception for the rows already in the books, by the owner's decision:
+        # they are being gone through and given their tamojni one by one, and a box
+        # that still offered the old answer would let one slip back through the
+        # correction pass unnoticed.
         if self.instance.category == ShipmentExpense.Category.CUSTOMS:
-            self.fields["customs_agent"].empty_label = (
-                "Kassadan to'landi (avvalgidek)" if self.kassa_bojxona_as_recorded
-                else "Tamojnini tanlang")
+            self.fields["customs_agent"].empty_label = "Tamojnini tanlang"
             self.fields["customs_agent"].help_text = "Bu bojxonani qaysi tamojni to'ladi"
             self.fields["logist"].help_text = "Bojxonani logist to'lagan bo'lsa"
         # Default to whoever is already carrying money for this load: the logist who
@@ -3163,8 +3136,7 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         # turkum rather than the row's own, so a xarajat switched to Bojxona in this
         # box is asked the same question as one that opened as one.
         elif (cleaned.get("category") == ShipmentExpense.Category.CUSTOMS
-              and not cleaned.get("logist") and not cleaned.get("customs_agent")
-              and not self.kassa_bojxona_as_recorded):
+              and not cleaned.get("logist") and not cleaned.get("customs_agent")):
             self.add_error("customs_agent", "Qaysi tamojni to'lagan — tanlang")
         return cleaned
 
