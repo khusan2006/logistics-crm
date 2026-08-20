@@ -26,20 +26,30 @@ be a total of what is underneath it.
       {% else %}hisob teng{% endif %}
     </div>
   </div>
-  <div class="ktile ktile--in">
+  {% comment %}
+  Each of these two IS the button for its own daftar: pressed, the page shows that
+  table alone, directly under the tiles. The daftar sit below the Qaysi yuklarga
+  jadval — which is as long as the bojxonachi has loads — so reading "what did we
+  send them" used to start with scrolling past all of them. Pressed again it goes
+  back to the whole page; the tile carries `is-active` while it is the one showing,
+  so the way out is the same thing that was clicked to get in.
+  {% endcomment %}
+  <a class="ktile ktile--in{% if daftar == 'yuborilgan' %} is-active{% endif %}"
+     href="{% if daftar == 'yuborilgan' %}?{% else %}?daftar=yuborilgan{% endif %}">
     <div class="ktile-label">Yuborilgan pul</div>
     {% for currency, amount in agent.received_by_currency %}
     <div class="ktile-num">{% money_in amount currency %}</div>
     {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
-    <div class="ktile-note">kassadan chiqqan pul</div>
-  </div>
-  <div class="ktile ktile--out">
+    <div class="ktile-note">kassadan chiqqan pul{% if daftar == 'yuborilgan' %} · hammasini ko'rish uchun yana bosing{% else %} · ko'rish uchun bosing{% endif %}</div>
+  </a>
+  <a class="ktile ktile--out{% if daftar == 'sarflangan' %} is-active{% endif %}"
+     href="{% if daftar == 'sarflangan' %}?{% else %}?daftar=sarflangan{% endif %}">
     <div class="ktile-label">Sarflangan pul</div>
     {% for currency, amount in agent.spent_by_currency %}
     <div class="ktile-num">{% money_in amount currency %}</div>
     {% empty %}<div class="ktile-num">{% money_in 0 "uzs" %}</div>{% endfor %}
-    <div class="ktile-note">bojxonada — yuklarning tannarxiga kirgan</div>
-  </div>
+    <div class="ktile-note">bojxonada — yuklarning tannarxiga kirgan{% if daftar == 'sarflangan' %} · hammasini ko'rish uchun yana bosing{% else %} · ko'rish uchun bosing{% endif %}</div>
+  </a>
 </div>
 <p class="ktiles-foot">
   {% if agent.phone %}{{ agent.phone }} · {% endif %}{{ agent.expenses.count }} ta xarajat kiritilgan.
@@ -48,7 +58,9 @@ be a total of what is underneath it.
   <a href="{% url 'customs_loads' %}">yuklar bo'yicha hisobda</a>.
 </p>
 
+{% if not daftar %}
 {% include "crm/_holder_loads.html" with loads=loads paid_label="Bojxonada sarflagan" show_sent=1 %}
+{% endif %}
 
 {% comment %}
 Two daftar rather than one Hisob varaqasi with a Kirim and a Chiqim column.
@@ -66,7 +78,8 @@ per-currency heap, and the Qoldiq tile above is the difference between them.
 Each pages on its own (?ipage / ?opage) — see .ledger-pair, the same shape the kassa
 draws.
 {% endcomment %}
-<div class="grid-2 ledger-pair">
+<div class="{% if not daftar %}grid-2 {% endif %}ledger-pair">
+  {% if daftar != 'sarflangan' %}
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Yuborilgan pul</h2>
@@ -95,7 +108,9 @@ draws.
     </div>
     {% include "crm/_pagination.html" with page=sent_page label="to'lov" param="ipage" %}
   </div>
+  {% endif %}
 
+  {% if daftar != 'yuborilgan' %}
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Sarflangan pul</h2>
@@ -127,6 +142,7 @@ draws.
     </div>
     {% include "crm/_pagination.html" with page=spent_page label="xarajat" param="opage" %}
   </div>
+  {% endif %}
 </div>
 
 {% endblock %}

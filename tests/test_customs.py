@@ -846,6 +846,72 @@ class TestPaymentForm:
         assert form.save(commit=False).shipment_id == shipment.pk
 
 
+class TestOneDaftarAtATime:
+    """The two daftar sit under Qaysi yuklarga, which is as long as the bojxonachi
+    has loads — so reading "what did we send them" started with scrolling past all
+    of them. Each tile opens its own daftar directly under the tiles."""
+
+    def _page(self, admin_client, agent, **params):
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        resp = admin_client.get(f"/customs/{agent.pk}/" + (f"?{query}" if query else ""))
+        assert resp.status_code == 200
+        return resp
+
+    def _seed(self):
+        agent = _agent()
+        shipment = _shipment()
+        _send(agent, "40000000", shipment)
+        _cleared(shipment, agent, "37000000")
+        return agent
+
+    #: What each daftar's own hint says, which is the one string on the page that
+    #: belongs to that table and to nothing else.
+    SENT = "Biz kassadan shu bojxonachiga yuborgan pul"
+    SPENT = "Yuklarni rasmiylashtirishga ketgan haqiqiy xarajat"
+
+    def test_by_default_both_are_shown_against_each_other(self, admin_client, db):
+        html = self._page(admin_client, self._seed()).content.decode()
+        assert self.SENT in html and self.SPENT in html
+        assert "Qaysi yuklarga" in html
+
+    def test_one_tile_shows_that_daftar_alone_and_moves_the_loads_out_of_the_way(
+            self, admin_client, db):
+        agent = self._seed()
+        sent = self._page(admin_client, agent, daftar="yuborilgan").content.decode()
+        assert self.SENT in sent and self.SPENT not in sent
+        assert "Qaysi yuklarga" not in sent
+
+        spent = self._page(admin_client, agent, daftar="sarflangan").content.decode()
+        assert self.SPENT in spent and self.SENT not in spent
+        assert "Qaysi yuklarga" not in spent
+
+    def test_the_tile_it_was_opened_from_stays_lit(self, admin_client, db):
+        """The way back is the same thing that was pressed to get in, so it has to
+        be visible which one that was."""
+        agent = self._seed()
+        html = self._page(admin_client, agent, daftar="sarflangan").content.decode()
+        assert "ktile--out is-active" in html
+        assert "ktile--in is-active" not in html
+        # ...and pressing it again goes back to the whole page.
+        assert 'href="?"' in html
+
+    def test_an_unknown_daftar_falls_back_to_both(self, admin_client, db):
+        """The value rides the query string, so it can arrive as anything."""
+        html = self._page(admin_client, self._seed(), daftar="xato").content.decode()
+        assert self.SENT in html and self.SPENT in html
+        assert admin_client.get(f"/customs/{self._seed().pk}/?daftar=").status_code == 200
+
+    def test_paging_a_daftar_stays_in_it(self, admin_client, db):
+        """`page_url` rebuilds the whole query string, so this is a guard rather than
+        a mechanism — a page link that dropped it would bounce the reader back up to
+        the loads table mid-read."""
+        agent = _agent()
+        for _ in range(21):
+            _cleared(_shipment(), agent, "1000000")
+        html = self._page(admin_client, agent, daftar="sarflangan").content.decode()
+        assert "daftar=sarflangan&amp;opage=2" in html
+
+
 class TestCustomsScreens:
     def test_list_shows_the_balance_and_both_position_figures(self, admin_client, db):
         agent = _agent("Bahrom aka")

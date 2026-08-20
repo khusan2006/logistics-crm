@@ -6920,8 +6920,17 @@ def customs_detail(request, pk):
         for expense in agent.expenses.all()]
     for rows in (sent_rows, spent_rows):
         rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
+    # Which daftar the page is opened ON. Both, by default — they are read against
+    # each other. Either one alone puts that table directly under the tiles: the
+    # Qaysi yuklarga jadval sits between them and the top of the page, so "what did
+    # we send them" meant scrolling past every load first. Clicking the tile that
+    # names the daftar is how it is asked for, the same way the ro'yxat tiles filter.
+    daftar = request.GET.get("daftar", "")
+    if daftar not in ("yuborilgan", "sarflangan"):
+        daftar = ""
     return render(request, "crm/customs_detail.html", {
         "agent": agent,
+        "daftar": daftar,
         "sent_page": Paginator(sent_rows, 20).get_page(request.GET.get("ipage")),
         "spent_page": Paginator(spent_rows, 20).get_page(request.GET.get("opage")),
         "loads": holder_loads(agent.expenses.all(), agent.payments.all()),

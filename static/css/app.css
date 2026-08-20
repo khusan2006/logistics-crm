@@ -3281,3 +3281,9 @@ form.stacked .lineset-field--fee_bearer label {
 }
 .fieldgroup--out > legend { color: var(--danger); }
 .fieldgroup--in > legend { color: var(--success); }
+
+/* A ktile that IS a button for the panel below it: while that panel is the one
+   showing, the tile it was opened from stays lit, so the way back is the same
+   thing that was pressed to get in (bojxonachi/logist hisob varaqasi). */
+.ktile.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.ktile.is-active .ktile-label { color: var(--accent); }
