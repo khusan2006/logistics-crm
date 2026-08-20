@@ -14,9 +14,14 @@ that gap is the thing nobody could see before.
 
 import re
 from decimal import Decimal
+from html import unescape
+from io import BytesIO
+from urllib.parse import parse_qs
 
 import pytest
+from openpyxl import load_workbook
 
+from crm.exports import MONEY
 from crm.models import (
     Contract, ContractLine, Currency, CustomsAgent, CustomsPayment, Logist,
     Partner, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -868,22 +873,26 @@ class TestOneDaftarAtATime:
     #: belongs to that table and to nothing else.
     SENT = "Biz kassadan shu bojxonachiga yuborgan pul"
     SPENT = "Yuklarni rasmiylashtirishga ketgan haqiqiy xarajat"
+    #: The loads jadval itself. Matched on its table rather than on the words "Qaysi
+    #: yuklarga": those also name the switch that leads BACK to it, which is drawn on
+    #: every reading of the page — including the ones this table is out of the way on.
+    LOADS = 'class="loads-table"'
 
     def test_by_default_both_are_shown_against_each_other(self, admin_client, db):
         html = self._page(admin_client, self._seed()).content.decode()
         assert self.SENT in html and self.SPENT in html
-        assert "Qaysi yuklarga" in html
+        assert self.LOADS in html
 
     def test_one_tile_shows_that_daftar_alone_and_moves_the_loads_out_of_the_way(
             self, admin_client, db):
         agent = self._seed()
         sent = self._page(admin_client, agent, daftar="yuborilgan").content.decode()
         assert self.SENT in sent and self.SPENT not in sent
-        assert "Qaysi yuklarga" not in sent
+        assert self.LOADS not in sent
 
         spent = self._page(admin_client, agent, daftar="sarflangan").content.decode()
         assert self.SPENT in spent and self.SENT not in spent
-        assert "Qaysi yuklarga" not in spent
+        assert self.LOADS not in spent
 
     def test_the_tile_it_was_opened_from_stays_lit(self, admin_client, db):
         """The way back is the same thing that was pressed to get in, so it has to
@@ -903,7 +912,7 @@ class TestOneDaftarAtATime:
         agent = self._seed()
         html = self._page(admin_client, agent, daftar="ikkalasi").content.decode()
         assert self.SENT in html and self.SPENT in html
-        assert "Qaysi yuklarga" not in html
+        assert self.LOADS not in html
         # ...side by side, the way they are read against each other.
         assert "grid-2 ledger-pair" in html
         assert "ktile--cash is-active" in html
@@ -923,6 +932,141 @@ class TestOneDaftarAtATime:
             _cleared(_shipment(), agent, "1000000")
         html = self._page(admin_client, agent, daftar="sarflangan").content.decode()
         assert "daftar=sarflangan&amp;opage=2" in html
+
+
+class TestTheDaftarNarrow:
+    """The hisob is opened to answer "what moved, and when" — so the page carries the
+    same davr bar, search box and Excel button every other ro'yxat in the app has.
+
+    One bar over BOTH readings, by the owner's decision: Qaysi yuklarga and the two
+    daftar answer for the same davr and the same qidiruv. A jadval still showing the
+    whole year beside a daftar cut to Avgust would be two periods on one screen with
+    nothing saying which was which. The price is that a narrowed load row states the
+    PERIOD's yuborilgan, sarflagan and farq rather than the load's own — and Hammasi,
+    which the page opens on, is where the whole story is."""
+
+    SENT = TestOneDaftarAtATime.SENT
+    SPENT = TestOneDaftarAtATime.SPENT
+    LOADS = TestOneDaftarAtATime.LOADS
+
+    def _seed(self):
+        """One clearing in Iyul and one in Avgust, out of one to'lov sent in Iyul."""
+        agent = _agent()
+        july, august = _shipment(), _shipment()
+        _send(agent, "80000000", july, date="2026-07-01")
+        _cleared(july, agent, "37000000", date="2026-07-08")
+        _cleared(august, agent, "41000000", date="2026-08-08")
+        return agent
+
+    def _rows(self, admin_client, agent, **params):
+        resp = admin_client.get(f"/customs/{agent.pk}/", params)
+        assert resp.status_code == 200
+        return resp
+
+    def test_the_davr_cuts_the_daftar_to_it(self, admin_client, db):
+        resp = self._rows(admin_client, self._seed(), **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert [r["amount_uzs"] for r in resp.context["spent_page"]] == [Decimal("41000000")]
+        # The Iyul to'lov is out of the window too — one bar over both daftar.
+        assert list(resp.context["sent_page"]) == []
+
+    def test_a_head_totals_the_rows_under_it(self, admin_client, db):
+        """The heap in the card head is read off the rows the table is SHOWING. A
+        figure that went on saying 78 mln over a table adding up to 41 is not a total
+        of anything on the screen."""
+        resp = self._rows(admin_client, self._seed(), **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert resp.context["spent_heap"] == [(UZS, Decimal("41000000"))]
+        assert resp.context["sent_heap"] == []
+
+    def test_the_tiles_keep_saying_the_whole_hisob(self, admin_client, db):
+        """A qoldiq is what this person is holding right now, not what a chosen davr
+        came to — narrowing it would answer a question nobody asked at the tiles."""
+        agent = self._seed()
+        self._rows(admin_client, agent, **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert agent.spent_by_currency() == [(UZS, Decimal("78000000"))]
+        assert agent.balance_by_currency() == [(UZS, Decimal("2000000"))]
+
+    def test_qaysi_yuklarga_narrows_with_them(self, admin_client, db):
+        """The bar sits above the jadval as well as above the daftar, so the yuklar
+        on screen are the ones money moved on in the chosen davr."""
+        agent = self._seed()
+        whole = self._rows(admin_client, agent)
+        assert len(whole.context["loads"]) == 2
+        august = self._rows(admin_client, agent, **{"from": "2026-08-01", "to": "2026-08-31"})
+        assert len(august.context["loads"]) == 1
+        row = august.context["loads"][0]
+        # And the row is the period's, not the load's: the Iyul to'lov that funded
+        # this truck is outside the window, so its Yuborilgan side is empty here.
+        assert row["paid"] == [(UZS, Decimal("41000000"))]
+        assert row["sent"] == []
+
+    def test_an_emptied_jadval_says_so(self, admin_client, db):
+        """`_holder_loads.html` draws nothing at all when handed nothing, which on a
+        filtered page reads as a table that went missing rather than as an answer."""
+        html = self._rows(admin_client, self._seed(),
+                          **{"from": "2026-01-01", "to": "2026-01-31"}).content.decode()
+        assert self.LOADS not in html
+        assert "Bu davrda hech bir yukka pul harakati bo'lmagan" in html
+
+    def test_the_search_narrows_the_jadval_to_the_row_it_found(self, admin_client, db):
+        loads = self._rows(admin_client, self._seed(), q="41 000 000").context["loads"]
+        assert [r["paid"] for r in loads] == [[(UZS, Decimal("41000000"))]]
+
+    def test_the_search_box_reads_every_column_of_a_row(self, admin_client, db):
+        """The kassa's own box over the kassa's own row shape — the daftar are built
+        the same way, so a sana, a turkum or a bare figure finds a row here too."""
+        agent = self._seed()
+        for needle, expected in [("41 000 000", [Decimal("41000000")]),
+                                 ("08.07.2026", [Decimal("37000000")]),
+                                 ("bojxona", [Decimal("41000000"), Decimal("37000000")])]:
+            rows = self._rows(admin_client, agent, q=needle).context["spent_page"]
+            assert [r["amount_uzs"] for r in rows] == expected, needle
+
+    def test_an_empty_daftar_says_which_kind_of_empty_it_is(self, admin_client, db):
+        """"Nothing was ever sent" and "the davr you picked holds nothing" are two
+        different answers, and the second one is fixed by changing the davr."""
+        agent = self._seed()
+        html = self._rows(admin_client, agent, q="yo'q-narsa").content.decode()
+        assert "Bu davrda pul yuborilmagan" in html
+        assert "Bu bojxonachiga hali pul yuborilmagan" not in html
+
+    def test_the_switch_leads_to_the_daftar_and_back(self, admin_client, db):
+        """The tiles already open a daftar, but each of them is one figure's button —
+        this row is the one that says in words which reading is on screen."""
+        agent = self._seed()
+        whole = self._rows(admin_client, agent).content.decode()
+        assert 'href="?daftar=ikkalasi"' in whole and self.LOADS in whole
+        both = self._rows(admin_client, agent, daftar="ikkalasi").content.decode()
+        assert self.SENT in both and self.SPENT in both and self.LOADS not in both
+        # ...and the way back is in the same row it was pressed from.
+        assert 'viewswitch-opt is-on' in both and 'href="?"' in both
+
+    def test_the_switch_keeps_the_davr_and_the_search(self, admin_client, db):
+        """Pressing it is a change of view, not of filter — a link that dropped them
+        would silently widen the tables the reader had just narrowed."""
+        html = self._rows(admin_client, self._seed(), q="bojxona",
+                          **{"from": "2026-08-01", "to": "2026-08-31"}).content.decode()
+        # Parsed rather than matched as a string: `{% querystring %}` keeps the order
+        # the params arrived in, which is the client's and not this page's business.
+        href = re.findall(r'href="([^"]*daftar=ikkalasi[^"]*)"', html)[-1]
+        assert parse_qs(unescape(href).lstrip("?")) == {
+            "q": ["bojxona"], "from": ["2026-08-01"], "to": ["2026-08-31"],
+            "daftar": ["ikkalasi"]}
+
+    def test_the_file_is_what_the_screen_is_showing(self, admin_client, db):
+        """Same davr, same qidiruv — the button downloads the table, not the model."""
+        agent = self._seed()
+        resp = admin_client.get(f"/customs/{agent.pk}/hisob.xlsx",
+                                {"from": "2026-08-01", "to": "2026-08-31"})
+        assert resp.status_code == 200
+        assert "nazarbe" not in resp["Content-Disposition"]
+        wb = load_workbook(BytesIO(resp.content))
+        assert wb.sheetnames == ["Yuborilgan", "Sarflangan"]
+        sent, spent = wb["Yuborilgan"], wb["Sarflangan"]
+        # Header only: the to'lov was sent in Iyul.
+        assert sent.max_row == 1
+        assert [c.value for c in spent[2]][-1] == 41000000
+        # Money as a number Excel can sum, not as a formatted string.
+        assert spent.cell(row=2, column=6).number_format == MONEY
 
 
 class TestCustomsScreens:

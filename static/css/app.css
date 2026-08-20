@@ -3287,3 +3287,40 @@ form.stacked .lineset-field--fee_bearer label {
    thing that was pressed to get in (bojxonachi/logist hisob varaqasi). */
 .ktile.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .ktile.is-active .ktile-label { color: var(--accent); }
+
+/* The same choice as those tiles, said in words: which of the two readings of a
+   hisob is on screen — the per-yuk jadval, or the two money daftar. A row of link
+   "tabs" rather than a `.seg`, because `.seg` is a radio group inside a form and this
+   is navigation: each option is a URL somebody can bookmark or open in a new tab.
+
+   Sits between the tiles and the panel it switches, so the label is next to the thing
+   it names — and the lit option is the way back out, the same rule .ktile.is-active
+   follows one card up. */
+.viewswitch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.viewswitch-opt {
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.viewswitch-opt:hover { background: var(--surface-hover); color: var(--text); }
+.viewswitch-opt.is-on {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+}
+/* In the bar it shares with the qidiruv and the ‹ davr ›, the row owns the spacing —
+   the same rule `.listbar > .searchbar` and `> .daterange-bar` already follow. */
+.listbar > .viewswitch { margin-bottom: 0; }
+@media (max-width: 620px) { .viewswitch { display: flex; } .viewswitch-opt { flex: 1; text-align: center; } }

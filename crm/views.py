@@ -6072,6 +6072,22 @@ def _ledger_table(rows):
     return headers, table, {"Kurs": "#,##0", "Foiz %": PERCENT}
 
 
+def _customs_daftar_table(rows):
+    """One bojxonachi daftar — Yuborilgan or Sarflangan — as the card prints it.
+
+    Both currencies in their own columns rather than one "summa": a row moved one of
+    the two and the other is its derived twin, and a column that mixes them cannot be
+    summed. Same reason the kassa's file has the pair."""
+    headers = ["Sana", "Nima uchun", "Usul", "Valyuta", "Summa ($)", "Summa (so'm)"]
+    table = (
+        [r["date"], r["title"], r["method"],
+         dict(Currency.choices).get(r["currency"], ""),
+         r["amount"], r["amount_uzs"]]
+        for r in rows
+    )
+    return headers, table
+
+
 def _konvertatsiya_table(rows):
     """The konvertatsiya list as the screen prints it — both sides on one line.
 
@@ -6232,6 +6248,22 @@ def kassa_export(request):
         headers, table, formats = _konvertatsiya_table(exchange_rows)
         sheets.append(("Konvertatsiya", headers, table, formats))
     return xlsx_book_response("kassa.xlsx", sheets)
+
+
+@role_required(User.Role.ADMIN)
+def customs_detail_export(request, pk):
+    """One bojxonachi's hisob as the card was showing it — same davr, same qidiruv.
+
+    Both daftar in one workbook rather than two downloads: what we SENT for a truck
+    and what clearing it COST are read against each other, which is the whole reason
+    the page draws them side by side. Named after the bojxonachi, because a folder of
+    `hisob.xlsx` says nothing about whose."""
+    agent = get_object_or_404(CustomsAgent, pk=pk)
+    sent_rows, spent_rows, _f = _customs_daftar(request, agent)
+    sheets = [("Yuborilgan", *_customs_daftar_table(sent_rows)),
+              ("Sarflangan", *_customs_daftar_table(spent_rows))]
+    return xlsx_book_response(
+        f"{slugify(agent.name) or 'bojxonachi'}-hisobi.xlsx", sheets)
 
 
 @role_required(User.Role.ADMIN)
@@ -6878,6 +6910,79 @@ def customs_loads(request):
     })
 
 
+def _customs_daftar(request, agent):
+    """One bojxonachi's two daftar — the pul we sent them and the pul they spent —
+    narrowed to the chosen davr and to what the search box says.
+
+    Built here rather than inside the view so the Excel button downloads exactly what
+    the screen is showing: the page and the file read the same rows through the same
+    filters, the same wiring as `_filter_customer_history`.
+
+    Cut in Python because a daftar row is braided out of two different models — a
+    CustomsPayment and a ShipmentExpense share no column to filter on — and one
+    bojxonachi's dealings are small enough to read whole and then narrow.
+
+    Qaysi yuklarga is built from these same narrowed rows (see `customs_detail`), by
+    the owner's decision: one bar over the page means one davr, and a jadval that
+    ignored it while the daftar under it obeyed would put two different periods on
+    one screen with nothing saying which was which. The cost is that a load's
+    Yuborilgan, Sarflagan and Farq are then the period's and not the load's — a truck
+    cleared in Iyul out of money sent in Iyun reads as a gap while the davr is Iyul.
+    Hammasi is the whole story, and it is what the page opens on."""
+    sent_rows = []
+    for payment in agent.payments.all():
+        # A bojxona to'lov names the yuk it was sent for; a general top-up names
+        # none, and saying so is the point — it is money against no load yet.
+        target = (f"Yuk #{payment.shipment_id} uchun" if payment.shipment_id
+                  else "Umumiy to'ldirish")
+        sent_rows.append({
+            # `kind` is the kassa's own vocabulary (LEDGER_KINDS), so the search box
+            # below matches the word the badge would print — and so `_ledger_search`
+            # can be the same one box the kassa uses rather than a second copy of it.
+            "date": payment.date, "obj": payment, "kind": "customs",
+            "title": f"{target}" + (f" · {payment.note}" if payment.note else ""),
+            "amount": payment.net_amount, "amount_uzs": payment.net_amount_uzs,
+            "currency": payment.currency, "method": payment.get_method_display(),
+            "method_code": payment.method})
+    spent_rows = [
+        {"date": expense.date, "obj": expense, "kind": "expense",
+         "title": f"Yuk #{expense.shipment_id} · {expense.get_category_display()}"
+                  + (f" · {expense.note}" if expense.note else ""),
+         "amount": expense.amount, "amount_uzs": expense.amount_uzs,
+         "currency": expense.currency, "method": expense.get_method_display(),
+         "method_code": expense.method}
+        for expense in agent.expenses.all()]
+    for rows in (sent_rows, spent_rows):
+        rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
+
+    date_from, date_to = _date_window(request)
+    q = request.GET.get("q", "").strip()
+
+    def narrowed(rows):
+        if date_from:
+            start = _date.fromisoformat(date_from)
+            rows = [r for r in rows if r["date"] >= start]
+        if date_to:
+            end = _date.fromisoformat(date_to)
+            rows = [r for r in rows if r["date"] <= end]
+        return _ledger_search(rows, q) if q else rows
+
+    return narrowed(sent_rows), narrowed(spent_rows), {
+        "date_from": date_from, "date_to": date_to, "q": q}
+
+
+def _daftar_heap(rows):
+    """[(currency, total)] for the rows a daftar is showing.
+
+    Read off those rows rather than off the agent, so the figure in the card head
+    stays a total of what is underneath it once a davr or a search has cut the table
+    down. Unfiltered it comes to the same heaps as `received_by_currency` /
+    `spent_by_currency` — which is what the tiles above go on printing either way,
+    because a qoldiq is the standing hisob and not a fact about a period."""
+    return _by_currency(
+        (r["currency"], own_side(r["obj"], r["amount"], r["amount_uzs"])) for r in rows)
+
+
 @role_required(User.Role.ADMIN)
 def customs_detail(request, pk):
     """One bojxonachi's account as TWO daftar: the pul we sent them, and the pul they
@@ -6898,28 +7003,7 @@ def customs_detail(request, pk):
             "expenses__shipment__contract__partner",
             "expenses__shipment__lines",
             "expenses__shipment__status"), pk=pk)
-    sent_rows = []
-    for payment in agent.payments.all():
-        # A bojxona to'lov names the yuk it was sent for; a general top-up names
-        # none, and saying so is the point — it is money against no load yet.
-        target = (f"Yuk #{payment.shipment_id} uchun" if payment.shipment_id
-                  else "Umumiy to'ldirish")
-        sent_rows.append({
-            "date": payment.date, "obj": payment,
-            "title": f"{target}" + (f" · {payment.note}" if payment.note else ""),
-            "amount": payment.net_amount, "amount_uzs": payment.net_amount_uzs,
-            "currency": payment.currency, "method": payment.get_method_display(),
-            "method_code": payment.method})
-    spent_rows = [
-        {"date": expense.date, "obj": expense,
-         "title": f"Yuk #{expense.shipment_id} · {expense.get_category_display()}"
-                  + (f" · {expense.note}" if expense.note else ""),
-         "amount": expense.amount, "amount_uzs": expense.amount_uzs,
-         "currency": expense.currency, "method": expense.get_method_display(),
-         "method_code": expense.method}
-        for expense in agent.expenses.all()]
-    for rows in (sent_rows, spent_rows):
-        rows.sort(key=lambda r: (r["date"], r["obj"].pk), reverse=True)
+    sent_rows, spent_rows, f = _customs_daftar(request, agent)
     # Which daftar the page is opened ON — one tile, one view:
     #
     #   ""            the whole page: Qaysi yuklarga, then the two daftar beside it
@@ -6940,7 +7024,20 @@ def customs_detail(request, pk):
         "daftar": daftar,
         "sent_page": Paginator(sent_rows, 20).get_page(request.GET.get("ipage")),
         "spent_page": Paginator(spent_rows, 20).get_page(request.GET.get("opage")),
-        "loads": holder_loads(agent.expenses.all(), agent.payments.all()),
+        # The heap in each daftar's head, off the rows it is SHOWING — see
+        # `_daftar_heap`. The tiles above keep printing the agent's standing hisob.
+        "sent_heap": _daftar_heap(sent_rows),
+        "spent_heap": _daftar_heap(spent_rows),
+        # Whether a davr or a search is on, so an empty daftar can tell the two cases
+        # apart: nothing was ever sent, or the filters left nothing.
+        "narrowed": bool(f["date_from"] or f["date_to"] or f["q"]),
+        "q": f["q"], "date_from": f["date_from"], "date_to": f["date_to"],
+        "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
+        "export_url": reverse("customs_detail_export", args=[agent.pk]),
+        # Off the narrowed rows, not off the agent: the bar sits above BOTH readings
+        # of the hisob, so both answer for the same davr and the same qidiruv.
+        "loads": holder_loads([r["obj"] for r in spent_rows],
+                              [r["obj"] for r in sent_rows]),
     })
 
 

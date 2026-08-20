@@ -61,6 +61,8 @@ urlpatterns = [
     path("customs/new/", crm_views.customs_create, name="customs_create"),
     path("customs/loads/", crm_views.customs_loads, name="customs_loads"),
     path("customs/<int:pk>/", crm_views.customs_detail, name="customs_detail"),
+    path("customs/<int:pk>/hisob.xlsx", crm_views.customs_detail_export,
+         name="customs_detail_export"),
     path("customs/<int:pk>/edit/", crm_views.customs_edit, name="customs_edit"),
     path("customs/<int:pk>/delete/", crm_views.customs_delete, name="customs_delete"),
     path("customs-payments/new/", crm_views.customs_payment_create, name="customs_payment_create"),

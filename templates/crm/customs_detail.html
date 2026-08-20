@@ -66,8 +66,45 @@ be a total of what is underneath it.
   <a href="{% url 'customs_loads' %}">yuklar bo'yicha hisobda</a>.
 </p>
 
+{% comment %}
+One bar over the whole hisob: which reading is on screen, what is being looked for in
+it, and which davr it is set to — the switch, the qidiruv and the ‹ davr › in the row
+`.listbar` draws on every other ro'yxat in the app.
+
+Above BOTH readings rather than on the daftar alone, because both obey it (see
+`_customs_daftar`): a Qaysi yuklarga still showing the whole year beside a daftar cut
+to Avgust would be two periods on one screen with nothing saying which was which.
+{% endcomment %}
+<div class="listbar">
+  <div class="viewswitch">
+    <a class="viewswitch-opt{% if not daftar %} is-on{% endif %}"
+       href="{% querystring daftar=None ipage=None opage=None %}">Qaysi yuklarga</a>
+    <a class="viewswitch-opt{% if daftar %} is-on{% endif %}"
+       href="{% querystring daftar='ikkalasi' ipage=None opage=None %}">Kirim / Chiqim</a>
+  </div>
+  <form method="get" class="searchbar" role="search" data-live-search>
+    {# The davr and the daftar being read ride along, or searching would drop them. #}
+    {% if daftar %}<input type="hidden" name="daftar" value="{{ daftar }}">{% endif %}
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    <div class="toolbar-search{% if q %} is-active{% endif %}">
+      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Yuk, izoh, usul, sana yoki summa bo'yicha qidirish…" autocomplete="off" aria-label="Hisob varaqasidan qidirish">
+      {% if q %}<a href="{% querystring q=None ipage=None opage=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    </div>
+  </form>
+  {% include "crm/_daterange.html" %}
+</div>
+
 {% if not daftar %}
 {% include "crm/_holder_loads.html" with loads=loads paid_label="Bojxonada sarflagan" show_sent=1 %}
+{% comment %}
+The partial draws nothing at all when it is handed nothing, which on a filtered page
+reads as a jadval that went missing rather than as an answer.
+{% endcomment %}
+{% if not loads and narrowed %}
+<p class="field-hint" style="margin:-4px 0 16px;">Bu davrda hech bir yukka pul harakati bo'lmagan.</p>
+{% endif %}
 {% endif %}
 
 {% comment %}
@@ -91,7 +128,7 @@ draws.
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Yuborilgan pul</h2>
-      <span class="ledger-total amt-in">{% for currency, amount in agent.received_by_currency %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "uzs" %}</span>{% endfor %}</span>
+      <span class="ledger-total amt-in">{% for currency, amount in sent_heap %}<span class="ledger-heap">+{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">+{% money_in 0 "uzs" %}</span>{% endfor %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Biz kassadan shu bojxonachiga yuborgan pul — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -111,7 +148,7 @@ draws.
           <a class="icon-action danger" href="{% url 'customs_payment_delete' r.obj.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
         </td>
       </tr>
-      {% empty %}<tr><td colspan="5" class="muted">Bu bojxonachiga hali pul yuborilmagan.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="5" class="muted">{% if narrowed %}Bu davrda pul yuborilmagan.{% else %}Bu bojxonachiga hali pul yuborilmagan.{% endif %}</td></tr>{% endfor %}
     </table>
     </div>
     {% include "crm/_pagination.html" with page=sent_page label="to'lov" param="ipage" %}
@@ -122,7 +159,7 @@ draws.
   <div class="card" style="margin-bottom:0;">
     <div class="card-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h2 style="margin:0;">Sarflangan pul</h2>
-      <span class="ledger-total amt-out">{% for currency, amount in agent.spent_by_currency %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "uzs" %}</span>{% endfor %}</span>
+      <span class="ledger-total amt-out">{% for currency, amount in spent_heap %}<span class="ledger-heap">−{% money_in amount currency %}</span>{% empty %}<span class="ledger-heap">−{% money_in 0 "uzs" %}</span>{% endfor %}</span>
     </div>
     <p class="field-hint" style="margin:2px 0 8px;">Yuklarni rasmiylashtirishga ketgan haqiqiy xarajat — eng yangisi yuqorida.</p>
     <div class="table-wrap">
@@ -145,7 +182,7 @@ draws.
           <a class="icon-action" href="{% url 'shipment_detail' r.obj.shipment_id %}" title="Yukni ochish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a>
         </td>
       </tr>
-      {% empty %}<tr><td colspan="5" class="muted">Hali xarajat kiritilmagan.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="5" class="muted">{% if narrowed %}Bu davrda xarajat yo'q.{% else %}Hali xarajat kiritilmagan.{% endif %}</td></tr>{% endfor %}
     </table>
     </div>
     {% include "crm/_pagination.html" with page=spent_page label="xarajat" param="opage" %}
