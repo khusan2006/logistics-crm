@@ -92,6 +92,24 @@ def _cleared_usd(shipment, agent, usd="3700", category="customs", **kw):
         method="cash", customs_agent=agent, **kw)
 
 
+def _grid_payload(shipment, **over):
+    """The whole grid posted back. Payer boxes exist on Bojxona and Transport only,
+    so a test that wants one passes payer_customs=/payer_transport=."""
+    body = {"shipment": shipment.pk, "date": "2026-07-08", "currency": "uzs",
+            "method": "cash", "exchange_rate": str(RATE), "fee_percent": "0",
+            "note": ""}
+    for category, _label in ShipmentExpense.Category.choices:
+        body[f"amount_{category}"] = ""
+        body[f"currency_{category}"] = ""
+        body[f"method_{category}"] = ""
+        body[f"fee_{category}"] = ""
+        body[f"row_{category}"] = ""
+    body["payer_customs"] = ""
+    body["payer_transport"] = ""
+    body.update(over)
+    return body
+
+
 class TestBalance:
     def test_balance_is_sent_minus_actually_spent(self, db):
         agent = _agent()
@@ -437,21 +455,7 @@ class TestTheGridCanSayWhoPaid:
     had already been funded had that same money leaving twice."""
 
     def _grid(self, shipment, **over):
-        """The whole grid posted back. Payer boxes exist on Bojxona and Transport
-        only, so a test that wants one passes payer_customs=/payer_transport=."""
-        body = {"shipment": shipment.pk, "date": "2026-07-08", "currency": "uzs",
-                "method": "cash", "exchange_rate": str(RATE), "fee_percent": "0",
-                "note": ""}
-        for category, _label in ShipmentExpense.Category.choices:
-            body[f"amount_{category}"] = ""
-            body[f"currency_{category}"] = ""
-            body[f"method_{category}"] = ""
-            body[f"fee_{category}"] = ""
-            body[f"row_{category}"] = ""
-        body["payer_customs"] = ""
-        body["payer_transport"] = ""
-        body.update(over)
-        return body
+        return _grid_payload(shipment, **over)
 
     def test_a_clearing_entered_here_can_come_out_of_the_float(self, admin_client, db):
         agent = _agent()
@@ -701,6 +705,93 @@ class TestTheGridCanSayWhoPaid:
         form = ExpenseGridForm(shipment=shipment,
                                initial={"shipment": shipment.pk})
         assert form.initial.get("payer_transport", "") == ""
+
+
+class TestABojxonaFromBeforeTheRule:
+    """The kassa is no longer an answer on the bojxonachi picker — but every bojxona
+    ALREADY in the books was entered when it was, and there are dozens of them.
+
+    Refusing those rows would mean no sana, no summa and no izoh on any of them
+    could be corrected without first naming a tamojni, which moves real money onto a
+    real person's balance to fix a typo. So a row recorded with nobody on it keeps
+    its own answer, spelled out as the old one; everything else names a tamojni."""
+
+    def _single(self, shipment, **over):
+        body = {"shipment": shipment.pk, "date": "2026-07-08", "category": "customs",
+                "logist": "", "customs_agent": "", "currency": "uzs",
+                "amount": "37000000", "exchange_rate": str(RATE), "method": "cash",
+                "fee_percent": "0", "note": ""}
+        body.update(over)
+        return body
+
+    def test_the_box_says_what_the_row_says(self, db):
+        from crm.forms import ShipmentExpenseForm
+        _agent()
+        row = _cleared(_shipment(), None, "37000000")
+        form = ShipmentExpenseForm(instance=row)
+        assert form.fields["customs_agent"].empty_label == "Kassadan to'landi (avvalgidek)"
+
+    def test_correcting_its_sana_does_not_move_the_money(self, db):
+        from crm.forms import ShipmentExpenseForm
+        _agent()
+        row = _cleared(_shipment(), None, "37000000")
+        form = ShipmentExpenseForm(
+            data=self._single(row.shipment, date="2026-07-09"), instance=row)
+        assert form.is_valid(), form.errors
+        form.save()
+        row.refresh_from_db()
+        assert str(row.date) == "2026-07-09"
+        assert row.from_kassa is True
+
+    def test_a_row_that_names_a_tamojni_cannot_be_handed_back_to_the_kassa(self, db):
+        """The exception is for rows the rule arrived too late for, not a way out of
+        it: money already on somebody's balance stays there."""
+        from crm.forms import ShipmentExpenseForm
+        agent = _agent()
+        row = _cleared(_shipment(), agent, "37000000")
+        form = ShipmentExpenseForm(data=self._single(row.shipment), instance=row)
+        assert not form.is_valid()
+        assert "customs_agent" in form.errors
+
+    def test_a_brand_new_bojxona_still_has_to_name_one(self, db):
+        """Nothing recorded to inherit an answer from."""
+        from crm.forms import ExpenseGridForm
+        _agent()
+        shipment = _shipment()
+        form = ExpenseGridForm(_grid_payload(shipment, amount_customs="37000000"),
+                               shipment=shipment)
+        assert not form.is_valid()
+        assert "payer_customs" in form.errors
+
+    def test_the_grid_box_opens_on_the_old_answer_and_saves_as_drawn(
+            self, admin_client, db):
+        from crm.forms import ExpenseGridForm
+        _agent()
+        shipment = _shipment()
+        row = _cleared(shipment, None, "37000000")
+        form = ExpenseGridForm(shipment=shipment, initial={"shipment": shipment.pk})
+        assert form.fields["payer_customs"].choices[0] == (
+            "", "Kassadan to'landi (avvalgidek)")
+
+        admin_client.post("/expenses/new/", _grid_payload(
+            shipment, amount_customs="39000000", **{"row_customs": row.pk}))
+        row.refresh_from_db()
+        assert row.amount_uzs == Decimal("39000000.00")
+        assert row.from_kassa is True
+
+    def test_the_blank_does_not_travel_to_another_row(self, admin_client, db):
+        """The exception is pinned to the row the box was drawn for. A payload
+        naming a DIFFERENT row's pk gets the ordinary answer, so it cannot be used
+        to blank a bojxona that names somebody."""
+        from crm.forms import ExpenseGridForm
+        agent = _agent()
+        shipment = _shipment()
+        theirs = _cleared(shipment, agent, "37000000")
+        form = ExpenseGridForm(
+            _grid_payload(shipment, amount_customs="39000000",
+                          **{"row_customs": theirs.pk}), shipment=shipment)
+        assert not form.is_valid()
+        assert "payer_customs" in form.errors
 
 
 class TestPaymentForm:
