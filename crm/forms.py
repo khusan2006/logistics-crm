@@ -842,8 +842,8 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
         fields = ["contract", "status", "sent", "eta", "arrived", "qr_date", "logist",
-                  "responsible", "driver_name", "driver_phone", "transport",
-                  "container", "note"]
+                  "customs_agent", "responsible", "driver_name", "driver_phone",
+                  "transport", "container", "note"]
         widgets = {
             "contract": forms.Select(attrs={"data-contract-source": ""}),
             "sent": date_widget(),
@@ -875,14 +875,19 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     # away from the logist picker. The generic template renders `form` in order, so
     # the order is set here rather than by hand-writing a template.
     field_order = ["contract", "status", "sent", "eta", "arrived", "qr_date",
-                   "logist", "driver_advance",
+                   "logist", "driver_advance", "customs_agent",
                    "responsible", "driver_name", "driver_phone",
                    "transport", "container", "note"]
 
     # Boxed together under one legend. This modal ALSO carries a Valyuta and a kurs
     # on every Mahsulot row, so two unboxed currency labels would leave the operator
     # guessing which amount each belongs to. The box says: these four are one thing.
-    field_groups = [("Logist va haydovchi avansi", ["logist", "driver_advance"])]
+    field_groups = [("Logist va haydovchi avansi", ["logist", "driver_advance"]),
+                    # Its own box, one field wide, so the legend can say the thing
+                    # the picker cannot: naming him costs nothing. Beside the avans —
+                    # which DOES leave a balance — an unboxed second person-picker
+                    # reads as a second amount waiting to be typed.
+                    ("Bojxona", ["customs_agent"])]
 
     # The advance is handed over as the truck leaves, so it belongs to the dispatch
     # form rather than to a later xarajat entry. Three fields because it is money:
@@ -953,6 +958,15 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
         self.fields["logist"].empty_label = "Logistsiz"
+        # Named at dispatch, paid whenever it is paid. The help text is the whole
+        # point of the field and says so outright: an operator who has watched the
+        # kassa drop every previous time a bojxonachi was named on a yuk will not
+        # otherwise believe this one is free.
+        self.fields["customs_agent"].empty_label = "Hali tanlanmagan"
+        self.fields["customs_agent"].help_text = (
+            "Bu yukni kim rasmiylashtiradi. Faqat belgilash — pul ko'chmaydi, "
+            "kassadan hech narsa yechilmaydi. Bojxona xarajati kiritilmaguncha yuk "
+            "«Bojxona to'lanmagan» ro'yxatida turadi.")
         # Yetib kelgan sana is offered only once the yuk HAS arrived — a date beside
         # a load still on the road is an invitation to type one, and a yuk carrying an
         # arrival date while its holat says otherwise would sit in the ombor

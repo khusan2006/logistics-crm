@@ -75,6 +75,8 @@ urlpatterns = [
     path("shipments/<int:pk>/edit/", crm_views.shipment_edit, name="shipment_edit"),
     path("shipments/<int:pk>/status/", crm_views.shipment_set_status, name="shipment_set_status"),
     path("shipments/<int:pk>/qr/", crm_views.shipment_set_qr, name="shipment_set_qr"),
+    path("shipments/<int:pk>/customs-agent/", crm_views.shipment_set_customs_agent,
+         name="shipment_set_customs_agent"),
     path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
     path("shipments/<int:pk>/extend/", crm_views.shipment_extend, name="shipment_extend"),
     path("delays/<int:pk>/edit/", crm_views.shipment_delay_edit,

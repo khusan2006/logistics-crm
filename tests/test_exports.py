@@ -26,6 +26,7 @@ EXPORT_URLS = {
     "/reports/export/shipments.xlsx": [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
+        "Bojxonachi", "Bojxona",
     ],
     "/reports/export/sales.xlsx": [
         # Kg is net of vazvratlar, like the screen; what left the shelf and what came

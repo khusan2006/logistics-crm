@@ -256,6 +256,28 @@
   {% endif %}
 
   {% comment %}
+  Whether this load's clearing is still owed, and who is down to handle it. The
+  badge comes first because it is the fact: a bojxona nobody has paid is unpaid
+  whether or not a bojxonachi was ever written on the yuk, so the line is drawn for
+  an unassigned load too and simply says the name is missing.
+
+  Naming the bojxonachi is a label and not money — it moved nothing out of the
+  kassa — so the line never prints a figure beside it. What clearing cost is the
+  xarajat's to say, on the row below.
+  {% endcomment %}
+  {% if shipment.customs_pending or shipment.customs_agent_id %}
+  <p class="muted" style="margin-top: 6px;">
+    {% if shipment.customs_pending %}
+    <span class="badge badge-warning">bojxona to'lanmagan</span>
+    <a href="{% url 'expense_create' %}?shipment={{ shipment.pk }}" data-modal>xarajatni kiritish</a> ·
+    {% endif %}
+    Bojxonachi:
+    {% if shipment.customs_agent_id %}<strong>{{ shipment.customs_agent.name }}</strong>
+    {% else %}<a href="{% url 'shipment_edit' shipment.pk %}" data-modal>belgilanmagan</a>{% endif %}
+  </p>
+  {% endif %}
+
+  {% comment %}
   The bojxona reconciliation for THIS load, on the page the operator is already on
   when they enter what clearing cost. Shown only once money has been sent for it:
   on every other yuk the line would be three zeros about a thing that never happened.

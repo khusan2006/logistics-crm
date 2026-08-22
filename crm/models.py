@@ -1493,6 +1493,24 @@ class Shipment(models.Model):
     logist = models.ForeignKey("Logist", on_delete=models.PROTECT, null=True,
                                blank=True, related_name="shipments",
                                verbose_name="Logist")
+    # Who will clear this load at bojxona — named when the truck is dispatched,
+    # long before anybody knows what clearing costs or has sent a som for it.
+    #
+    # Deliberately NOT money. Every other way of naming a bojxonachi on a yuk moves
+    # cash: a CustomsPayment takes it out of the kassa, a ShipmentExpense prices the
+    # load. Both were the wrong shape for the fact the operator actually holds at
+    # dispatch — "Bahrom aka will handle this one" — so naming him used to mean
+    # inventing a figure and watching the kassa drop by it.
+    #
+    # It is also what makes "bojxonasi to'lanmagan" answerable at all. A load with no
+    # bojxona xarajat on it is otherwise indistinguishable from one that never needed
+    # clearing, and every yuk in the books from before this field would read as
+    # unpaid. Naming the agent is the load saying it OWES a clearing; see
+    # `customs_pending`.
+    customs_agent = models.ForeignKey("CustomsAgent", on_delete=models.PROTECT,
+                                      null=True, blank=True,
+                                      related_name="assigned_shipments",
+                                      verbose_name="Bojxonachi")
     # Who is actually driving it — often known before the plate, and the number the
     # logist calls when a load goes quiet.
     driver_name = models.CharField("Haydovchi", max_length=120, blank=True)
@@ -1675,6 +1693,43 @@ class Shipment(models.Model):
         if not self.customs_sent_by_currency() and not self.customs_spent_by_currency():
             return False
         return bool(self.customs_diff_by_currency())
+
+    @property
+    def customs_cost(self):
+        """The bojxona xarajat on this load, whoever paid it — the bojxonachi out of
+        his float, a logist, or the kassa at the border.
+
+        Read off `expenses`, which every screen that asks this already prefetches.
+        Its ABSENCE is the fact worth having: it is what says clearing this truck has
+        not been priced yet."""
+        return sum((e.amount for e in self.expenses.all()
+                    if e.category == ShipmentExpense.Category.CUSTOMS), Decimal("0"))
+
+    @property
+    def customs_recorded(self):
+        """Whether a bojxona xarajat exists on this load at all.
+
+        Not `customs_cost > 0`: a clearing genuinely entered as zero is a decision
+        somebody made and recorded, and re-listing that truck as unpaid every day
+        would leave the operator no way to ever close it."""
+        return any(e.category == ShipmentExpense.Category.CUSTOMS
+                   for e in self.expenses.all())
+
+    @property
+    def customs_pending(self):
+        """Bojxonasi to'lanmagan: the load is IN THE OMBOR and no clearing cost has
+        reached the books for it.
+
+        Both halves matter, and neither is the bojxonachi. A truck still on the road
+        has not been cleared yet — its bojxona is not unpaid, it is not yet due — so
+        including it would bury the handful that are genuinely outstanding under
+        every load in the pipeline. And a load that HAS landed owes its clearing
+        whether or not anybody remembered to write down who would handle it, so the
+        assignment is a label on the row and never a condition of being on it.
+
+        What is left is the exact case this exists for: stock on the shelf, being
+        sold, with the bojxona behind it still unpaid."""
+        return self.arrived is not None and not self.customs_recorded
 
     @property
     def is_lot(self):

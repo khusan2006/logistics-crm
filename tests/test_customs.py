@@ -1304,3 +1304,400 @@ class TestCustomsScreens:
         assert translator_client.get("/customs/new/").status_code == 403
         assert translator_client.get("/customs/loads/").status_code == 403
         assert translator_client.get("/customs-payments/new/").status_code == 403
+
+
+class TestPendingGroup:
+    """Bojxonasi to'lanmagan — the group that answers "which trucks still owe a
+    clearing?", including the ones already unloaded and being sold.
+
+    One rule, and it is deliberately narrow: a yuk is in the group while no bojxona
+    xarajat has been booked against it. Not whether it has arrived — an arrived load
+    is the urgent case, not a different one — and NOT whether a bojxonachi has been
+    named on it, which is a label somebody may simply not have filled in yet.
+
+    Beside it, the second thing the customer asked for: a yuk can name its
+    bojxonachi with no money moving at all.
+    """
+
+    def test_naming_the_agent_moves_no_money(self, db):
+        """The point of the field. Every other way of putting a bojxonachi on a yuk
+        debits something; this one debits nothing, and there is nothing to find."""
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+
+        assert agent.received_by_currency() == []
+        assert agent.spent_by_currency() == []
+        assert agent.balance_by_currency() == []
+        assert not CustomsPayment.objects.exists()
+        assert not ShipmentExpense.objects.exists()
+
+    def test_arrived_with_no_xarajat_is_pending(self, db):
+        shipment = _shipment()          # arrives 2026-07-16
+        shipment.customs_agent = _agent()
+        shipment.save()
+        assert shipment.customs_pending
+
+    def test_a_load_still_on_the_road_is_not_pending(self, db):
+        """Its bojxona is not unpaid — it is not yet due. Letting the pipeline in
+        would bury the handful of ombor loads that actually need chasing under every
+        truck that has not reached the border."""
+        shipment = _shipment()
+        shipment.arrived = None
+        shipment.customs_agent = _agent()
+        shipment.save()
+        assert not shipment.customs_pending
+
+    def test_an_arrived_yuk_with_no_agent_is_pending_all_the_same(self, db):
+        """The rule is the missing xarajat, full stop. Requiring the name would make
+        the group report what somebody had filled in rather than what is owed — and
+        the loads most likely to be missing a bojxonachi are exactly the ones nobody
+        has got round to, which is the opposite of what should be hidden."""
+        assert _shipment().customs_pending
+
+    def test_the_bojxona_xarajat_closes_it(self, db):
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+        _cleared(shipment, agent, "37000000")
+        assert not Shipment.objects.get(pk=shipment.pk).customs_pending
+
+    def test_a_clearing_paid_from_the_kassa_closes_it_too(self, db):
+        """The group asks whether the clearing is on the books, not whose balance it
+        came out of. A bojxona paid in cash at the border is paid."""
+        shipment = _shipment()
+        shipment.customs_agent = _agent()
+        shipment.save()
+        ShipmentExpense.objects.create(
+            shipment=shipment, date="2026-07-08", category="customs",
+            currency="uzs", exchange_rate=RATE,
+            amount=Decimal("3700"), amount_uzs=Decimal("37000000"), method="cash")
+        assert not Shipment.objects.get(pk=shipment.pk).customs_pending
+
+    def test_a_zero_clearing_closes_it(self, db):
+        """A clearing entered as zero is a decision somebody recorded. Reading it as
+        "nothing paid" would leave the operator no way to ever close that truck."""
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+        _cleared(shipment, agent, "0")
+        assert not Shipment.objects.get(pk=shipment.pk).customs_pending
+
+    def test_another_turkum_does_not_close_it(self, db):
+        """A gruzchi is not a bojxona. The truck still owes its clearing."""
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+        _cleared(shipment, agent, "500000", category="loader")
+        assert Shipment.objects.get(pk=shipment.pk).customs_pending
+
+    def test_naming_an_agent_does_not_close_it_either(self, db):
+        """Symmetry with the test above: the name neither puts a landed load in the
+        group nor takes it out. Only the xarajat does."""
+        shipment = _shipment()
+        shipment.customs_agent = _agent()
+        shipment.save()
+        assert shipment.customs_pending
+
+    def test_money_sent_ahead_does_not_close_it(self, db):
+        """Sending 40 mln is not the same as knowing what clearing cost — the whole
+        distinction this app already draws between yuborilgan and sarflangan. Until
+        the xarajat lands, the load's bojxona is still an open figure."""
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+        _send(agent, "40000000", shipment)
+        assert Shipment.objects.get(pk=shipment.pk).customs_pending
+
+
+class TestPendingView:
+    """The screen: /shipments/?customs=1."""
+
+    def _pending(self, arrived="2026-07-16"):
+        agent = _agent()
+        shipment = _shipment()
+        shipment.arrived = arrived
+        shipment.customs_agent = agent
+        shipment.save()
+        return agent, shipment
+
+    def test_an_arrived_load_shows_up(self, admin_client, db):
+        """THE case the group was asked for: the truck is unloaded and selling, and
+        its bojxona has not been paid. The default yuklar view drops arrived loads
+        entirely, so nothing before this could put it in front of anybody."""
+        _agent_obj, shipment = self._pending()
+        rows = admin_client.get("/shipments/", {"customs": "1"}).context["shipments"]
+        assert [s.pk for s in rows] == [shipment.pk]
+
+    def test_an_arrived_load_with_no_agent_shows_up_too(self, admin_client, db):
+        """The correction this rule was rewritten for. The truck landed, it is being
+        sold, its bojxona is unpaid — and nobody ever wrote down who would clear it.
+        That last part is a gap in the paperwork, not a reason to leave the load off
+        the one screen that would surface the unpaid clearing."""
+        shipment = _shipment()          # arrives 2026-07-16, no bojxonachi named
+        rows = admin_client.get("/shipments/", {"customs": "1"}).context["shipments"]
+        assert [s.pk for s in rows] == [shipment.pk]
+        assert shipment.customs_agent_id is None
+
+    def test_the_default_view_still_hides_it(self, db, admin_client):
+        """Which is the reason the group is not a tab: the row is not even on the
+        page for a client-side filter to find."""
+        self._pending()
+        assert admin_client.get("/shipments/").context["shipments"] == []
+
+    def test_the_count_is_the_same_from_every_view(self, admin_client, db):
+        """The pill is drawn on the unfiltered page, so its number has to mean "loads
+        outstanding" and not "loads outstanding among the ones you can see" — which
+        on the default view would always be 0."""
+        self._pending()
+        for params in ({}, {"all": "1"}, {"customs": "1"}):
+            resp = admin_client.get("/shipments/", params)
+            assert resp.context["customs_pending_count"] == 1
+
+    def test_entering_the_xarajat_empties_the_group(self, admin_client, db):
+        agent, shipment = self._pending()
+        _cleared(shipment, agent, "37000000")
+        resp = admin_client.get("/shipments/", {"customs": "1"})
+        assert resp.context["shipments"] == []
+        assert resp.context["customs_pending_count"] == 0
+
+    def test_a_load_carrying_only_other_xarajatlar_stays(self, admin_client, db):
+        """Guards the `~Exists` — an `.exclude(expenses__category="customs")` drops a
+        yuk because ONE of its rows is not a bojxona, which is every truck that ever
+        paid a gruzchi."""
+        agent, shipment = self._pending()
+        _cleared(shipment, agent, "500000", category="loader")
+        rows = admin_client.get("/shipments/", {"customs": "1"}).context["shipments"]
+        assert [s.pk for s in rows] == [shipment.pk]
+
+    def test_no_holat_is_preselected(self, admin_client, db):
+        """The group spans the pipeline, so opening it on Yo'lda would hide exactly
+        the arrived loads it exists to show."""
+        self._pending()
+        assert admin_client.get(
+            "/shipments/", {"customs": "1"}).context["default_tab"] is None
+
+    def test_the_toolbar_keeps_every_other_control(self, admin_client, db):
+        """A toolbar that loses buttons when you press one of them reads as the page
+        breaking. Every holat tab stays — including the arrival one — and so does
+        Hammasi."""
+        self._pending()
+        resp = admin_client.get("/shipments/", {"customs": "1"})
+        assert [t["status"].name for t in resp.context["tabs"]] == list(
+            ShipmentStatus.objects.values_list("name", flat=True))
+        assert "Hammasi" in resp.content.decode()
+
+    def test_the_holat_counts_are_of_every_yuk_not_of_the_group(self, admin_client, db):
+        """The bug this was rewritten for: inside the group the tabs counted the rows
+        under them, so they read 0 across the row — six controls reporting the
+        filter's emptiness rather than anything about the yuklar."""
+        self._pending()                                   # arrived, unpaid
+        moving = _shipment()                              # on the road, not in group
+        moving.arrived = None
+        moving.save()
+        yolda = ShipmentStatus.objects.get(name="Yo'lda")
+        moving.status = yolda
+        moving.save()
+
+        tabs = admin_client.get(
+            "/shipments/", {"customs": "1"}).context["tabs"]
+        by_name = {t["status"].name: t["count"] for t in tabs}
+        # Counted even though no Yo'lda load is on this page.
+        assert by_name["Yo'lda"] == 1
+        assert by_name[ShipmentStatus.arrival().name] == 1
+
+    def test_a_holat_tab_here_is_a_link_out_of_the_group(self, admin_client, db):
+        """Client-side it could only ever empty the screen — the rows it would filter
+        were never sent. As a link it does what it looks like it does."""
+        self._pending()
+        html = admin_client.get("/shipments/", {"customs": "1"}).content.decode()
+        yolda = ShipmentStatus.objects.get(name="Yo'lda")
+        assert re.search(rf'<a class="status-tab status-tab--link" href="\?[^"]*holat={yolda.pk}', html)
+        # …and never carries the group along with it.
+        assert not re.search(r'href="\?[^"]*holat=\d+[^"]*customs=1', html)
+
+    def test_the_holat_it_names_is_the_tab_that_opens(self, admin_client, db):
+        """Otherwise the press lands on the default view with Yo'lda lit, which is
+        not the tab the operator aimed at."""
+        bojxona = ShipmentStatus.objects.get(name="Bojxona")
+        resp = admin_client.get("/shipments/", {"holat": bojxona.pk})
+        assert resp.context["default_tab"] == bojxona.pk
+
+    def test_a_bogus_holat_falls_back_to_the_default_tab(self, admin_client, db):
+        yolda = ShipmentStatus.objects.get(name="Yo'lda")
+        assert admin_client.get(
+            "/shipments/", {"holat": "999999"}).context["default_tab"] == yolda.pk
+
+    def test_hammasi_is_a_way_out_of_the_group(self, admin_client, db):
+        """Otherwise it is a button that visibly does nothing: `customs` would win
+        over `all` and the page would come back unchanged."""
+        self._pending()
+        html = admin_client.get("/shipments/", {"customs": "1"}).content.decode()
+        assert re.search(r'href="\?[^"]*all=1[^"]*"[^>]*>\s*Hammasi', html)
+        assert not re.search(r'href="\?[^"]*all=1[^"]*customs=1', html)
+
+    def test_search_stays_inside_the_group(self, admin_client, db):
+        agent, shipment = self._pending()
+        shipment.transport = "TRUCK-XYZ"
+        shipment.save()
+        # Matches the search term, but its clearing is on the books — so the search
+        # must not pull it back in.
+        settled = _shipment()
+        settled.transport = "TRUCK-XYZ"
+        settled.save()
+        _cleared(settled, agent, "37000000")
+        rows = admin_client.get(
+            "/shipments/", {"customs": "1", "q": "XYZ"}).context["shipments"]
+        assert [s.pk for s in rows] == [shipment.pk]
+
+    def test_the_pill_is_drawn_even_at_zero(self, admin_client, db):
+        """"Nothing outstanding" is the one piece of good news this screen can give,
+        and a pill that disappears at 0 cannot give it."""
+        _shipment()
+        html = admin_client.get("/shipments/").content.decode()
+        assert "Bojxona to'lanmagan" in html
+
+    def test_translator_cannot_reach_the_group(self, translator_client, db):
+        """A tarjimon sees yuklar but no money, so the group is not theirs. The page
+        still opens — narrowed to the same loads anyone would see."""
+        self._pending()
+        html = translator_client.get("/shipments/").content.decode()
+        assert "Bojxona to'lanmagan" not in html
+
+
+class TestAssignment:
+    """Naming the bojxonachi on the yuk form, and what that buys later."""
+
+    def test_the_form_saves_the_agent_without_a_money_row(self, admin_client, db):
+        from conftest import line_data
+        agent = _agent()
+        shipment = _shipment()
+        contract = shipment.contract
+        resp = admin_client.post(f"/shipments/{shipment.pk}/edit/", {
+            "contract": contract.pk, "status": shipment.status_id,
+            "sent": "2026-07-05", "eta": "2026-07-20", "arrived": "2026-07-16",
+            "customs_agent": agent.pk, "transport": "01A111AA", "note": "",
+            **line_data({"contract_line": contract.lines.first().pk, "kg": "24000",
+                         "id": shipment.lines.first().pk}, initial=1)})
+        assert resp.status_code in (204, 302), resp.content[:400]
+        shipment.refresh_from_db()
+        assert shipment.customs_agent_id == agent.pk
+        assert not CustomsPayment.objects.exists()
+        assert not ShipmentExpense.objects.exists()
+
+    def test_the_pul_form_opens_on_the_named_agent(self, admin_client, db):
+        """What the dispatch-time assignment is for: + Pul on the load already knows
+        who it goes to."""
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+        html = admin_client.get(
+            "/customs-payments/new/", {"shipment": shipment.pk},
+            headers={"X-Requested-With": "XMLHttpRequest"}).content.decode()
+        assert re.search(rf'<option value="{agent.pk}" selected', html)
+
+    def test_a_named_agent_cannot_be_deleted(self, admin_client, db):
+        """No money is behind the name, but dropping it would take the load out of
+        the group silently — the one place its unpaid clearing shows."""
+        agent, shipment = _agent(), _shipment()
+        shipment.customs_agent = agent
+        shipment.save()
+        admin_client.post(f"/customs/{agent.pk}/delete/", {})
+        assert CustomsAgent.objects.filter(pk=agent.pk).exists()
+
+
+def test_a_tarjimon_typing_the_param_does_not_get_the_group(translator_client, db):
+    """The column prints money. Hiding the pill is not enough — the param has to be
+    refused, or the URL is a way around a role that sees no figures anywhere else."""
+    agent, shipment = _agent(), _shipment()
+    shipment.customs_agent = agent
+    shipment.save()
+    _send(agent, "40000000", shipment)
+    resp = translator_client.get("/shipments/", {"customs": "1"})
+    assert resp.context["customs"] is False
+    assert "40 000 000" not in resp.content.decode()
+
+
+def test_the_tarjimon_excel_carries_no_bojxona_columns(translator_client, admin_client, db):
+    """The Excel button has to be a copy of the screen, not a way around it: the page
+    refuses a tarjimon the bojxona group, so the file cannot hand them the same
+    ledger in a spreadsheet."""
+    import openpyxl
+    from io import BytesIO
+
+    agent, shipment = _agent(), _shipment()
+    shipment.customs_agent = agent
+    shipment.save()
+
+    def header(client):
+        wb = openpyxl.load_workbook(
+            BytesIO(client.get("/shipments/export.xlsx", {"all": "1"}).content))
+        return [c.value for c in next(wb.active.iter_rows(min_row=1, max_row=1))]
+
+    assert "Bojxonachi" in header(admin_client)
+    assert "Bojxonachi" not in header(translator_client)
+    assert "Bojxona" not in header(translator_client)
+
+
+class TestInlineAgentPicker:
+    """Setting the bojxonachi from the column, the way the holat is set."""
+
+    def _arrived(self):
+        return _shipment()          # arrives 2026-07-16
+
+    def test_the_column_draws_a_picker_with_every_agent(self, admin_client, db):
+        self._arrived()
+        first, second = _agent("Bahrom aka"), _agent("Sanjar aka")
+        html = admin_client.get("/shipments/", {"customs": "1"}).content.decode()
+        assert 'name="customs_agent"' in html
+        assert f'<option value="{first.pk}" ' in html
+        assert f'<option value="{second.pk}" ' in html
+
+    def test_picking_one_assigns_it_and_spends_nothing(self, admin_client, db):
+        agent, shipment = _agent(), self._arrived()
+        resp = admin_client.post(
+            f"/shipments/{shipment.pk}/customs-agent/", {"customs_agent": agent.pk},
+            headers={"X-Requested-With": "XMLHttpRequest"})
+        assert resp.status_code == 200 and resp.json()["agent_id"] == agent.pk
+        shipment.refresh_from_db()
+        assert shipment.customs_agent_id == agent.pk
+        # The whole point of the assignment: it is a name, not a to'lov.
+        assert not CustomsPayment.objects.exists()
+        assert not ShipmentExpense.objects.exists()
+        assert agent.balance_by_currency() == []
+
+    def test_the_blank_option_clears_it(self, admin_client, db):
+        """A yuk handed to the wrong bojxonachi has to be able to go back to having
+        none — otherwise the first pick is permanent."""
+        agent, shipment = _agent(), self._arrived()
+        shipment.customs_agent = agent
+        shipment.save()
+        admin_client.post(f"/shipments/{shipment.pk}/customs-agent/",
+                          {"customs_agent": ""})
+        shipment.refresh_from_db()
+        assert shipment.customs_agent_id is None
+
+    def test_assigning_does_not_remove_the_load_from_the_group(self, admin_client, db):
+        """Naming somebody is not paying anybody. The row stays until the xarajat
+        lands — which is the distinction the picker is most likely to blur."""
+        agent, shipment = _agent(), self._arrived()
+        admin_client.post(f"/shipments/{shipment.pk}/customs-agent/",
+                          {"customs_agent": agent.pk})
+        rows = admin_client.get("/shipments/", {"customs": "1"}).context["shipments"]
+        assert [s.pk for s in rows] == [shipment.pk]
+
+    def test_it_is_written_to_the_audit_log(self, admin_client, db):
+        from crm.models import AuditLog
+        agent, shipment = _agent("Bahrom aka"), self._arrived()
+        admin_client.post(f"/shipments/{shipment.pk}/customs-agent/",
+                          {"customs_agent": agent.pk})
+        assert AuditLog.objects.filter(
+            target_id=shipment.pk, summary__contains="Bahrom aka").exists()
+
+    def test_a_tarjimon_cannot_set_one(self, translator_client, db):
+        agent, shipment = _agent(), self._arrived()
+        resp = translator_client.post(f"/shipments/{shipment.pk}/customs-agent/",
+                                      {"customs_agent": agent.pk})
+        assert resp.status_code == 403
+        shipment.refresh_from_db()
+        assert shipment.customs_agent_id is None

@@ -2695,6 +2695,14 @@ ul.errorlist li::before { content: "⚠ "; }
   font-weight: 700;
   line-height: 1;
 }
+/* Bojxona to'lanmagan sits in the holat row as the last pill, after Kechikkan and
+   wearing its danger colours — the two are the same kind of thing: not a stage a yuk
+   moved to, but a problem it is carrying.
+
+   The one difference is that it is an <a>, since it needs a round trip (its loads
+   are the arrived ones, which the default queryset never sends). Everything below
+   just makes a link sit in a row of buttons without giving itself away. */
+.status-tab--link { text-decoration: none; }
 .load-id { font-weight: 700; }
 .load-partner { font-weight: 600; color: var(--text); }
 .load-sub { font-size: 12px; margin-top: 1px; }
@@ -2704,6 +2712,10 @@ ul.errorlist li::before { content: "⚠ "; }
 .status-select { padding: 5px 10px; border-radius: 999px; font-size: 13px; field-sizing: content; min-width: 92px; max-width: 170px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; transition: border-color .2s ease, box-shadow .2s ease; }
 .status-select:hover { border-color: var(--accent); }
 .status-select.is-saved { border-color: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+/* The bojxonachi picker wears the holat control's looks — it is filled in the same
+   way, down a column — and greys itself while nobody is named, so the column can
+   still be read at a glance as assigned vs not without anyone opening it. */
+.customs-select.is-unset { color: var(--text-faint); border-style: dashed; }
 
 /* Route arrow (from → to) wherever a leg or a load's route is written inline */
 .route-arrow { color: var(--text-faint); margin: 0 2px; }

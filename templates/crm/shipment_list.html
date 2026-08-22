@@ -35,6 +35,10 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
     {# Same reason as `all`: searching must not silently drop the QR filter. #}
     {% if qr %}<input type="hidden" name="qr" value="{{ qr }}">{% endif %}
+    {# And searching inside Bojxona to'lanmagan must stay inside it. #}
+    {% if customs %}<input type="hidden" name="customs" value="1">{% endif %}
+    {# Same for the holat a tab press landed on — searching must not reset it. #}
+    {% if default_tab %}<input type="hidden" name="holat" value="{{ default_tab }}">{% endif %}
     <div class="toolbar-search{% if q %} is-active{% endif %}">
       <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input type="search" name="q" value="{{ q }}" placeholder="{% if show_all %}Barcha yuklar orasidan qidirish…{% else %}Transport, konteyner, marka yoki hamkor bo'yicha qidirish…{% endif %}" autocomplete="off" aria-label="Yuk qidirish">
@@ -49,10 +53,19 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     turns itself off. page=None sends the pager back to page 1: page 3 of the old set
     means nothing once the set changes under it.
     {% endcomment %}
-    <a class="btn{% if not show_all %} btn-ghost{% endif %}"
-       href="{% if show_all %}{% querystring all=None page=None %}{% else %}{% querystring all=1 page=None %}{% endif %}"
-       title="{% if show_all %}Faqat yo'ldagi yuklar{% else %}Yakunlangan yuklar bilan birga hammasi{% endif %}">
-      {% if show_all %}Faol yuklar{% else %}Hammasi{% endif %}
+    {% comment %}
+    Stays on screen inside Bojxona to'lanmagan too — it was hidden there for a while,
+    and a toolbar that loses a button when you press another one reads as the page
+    breaking rather than as the button being irrelevant.
+
+    Inside the group it drops `customs` as well, so it is a real way out: Hammasi
+    from here means the whole list, not "the whole list, still only the unpaid ones",
+    which is the only reading that would leave it changing nothing when pressed.
+    {% endcomment %}
+    <a class="btn{% if not show_all or customs %} btn-ghost{% endif %}"
+       href="{% if show_all and not customs %}{% querystring all=None page=None %}{% else %}{% querystring all=1 customs=None page=None %}{% endif %}"
+       title="{% if show_all and not customs %}Faqat yo'ldagi yuklar{% else %}Yakunlangan yuklar bilan birga hammasi{% endif %}">
+      {% if show_all and not customs %}Faol yuklar{% else %}Hammasi{% endif %}
     </a>
     {% comment %}
     QR bor / QR yo'q — two toggles, each clearing itself when pressed while active.
@@ -76,13 +89,57 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
   {% include "crm/_daterange.html" %}
 </div>
 
-{% if shipments %}
+{% comment %}
+Drawn for an admin even with no rows under it. The bar used to appear only when the
+list had something in it, which was fine while it held nothing but holat filters —
+there is nothing to filter on an empty page. It is not fine now that it carries the
+way IN to Bojxona to'lanmagan: a day when no yuk is on the road is exactly a day
+when the only thing on this screen worth pressing is the unpaid-clearing pill, and
+that is the day the bar would have vanished.
+
+It also has to survive the group coming back empty, or the operator is standing
+inside a view with no control left to leave it by.
+{% endcomment %}
+{% if shipments or customs or user.is_admin_role %}
 <div class="status-tabs" role="tablist">
+  {% comment %}
+  Buttons on every view but one. They filter the rows the page already sent, which is
+  instant and is why the holat tabs have always been client-side.
+
+  Inside Bojxona to'lanmagan they are links instead. The rows they would filter are
+  not on the page — the group holds only arrived, unpaid loads — so a client-side
+  press could never do anything but empty the screen. As links they mean what they
+  look like they mean: leave the group, open on that holat. The arrival one carries
+  `all=1`, since arrived loads live in Hammasi.
+  {% endcomment %}
   {% for t in tabs %}
+    {% if customs %}
+  <a class="status-tab status-tab--link" href="{% if t.status.is_arrival %}{% querystring customs=None holat=t.status.pk all=1 page=None %}{% else %}{% querystring customs=None holat=t.status.pk all=None page=None %}{% endif %}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></a>
+    {% else %}
   <button type="button" class="status-tab{% if t.status.pk == default_tab %} is-active{% endif %}" data-tab="{{ t.status.pk }}"{% if t.status.pk == default_tab %} data-default{% endif %}>{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
+    {% endif %}
   {% endfor %}
   {% if overdue_count %}
   <button type="button" class="status-tab status-tab--danger" data-tab="overdue">Kechikkan <span class="status-tab-count">{{ overdue_count }}</span></button>
+  {% endif %}
+  {% comment %}
+  Bojxona to'lanmagan — last in the row, after Kechikkan, and wearing the same
+  danger pill, because it is the same kind of thing: not a stage a yuk moved to but a
+  problem it is carrying. Both are read the way a warning light is.
+
+  An <a> and not a <button>, alone among these: the others filter rows the page has
+  already sent, and this one cannot — the loads it wants are the arrived ones, which
+  the default queryset drops before the browser sees them. So it is a round trip, and
+  the JS below leaves it alone (it binds `.status-tab[data-tab]`, which this has not
+  got). Pressed while active it clears itself, the way the QR pills do.
+
+  Drawn even at zero: an empty group is the good news this screen otherwise has no
+  way to deliver, and a pill that vanishes at 0 can only say "look elsewhere".
+  {% endcomment %}
+  {% if user.is_admin_role %}
+  <a class="status-tab status-tab--danger status-tab--link{% if customs %} is-active{% endif %}"
+     href="{% if customs %}{% querystring customs=None page=None %}{% else %}{% querystring customs=1 page=None %}{% endif %}"
+     title="{% if customs %}Saralashni bekor qilish{% else %}Omborga yetib kelgan, lekin bojxona xarajati hali kiritilmagan yuklar{% endif %}">Bojxona to'lanmagan <span class="status-tab-count">{{ customs_pending_count }}</span></a>
   {% endif %}
 </div>
 {% endif %}
@@ -99,13 +156,17 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     <th>Transport</th>
     <th>Haydovchi</th>
     {% if user.is_admin_role %}<th class="num">Xarajat</th>{% endif %}
+    {% if customs %}<th>Bojxonachi</th>{% endif %}
     <th>Kelish</th>
     <th></th>
   </tr>
   {% for g in groups %}
-  {# Narx + Xarajat are admin-only, so the full-width rows span 10 or 8 columns. #}
+  {% comment %}
+  Counted in the view: Narx + Xarajat are admin-only and Bojxonachi is drawn on the
+  Bojxona to'lanmagan view alone, so the width is not a constant.
+  {% endcomment %}
   <tr class="kelishuv-row" data-contract="{{ g.contract.pk }}">
-    <td colspan="{% if user.is_admin_role %}10{% else %}8{% endif %}">
+    <td colspan="{{ colspan }}">
       <div class="kelishuv-head">
         <span class="kelishuv-title">Kelishuv {{ g.contract.code }}</span>
         <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand_summary }}</span>
@@ -198,6 +259,43 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
       {% endwith %}
     </td>
     {% endif %}
+    {% if customs %}
+    {% comment %}
+    Who owes the clearing, and whether any money has gone their way for it yet. The
+    second line is the distinction the whole group turns on: money SENT to a
+    bojxonachi is not a clearing PAID — the truck can be sitting in the ombor with 40
+    mln already in his hands and nothing yet on the books saying what it cost. Both
+    rows belong here; only the second one is squared on the Yuklar bo'yicha hisob.
+    {% endcomment %}
+    <td>
+      {% comment %}
+      A picker in the cell, exactly like Holat two columns over — because it is
+      filled in the same way: down a column, load after load, while reading the list.
+      Reaching a modal per yuk to change one dropdown was the wrong shape for that.
+
+      Nothing here spends money. This is the assignment, which is a name and not a
+      to'lov; the sub-line below says what has actually been sent, and it is a
+      different fact that this control cannot change.
+      {% endcomment %}
+      <form method="post" action="{% url 'shipment_set_customs_agent' s.pk %}" class="status-cell-form">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <select name="customs_agent" class="status-select customs-select{% if not s.customs_agent_id %} is-unset{% endif %}">
+          <option value="">bojxonachi belgilanmagan</option>
+          {% for a in customs_agents %}
+            <option value="{{ a.pk }}" {% if a.pk == s.customs_agent_id %}selected{% endif %}>{{ a.name }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% with sent=s.customs_sent_by_currency %}
+      {% if sent %}
+        <div class="muted load-sub">yuborilgan: {% for currency, amount in sent %}{% money_in amount currency %}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+      {% else %}
+        <div class="muted load-sub">pul yuborilmagan</div>
+      {% endif %}
+      {% endwith %}
+    </td>
+    {% endif %}
     <td class="load-date">
       {% include "crm/_load_date_cell.html" with s=s %}
     </td>
@@ -243,7 +341,7 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     </td>
   </tr>
   <tr class="legs-detail" data-load="{{ s.pk }}" data-contract="{{ g.contract.pk }}" hidden>
-    <td colspan="{% if user.is_admin_role %}10{% else %}8{% endif %}">
+    <td colspan="{{ colspan }}">
       <div class="legs-inline">
 
         {# ── Panel head: which load + quick jump ── #}
@@ -411,12 +509,24 @@ The empty state names every filter that is on. Without the QR part it read "Faol
 yuklar yo'q" on a screen where fourteen loads were one click away — the filter, not
 the data, was the reason nothing showed.
 {% endcomment %}
-<p class="muted">{% if show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if qr == 'bor' %} — QR kod berilganlari orasida{% elif qr == 'yoq' %} — QR kod berilmaganlari orasida{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
+<p class="muted">{% if customs %}Bojxonasi to'lanmagan yuk yo'q — hamma yukka bojxona xarajati kiritilgan{% elif show_all %}Yuklar topilmadi{% else %}Faol yuklar yo'q{% endif %}{% if qr == 'bor' %} — QR kod berilganlari orasida{% elif qr == 'yoq' %} — QR kod berilmaganlari orasida{% endif %}{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
 
 <script>
 (function () {
-  var showAll = {% if show_all %}true{% else %}false{% endif %};
+  {% comment %}
+  Whether THIS view keeps a load once it lands. Hammasi does, and so does Bojxona
+  to'lanmagan — an arrived truck whose clearing is still unpaid is the whole reason
+  that group exists — while the default active view drops the row as it arrives.
+
+  Named `keepsArrived` and not `showAll`: it used to be `showAll`, which is also the
+  name of the function below that unhides every row. Same scope, so `var showAll =
+  false` overwrote the hoisted function and every later `showAll()` call threw —
+  which is why clicking the active tab to clear the filter left the rows hidden, and
+  why changing a holat on Hammasi popped "Holatni saqlab bo'lmadi" over a status that
+  had in fact saved.
+  {% endcomment %}
+  var keepsArrived = {% if show_all or customs %}true{% else %}false{% endif %};
   var tabs = document.querySelectorAll('.status-tab[data-tab]');
   var defaultTab = document.querySelector('.status-tab[data-default]');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
@@ -579,7 +689,11 @@ the data, was the reason nothing showed.
   // Status dropdown: save via fetch and update the row IN PLACE — no page
   // reload, so what you see is always the saved state. If the load reached
   // the arrival status it moves to Yakunlangan and its row is removed.
-  document.querySelectorAll('.status-select').forEach(function (sel) {
+  //
+  // Bound by name and not by class: the bojxonachi picker below wears the same
+  // `.status-select` for its looks, and this handler would answer for it and then
+  // read a status_id out of a response that carries none.
+  document.querySelectorAll('.status-select[name="status"]').forEach(function (sel) {
     sel.dataset.prev = sel.value;
     sel.addEventListener('change', function () {
       var form = sel.closest('form');
@@ -592,7 +706,7 @@ the data, was the reason nothing showed.
         if (!r.ok) { throw new Error(); }
         return r.json();
       }).then(function (data) {
-        if (data.arrived && !showAll) {   // left the active set — drop the row pair
+        if (data.arrived && !keepsArrived) {   // left the active set — drop the row pair
           var loadId = row.querySelector('.leg-expand').getAttribute('data-load');
           var detail = document.querySelector('.legs-detail[data-load="' + loadId + '"]');
           if (detail) { detail.remove(); }
@@ -612,6 +726,42 @@ the data, was the reason nothing showed.
       }).catch(function () {
         sel.value = sel.dataset.prev;  // save failed — put the old status back
         alert("Holatni saqlab bo'lmadi. Qayta urinib ko'ring.");
+      });
+    });
+  });
+
+  {% comment %}
+  The bojxonachi dropdown in the column. Same shape as the holat one above and
+  deliberately simpler: no money moves and no row leaves the group — assigning a
+  name does not pay a clearing — so there is nothing to re-render beyond the green
+  flash saying it saved. A row only leaves when its xarajat is entered, which
+  happens in a modal that reloads the page anyway.
+
+  A template comment and not a `//` one, for the reason given further up: this sits
+  inside <script>, so a JS comment is shipped to every browser that loads the page —
+  including a tarjimon's, who is not shown this control at all.
+  {% endcomment %}
+  document.querySelectorAll('.customs-select').forEach(function (sel) {
+    sel.dataset.prev = sel.value;
+    sel.addEventListener('change', function () {
+      var form = sel.closest('form');
+      fetch(form.getAttribute('action'), {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      }).then(function (r) {
+        if (!r.ok) { throw new Error(); }
+        return r.json();
+      }).then(function () {
+        sel.dataset.prev = sel.value;
+        // Greys out again when set back to nobody, so the column still reads at a
+        // glance as "named" vs "not named" after an edit.
+        sel.classList.toggle('is-unset', sel.value === '');
+        sel.classList.add('is-saved');
+        setTimeout(function () { sel.classList.remove('is-saved'); }, 900);
+      }).catch(function () {
+        sel.value = sel.dataset.prev;
+        alert("Bojxonachini saqlab bo'lmadi. Qayta urinib ko'ring.");
       });
     });
   });

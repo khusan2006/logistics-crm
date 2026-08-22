@@ -8,7 +8,7 @@ from uuid import uuid4
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Max, ProtectedError, Q, Sum
+from django.db.models import Count, Exists, Max, OuterRef, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
 from django.http import Http404, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
@@ -1710,26 +1710,94 @@ def status_move(request, pk):
     return redirect("status_list")
 
 
+def customs_pending_loads(shipments):
+    """Narrow a yuklar queryset to the ones sitting in the ombor with their bojxona
+    still unpaid — arrived, and no bojxona xarajat on the books.
+
+    The SQL twin of `Shipment.customs_pending` — same rule, asked of the database so
+    the group can be counted and paged without walking every load in Python.
+
+    `arrived__isnull=False` is the same test `arrived_lots` uses to decide what is on
+    the shelf, so the group is exactly "stock we are selling" minus "stock whose
+    clearing is settled". A truck still on the road is not in it: its bojxona is not
+    unpaid, it is not yet due, and letting the pipeline in would bury the few rows
+    that need chasing.
+
+    Nothing about the bojxonachi is asked. A landed load owes its clearing whether or
+    not somebody wrote down who would handle it, and requiring the name would make
+    this a list of loads that had been FILLED IN rather than of loads that are OWED.
+
+    `~Exists` rather than `.exclude(expenses__category=...)`: exclude() on a
+    multi-valued relation removes a yuk if ANY of its xarajatlar fails to match,
+    which on a truck carrying a gruzchi and nothing else is every load in the table.
+    """
+    return shipments.filter(arrived__isnull=False).filter(
+        ~Exists(ShipmentExpense.objects.filter(
+            shipment=OuterRef("pk"),
+            category=ShipmentExpense.Category.CUSTOMS)))
+
+
 def _filter_shipments(request):
     """The yuklar list's own filters — shared by the page and its Excel button, so the
     file holds the loads the screen was showing (including the Hammasi/QR toggles)."""
     q = request.GET.get("q", "").strip()
     show_all = request.GET.get("all") == "1"
+    # Bojxona to'lanmagan — the loads in the ombor whose clearing is still unpaid.
+    #
+    # It sits beside the holat tabs and is deliberately NOT one. A yuk in it already
+    # has a holat — "Omborga yetib keldi" — so this is a second question asked of the
+    # same load, not a stage it moved to. And it cannot be a client-side tab like
+    # Kechikkan either: those filter rows the page already sent, and the default view
+    # drops every arrived load before the browser ever sees it. Which is exactly the
+    # set this needs.
+    #
+    # Admin only, and enforced here rather than by hiding the pill: the group's own
+    # column prints what has been sent to the bojxonachi, and a tarjimon typing the
+    # param by hand would be reading money off a screen that shows them none of it
+    # anywhere else.
+    customs = request.GET.get("customs") == "1" and request.user.is_admin_role
     # Anything else in the URL means no QR filter at all — a typo should show every
     # yuk, not silently drop half of them.
     qr = request.GET.get("qr", "")
     if qr not in ("bor", "yoq"):
         qr = ""
     shipments = (Shipment.objects
-                 .select_related("contract__partner", "status")
-                 .prefetch_related("delays", "legs", "expenses"))
-    if not show_all:
-        shipments = shipments.filter(arrived__isnull=True)
+                 .select_related("contract__partner", "status", "customs_agent")
+                 .prefetch_related("delays", "legs", "expenses", "customs_payments"))
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
             | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q)
             | Q(driver_name__icontains=q) | Q(responsible__icontains=q)).distinct()
+    # The load's own sana, defined exactly as the row prints it: the day it arrived,
+    # or the day it is expected while it is still moving (see _load_date_cell.html).
+    # A yuk carrying neither date has no place on a calendar and drops out of a
+    # narrowed window — it is still there with the filter off.
+    #
+    # Applied here rather than last so that everything below it — the counts as much
+    # as the rows — is talking about the same davr.
+    date_from, date_to = _date_window(request)
+    if date_from or date_to:
+        shipments = shipments.annotate(row_date=Coalesce("arrived", "eta"))
+        if date_from:
+            shipments = shipments.filter(row_date__gte=date_from)
+        if date_to:
+            shipments = shipments.filter(row_date__lte=date_to)
+    # Every yuk the search and the davr allow, before any view narrows it further.
+    # The holat tabs count THIS and never the rows on screen — see `shipment_list`.
+    every_load = shipments
+    # Counted before the arrived filter, not after: a to'lanmagan load is always an
+    # ARRIVED one, and the pill has to say how many exist from whichever view the
+    # operator is standing in — a count that reads 0 on the default page and 6 on
+    # Hammasi is worse than no count.
+    # …and not counted at all for a tarjimon, who never sees the pill: it is one more
+    # subquery per page load to produce a number that is thrown away.
+    customs_pending_count = (customs_pending_loads(shipments).count()
+                             if request.user.is_admin_role else 0)
+    if customs:
+        shipments = customs_pending_loads(shipments)
+    elif not show_all:
+        shipments = shipments.filter(arrived__isnull=True)
     # Counted before the QR filter narrows anything, so the number on the pill keeps
     # meaning "waiting, among the yuklar you are looking at" — standing on QR bor
     # must not zero out the count of the loads you are not looking at.
@@ -1739,20 +1807,11 @@ def _filter_shipments(request):
     if qr:
         # The date is what says the kod was handed over, so its absence is "yo'q".
         shipments = shipments.filter(qr_given__isnull=qr == "yoq")
-    # The load's own sana, defined exactly as the row prints it: the day it arrived,
-    # or the day it is expected while it is still moving (see _load_date_cell.html).
-    # A yuk carrying neither date has no place on a calendar and drops out of a
-    # narrowed window — it is still there with the filter off.
-    date_from, date_to = _date_window(request)
-    if date_from or date_to:
-        shipments = shipments.annotate(row_date=Coalesce("arrived", "eta"))
-        if date_from:
-            shipments = shipments.filter(row_date__gte=date_from)
-        if date_to:
-            shipments = shipments.filter(row_date__lte=date_to)
-    return shipments, {"q": q, "show_all": show_all, "qr": qr,
+    return shipments, {"q": q, "show_all": show_all, "qr": qr, "customs": customs,
                        "date_from": date_from, "date_to": date_to,
-                       "qr_waiting_count": qr_waiting_count}
+                       "qr_waiting_count": qr_waiting_count,
+                       "customs_pending_count": customs_pending_count,
+                       "every_load": every_load}
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
@@ -1762,6 +1821,11 @@ def shipment_list(request):
 
     Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
     adds the arrived ones and paginates, since that set only grows.
+
+    `?customs=1` (Bojxona to'lanmagan) is a third: the loads standing in the ombor
+    with no bojxona xarajat against them — see `customs_pending_loads`. It replaces
+    the arrived filter with its inverse rather than narrowing what the default view
+    already shows, since those are the loads the default view exists to exclude.
 
     `?qr=bor|yoq` narrows to the loads whose driver carries a QR kod, or the ones
     whose driver does not. Server-side rather than a third client-side tab: it has to
@@ -1775,7 +1839,7 @@ def shipment_list(request):
     yo'q pill, so the ones worth chasing announce themselves without the list having
     to hide anything to say so."""
     shipments, f = _filter_shipments(request)
-    q, show_all, qr = f["q"], f["show_all"], f["qr"]
+    q, show_all, qr, customs = f["q"], f["show_all"], f["qr"], f["customs"]
     date_from, date_to, qr_waiting_count = f["date_from"], f["date_to"], f["qr_waiting_count"]
     shipments = list(shipments)
 
@@ -1829,21 +1893,54 @@ def shipment_list(request):
     rows = [s for g in groups for s in g["shipments"]]
 
     statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
-    # The arrival status only earns a tab in Hammasi — in the active view nothing
-    # can be sitting in it.
+    # Inside Bojxona to'lanmagan the holat tabs count EVERY yuk, not the rows under
+    # them.
+    #
+    # Counting the rows was right while the tabs only ever filtered what was already
+    # on screen — that is what makes Kechikkan's siblings keep their numbers when it
+    # is pressed. This group is a server round trip that replaces the row set, so the
+    # same code answered "Yo'lda 0, Bojxona 0, Chegarada 0" — six controls reporting
+    # an emptiness that is about the filter and not about the yuklar. A number that
+    # only means something once you know which view produced it is worse than none.
+    #
+    # So in the group they say what they say everywhere else, and clicking one leaves
+    # the group for that holat (`?holat=`, below). One view is active at a time, and
+    # the row is a view picker rather than six filters stacked on a seventh.
+    if customs:
+        counts = dict(f["every_load"].values_list("status")
+                      .annotate(n=Count("pk")).values_list("status", "n"))
+    # The arrival status only earns a tab where arrived loads can appear — in the
+    # active view nothing can be sitting in it. Bojxona to'lanmagan is all of them.
     tabs = [{"status": st, "count": counts.get(st.pk, 0)}
-            for st in statuses if show_all or not st.is_arrival]
+            for st in statuses if show_all or customs or not st.is_arrival]
     # The active view opens on Yo'lda — the loads actually moving are what the
     # logist watches. Resolved by name (statuses are editable) and simply absent
     # if renamed away. Hammasi opens unfiltered: it was asked for to show
     # everything, so preselecting a tab would defeat it.
-    default_tab = None if show_all else next(
+    #
+    # `?holat=` overrides both. It is how a holat tab pressed inside Bojxona
+    # to'lanmagan gets you out: the link leaves the group and names the tab to open
+    # on, so the press lands where it looks like it will rather than dumping the
+    # operator on the default view with a different tab lit.
+    asked_tab = request.GET.get("holat", "")
+    default_tab = None if show_all or customs else next(
         (t["status"].pk for t in tabs if t["status"].name.casefold() == "yo'lda"), None)
+    if asked_tab.isdigit() and any(t["status"].pk == int(asked_tab) for t in tabs):
+        default_tab = int(asked_tab)
     return render(request, "crm/shipment_list.html", {
         "export_url": reverse("shipment_list_export"),
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
         "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count,
+        "customs": customs, "customs_pending_count": f["customs_pending_count"],
+        # Only fetched for the view that draws the picker — every other yuklar page
+        # would be paying for a list it never renders.
+        "customs_agents": CustomsAgent.objects.all() if customs else [],
+        # The row template's full-width cells (kelishuv header, route panel) have to
+        # span whatever the header actually drew, and Bojxonachi is one more column
+        # on this view only. Counted here rather than as a template expression that
+        # every future column would have to be added to by hand.
+        "colspan": 8 + (2 if request.user.is_admin_role else 0) + (1 if customs else 0),
         "default_tab": default_tab, "show_all": show_all, "page": page,
         "date_from": date_from, "date_to": date_to,
         "daterange": _daterange_bar(request, date_from, date_to),
@@ -2536,6 +2633,33 @@ def shipment_set_status(request, pk):
     messages.success(request, "Holat yangilandi")
     if brons:
         messages.info(request, f"Bu yukda {brons} ta faol bron bor — sotuvga aylantirish mumkin")
+    return redirect(request.POST.get("next") or "shipment_list")
+
+
+@require_POST
+@role_required(User.Role.ADMIN)
+def shipment_set_customs_agent(request, pk):
+    """Set (or clear) the bojxonachi on a yuk from the list, the way the holat is set.
+
+    Money never enters this. It is the same assignment the yuk form makes — a label
+    saying who will clear this truck — and the reason it is worth a control of its own
+    is that it is filled in load by load down a column, exactly as the holat is. A
+    modal per yuk to change one dropdown was the wrong shape for that.
+
+    An empty value clears the name. Not an error and not a special case: a yuk handed
+    to the wrong bojxonachi has to be able to go back to having none."""
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("customs_agent"), pk=pk)
+    raw = request.POST.get("customs_agent") or ""
+    agent = get_object_or_404(CustomsAgent, pk=raw) if raw else None
+    old_name = shipment.customs_agent.name if shipment.customs_agent_id else "yo'q"
+    shipment.customs_agent = agent
+    shipment.save(update_fields=["customs_agent"])
+    AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                    f"Bojxonachi: {old_name} → {agent.name if agent else 'yo`q'}")
+    if is_ajax(request):
+        return JsonResponse({"agent_id": agent.pk if agent else None})
+    messages.success(request, "Bojxonachi yangilandi")
     return redirect(request.POST.get("next") or "shipment_list")
 
 
@@ -5902,14 +6026,37 @@ def _contracts_table(contracts):
     return headers, rows, {"Kg": KG, "Yuborilgan kg": KG, "Kurs": "#,##0"}
 
 
-def _shipments_table(shipments):
+def _shipments_table(shipments, include_customs=True):
+    """The yuklar sheet. `include_customs` adds the two bojxona columns.
+
+    Off for a tarjimon, and for the same reason `?customs=1` refuses them on the
+    page: who is clearing a load and whether it has been paid is the bojxona ledger,
+    which that role sees nowhere in the app. An export the screen will not show is
+    still the screen's data, so the two have to agree — otherwise the Excel button is
+    a way around the rule rather than a copy of what is on it."""
+    # Two columns, not one verdict: who is clearing the load, and whether its bojxona
+    # has reached the books. Carried on every view rather than only on Bojxona
+    # to'lanmagan, so a file pulled from Hammasi can be sorted on them.
+    customs_headers = ["Bojxonachi", "Bojxona"] if include_customs else []
     headers = [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
+        *customs_headers,
     ]
+
+    def customs_cells(s):
+        if not include_customs:
+            return []
+        # The verdict is about the xarajat, not about the name: a load with no
+        # bojxonachi written on it is still a load whose clearing is unpaid, and
+        # blanking the column for it would hide exactly the rows worth sorting to.
+        return [s.customs_agent.name if s.customs_agent_id else "",
+                "To'langan" if s.customs_recorded else "To'lanmagan"]
+
     rows = (
         [s.pk, s.contract.code, s.contract.partner.name, ln.brand, ln.kg, s.status.name,
-         s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container]
+         s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container,
+         *customs_cells(s)]
         for s in shipments
         for ln in s.lines.all()
     )
@@ -6171,7 +6318,8 @@ def contract_list_export(request):
 def shipment_list_export(request):
     shipments, _f = _filter_shipments(request)
     headers, table, formats = _shipments_table(
-        shipments.prefetch_related("lines__contract_line"))
+        shipments.prefetch_related("lines__contract_line"),
+        include_customs=request.user.is_admin_role)
     return xlsx_response("yuklar.xlsx", headers, table, "Yuklar", formats)
 
 
@@ -7081,9 +7229,14 @@ def customs_delete(request, pk):
                             f"Bojxonachi o'chirildi: {agent.name}")
             messages.success(request, "Bojxonachi o'chirildi")
         except ProtectedError:
-            # PROTECT on both sides, same as a logist: somebody with money behind
-            # them is a piece of the ledger, not a contact card to tidy away.
-            messages.error(request, "Bojxonachiga to'lov yoki xarajat biriktirilgan")
+            # PROTECT on every side, same as a logist: somebody with money behind
+            # them is a piece of the ledger, not a contact card to tidy away. A yuk
+            # merely NAMING him is protected too — no money has moved there, but
+            # dropping the name silently would take that load out of the Bojxona
+            # to'lanmagan group, which is the one place its unpaid clearing shows.
+            messages.error(
+                request,
+                "Bojxonachiga to'lov, xarajat yoki yuk biriktirilgan")
         return form_reload(request, reverse("customs_list"))
     return render_confirm(
         request, "Bojxonachini o'chirish", f"“{agent.name}” o'chiriladi.",
@@ -7103,6 +7256,15 @@ def customs_payment_create(request):
     shipment_id = request.GET.get("shipment")
     if shipment_id and shipment_id.isdigit():
         initial["shipment"] = int(shipment_id)
+        # …and with it the bojxonachi the yuk already names, unless the link said
+        # otherwise. This is what the dispatch-time assignment buys: opening + Pul on
+        # a load fills in who it goes to, so the one thing that WAS decided early
+        # does not have to be remembered and retyped now.
+        if "agent" not in initial:
+            assigned = (Shipment.objects.filter(pk=shipment_id)
+                        .values_list("customs_agent_id", flat=True).first())
+            if assigned:
+                initial["agent"] = assigned
     target = CustomsPaymentTargetForm(request.POST or None, initial=initial)
     rows = CustomsPaymentFormSet(request.POST or None,
                                  queryset=CustomsPayment.objects.none())
