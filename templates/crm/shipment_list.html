@@ -281,7 +281,8 @@ inside a view with no control left to leave it by.
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}">
         <select name="customs_agent" class="status-select customs-select{% if not s.customs_agent_id %} is-unset{% endif %}">
-          <option value="">bojxonachi belgilanmagan</option>
+          {# Short enough to fit the control — the ustun sarlavhasi already says BOJXONACHI. #}
+          <option value="">— belgilanmagan —</option>
           {% for a in customs_agents %}
             <option value="{{ a.pk }}" {% if a.pk == s.customs_agent_id %}selected{% endif %}>{{ a.name }}</option>
           {% endfor %}

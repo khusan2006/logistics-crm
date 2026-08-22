@@ -2715,6 +2715,7 @@ ul.errorlist li::before { content: "⚠ "; }
 /* The bojxonachi picker wears the holat control's looks — it is filled in the same
    way, down a column — and greys itself while nobody is named, so the column can
    still be read at a glance as assigned vs not without anyone opening it. */
+.customs-select { max-width: 200px; }
 .customs-select.is-unset { color: var(--text-faint); border-style: dashed; }
 
 /* Route arrow (from → to) wherever a leg or a load's route is written inline */
