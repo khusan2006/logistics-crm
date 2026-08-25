@@ -2737,6 +2737,14 @@ ul.errorlist li::before { content: "⚠ "; }
 .kelishuv-title { font-weight: 700; color: var(--accent); }
 .kelishuv-sub { color: var(--text); font-weight: 600; }
 .kelishuv-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
+/* Kelish sanasi bo'yicha: the same band, holding a day instead of a kelishuv. The
+   accent stripe and the accent title come off it — a kod is a thing you can open and
+   a date is not, so wearing the link colour would promise a destination this header
+   has not got. Bugun keeps them: it is the row the sort exists to put on top. */
+.kelishuv-row--day > td { box-shadow: inset 3px 0 0 var(--border-strong); }
+.kelishuv-row--day .kelishuv-title { color: var(--text); }
+.kelishuv-row--day.is-today > td { box-shadow: inset 3px 0 0 var(--accent); }
+.kelishuv-row--day.is-today .kelishuv-title { color: var(--accent); }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;

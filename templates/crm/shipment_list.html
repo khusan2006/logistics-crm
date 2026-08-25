@@ -37,6 +37,8 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     {% if qr %}<input type="hidden" name="qr" value="{{ qr }}">{% endif %}
     {# And searching inside Bojxona to'lanmagan must stay inside it. #}
     {% if customs %}<input type="hidden" name="customs" value="1">{% endif %}
+    {# Same again: qidirish must not silently put the list back in kelishuv order. #}
+    {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
     {# Same for the holat a tab press landed on — searching must not reset it. #}
     {% if default_tab %}<input type="hidden" name="holat" value="{{ default_tab }}">{% endif %}
     <div class="toolbar-search{% if q %} is-active{% endif %}">
@@ -63,7 +65,7 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     which is the only reading that would leave it changing nothing when pressed.
     {% endcomment %}
     <a class="btn{% if not show_all or customs %} btn-ghost{% endif %}"
-       href="{% if show_all and not customs %}{% querystring all=None page=None %}{% else %}{% querystring all=1 customs=None page=None %}{% endif %}"
+       href="{% if show_all and not customs %}{% querystring all=None sort=None page=None %}{% else %}{% querystring all=1 customs=None page=None %}{% endif %}"
        title="{% if show_all and not customs %}Faqat yo'ldagi yuklar{% else %}Yakunlangan yuklar bilan birga hammasi{% endif %}">
       {% if show_all and not customs %}Faol yuklar{% else %}Hammasi{% endif %}
     </a>
@@ -85,6 +87,29 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     <a class="btn qr-filter qr-filter--no{% if qr != 'yoq' %} btn-ghost{% endif %}"
        href="{% if qr == 'yoq' %}{% querystring qr=None page=None %}{% else %}{% querystring qr='yoq' page=None %}{% endif %}"
        title="{% if qr == 'yoq' %}Saralashni bekor qilish{% else %}Faqat QR kod berilmagan yuklar{% endif %}">QR yo'q{% if qr_waiting_count %}<span class="qr-waiting" title="{{ qr_waiting_count }} ta yukning QR kuni o'tib ketgan, kod hali berilmagan">{{ qr_waiting_count }}</span>{% endif %}</a>
+    {% comment %}
+    Kelish sanasi bo'yicha — bugun kelgan yuklar tepada, keyin kecha kelganlari, and
+    on down the calendar. It clears itself when pressed while active, the way the QR
+    pills do; there is no second pill saying "kelishuv bo'yicha", because that is the
+    order the page is already in when this one is off.
+
+    LAST on the bar rather than beside Hammasi, which is what it belongs to: it is
+    drawn on Hammasi alone, and a button appearing in the MIDDLE of the row would
+    shove the two QR pills sideways every time the operator switched view.
+
+    Only on Hammasi. The active view has no arrived yuk in it to sort, and Bojxona
+    to'lanmagan is its own question with its own row set — `_filter_shipments` drops
+    the param in both cases, so this is the toolbar agreeing with the view rather
+    than the only thing enforcing it.
+    {% endcomment %}
+    {% if show_all and not customs %}
+    <a class="btn{% if not sort %} btn-ghost{% endif %}"
+       href="{% if sort %}{% querystring sort=None page=None %}{% else %}{% querystring sort='kelish' page=None %}{% endif %}"
+       title="{% if sort %}Saralashni bekor qilish — yuklar yana kelishuvlar bo'yicha guruhlanadi{% else %}Kelish sanasi bo'yicha: bugun kelgan yuklar eng tepada, keyin kecha kelganlari{% endif %}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h13"/><path d="M4 12h9"/><path d="M4 18h5"/></svg>
+      Kelish sanasi bo'yicha
+    </a>
+    {% endif %}
   </form>
   {% include "crm/_daterange.html" %}
 </div>
@@ -165,9 +190,30 @@ inside a view with no control left to leave it by.
   Counted in the view: Narx + Xarajat are admin-only and Bojxonachi is drawn on the
   Bojxona to'lanmagan view alone, so the width is not a constant.
   {% endcomment %}
-  <tr class="kelishuv-row" data-contract="{{ g.contract.pk }}">
+  <tr class="kelishuv-row{% if not g.contract %} kelishuv-row--day{% if g.label == 'Bugun' %} is-today{% endif %}{% endif %}"{% if g.contract %} data-contract="{{ g.contract.pk }}"{% endif %} data-group="{{ g.key }}">
     <td colspan="{{ colspan }}">
       <div class="kelishuv-head">
+        {% comment %}
+        Two kinds of block share this band. Under the kelishuv the header names the
+        deal and how much of it has gone; under a day it names the day, because in
+        that view the day is what the rows are grouped by.
+
+        Bugun and Kecha are spelled out and carry the date beside them — those are
+        the two the reader is scanning for, and a bare "24-avgust" makes them work
+        out which one it is. Every older day is just its date. The month name is
+        written here and not in the view so it keeps Django's l10n.
+        {% endcomment %}
+        {% if not g.contract %}
+        <span class="kelishuv-title">{% if g.label %}{{ g.label }}{% else %}{{ g.day|date:"j-F, Y" }}{% endif %}</span>
+        {% if g.label and g.day %}<span class="kelishuv-sub">{{ g.day|date:"j-F, Y" }}</span>{% endif %}
+        <span class="kelishuv-count">{{ g.shipments|length }} yuk</span>
+        {% comment %}
+        The tail: yo'ldagi yuklar have no kelgan kun to sit under, so they gather in
+        one block at the bottom rather than being dropped — Hammasi means hammasi,
+        and a sort must not quietly become a filter. Nearest ETA first inside it.
+        {% endcomment %}
+        {% if not g.day %}<span class="kelishuv-meta muted">hali yo'lda — taxminiy kelish sanasi bo'yicha</span>{% endif %}
+        {% else %}
         <span class="kelishuv-title">Kelishuv {{ g.contract.code }}</span>
         <span class="kelishuv-sub">{{ g.contract.partner.name }} · {{ g.contract.brand_summary }}</span>
         <span class="kelishuv-count">{{ g.shipments|length }} yuk</span>
@@ -185,12 +231,13 @@ inside a view with no control left to leave it by.
         {% endif %}
         {% endwith %}
         <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
+        {% endif %}
       </div>
     </td>
   </tr>
   {% for s in g.shipments %}
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
-      data-contract="{{ g.contract.pk }}"
+      data-group="{{ g.key }}"
       class="load-row{% if s.is_overdue %} is-overdue{% endif %}{% if s.has_qr %} has-qr{% elif s.qr_overdue %} qr-late{% endif %}">
     {% comment %}
     The row's left bar is the QR marker: green once the kod is given, yellow while
@@ -341,7 +388,7 @@ inside a view with no control left to leave it by.
       {% endif %}
     </td>
   </tr>
-  <tr class="legs-detail" data-load="{{ s.pk }}" data-contract="{{ g.contract.pk }}" hidden>
+  <tr class="legs-detail" data-load="{{ s.pk }}" data-group="{{ g.key }}" hidden>
     <td colspan="{{ colspan }}">
       <div class="legs-inline">
 
@@ -501,9 +548,11 @@ inside a view with no control left to leave it by.
 <p class="muted loads-empty-filtered" hidden>Bu holatda yuk yo'q.</p>
 {% comment %}
 Hammasi pages by kelishuv, so the count beside the pager counts kelishuvlar — a
-page here is "these N kelishuv and all of their yuklar".
+page here is "these N kelishuv and all of their yuklar". Sorted by kelish sanasi
+there are no kelishuv blocks to keep whole, so that view pages the yuklar
+themselves and the count says so.
 {% endcomment %}
-{% include "crm/_pagination.html" with label="kelishuv" %}
+{% if sort %}{% include "crm/_pagination.html" with label="yuk" %}{% else %}{% include "crm/_pagination.html" with label="kelishuv" %}{% endif %}
 {% else %}
 {% comment %}
 The empty state names every filter that is on. Without the QR part it read "Faol
@@ -573,11 +622,12 @@ the data, was the reason nothing showed.
     });
   });
 
-  // A kelishuv header row shows only while at least one of its loads is visible.
+  // A group header row — a kelishuv, or a kun when the list is sorted by the day
+  // each yuk landed — shows only while at least one of its loads is visible.
   function syncGroups() {
     document.querySelectorAll('.kelishuv-row').forEach(function (h) {
       var any = false;
-      document.querySelectorAll('.load-row[data-contract="' + h.getAttribute('data-contract') + '"]')
+      document.querySelectorAll('.load-row[data-group="' + h.getAttribute('data-group') + '"]')
         .forEach(function (r) { if (!r.hidden) { any = true; } });
       h.hidden = !any;
     });

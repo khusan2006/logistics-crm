@@ -8,7 +8,7 @@ from uuid import uuid4
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count, Exists, Max, OuterRef, ProtectedError, Q, Sum
+from django.db.models import Count, Exists, F, Max, OuterRef, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
 from django.http import Http404, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
@@ -1761,6 +1761,25 @@ def _filter_shipments(request):
     qr = request.GET.get("qr", "")
     if qr not in ("bor", "yoq"):
         qr = ""
+    # Kelish sanasi bo'yicha — bugun kelgan yuklar tepada, then kecha's, and so on
+    # down the calendar.
+    #
+    # It sorts on `arrived` and NOT on the row date the davr filter uses
+    # (`Coalesce(arrived, eta)`): "kelgan" is the day a yuk actually walked into the
+    # ombor, and a descending sort over the coalesced date would have parked next
+    # month's taxminiy arrivals above everything that has really landed — the exact
+    # rows this ordering exists to put on top. Loads still on the road have no
+    # kelgan kun at all, so they gather at the end, soonest ETA first: that is the
+    # only reading of "not yet" that keeps the list one calendar.
+    #
+    # Hammasi only. The active view drops every arrived load before this point, so
+    # there ordering by the day they arrived would be sorting a set in which
+    # nothing has; and Bojxona to'lanmagan replaces the row set with its own
+    # question, which the toolbar does not draw this button on either. Both are
+    # enforced here rather than by hiding the pill, so a hand-typed `?sort=` cannot
+    # reorder a view whose order means something else.
+    sort = "kelish" if (request.GET.get("sort") == "kelish"
+                        and show_all and not customs) else ""
     shipments = (Shipment.objects
                  .select_related("contract__partner", "status", "customs_agent")
                  .prefetch_related("delays", "legs", "expenses", "customs_payments"))
@@ -1807,11 +1826,59 @@ def _filter_shipments(request):
     if qr:
         # The date is what says the kod was handed over, so its absence is "yo'q".
         shipments = shipments.filter(qr_given__isnull=qr == "yoq")
+    # Applied to the queryset rather than to the rows the page builds, so the Excel
+    # button hands over the file in the order the screen was showing it — the whole
+    # reason the filters live in here and not in the view.
+    if sort:
+        shipments = shipments.order_by(F("arrived").desc(nulls_last=True),
+                                       F("eta").asc(nulls_last=True), "-pk")
     return shipments, {"q": q, "show_all": show_all, "qr": qr, "customs": customs,
+                       "sort": sort,
                        "date_from": date_from, "date_to": date_to,
                        "qr_waiting_count": qr_waiting_count,
                        "customs_pending_count": customs_pending_count,
                        "every_load": every_load}
+
+
+# How many yuklar one page of the Kelish sanasi view holds. Counted in loads and not
+# in kelishuvlar, the way the default Hammasi pager is: this view has no kelishuv
+# blocks to keep whole, and a day is a small enough unit that splitting one across a
+# page break costs nothing — the header repeats and the reader keeps reading.
+LOADS_PER_DATE_PAGE = 50
+
+
+def _loads_by_day(rows):
+    """The Kelish sanasi view's grouping: one block per day, newest day first, with
+    the loads still on the road gathered at the end.
+
+    `rows` must already be ordered the way `_filter_shipments` orders them for this
+    view — the blocks come out in whatever order the rows walk past, so the sort is
+    what puts Bugun on top and Hali kelmagan at the bottom, not this function.
+
+    The day itself is handed over as a date object and named in the template, so the
+    month keeps Django's l10n instead of being spelled here (same reason as
+    `_daterange_bar`). Only the two days that have a WORD rather than a date —
+    bugun, kecha — are labelled, since those are the ones the reader is looking for
+    and the ones a date would make them work out."""
+    today = timezone.localdate()
+    yesterday = today - timedelta(days=1)
+    groups, by_day = [], {}
+    for s in rows:
+        g = by_day.get(s.arrived)
+        if g is None:
+            label = ""
+            if s.arrived is None:
+                label = "Hali kelmagan"
+            elif s.arrived == today:
+                label = "Bugun"
+            elif s.arrived == yesterday:
+                label = "Kecha"
+            g = by_day[s.arrived] = {
+                "key": s.arrived.isoformat() if s.arrived else "kelmagan",
+                "day": s.arrived, "label": label, "shipments": []}
+            groups.append(g)
+        g["shipments"].append(s)
+    return groups
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
@@ -1834,12 +1901,19 @@ def shipment_list(request):
     page), and narrowing the queryset is what makes the tab counts beside it say how
     many of THOSE loads sit in each holat.
 
+    `?sort=kelish` (Kelish sanasi bo'yicha) reorders Hammasi by the day each yuk
+    landed — bugun's arrivals on top, kecha's under them, and so on — and swaps the
+    kelishuv blocks for day ones, since under that order the day IS the grouping.
+    Hammasi only, and it pages by yuk rather than by kelishuv; see
+    `_filter_shipments` for why it sorts on `arrived` alone.
+
     The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
     the loads whose planned QR day has come and gone with no kod, counted on the QR
     yo'q pill, so the ones worth chasing announce themselves without the list having
     to hide anything to say so."""
     shipments, f = _filter_shipments(request)
     q, show_all, qr, customs = f["q"], f["show_all"], f["qr"], f["customs"]
+    sort = f["sort"]
     date_from, date_to, qr_waiting_count = f["date_from"], f["date_to"], f["qr_waiting_count"]
     shipments = list(shipments)
 
@@ -1852,45 +1926,63 @@ def shipment_list(request):
 
     # Group under the kelishuv (newest load first inside). Built from every row,
     # before any paging: a kelishuv is the unit this page is read in.
+    #
+    # …unless Kelish sanasi bo'yicha is on, where the day is that unit instead. The
+    # kelishuv blocks are not a header the rows could keep while the order changes
+    # around them — they ARE the order, and sorting the blocks themselves would
+    # answer a different question ("which kelishuv had something land recently")
+    # than the one being asked ("which yuklar came in today"). So that view pages
+    # the flat list and groups the page by the day; the kelishuv survives on every
+    # row as the hamkor name under the marka, and in the yuk's own panel.
     groups = []
-    by_contract = {}
-    for s in shipments:
-        g = by_contract.get(s.contract_id)
-        if g is None:
-            g = by_contract[s.contract_id] = {"contract": s.contract, "shipments": []}
-            groups.append(g)
-        g["shipments"].append(s)
-    for g in groups:
-        g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
+    if sort:
+        page = Paginator(shipments, LOADS_PER_DATE_PAGE).get_page(request.GET.get("page"))
+        rows = list(page.object_list)
+        # Grouped AFTER paging, so a day straddling a page break is drawn under its
+        # own header on both — each saying how many of that day are on THIS page,
+        # rather than a number whose rest the reader cannot see.
+        groups = _loads_by_day(rows)
+    else:
+        by_contract = {}
+        for s in shipments:
+            g = by_contract.get(s.contract_id)
+            if g is None:
+                g = by_contract[s.contract_id] = {"key": s.contract_id,
+                                                  "contract": s.contract, "shipments": []}
+                groups.append(g)
+            g["shipments"].append(s)
+        for g in groups:
+            g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
 
-    # Then keep each HAMKOR whole. Ordering the kelishuvlar by recency alone
-    # interleaved them — one partner's kelishuv, then another's, then the first
-    # partner's again — so reading everything going to one hamkor meant hunting
-    # the same name down a page it appeared on four separate times.
-    #
-    # A hamkor takes the position of their newest kelishuv rather than an
-    # alphabetical slot, so the page still opens on the most recent work; inside
-    # the block the kelishuvlar stay newest-first, as before.
-    newest_by_partner = {}
-    for g in groups:
-        partner_id = g["contract"].partner_id
-        newest_by_partner[partner_id] = max(
-            newest_by_partner.get(partner_id, 0), g["contract"].pk)
-    groups.sort(key=lambda g: (-newest_by_partner[g["contract"].partner_id],
-                               -g["contract"].pk))
+        # Then keep each HAMKOR whole. Ordering the kelishuvlar by recency alone
+        # interleaved them — one partner's kelishuv, then another's, then the first
+        # partner's again — so reading everything going to one hamkor meant hunting
+        # the same name down a page it appeared on four separate times.
+        #
+        # A hamkor takes the position of their newest kelishuv rather than an
+        # alphabetical slot, so the page still opens on the most recent work; inside
+        # the block the kelishuvlar stay newest-first, as before.
+        newest_by_partner = {}
+        for g in groups:
+            partner_id = g["contract"].partner_id
+            newest_by_partner[partner_id] = max(
+                newest_by_partner.get(partner_id, 0), g["contract"].pk)
+        groups.sort(key=lambda g: (-newest_by_partner[g["contract"].partner_id],
+                                   -g["contract"].pk))
 
-    # Hammasi can grow without bound, so page it — by KELISHUV, not by yuk. Paging
-    # the flat list cut a kelishuv wherever its 20th load happened to fall, leaving
-    # the rest of that kelishuv's yuklar under a second copy of the same header a
-    # page later. And because the list runs newest-first, that cut landed almost
-    # exactly along the status line: the moving loads on one page, the arrived ones
-    # on the next, which is what made a kelishuv look split by holat.
-    #
-    # The active view stays whole, as the pipeline is meant to be scanned.
-    page = Paginator(groups, 10).get_page(request.GET.get("page")) if show_all else None
-    if page is not None:
-        groups = list(page.object_list)
-    rows = [s for g in groups for s in g["shipments"]]
+        # Hammasi can grow without bound, so page it — by KELISHUV, not by yuk.
+        # Paging the flat list cut a kelishuv wherever its 20th load happened to
+        # fall, leaving the rest of that kelishuv's yuklar under a second copy of
+        # the same header a page later. And because the list runs newest-first, that
+        # cut landed almost exactly along the status line: the moving loads on one
+        # page, the arrived ones on the next, which is what made a kelishuv look
+        # split by holat.
+        #
+        # The active view stays whole, as the pipeline is meant to be scanned.
+        page = Paginator(groups, 10).get_page(request.GET.get("page")) if show_all else None
+        if page is not None:
+            groups = list(page.object_list)
+        rows = [s for g in groups for s in g["shipments"]]
 
     statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
     # Inside Bojxona to'lanmagan the holat tabs count EVERY yuk, not the rows under
@@ -1931,7 +2023,7 @@ def shipment_list(request):
         "export_url": reverse("shipment_list_export"),
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
-        "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count,
+        "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count, "sort": sort,
         "customs": customs, "customs_pending_count": f["customs_pending_count"],
         # Only fetched for the view that draws the picker — every other yuklar page
         # would be paying for a list it never renders.

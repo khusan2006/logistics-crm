@@ -101,6 +101,25 @@ def test_the_yuklar_file_follows_the_hammasi_toggle(admin_client, db):
     assert len(_rows(everything)) == 2
 
 
+def test_the_yuklar_file_comes_out_in_the_order_the_screen_had(admin_client, db):
+    """Kelish sanasi bo'yicha saralangan ekran — o'sha tartibda yuklab olinadi.
+
+    The sort lives in the same filter helper the button goes through, so this is
+    what stops the file from silently re-answering in kelishuv order."""
+    contract = make_contract()
+    week = make_shipment(contract=contract, kg="100", arrived=date(2026, 7, 5),
+                         status=ShipmentStatus.arrival())
+    moving = make_shipment(contract=contract, kg="100", eta=date(2026, 12, 1))
+    fresh = make_shipment(contract=contract, kg="100", arrived=date(2026, 7, 12),
+                          status=ShipmentStatus.arrival())
+
+    ordered = admin_client.get("/shipments/export.xlsx",
+                               {"all": "1", "sort": "kelish"})
+    # Newest arrival first, and the yuk still on the road last — not the one whose
+    # taxminiy kelish is furthest out.
+    assert [row[0] for row in _rows(ordered)] == [fresh.pk, week.pk, moving.pk]
+
+
 def test_the_kassa_file_is_two_tabs(admin_client, db):
     """Kirim and Chiqim are read against each other, so they arrive in one file."""
     customer = _customer()
