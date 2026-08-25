@@ -577,6 +577,13 @@ the data, was the reason nothing showed.
   had in fact saved.
   {% endcomment %}
   var keepsArrived = {% if show_all or customs %}true{% else %}false{% endif %};
+  {% comment %}
+  Whether the blocks on this page are DAYS. On the Kelish sanasi view a row's header
+  is the day the yuk landed, so a status change that stamps or clears that date moves
+  the row between blocks — which is the one thing the in-place update below cannot
+  honestly do (see the handler).
+  {% endcomment %}
+  var sortedByDay = {% if sort %}true{% else %}false{% endif %};
   var tabs = document.querySelectorAll('.status-tab[data-tab]');
   var defaultTab = document.querySelector('.status-tab[data-default]');
   var emptyMsg = document.querySelector('.loads-empty-filtered');
@@ -762,6 +769,14 @@ the data, was the reason nothing showed.
           var detail = document.querySelector('.legs-detail[data-load="' + loadId + '"]');
           if (detail) { detail.remove(); }
           row.remove();
+        } else if (sortedByDay
+                   && data.arrived !== (row.getAttribute('data-group') !== 'kelmagan')) {
+          // Sorted by kelish sanasi, the header a row sits under IS its arrival day,
+          // and this save has just given the yuk one (or taken it away). Moving the
+          // row in place would mean inventing a block that may not be on the page,
+          // renumbering two headers and re-sorting around it — so this is the one
+          // save that goes back to the server instead of patching the row.
+          window.location.reload();
         } else {
           row.setAttribute('data-status', String(data.status_id));
           // Refresh the date cell: an arrived load now shows its exact

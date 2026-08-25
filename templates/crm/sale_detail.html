@@ -17,7 +17,7 @@
     </div>
     <div class="stat">
       <div class="muted">Lot</div>
-      <div>#{{ sale.line.shipment_id }} · {{ sale.line.brand }}</div>
+      <div>#{{ sale.line.shipment_id }} · {{ sale.line.brand }}{% if sale.reys %}<span class="reys-no" title="{{ sale.reys }}-reys">{{ sale.reys }}</span>{% endif %}</div>
     </div>
     {% if sale.reservation_id %}
     <div class="stat">
@@ -79,7 +79,7 @@ found by scrolling Sotuvlar.
       {% for s in group %}
       <tr{% if s.pk == sale.pk %} class="sale-group-current"{% endif %}>
         <td>{% if s.pk == sale.pk %}#{{ s.pk }} <span class="muted">(shu sotuv)</span>{% else %}<a href="{% url 'sale_detail' s.pk %}">#{{ s.pk }}</a>{% endif %}</td>
-        <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
+        <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}{% if s.reys %}<span class="reys-no" title="{{ s.reys }}-reys">{{ s.reys }}</span>{% endif %}</td>
         <td>{{ s.kg|floatformat:"-3" }}</td>
         <td>{% rate s.price s.price_uzs s.currency %}</td>
         <td>{% money s.total s.total_uzs s.currency %}</td>

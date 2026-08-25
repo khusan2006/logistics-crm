@@ -111,7 +111,15 @@
       </div>
       {% endif %}
     </td>
-    <td>{% for s in g.sales %}<div class="cell-line">#{{ s.line.shipment_id }} · {{ s.line.brand }}</div>{% endfor %}</td>
+    {% comment %}
+    The reys number follows the marka, in a circle. It is drawn only on a marka that
+    went out on more than one mashina — an ordinary sotuv has no reys and
+    a lone ① beside every row would be a number that never means anything.
+
+    Numbered per marka, so two markalar each split in two read ①② ①② rather than
+    ①②③④: the operator counts the trucks of ONE load, not the trucks of the day.
+    {% endcomment %}
+    <td>{% for s in g.sales %}<div class="cell-line">#{{ s.line.shipment_id }} · {{ s.line.brand }}{% if s.reys %}<span class="reys-no" title="{{ s.reys }}-reys">{{ s.reys }}</span>{% endif %}</div>{% endfor %}</td>
     {% comment %}
     The kg the mijoz kept. A row whose granula partly came back says so underneath
     rather than quietly printing a smaller number, which would read as a typo — and

@@ -1497,7 +1497,8 @@ def _customer_picker_widget():
 
 
 class SaleLineForm(forms.Form):
-    """One marka on a sotuv.
+    """One marka on a sotuv — and, when the sotuv is delivered by several mashina,
+    one marka on ONE of them.
 
     Deliberately NOT a ModelForm: a row is not a Sale. The view splits each row FIFO
     across the lots that actually hold that marka, so one row becomes as many Sale
@@ -1508,6 +1509,16 @@ class SaleLineForm(forms.Form):
     brand = forms.ChoiceField(label="Marka (ombordan)")
     kg = forms.DecimalField(label="Sotilgan kg", max_digits=12, decimal_places=3)
     price = forms.DecimalField(label="1 kg sotuv narxi", max_digits=14, decimal_places=4)
+    # WHICH mashina of the sotuv this product went out on. A truck can carry more
+    # than one marka, so the reys is a property of the ROW rather than of the sotuv:
+    # rows sharing a number are one lorry-load, and "+ Mahsulot qo'shish" inside a
+    # reys is what puts a second granula on it.
+    #
+    # Hidden and driven by the two buttons — the operator says which they meant by
+    # pressing the one they meant, not by typing a truck number. Blank on an
+    # ordinary sotuv, and the view reads a sotuv whose numbers never reach 2 as
+    # exactly that: one handover, however many markalar it carried.
+    reys = forms.IntegerField(required=False, min_value=1, widget=forms.HiddenInput)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1532,8 +1543,15 @@ class SaleLineForm(forms.Form):
 
 
 class BaseSaleLineFormSet(forms.BaseFormSet):
-    """Guards the three ways a sotuv's marka rows can be wrong: empty, carrying the
-    same marka twice, or asking for more than is on the shelf."""
+    """Guards the two ways a sotuv's marka rows can be wrong: empty, or asking for
+    more than is on the shelf.
+
+    Repeating a marka used to be the third, and is now a feature: one order is often
+    loaded onto several mashina one after another, so the same marka appearing twice
+    means two REYS of that load. What the repeat changed is the ceiling — the rows of
+    one marka are checked as a SUM against the shelf, which is the thing the old
+    refusal was really protecting (two rows each passing on their own, then taking
+    twice what is there)."""
 
     def rows(self):
         """The rows that mean something — filled in and not struck out."""
@@ -1549,25 +1567,33 @@ class BaseSaleLineFormSet(forms.BaseFormSet):
         if not rows:
             raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
 
-        # One row per marka. Two rows of the same granula would each be checked
-        # against the whole shelf and pass, then take twice what is there — and the
-        # operator meant one line anyway.
+        # Grouped by marka, keeping the order they were typed: the rows of one marka
+        # are its reyslar, and what leaves the ombor is their sum.
         wanted = {}
         for form in rows:
-            brand = form.cleaned_data["brand"]
-            if brand in wanted:
-                form.add_error("brand", "Bu marka ro'yxatda bor")
-                continue
-            wanted[brand] = (form, form.cleaned_data.get("kg") or Decimal("0"))
+            wanted.setdefault(form.cleaned_data["brand"], []).append(form)
 
-        for brand, (form, kg) in wanted.items():
+        for brand, forms_ in wanted.items():
+            kg = sum((f.cleaned_data.get("kg") or Decimal("0") for f in forms_),
+                     Decimal("0"))
             # The shelf is the only ceiling. A bron is a promise between the operator
             # and a mijoz, and the operator is the one who decides whether to keep it
             # today — granula refused to a buyer standing at the counter is a sale
             # lost to a rule that was never the mijoz's.
             available = brand_on_hand_kg(brand)
-            if kg > available:
-                form.add_error(
+            if kg <= available:
+                continue
+            # On the LAST reys of that marka, which is the one that broke the ceiling
+            # and the one the operator was typing when it did. The message names the
+            # sum, or the row's own kg would look like it fits and the refusal would
+            # read as a bug.
+            if len(forms_) > 1:
+                forms_[-1].add_error(
+                    "kg", f"{len(forms_)} reys jami {_clean_number(kg)} kg — ombor "
+                          f"qoldig'idan oshmasligi kerak "
+                          f"({_clean_number(available)} kg)")
+            else:
+                forms_[-1].add_error(
                     "kg", f"Ombor qoldig'idan oshmasligi kerak "
                           f"({_clean_number(available)} kg)")
 

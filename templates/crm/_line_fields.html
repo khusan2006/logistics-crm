@@ -3,7 +3,12 @@ Repeating product rows for a kelishuv or a yuk. Each row is a card so the label
 of every field stays visible on a phone; the empty_form at the bottom is the
 template the JS clones when "+ Mahsulot qo'shish" is pressed.
 {% endcomment %}
-<fieldset class="lineset {{ lines_class }}" data-lineset>
+{% comment %}
+`data-line-reys` opts a formset into reys rejimi; its value is what the legend reads
+while that mode is on, so the word stays in the template with the rest of the page's
+Uzbek rather than being spelled inside base.html's JS.
+{% endcomment %}
+<fieldset class="lineset {{ lines_class }}" data-lineset{% if lines_reys %} data-line-reys="Reyslar"{% endif %}>
   <legend>{{ lines_legend }}</legend>
   {{ lines.management_form }}
   {% if lines.non_form_errors %}
@@ -61,6 +66,27 @@ template the JS clones when "+ Mahsulot qo'shish" is pressed.
     </div>
   </template>
 
-  <button type="button" class="btn btn-ghost lineset-add" data-line-add>{{ lines_add_label|default:"+ Mahsulot qo'shish" }}</button>
+  <div class="lineset-adds">
+    <button type="button" class="btn btn-ghost lineset-add" data-line-add>{{ lines_add_label|default:"+ Mahsulot qo'shish" }}</button>
+    {% comment %}
+    Reys — another mashina of the same order. One order is routinely loaded onto
+    several trucks one after another and the mijoz takes them as one deal, so that is
+    one sotuv of several reyslar rather than three sotuvlar to reconcile later.
+
+    The two buttons answer different questions, and that is the whole point of there
+    being two. Reys adds a TRUCK; Mahsulot adds a granula to a truck. Once a second
+    reys exists each one grows its own "+ Mahsulot" in its header and this bottom one
+    stands down, because by then "add a product" has to say WHICH lorry it goes on
+    and a single button at the foot of the form could only guess.
+
+    A new reys opens on the marka above it, since the usual next truck carries the
+    same load — but the select stays free, and a reys hauling something else is
+    simply changed to it and keeps its number.
+    {% endcomment %}
+    {% if lines_reys %}
+    <button type="button" class="btn btn-ghost lineset-add" data-line-add data-line-reys-add
+            title="Shu buyurtmaning yana bitta mashinasi — bitta sotuv, bir nechta reys. Har reysga boshqa mahsulot tanlash mumkin">+ Reys qo'shish</button>
+    {% endif %}
+  </div>
 </fieldset>
 {% if lines_after %}{{ lines_after.as_p }}{% endif %}

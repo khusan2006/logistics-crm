@@ -792,6 +792,35 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
+  // Scrolling over a FOCUSED number input nudges its value — every browser does
+  // it, and with the spinners hidden app-wide (app.css) there is nothing on screen
+  // to warn that the box is a dial. A wheel while reading down a long modal turned
+  // a kg that had just been typed into a different one, silently and with the
+  // operator's eyes on something else.
+  //
+  // Blur rather than preventDefault: swallowing the wheel would freeze the modal
+  // under the pointer, which is a worse bug than the one being fixed. Blurring
+  // happens before the browser applies the increment, so the figure stays as typed
+  // AND the page scrolls the way the operator meant.
+  //
+  // `change` fires from this only if the value really was edited — the same event
+  // clicking away would have fired — so nothing downstream sees a phantom edit.
+  //
+  // Money boxes are already immune: the grouping code above retypes them as text
+  // to show "1 000 000". This is for the plain ones — kg, foiz, mashina soni.
+  (function () {
+    document.addEventListener('wheel', function (e) {
+      var el = e.target;
+      // Focused AND under the pointer, which is the only state the browser spins.
+      // Blurring on any wheel would throw focus away while the operator scrolls
+      // some other part of the page.
+      if (el && el.tagName === 'INPUT' && el.type === 'number'
+          && el === document.activeElement) {
+        el.blur();
+      }
+    }, { passive: true });
+  })();
+
   // International phone (data-phone-intl): injects a country picker (🇺🇿 +998 /
   // 🇮🇷 +98 / 🇹🇷 +90) joined to the left of the field. The visible box holds only
   // the national digits, auto-grouped as you type. A hidden mirror carries the
@@ -947,6 +976,128 @@
         if (btn) { btn.disabled = only && !row.hidden; }
       });
     }
+    // ── Reys ──────────────────────────────────────────────────────────────────
+    // On the sotuv form (and there alone — `data-line-reys`) a marka may repeat: one
+    // order loaded onto several mashina one after another is one sotuv with that
+    // marka on several rows. These two keep that legible while it is being typed.
+    function brandSelect(row) { return row.querySelector('select[name$="-brand"]'); }
+    function visibleRows(set) {
+      return Array.prototype.filter.call(rows(set), function (r) { return !r.hidden; });
+    }
+    // Which mashina a row went out on. Kept on the ROW because a truck can carry
+    // more than one marka — rows sharing a number are one lorry-load, and that is
+    // what "+ Mahsulot" inside a reys adds to.
+    function rowReysInput(row) { return row.querySelector('input[name$="-reys"]'); }
+    function rowReys(row) {
+      var input = rowReysInput(row);
+      var n = input ? parseInt(input.value, 10) : NaN;
+      return isNaN(n) ? 1 : n;      // an unnumbered row is the first (only) reys
+    }
+    function setRowReys(row, n) {
+      var input = rowReysInput(row);
+      if (input) { input.value = n; }
+    }
+    // The rows of one reys are kept together, so a product added to reys 1 lands
+    // under reys 1 rather than at the bottom of the form beneath a different truck.
+    function moveIntoReys(set, row, n) {
+      var last = null;
+      visibleRows(set).forEach(function (r) {
+        if (r !== row && rowReys(r) === n) { last = r; }
+      });
+      if (last && last.nextSibling !== row) {
+        last.parentNode.insertBefore(row, last.nextSibling);
+      }
+    }
+    function reysHead(position, n) {
+      var head = document.createElement('div');
+      head.className = 'reys-head';
+      head.setAttribute('data-reys-head', n);
+      var badge = document.createElement('span');
+      badge.className = 'reys-no';
+      badge.textContent = position;
+      var label = document.createElement('span');
+      label.className = 'reys-head-label';
+      label.textContent = 'reys';
+      // Its own button, and the reason the one at the bottom stands down: a product
+      // has to join a PARTICULAR truck, and a single button at the foot of the form
+      // could only ever guess which.
+      var add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'btn btn-ghost btn-sm';
+      add.setAttribute('data-line-add', '');
+      add.setAttribute('data-reys-product', n);
+      add.title = 'Shu reysga yana bitta mahsulot';
+      add.textContent = "+ Mahsulot";
+      head.appendChild(badge);
+      head.appendChild(label);
+      head.appendChild(add);
+      return head;
+    }
+    // Redraws the reys headers over the flat row list. A sotuv is in reys rejimi
+    // when its rows reach a SECOND number: one truck carrying three markalar is a
+    // single handover, and numbering it 1 of 1 would claim a delivery with no other
+    // half.
+    //
+    // Drawn live rather than on save: reys rejimi changes what the rows MEAN — two
+    // markalar as two lorry-loads rather than as one — and a mode you cannot see you
+    // are in is a mode you enter by accident. Deleting back to one truck drops it
+    // again, which is also the way out for an operator who pressed Reys by mistake.
+    //
+    // The header numbers are positions, while the button inside carries the RAW
+    // number the rows are grouped by — renumbering the inputs as trucks are deleted
+    // would move rows between lorries behind the operator's back.
+    function syncReys(set) {
+      if (!set.hasAttribute('data-line-reys')) { return; }
+      Array.prototype.forEach.call(set.querySelectorAll('.reys-head'), function (h) {
+        h.remove();
+      });
+      var list = visibleRows(set);
+      var numbers = list.map(rowReys);
+      var distinct = [];
+      numbers.forEach(function (n) {
+        if (distinct.indexOf(n) === -1) { distinct.push(n); }
+      });
+      var on = distinct.length > 1;
+      var legend = set.querySelector('legend');
+      if (legend) {
+        if (!set.dataset.legendWas) { set.dataset.legendWas = legend.textContent; }
+        legend.textContent = on ? set.getAttribute('data-line-reys')
+                                : set.dataset.legendWas;
+      }
+      var bottomAdd = set.querySelector(
+        '.lineset-adds [data-line-add]:not([data-line-reys-add])');
+      if (bottomAdd) { bottomAdd.hidden = on; }
+      // The circle belongs to the header now; a row that kept one from an earlier
+      // state would number a product as though it were a truck.
+      Array.prototype.forEach.call(
+        set.querySelectorAll('[data-line-row] .reys-no'), function (b) { b.remove(); });
+      if (!on) { return; }
+      var drawn = {};
+      list.forEach(function (row, i) {
+        var n = numbers[i];
+        if (drawn[n]) { return; }
+        drawn[n] = true;
+        row.parentNode.insertBefore(reysHead(distinct.indexOf(n) + 1, n), row);
+      });
+    }
+    // A new reys opens on the marka above it — the common case is the same load
+    // going out again, and retyping it for every truck is the work this saves. It is
+    // only a starting point: the select stays free, and a reys hauling something
+    // else is simply changed to it without losing its number.
+    //
+    // Taken from the last row that names a marka, so pressing Reys after an unfilled
+    // row still finds the load being entered.
+    function carryBrandDown(set, row) {
+      var brand = '';
+      visibleRows(set).forEach(function (r) {
+        if (r === row) { return; }
+        var sel = brandSelect(r);
+        if (sel && sel.value) { brand = sel.value; }
+      });
+      var target = brandSelect(row);
+      if (target && brand) { target.value = brand; }
+    }
+
     function addRow(set) {
       var tpl = set.querySelector('[data-line-template]');
       var total = totalField(set);
@@ -967,6 +1118,7 @@
       document.dispatchEvent(new CustomEvent('modal:loaded', { detail: row }));
       var first = row.querySelector('input, select');
       if (first) { first.focus(); }
+      return row;
     }
     function removeRow(set, row) {
       var del = row.querySelector('input[type=checkbox][name$="-DELETE"]');
@@ -987,6 +1139,7 @@
         if (total) { total.value = i; }
       }
       syncRemoveButtons(set);
+      syncReys(set);
     }
     // On the yuk form the product list spans every kelishuv, so drop the ones that
     // do not belong to the kelishuv chosen above. The server re-checks.
@@ -1070,7 +1223,32 @@
         set.dataset.linesetReady = '1';
         set.addEventListener('click', function (e) {
           var add = e.target.closest('[data-line-add]');
-          if (add) { e.preventDefault(); addRow(set); return; }
+          if (add) {
+            e.preventDefault();
+            // Read before the row is added: a fresh row counts as reys 1 until it
+            // is told otherwise, which would make every new truck number 2.
+            var here = visibleRows(set).map(rowReys);
+            var row = addRow(set);
+            if (row) {
+              if (add.hasAttribute('data-line-reys-add')) {
+                // A new mashina, after every one entered so far, opening on the
+                // marka above it.
+                setRowReys(row, Math.max.apply(null, here.concat([0])) + 1);
+                carryBrandDown(set, row);
+              } else if (add.hasAttribute('data-reys-product')) {
+                // Another granula on THAT truck — it joins that reys and is filed
+                // under it rather than landing at the foot of the form.
+                var n = parseInt(add.getAttribute('data-reys-product'), 10);
+                setRowReys(row, n);
+                moveIntoReys(set, row, n);
+              } else {
+                // The plain button: one more marka on the same handover.
+                setRowReys(row, here.length ? here[here.length - 1] : 1);
+              }
+            }
+            syncReys(set);
+            return;
+          }
           var rm = e.target.closest('[data-line-remove]');
           if (rm && !rm.disabled) {
             e.preventDefault();
@@ -1086,6 +1264,7 @@
         }
         filterLineOptions(set);
         syncRemoveButtons(set);
+        syncReys(set);
       });
     }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });

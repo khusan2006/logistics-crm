@@ -2887,6 +2887,25 @@ form.stacked .lineset-field[hidden] { display: none; }
 .lineset-rm[disabled] { opacity: 0.35; cursor: not-allowed; }
 .lineset-del { display: none; }        /* the − button drives DELETE */
 .lineset-add { margin-top: 10px; }
+/* Mahsulot qo'shish and Reys qo'shish sit side by side and wrap together on a
+   phone rather than stacking full-width, which read as two unrelated controls. */
+.lineset-adds { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The header over one reys's rows — which mashina they went out on, and the way to
+   put another granula on that same truck. It reads as a divider between lorry-loads
+   rather than as a card of its own, so it carries a rule and no background. */
+.reys-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.reys-head:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.reys-head .reys-no { margin-left: 0; }
+.reys-head-label { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+/* Pushed to the end so the trucks' own numbers line up down the left edge. */
+.reys-head .btn { margin-left: auto; }
 
 /* Wide enough for a row: the product spans the top, the numbers sit beneath it.
    Four columns, placed explicitly rather than left to auto-flow — the row grew a
@@ -2939,6 +2958,25 @@ form.stacked .lineset-field[hidden] { display: none; }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
+/* The reys number beside a marka — which mashina of that load the row went out on.
+   A circle rather than "2-reys" in words: it sits in a cell that already carries a
+   lot id and a marka name, and the whole point is that it is read at a glance down
+   a column of them. Tabular figures so ① and ⑩ line up in that column. */
+.reys-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
 
 /* ── One to'lov paid several ways, in the kassa daftar ──────────────────────
    The line is ONE payment; the usul and the summa are stacked inside it, one per

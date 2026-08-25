@@ -3195,9 +3195,35 @@ def sale_list(request):
                    "daterange": _daterange_bar(request, date_from, date_to)})
 
 
+def _reys_numbers(rows):
+    """Which mashina each Mahsulot row went out on, normalised to 1, 2, 3… in the
+    order the reyslar first appear — or `None` on every row when the sotuv is not a
+    reys sotuv at all.
+
+    A sotuv whose rows never reach a second number is one handover, however many
+    markalar the mijoz took on it, so nothing is numbered: reys 1 of 1 is not a fact
+    about a delivery, and a lone ① beside every ordinary sotuv would be a marker that
+    never means anything.
+
+    The browser's numbers are only used for GROUPING — rows sharing one are the same
+    lorry-load. Renumbering them here is what keeps a saved sotuv reading 1, 2, 3
+    after the operator built the trucks out of order or deleted the middle one."""
+    raw = [row.cleaned_data.get("reys") or 1 for row in rows]
+    order = {}
+    for number in raw:
+        order.setdefault(number, len(order) + 1)
+    if len(order) < 2:
+        return [None] * len(raw)
+    return [order[number] for number in raw]
+
+
 def _sale_form_response(request, form, lines, title, invalid=False):
+    """`lines_reys` turns on the Reys qo'shish button and the ①②③ the rows of one
+    marka wear as they are typed. Sotuv only: a kelishuv or a yuk lists a marka once
+    by nature, and repeating one there is the slip the guard still calls it."""
     return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar",
+                                        "lines_reys": True})
 
 
 @role_required(User.Role.ADMIN)
@@ -3250,9 +3276,19 @@ def sale_create(request):
             # FIFO slices under them — so Sotuvlar can band them back together as the
             # one trip to the counter they were.
             group = uuid4()
+            # Which mashina each row went out on. The rows carry it themselves — a
+            # truck can hold more than one marka, so several rows may share a number
+            # and the sotuv is read off them rather than the other way round.
+            #
+            # Renumbered here rather than trusted: the browser's numbers only have to
+            # GROUP the rows, and normalising them in order of first appearance means
+            # a saved sotuv always reads 1, 2, 3 even if the operator built the reys
+            # out of order or deleted the middle one.
+            rows_in = lines.rows()
+            reys_numbers = _reys_numbers(rows_in)
             slices, sold = [], []
             with transaction.atomic():
-                for line in lines.rows():
+                for line, reys in zip(rows_in, reys_numbers):
                     take_from = line.cleaned_data
                     # The same conversion PriceEntryFormMixin does, at the header's
                     # kurs. Four decimals: rounding a $/kg to cents would move a
@@ -3269,6 +3305,9 @@ def sale_create(request):
                             # marka, in the currency the sotuv was agreed in
                             price=usd, price_uzs=uzs,
                             currency=currency, exchange_rate=rate, group=group,
+                            # Every FIFO slice of the row carries the row's reys: one
+                            # truck that reached across two lots is still one truck.
+                            reys=reys,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=request.user,
                         )
@@ -3280,7 +3319,8 @@ def sale_create(request):
                         # sotuv is something else they bought and the booking stands.
                         if data.get("draw_from_bron"):
                             draw_down_bron(sale)
-                    sold.append(f"{take_from['kg']} kg {take_from['brand']}")
+                    sold.append(f"{take_from['kg']} kg {take_from['brand']}"
+                                + (f" ({reys}-reys)" if reys else ""))
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
                 f"Yangi sotuv (FIFO): {', '.join(sold)} · "
@@ -3288,9 +3328,13 @@ def sale_create(request):
             )
             for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
                 apply_customer_advance(sale)
-            # Says what actually happened: several markalar, or one split across
-            # lots, or the ordinary single row.
-            if len(sold) > 1:
+            # Says what actually happened, in the words the operator used: reyslar
+            # when a marka went out on several mashina, otherwise several markalar,
+            # or one split across lots, or the ordinary single row.
+            reys_count = len({n for n in reys_numbers if n})
+            if reys_count > 1:
+                note = f"Sotuv qo'shildi ({reys_count} reys, {len(slices)} lotdan)"
+            elif len(sold) > 1:
                 note = f"Sotuv qo'shildi ({len(sold)} mahsulot, {len(slices)} lotdan)"
             elif len(slices) > 1:
                 note = f"Sotuv qo'shildi ({len(slices)} lotdan)"
@@ -6159,19 +6203,22 @@ def _sales_table(sales):
     # Kg and Jami are NET of vazvratlar, matching the screen the Excel button sits
     # on; what left the shelf on the day and what came back are their own columns, so
     # nothing is hidden by the netting.
-    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Sotilgan kg", "Qaytgan kg",
-               "Valyuta", "Kurs", "Tan narx ($)",
+    # Reys sits beside Marka, where the screen puts it. Blank on a marka that went
+    # out on one mashina: the column answers "which truck of this load", and a 1
+    # against every ordinary row would make it look like every sotuv had reyslar.
+    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Reys", "Kg", "Sotilgan kg",
+               "Qaytgan kg", "Valyuta", "Kurs", "Tan narx ($)",
                "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
                "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)"]
     rows = (
-        [s.date, s.customer.name, s.line_id, s.line.brand, s.net_kg, s.kg,
-         s.returned_kg, s.get_currency_display(), s.exchange_rate, s.cost_price,
+        [s.date, s.customer.name, s.line_id, s.line.brand, s.reys or "", s.net_kg,
+         s.kg, s.returned_kg, s.get_currency_display(), s.exchange_rate, s.cost_price,
          s.price, s.price_uzs, s.net_total, s.net_total_uzs,
          s.profit, s.profit_uzs, s.remaining, s.remaining_uzs]
         for s in sales
     )
     return headers, rows, {"Kg": KG, "Sotilgan kg": KG, "Qaytgan kg": KG,
-                           "Lot ID": "0", "Kurs": "#,##0"}
+                           "Lot ID": "0", "Reys": "0", "Kurs": "#,##0"}
 
 
 def _supplier_payments_table(payments):

@@ -31,7 +31,9 @@ EXPORT_URLS = {
     "/reports/export/sales.xlsx": [
         # Kg is net of vazvratlar, like the screen; what left the shelf and what came
         # back are their own columns beside it.
-        "Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Sotilgan kg", "Qaytgan kg",
+        # Reys sits beside Marka, where the screen puts it — which mashina of that
+        # load the row went out on, blank when it went out on one.
+        "Sana", "Mijoz", "Lot ID", "Marka", "Reys", "Kg", "Sotilgan kg", "Qaytgan kg",
         "Valyuta", "Kurs", "Tan narx ($)",
         "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
         "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)",

@@ -526,10 +526,11 @@ class TestMultipleProductsInOneSotuv:
         assert resp.status_code == 200
         assert not Sale.objects.exists()
 
-    def test_the_same_marka_twice_is_refused(self, admin_client, db):
-        """Two rows of one granula would each be checked against the whole shelf and
-        pass, then take twice what is there."""
-        customer = self._two_markas()
+    def test_the_same_marka_twice_is_checked_as_a_sum(self, admin_client, db):
+        """Repeating a marka is a REYS now, not a slip — but the shelf is still the
+        ceiling, and it is the two rows TOGETHER that have to fit. Each was checked
+        on its own once, so both passed and then took twice what was there."""
+        customer = self._two_markas()             # 500 kg LLDPE on the shelf
         resp = self._post(admin_client, customer,
                           {"brand": "LLDPE", "kg": "300", "price": "1.50"},
                           {"brand": "LLDPE", "kg": "300", "price": "1.50"})
@@ -566,6 +567,152 @@ class TestMultipleProductsInOneSotuv:
                           {"brand": "", "kg": "", "price": ""})
         assert resp.status_code == 302
         assert Sale.objects.count() == 1
+
+
+class TestReys:
+    """Bitta buyurtma bir nechta mashinada ketadi — bitta sotuv, bir nechta reys.
+
+    A reys is a TRUCK, and a truck can carry more than one marka. So the number sits
+    on the ROW: rows sharing one are a single lorry-load, which is what the
+    "+ Mahsulot" inside a reys adds to. Nothing is read off the granula — numbering
+    by marka renamed reys 2 the moment its load was changed to something else."""
+
+    def _shelf(self):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        return Customer.objects.create(name="Uch reys")
+
+    def _post(self, client, customer, *rows, **extra):
+        data = {"customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+                "date": "2026-07-24", "debt_deadline": "", "note": "",
+                **line_data(*rows)}
+        data.update(extra)
+        return client.post("/sales/new/", data)
+
+    def _lldpe(self, kg, reys=None):
+        row = {"brand": "LLDPE", "kg": kg, "price": "1.50"}
+        return {**row, "reys": reys} if reys else row
+
+    def _hdpe(self, kg, reys=None):
+        row = {"brand": "HDPE", "kg": kg, "price": "3.00"}
+        return {**row, "reys": reys} if reys else row
+
+    def test_three_trucks_of_one_load_are_one_sotuv(self, admin_client, db):
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("100", 1), self._lldpe("120", 2),
+                          self._lldpe("80", 3))
+        assert resp.status_code == 302
+        sales = list(Sale.objects.order_by("pk"))
+        assert [s.reys for s in sales] == [1, 2, 3]
+        assert [s.kg for s in sales] == [Decimal("100.000"), Decimal("120.000"),
+                                         Decimal("80.000")]
+        # One deal: one group, one qarz.
+        assert len({s.group for s in sales}) == 1
+        customer.refresh_from_db()
+        assert customer.balance == Decimal("450.00")
+
+    def test_one_reys_can_carry_several_markalar(self, admin_client, db):
+        """The nesting that "+ Mahsulot qo'shish" inside a reys is for: two granula
+        on the first lorry, one on the second."""
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("100", 1), self._hdpe("50", 1),
+                          self._lldpe("120", 2))
+        assert resp.status_code == 302
+        assert [(s.line.brand, s.reys) for s in Sale.objects.order_by("pk")] == [
+            ("LLDPE", 1), ("HDPE", 1), ("LLDPE", 2)]
+
+    def test_every_reys_can_carry_a_different_marka(self, admin_client, db):
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("100", 1), self._hdpe("50", 2),
+                          self._lldpe("120", 3))
+        assert resp.status_code == 302
+        assert [(s.line.brand, s.reys) for s in Sale.objects.order_by("pk")] == [
+            ("LLDPE", 1), ("HDPE", 2), ("LLDPE", 3)]
+
+    def test_markalar_on_one_truck_are_not_reyslar(self, admin_client, db):
+        """Three granula handed over on one lorry is one delivery. Numbering it 1 of
+        1 would claim a second half that never existed."""
+        customer = self._shelf()
+        self._post(admin_client, customer,
+                   self._lldpe("100", 1), self._hdpe("50", 1))
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [None, None]
+
+    def test_an_ordinary_sotuv_names_no_reys_at_all(self, admin_client, db):
+        customer = self._shelf()
+        self._post(admin_client, customer, self._lldpe("100"), self._hdpe("50"))
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [None, None]
+
+    def test_the_numbers_are_normalised_to_the_order_they_appear(self, admin_client, db):
+        """The browser's numbers only have to GROUP the rows. Building the trucks out
+        of order, or deleting the middle one, must still save as 1, 2, 3."""
+        customer = self._shelf()
+        self._post(admin_client, customer,
+                   self._lldpe("100", 5), self._hdpe("50", 2), self._lldpe("120", 5))
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [1, 2, 1]
+
+    def test_the_shelf_is_the_ceiling_for_the_reyslar_together(self, admin_client, db):
+        """Two trucks of one granula come off one pile, so it is their SUM that has
+        to fit — each was checked alone once, and both passed."""
+        customer = self._shelf()                    # 500 kg LLDPE
+        resp = self._post(admin_client, customer,
+                          self._lldpe("300", 1), self._lldpe("300", 2))
+        assert resp.status_code == 200
+        assert not Sale.objects.exists()
+        # The refusal names the sum: the last row's own 300 kg fits 500 on its own,
+        # so a message about that row alone would read as a bug.
+        assert "600" in resp.content.decode()
+
+    def test_reyslar_that_fit_together_go_through(self, admin_client, db):
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("300", 1), self._lldpe("200", 2))
+        assert resp.status_code == 302
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [1, 2]
+
+    def test_a_reys_that_reaches_across_two_lots_is_still_one_truck(
+            self, admin_client, db):
+        """FIFO can split one row into several Sale rows. Those are lot slices, not
+        trucks, so they all carry the same reys."""
+        _lot_at("PP", "100", "1.00", "2026-07-01")
+        _lot_at("PP", "100", "1.10", "2026-07-02")
+        customer = Customer.objects.create(name="Ikki lot")
+        resp = self._post(admin_client, customer,
+                          {"brand": "PP", "kg": "150", "price": "2.00", "reys": 1},
+                          {"brand": "PP", "kg": "40", "price": "2.00", "reys": 2})
+        assert resp.status_code == 302
+        # 150 kg took the whole first lot and 50 of the second — two rows, one reys.
+        assert [(s.kg, s.reys) for s in Sale.objects.order_by("pk")] == [
+            (Decimal("100.000"), 1), (Decimal("50.000"), 1), (Decimal("40.000"), 2)]
+
+    def test_the_list_prints_the_number_in_a_circle(self, admin_client, db):
+        customer = self._shelf()
+        self._post(admin_client, customer,
+                   self._lldpe("100", 1), self._hdpe("50", 2))
+        html = admin_client.get("/sales/").content.decode()
+        assert '<span class="reys-no" title="1-reys">1</span>' in html
+        assert '<span class="reys-no" title="2-reys">2</span>' in html
+
+    def test_an_ordinary_sotuv_wears_no_circle(self, admin_client, db):
+        customer = self._shelf()
+        self._post(admin_client, customer, self._lldpe("100"))
+        # The rendered badge, not the class name — the modal JS that draws the same
+        # circle while typing ships on every page and names it too.
+        assert '<span class="reys-no"' not in admin_client.get("/sales/").content.decode()
+
+    def test_the_form_offers_both_buttons_and_a_reys_field_per_row(
+            self, admin_client, db):
+        html = admin_client.get("/sales/new/").content.decode()
+        assert "+ Mahsulot qo'shish" in html and "+ Reys qo'shish" in html
+        assert 'data-line-reys="Reyslar"' in html
+        assert 'name="lines-0-reys"' in html          # the row carries its truck
+
+    def test_a_kelishuv_form_does_not(self, admin_client, db):
+        """A kelishuv lists a marka once by nature — it has no trucks to number."""
+        html = admin_client.get("/contracts/new/").content.decode()
+        assert "+ Reys qo'shish" not in html
 
 
 class TestSotuvlarShowsWhatWasSoldTogether:

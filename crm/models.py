@@ -2691,6 +2691,24 @@ class Sale(MoneyEntry):
     # existed and on a sale made from one chosen lot, which is one row by nature.
     group = models.UUIDField("Sotuv guruhi", null=True, blank=True,
                              editable=False, db_index=True)
+    # WHICH truck of the sotuv the row went out on. One order is often loaded onto
+    # several mashina one after another and the mijoz takes them as one deal, so a
+    # sotuv can be a sequence of reyslar rather than a single handover.
+    #
+    # A reys is a TRUCK, not a product. One can carry several markalar, so several
+    # Sale rows may share a number; reys 1 may haul one granula and reys 2 another,
+    # or the same one again. Nothing is inferred from the marka — numbering by it
+    # would have renamed reys 2 the moment its granula was changed.
+    #
+    # Null unless the sotuv actually reached a SECOND truck: three markalar handed
+    # over on one lorry are one delivery, and a lone "1" beside every ordinary sotuv
+    # would be a number that never means anything. `_reys_numbers` is where that is
+    # decided, and where the browser's grouping is renumbered to 1, 2, 3.
+    #
+    # Carried on every FIFO slice of the row, so a reys that reached across two lots
+    # still reads as the one truck it was.
+    reys = models.PositiveSmallIntegerField("Reys", null=True, blank=True,
+                                            editable=False)
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg sotuv narxi (so'm)", max_digits=18,
