@@ -218,3 +218,21 @@ def line_data(*rows, initial=0, prefix="lines"):
         for key, value in row.items():
             data[f"{prefix}-{i}-{key}"] = "" if value is None else str(value)
     return data
+
+
+def e2e_context(browser, **kwargs):
+    """A Playwright context for the browser probes, pinned to lotin.
+
+    The app defaults to kiril and transliterates every label in the browser
+    (static/js/yozuv.js), so a probe looking for "ftor oq" in a dropdown finds
+    "фтор оқ" there instead. These tests are about what the FORMS do — which box
+    appears, which markalar are on offer, whether a preview updates — so they read
+    the page in the script it is SERVED in, and the alphabet is pinned on its own in
+    tests/test_yozuv.py rather than a second time inside every one of them.
+
+    An init script rather than a plain setItem: it runs before any of the page's own
+    scripts, which is the only place early enough for base.html's <head> to see it.
+    """
+    ctx = browser.new_context(**kwargs)
+    ctx.add_init_script("try { localStorage.setItem('yozuv', 'lotin'); } catch (e) {}")
+    return ctx

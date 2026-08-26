@@ -17,6 +17,8 @@ import pytest  # noqa: E402
 from accounts.models import User  # noqa: E402
 from crm.models import Contract, ContractLine, Partner  # noqa: E402
 
+from conftest import e2e_context  # noqa: E402
+
 pw = pytest.importorskip("playwright.sync_api")
 
 PASSWORD = "e2e-pass-123"
@@ -32,7 +34,7 @@ def browser():
 
 @pytest.fixture
 def page(browser):
-    ctx = browser.new_context()
+    ctx = e2e_context(browser)
     pg = ctx.new_page()
     yield pg
     ctx.close()

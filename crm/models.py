@@ -1765,9 +1765,15 @@ class ShipmentLine(MoneyEntry):
                                       related_name="shipment_lines",
                                       verbose_name="Mahsulot")
     kg = models.DecimalField("Yuborilgan kg", max_digits=12, decimal_places=3)
+    # Empty is the normal shape and the only one any screen can produce: tannarx is
+    # agreed on the kelishuv and read from there, live, so a truck re-prices with the
+    # agreement instead of freezing at the figure it was entered beside. What is left
+    # in here are the loads that really did go at a price of their own — imported, or
+    # entered before the yuk form's narx box was locked — and those are read as they
+    # stand. See ShipmentLineForm and unit_price below.
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
                                 null=True, blank=True,
-                                help_text="Bo'sh qoldirilsa kelishuv narxi olinadi")
+                                help_text="Bo'sh — tannarx kelishuvdan olinadi")
     price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
                                     decimal_places=2, null=True, blank=True)
     position = models.PositiveIntegerField(default=0, editable=False)

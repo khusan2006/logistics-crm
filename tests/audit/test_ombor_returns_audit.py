@@ -388,44 +388,67 @@ def test_resaving_an_untouched_yuk_twice_moves_no_ombor_figure(admin_client):
         assert _ombor_snapshot(admin_client, "LLDPE") == before
 
 
-def test_resaving_an_untouched_som_priced_yuk_keeps_its_som_narx(admin_client):
-    """A so'm lot survives an untouched Save — and now for the right reason.
+def test_resaving_a_legacy_priced_som_yuk_keeps_its_own_som_narx(admin_client):
+    """A lot carrying a narx of its own keeps it, bit-exact, through a Save.
 
-    This used to pass by luck: the narx box was painted with the DERIVED dollar
-    figure (1.6201) under a So'm picker, and nothing moved only because the row
-    was byte-identical to its initial and Django's has_changed() kept _save_lines
-    from writing it at all. Touching any other field removed that shield.
+    Such rows still exist: the old book had them and the importer still writes them.
+    Nothing can ACQUIRE one any more — the yuk form has no narx box to type into
+    (`ShipmentLineForm._lock_price`) — but a load that really did go at another price
+    is a fact about the past, and handing it back to the kelishuv because somebody
+    opened the yuk would move that lot's tannarx and the foyda of everything sold off
+    it, on a save that had nothing to do with either.
 
-    Since MoneyEntryFormMixin._seed_typed_side (crm/forms.py) the box holds the
-    so'm narx the operator actually agreed, so the round trip is correct rather
-    than merely skipped.
+    The narx pair is the part worth watching. `clean_price` nulls the box before the
+    mixin can read the row's own figure as something freshly typed and convert it a
+    second time; `_post_clean` then puts the two stored columns back untouched.
     """
-    lot = _lot(kg="1000", lot_typed="20000", contract_currency=UZS, lot_rate="12345")
-    assert lot.price_uzs == Decimal("20000.00")
+    lot = _lot(kg="1000", contract_typed="20000", contract_currency=UZS,
+               contract_rate="12345", lot_typed="25000", lot_rate="12345")
+    assert (lot.price, lot.price_uzs) == (Decimal("2.0251"), Decimal("25000.00"))
 
     for _ in range(2):
         page = admin_client.get(f"/shipments/{lot.shipment_id}/edit/")
-        # the box now shows the so'm side — there is no picker beside it any more,
-        # the row reads so'm because the kelishuv it hangs off was struck in so'm
+        # the box shows what the LOT costs — its own so'm narx, not the kelishuv's —
+        # and it reads so'm because the kelishuv it hangs off was struck in so'm
         row = page.context["lines"].forms[0]
-        assert row["price"].value() == Decimal("20000.00")
+        assert row.fields["price"].disabled
+        assert row["price"].value() == Decimal("25000.00")
         assert "currency" not in row.fields
         body = _rendered_post(page.context["form"])
         body.update(_rendered_formset_post(page.context["lines"]))
+        body["lines-0-kg"] = "900"              # and the row IS rewritten, not skipped
         resp = admin_client.post(f"/shipments/{lot.shipment_id}/edit/", body)
         assert resp.status_code == 302, resp.content.decode()[:1500]
 
         lot.refresh_from_db()
+        assert lot.kg == Decimal("900.000")
         assert lot.currency == UZS
-        assert lot.price_uzs == Decimal("20000.00")
-        assert lot.price == Decimal("1.6201")
+        assert (lot.price, lot.price_uzs) == (Decimal("2.0251"), Decimal("25000.00"))
+        assert lot.unit_price_uzs == Decimal("25000.00")
 
 
-# Regression guard. This was an xfail documenting the so'm-edit defect; it passes
-# since MoneyEntryFormMixin._seed_typed_side (crm/forms.py) opens a so'm row showing
-# its so'm figure. Kept as a test so the defect cannot come back.
-def test_correcting_the_kg_of_a_som_priced_lot_must_not_move_its_narx(admin_client):
-    lot = _lot(kg="1000", lot_typed="20000", contract_currency=UZS, lot_rate="12345")
+def test_a_narx_posted_onto_a_legacy_lot_cannot_replace_the_one_it_has(admin_client):
+    """The lock cuts both ways: a row keeps its own narx, and nobody can put a
+    different one there through this screen either."""
+    lot = _lot(kg="1000", contract_typed="20000", contract_currency=UZS,
+               contract_rate="12345", lot_typed="25000", lot_rate="12345")
+    page = admin_client.get(f"/shipments/{lot.shipment_id}/edit/")
+    body = _rendered_post(page.context["form"])
+    body.update(_rendered_formset_post(page.context["lines"]))
+    body["lines-0-price"] = "31000"
+    assert admin_client.post(f"/shipments/{lot.shipment_id}/edit/", body).status_code == 302
+
+    lot.refresh_from_db()
+    assert (lot.price, lot.price_uzs) == (Decimal("2.0251"), Decimal("25000.00"))
+
+
+# Regression guard. This was an xfail documenting the so'm-edit defect: the narx in
+# the box was re-read as dollars on the way back in and divided by the kurs. There is
+# no narx to re-read now — the lot is costed at its kelishuv's — but correcting the
+# kg must still leave what it costs exactly where it was.
+def test_correcting_the_kg_of_a_som_lot_must_not_move_its_narx(admin_client):
+    lot = _lot(kg="1000", contract_typed="20000", contract_currency=UZS,
+               contract_rate="12345")
 
     page = admin_client.get(f"/shipments/{lot.shipment_id}/edit/")
     body = _rendered_post(page.context["form"])
@@ -436,8 +459,8 @@ def test_correcting_the_kg_of_a_som_priced_lot_must_not_move_its_narx(admin_clie
 
     lot.refresh_from_db()
     assert lot.kg == Decimal("900.000")
-    assert lot.price_uzs == Decimal("20000.00"), "the agreed so'm narx moved by itself"
-    assert lot.price == Decimal("1.6201")
+    assert lot.unit_price_uzs == Decimal("20000.00"), "the agreed so'm narx moved by itself"
+    assert lot.unit_price == Decimal("1.6201")
 
 
 def test_editing_an_unrelated_field_on_the_yuk_moves_no_money(admin_client):

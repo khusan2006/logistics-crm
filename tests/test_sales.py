@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.utils import timezone
@@ -569,6 +569,63 @@ class TestMultipleProductsInOneSotuv:
         assert Sale.objects.count() == 1
 
 
+class TestSotuvlarBandsTheDays:
+    """Sana ustuni o'rniga — kun sarlavhasi.
+
+    The column repeated one date down twenty rows to say something that changes three
+    times on a page, and it sat in the widest slot on the table. As a band the date is
+    said once, over the sotuvlar of that day."""
+
+    def _sale_on(self, client, day, name):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-01")
+        customer = Customer.objects.create(name=name)
+        client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": day, "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "10", "price": "1.50"})})
+        return customer
+
+    def test_the_sana_column_is_gone(self, admin_client, db):
+        self._sale_on(admin_client, date.today(), "Bugungi")
+        html = admin_client.get("/sales/").content.decode()
+        assert '<th class="sticky-col">Sana</th>' not in html
+        assert '<th class="sticky-col">Mijoz</th>' in html
+
+    def test_a_band_per_day_newest_first(self, admin_client, db):
+        today = date.today()
+        self._sale_on(admin_client, today - timedelta(days=2), "Uch kun")
+        self._sale_on(admin_client, today, "Bugungi")
+        self._sale_on(admin_client, today - timedelta(days=1), "Kechagi")
+        days = admin_client.get("/sales/").context["days"]
+        assert [d["day"] for d in days] == [
+            today, today - timedelta(days=1), today - timedelta(days=2)]
+        assert [d["label"] for d in days] == ["Bugun", "Kecha", ""]
+        assert [len(d["blocks"]) for d in days] == [1, 1, 1]
+
+    def test_the_sotuvlar_of_one_day_share_one_band(self, admin_client, db):
+        today = date.today()
+        self._sale_on(admin_client, today, "Birinchi")
+        self._sale_on(admin_client, today, "Ikkinchi")
+        days = admin_client.get("/sales/").context["days"]
+        assert len(days) == 1 and len(days[0]["blocks"]) == 2
+
+    def test_the_band_is_drawn_and_names_the_day(self, admin_client, db):
+        self._sale_on(admin_client, date.today() - timedelta(days=3), "Eski")
+        html = admin_client.get("/sales/").content.decode()
+        assert '<tr class="day-row' in html
+        # An older day carries no word, so the band prints the date itself.
+        assert (date.today() - timedelta(days=3)).strftime("%-d-") in html
+
+    def test_the_flat_blocks_are_still_there_for_what_counts_them(
+            self, admin_client, db):
+        """`days` is how the table is drawn; `groups` is still every sotuv on the
+        page, which is what the pager and the chips are counted from."""
+        self._sale_on(admin_client, date.today(), "Bugungi")
+        resp = admin_client.get("/sales/")
+        assert len(resp.context["groups"]) == 1
+        assert resp.context["groups"][0]["first"].customer.name == "Bugungi"
+
+
 class TestReys:
     """Bitta buyurtma bir nechta mashinada ketadi — bitta sotuv, bir nechta reys.
 
@@ -774,7 +831,9 @@ class TestSotuvlarShowsWhatWasSoldTogether:
         self._post(admin_client, customer, {"brand": "LLDPE", "kg": "300", "price": "2.00"})
         assert Sale.objects.count() == 2
         html = admin_client.get("/sales/").content.decode()
-        assert html.count("<tr") == 2                 # the header row and the sotuv
+        # One sotuv row for both slices — counted by class, so the column header and
+        # the sana band over the day are not mistaken for rows of their own.
+        assert html.count('class="sale-row"') == 1
         assert "1.2 $/kg" in html and "1.3 $/kg" in html   # both lots' tannarx
 
     def test_the_detail_page_names_the_other_rows(self, admin_client, db):
@@ -895,7 +954,9 @@ class TestTheOneRowView:
         self._sotuv(admin_client)
         assert Sale.objects.count() == 2
         html = admin_client.get("/sales/").content.decode()
-        assert html.count("<tr") == 2                 # the header row and the sotuv
+        # One sotuv row, whatever it carried. Counted by class rather than by "<tr",
+        # which also catches the column header and the sana band over the day.
+        assert html.count('class="sale-row"') == 1
         assert "LLDPE" in html and "HDPE" in html
 
     def test_jami_is_the_whole_sotuv(self, admin_client, db):

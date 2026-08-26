@@ -11,8 +11,8 @@ to let through.
 """
 from decimal import Decimal
 
-from conftest import make_contract, supplier_payment_rows
-from crm.models import (ContractLine, SupplierPayment, own_side,
+from conftest import line_data, make_contract, supplier_payment_rows
+from crm.models import (ContractLine, ShipmentLine, SupplierPayment, own_side,
                         unspent_supplier_payment_pair)
 
 
@@ -82,24 +82,46 @@ def test_a_single_marka_kelishuv_still_fills_the_marka_in(admin_client, db):
 
 # ── the slices follow the trucks ──────────────────────────────────────────────
 
-def test_a_new_truck_pulls_back_money_that_spilled_to_the_next_marka(admin_client, db):
+def test_a_re_priced_marka_pulls_back_money_that_spilled_to_the_next_one(admin_client, db):
     """Pay 1 500 naming a marka that costs 1 000 and 500 spills to the next one.
-    Send that marka a truck at a higher narx and it now costs 5 000 — the 500 was
-    always its own money and has to come back, or the neighbour reads as paid for
-    goods nobody bought from them."""
+    Correct that marka's narx to 5.00 and it now costs 5 000 — the 500 was always its
+    own money and has to come back, or the neighbour reads as paid for goods nobody
+    bought from them.
+
+    The narx is the lever because it is the only one left: a truck is costed at its
+    kelishuv's price (`ShipmentLineForm`), so sending one can no longer make a marka
+    dearer or cheaper than the agreement already says it is. Correcting the kelishuv
+    is where that happens now, and `contract_edit` places the to'lovlar again."""
     contract = _two_marka()
     named = contract.lines.get(brand="209")
+    other = contract.lines.get(brand="7000")
     SupplierPayment.objects.create(contract=contract, contract_line=named,
                                    amount=Decimal("1500"), date="2026-07-06")
     assert _placed(contract) == {"209": Decimal("1000.00"), "7000": Decimal("500.00")}
 
-    admin_client.post(f"/shipments/{_send(admin_client, contract, named)}/", {})
+    _reprice(admin_client, contract, {named: "5.00", other: "1.00"})
     assert _placed(contract) == {"209": Decimal("1500.00"), "7000": Decimal("0")}
 
 
-def _send(admin_client, contract, line):
-    """A truck for one marka at 5.00/kg, through the dispatch screen — the trigger
-    is on the VIEW, so creating the Shipment directly would not exercise it."""
+def _reprice(admin_client, contract, prices):
+    """Correct the agreed narx of each marka, through the kelishuv screen."""
+    rows = [{"id": line.pk, "brand": line.brand, "kg": line.kg, "price": price}
+            for line, price in prices.items()]
+    resp = admin_client.post(f"/contracts/{contract.pk}/edit/", {
+        "partner": contract.partner_id, "currency": contract.currency,
+        "created": "2026-07-01", "note": "",
+        **line_data(*rows, initial=len(rows))})
+    assert resp.status_code in (200, 302), resp.status_code
+
+
+def _send(admin_client, contract, line, price=None):
+    """A truck for one marka, through the dispatch screen — the trigger is on the
+    VIEW, so creating the Shipment directly would not exercise it.
+
+    `price` is written straight onto the row afterwards, because the dispatch screen
+    has no narx box to type one into any more. That is how the importer and the
+    pre-lock book carry a load which really did go at a price of its own, and such a
+    row is still read as it stands — which is the case being set up here."""
     from crm.models import Shipment, ShipmentStatus
     resp = admin_client.post("/shipments/new/", {
         "contract": contract.pk, "status": ShipmentStatus.objects.first().pk,
@@ -108,10 +130,14 @@ def _send(admin_client, contract, line):
         "transport": "", "container": "", "note": "",
         "lines-TOTAL_FORMS": "1", "lines-INITIAL_FORMS": "0",
         "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000",
-        "lines-0-contract_line": line.pk, "lines-0-kg": "1000", "lines-0-price": "5.00",
+        "lines-0-contract_line": line.pk, "lines-0-kg": "1000",
     })
     assert resp.status_code in (200, 302), resp.status_code
-    return Shipment.objects.latest("pk").pk
+    pk = Shipment.objects.latest("pk").pk
+    if price is not None:
+        ShipmentLine.objects.filter(shipment_id=pk).update(
+            price=Decimal(price), price_uzs=Decimal(price) * Decimal("12000"))
+    return pk
 
 
 def test_a_deleted_truck_hands_back_what_the_marka_can_no_longer_cost(admin_client, db):
@@ -120,7 +146,8 @@ def test_a_deleted_truck_hands_back_what_the_marka_can_no_longer_cost(admin_clie
     not a settled marka."""
     contract = _two_marka()
     named = contract.lines.get(brand="209")
-    pk = _send(admin_client, contract, named)
+    # priced before the to'lov, so the marka already costs 5 000 when it is placed
+    pk = _send(admin_client, contract, named, price="5.00")
     payment = SupplierPayment.objects.create(contract=contract, contract_line=named,
                                              amount=Decimal("5000"), date="2026-07-08")
     assert _placed(contract)["209"] == Decimal("5000.00")

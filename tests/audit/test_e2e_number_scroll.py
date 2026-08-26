@@ -20,6 +20,8 @@ import pytest  # noqa: E402
 from accounts.models import User  # noqa: E402
 from crm.models import Contract, ContractLine, Partner  # noqa: E402
 
+from conftest import e2e_context  # noqa: E402
+
 pw = pytest.importorskip("playwright.sync_api")
 
 PASSWORD = "e2e-pass-123"
@@ -48,7 +50,7 @@ def world(transactional_db):
 
 def _open(browser, live_server):
     """The kelishuv form, which carries Nechta mashina — a plain number box."""
-    ctx = browser.new_context(viewport={"width": 1100, "height": 900})
+    ctx = e2e_context(browser, viewport={"width": 1100, "height": 900})
     page = ctx.new_page()
     page.goto(f"{live_server.url}/login/")
     page.fill("[name=username]", "e2eboss")

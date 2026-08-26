@@ -1847,38 +1847,69 @@ def _filter_shipments(request):
 LOADS_PER_DATE_PAGE = 50
 
 
+def _day_label(day):
+    """The WORD a date band goes by, or "" for a day that is only its date.
+
+    Only bugun and kecha get one. Those are the two the reader is actually looking
+    for, and the two a bare "24-avgust" makes them work out; every other day is
+    clearer as the date it is. The date itself is handed to the template as a date
+    object and named there, so the month keeps Django's l10n rather than being
+    spelled here — the same reason `_daterange_bar` does it."""
+    today = timezone.localdate()
+    if day == today:
+        return "Bugun"
+    if day == today - timedelta(days=1):
+        return "Kecha"
+    return ""
+
+
 def _loads_by_day(rows):
     """The Kelish sanasi view's grouping: one block per day, newest day first, with
     the loads still on the road gathered at the end.
 
     `rows` must already be ordered the way `_filter_shipments` orders them for this
     view — the blocks come out in whatever order the rows walk past, so the sort is
-    what puts Bugun on top and Hali kelmagan at the bottom, not this function.
-
-    The day itself is handed over as a date object and named in the template, so the
-    month keeps Django's l10n instead of being spelled here (same reason as
-    `_daterange_bar`). Only the two days that have a WORD rather than a date —
-    bugun, kecha — are labelled, since those are the ones the reader is looking for
-    and the ones a date would make them work out."""
-    today = timezone.localdate()
-    yesterday = today - timedelta(days=1)
+    what puts Bugun on top and Hali kelmagan at the bottom, not this function."""
     groups, by_day = [], {}
     for s in rows:
         g = by_day.get(s.arrived)
         if g is None:
-            label = ""
-            if s.arrived is None:
-                label = "Hali kelmagan"
-            elif s.arrived == today:
-                label = "Bugun"
-            elif s.arrived == yesterday:
-                label = "Kecha"
             g = by_day[s.arrived] = {
                 "key": s.arrived.isoformat() if s.arrived else "kelmagan",
-                "day": s.arrived, "label": label, "shipments": []}
+                "day": s.arrived, "shipments": [],
+                # The tail's own line: yo'ldagi yuklar are kept rather than dropped
+                # — Hammasi means hammasi, and a sort must not become a filter.
+                "note": "" if s.arrived else "hali yo'lda — taxminiy kelish sanasi bo'yicha",
+                # A yuk with no kelgan kun has nowhere on the calendar, so its block
+                # is named for the fact rather than for a date it has not got.
+                "label": _day_label(s.arrived) if s.arrived else "Hali kelmagan"}
             groups.append(g)
         g["shipments"].append(s)
     return groups
+
+
+def _sales_by_day(blocks):
+    """Sotuvlar banded by the day they were struck — one header per sana, and the
+    sotuvlar of that day under it.
+
+    The sana used to be a column, repeating the same date down twenty rows to say
+    something that changes three times on the page. As a band it is said once, and
+    the list reads the way the operator asks about it: what went out today, then what
+    went out yesterday.
+
+    `blocks` arrives in the list's own order (newest sotuv first), so the bands come
+    out newest-first by walking it — nothing is sorted here, and a page of the pager
+    bands exactly the rows it holds."""
+    days, by_day = [], {}
+    for block in blocks:
+        day = block["first"].date
+        band = by_day.get(day)
+        if band is None:
+            band = by_day[day] = {"key": day.isoformat(), "day": day,
+                                  "label": _day_label(day), "blocks": []}
+            days.append(band)
+        band["blocks"].append(block)
+    return days
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
@@ -3182,10 +3213,19 @@ def sale_list(request):
     sales, q, date_from, date_to = _filter_sales(request)
     page = Paginator(sales, 20).get_page(request.GET.get("page"))
     rows = page.object_list
+    groups = _sale_groups(rows, edited=_edited_today([s.pk for s in rows]))
     return render(request, "crm/sale_list.html",
                   {"page": page, "q": q,
-                   "groups": _sale_groups(
-                       rows, edited=_edited_today([s.pk for s in rows])),
+                   # `groups` is still every sotuv on the page, flat and in order;
+                   # `days` is the same blocks banded under their sana, which is what
+                   # the table draws. Both, because the two answer different
+                   # questions and the flat one is what the page is counted by.
+                   "groups": groups, "days": _sales_by_day(groups),
+                   # What the date band and the vazvrat panel have to span. Money is
+                   # not drawn for a skladchi at all, so the width is not a constant
+                   # — counted here rather than as a template expression every future
+                   # column would have to be added to by hand.
+                   "colspan": 3 + (6 if request.user.is_admin_role else 0),
                    "export_url": reverse("sale_list_export"),
                    "changed": request.GET.get("changed", "").strip(),
                    "new": request.GET.get("new", "").strip(),

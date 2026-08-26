@@ -1077,6 +1077,28 @@ def test_changed_today_finds_an_old_sale(admin_client, db):
     assert old.pk in everything and len(everything) == 2
 
 
+def test_the_vazvrat_caret_moved_with_the_sticky_column(admin_client, db):
+    """It used to ride on the Sana cell. Sana is a band over the day now, so the
+    caret follows the STICKY slot rather than the date — it has always been "the
+    handle on the left of the row", and losing it would leave the vazvrat panel with
+    no way to open."""
+    lot = _lot(kg="20000")
+    customer = _customer()
+    sale = _sale(admin_client, lot, customer, kg="4000", price="1.60",
+                 date="2026-07-18")
+    admin_client.post("/returns/new/", return_rows(
+        (sale, "1000"), customer=customer, date="2026-07-19"))
+
+    html = admin_client.get("/sales/").content.decode()
+    # The toggle cell is the Mijoz one now: same cell, carrying the caret AND the
+    # customer's name.
+    cell = html.split('class="sticky-col sale-toggle"', 1)[1].split("</td>", 1)[0]
+    assert "leg-expand" in cell
+    assert customer.name in cell
+    # …and the panel it opens is still there to be opened.
+    assert f'class="sale-detail" data-sale="{sale.pk}"' in html
+
+
 def test_the_chip_names_where_the_money_went(admin_client, db):
     """Three routes, three sentences. "mijozga qaytdi" for all of them read as cash
     handed over on a vazvrat where nothing had moved at all."""

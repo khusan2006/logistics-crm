@@ -1,0 +1,24 @@
+{% comment %}
+A date band across a list that is read in day order — the yuklar sorted by kelish
+sanasi, and the sotuvlar. One header row spanning the table, with the day's own rows
+under it.
+
+Expects `day` (a date, or None for a band that has none), `label` (the WORD it goes
+by — Bugun, Kecha, Hali kelmagan — or "" for a day that is only its date), `colspan`,
+`key`, and optionally `count` + `count_noun` and a `note`.
+
+Bugun and Kecha are spelled out with the date beside them: they are the two the
+reader scans for, and the two a bare "24-avgust" makes them work out. Every older day
+is simply its date. The month name is written HERE and not in the view so it keeps
+Django's l10n.
+{% endcomment %}
+<tr class="day-row{% if label == 'Bugun' %} is-today{% endif %}" data-group="{{ key }}">
+  <td colspan="{{ colspan }}">
+    <div class="day-head">
+      <span class="day-title">{% if label %}{{ label }}{% else %}{{ day|date:"j-F, Y" }}{% endif %}</span>
+      {% if label and day %}<span class="day-sub">{{ day|date:"j-F, Y" }}</span>{% endif %}
+      {% if count %}<span class="day-count">{{ count }} {{ count_noun }}</span>{% endif %}
+      {% if note %}<span class="day-note muted">{{ note }}</span>{% endif %}
+    </div>
+  </td>
+</tr>

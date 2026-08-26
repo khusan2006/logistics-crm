@@ -306,6 +306,18 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 html[data-theme="dark"] #theme-toggle .ico-moon { display: none; }
 html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 
+/* Yozuv (kiril / lotin). The page is served in lotin and converted to kiril in the
+   browser, so between parse and conversion there is a moment of the wrong alphabet
+   — hidden rather than shown, because a page that flickers through a second script
+   reads as a page that has loaded wrong. Set and cleared by base.html, never by CSS
+   alone: without JS the attribute never appears and nothing is ever hidden. */
+html[data-yozuv-wait] body { visibility: hidden; }
+/* The face is the script it switches TO, matching the Mavzu button above. */
+#yozuv-toggle { font-size: 12px; font-weight: 700; letter-spacing: 0.01em; }
+#yozuv-toggle .yozuv-kiril, #yozuv-toggle .yozuv-lotin { display: none; }
+html[data-yozuv="kiril"] #yozuv-toggle .yozuv-lotin { display: inline; }
+html[data-yozuv="lotin"] #yozuv-toggle .yozuv-kiril { display: inline; }
+
 .content { padding: 22px 24px 48px; max-width: none; width: 100%; margin: 0; }
 
 /* ============================================================
@@ -1483,6 +1495,17 @@ select.status-select, select.xmini, select.xpayer,
   background-image: none;
 }
 input::placeholder, textarea::placeholder { color: var(--text-faint); }
+/* A box that shows a figure rather than asking for one — the yuk's tan narx, read
+   off its kelishuv. Every browser greys a disabled input its own way, and left to
+   them it reads as a field that has broken rather than one that was never a
+   question. Muted text on the page's own surface, and no focus frame to promise an
+   edit that is not on offer. */
+input:disabled, select:disabled, textarea:disabled {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-style: dashed;
+  cursor: default;
+}
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
@@ -2737,14 +2760,21 @@ ul.errorlist li::before { content: "⚠ "; }
 .kelishuv-title { font-weight: 700; color: var(--accent); }
 .kelishuv-sub { color: var(--text); font-weight: 600; }
 .kelishuv-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
-/* Kelish sanasi bo'yicha: the same band, holding a day instead of a kelishuv. The
-   accent stripe and the accent title come off it — a kod is a thing you can open and
-   a date is not, so wearing the link colour would promise a destination this header
-   has not got. Bugun keeps them: it is the row the sort exists to put on top. */
-.kelishuv-row--day > td { box-shadow: inset 3px 0 0 var(--border-strong); }
-.kelishuv-row--day .kelishuv-title { color: var(--text); }
-.kelishuv-row--day.is-today > td { box-shadow: inset 3px 0 0 var(--accent); }
-.kelishuv-row--day.is-today .kelishuv-title { color: var(--accent); }
+/* A date band — the same shape as the kelishuv header above, holding a day. Shared
+   by the yuklar sorted on kelish sanasi and by Sotuvlar, where it replaced a Sana
+   column that repeated one date down twenty rows.
+
+   No accent stripe and no accent title: a kelishuv kod is a thing you can open and a
+   date is not, so wearing the link colour would promise a destination this header
+   has not got. Bugun takes them back — it is the band both lists exist to put on
+   top. */
+.day-row > td { background: var(--table-head); padding: 9px 14px; border-top: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--border-strong); }
+.day-row.is-today > td { box-shadow: inset 3px 0 0 var(--accent); }
+.day-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.day-title { font-weight: 700; color: var(--text); }
+.day-row.is-today .day-title { color: var(--accent); }
+.day-sub { color: var(--text-muted); font-weight: 600; }
+.day-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;

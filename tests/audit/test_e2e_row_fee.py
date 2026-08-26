@@ -4,6 +4,8 @@ os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "1")
 import pytest
 from accounts.models import User
 from crm.models import Partner, Shipment, ShipmentStatus
+from conftest import e2e_context  # noqa: E402
+
 pw = pytest.importorskip("playwright.sync_api")
 
 PASSWORD = "e2e-pass-123"
@@ -15,7 +17,7 @@ def browser():
 
 @pytest.fixture
 def page(browser):
-    ctx = browser.new_context(); pg = ctx.new_page(); yield pg; ctx.close()
+    ctx = e2e_context(browser); pg = ctx.new_page(); yield pg; ctx.close()
 
 @pytest.fixture
 def ship(transactional_db):

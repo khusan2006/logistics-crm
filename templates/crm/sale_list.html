@@ -50,8 +50,13 @@
 <div class="table-wrap">
 <table>
   <tr>
-    <th class="sticky-col">Sana</th>
-    <th>Mijoz</th>
+    {% comment %}
+    No Sana column. It repeated one date down twenty rows to say something that
+    changes three times on a page, and it was the widest thing in the sticky slot.
+    The date is a BAND over the rows of that day now — said once, where the operator
+    reads it: what went out today, then what went out yesterday.
+    {% endcomment %}
+    <th class="sticky-col">Mijoz</th>
     <th>Mahsulotlar</th>
     <th>Kg</th>
     {% comment %}
@@ -75,7 +80,9 @@
   because that is the only way they are ever read: the mijoz owes one qarz, not one
   per lot the granula came off.
   {% endcomment %}
-  {% for g in groups %}
+  {% for d in days %}
+  {% include "crm/_day_row.html" with day=d.day label=d.label key=d.key colspan=colspan count=d.blocks|length count_noun="sotuv" note="" %}
+  {% for g in d.blocks %}
   <tr class="sale-row"{% if g.returns %} data-sale="{{ g.first.pk }}"{% endif %}>
     {% comment %}
     The caret appears only on a sotuv that HAS vazvratlar — an expander that opens an
@@ -83,19 +90,22 @@
     Yuklar, and it toggles the same way: the whole cell is the hit area, the row
     beneath it holds the detail.
     {% endcomment %}
-    <td class="sticky-col{% if g.returns %} sale-toggle{% endif %}"
-        {% if g.returns %}data-sale="{{ g.first.pk }}" title="Vazvratlarni ochish"{% endif %}>
-      {% if g.returns %}
-      <button type="button" class="leg-expand" data-sale="{{ g.first.pk }}"
-              title="Vazvratlar">&#9656;</button>
-      {% endif %}
-      {{ g.first.date }}
-    </td>
+
     {% comment %}
     Plain text for a skladchi: the sotuv's own page is admin-only and carries the
     narx, so a link there would be a 403 dressed up as a way in.
     {% endcomment %}
-    <td>
+    <td class="sticky-col{% if g.returns %} sale-toggle{% endif %}"
+        {% if g.returns %}data-sale="{{ g.first.pk }}" title="Vazvratlarni ochish"{% endif %}>
+      {% comment %}
+      The vazvrat caret rode on the Sana cell, which was the sticky one. It follows
+      the sticky slot rather than the date: it has always been "the handle on the
+      left of the row", and the whole cell stays the hit area.
+      {% endcomment %}
+      {% if g.returns %}
+      <button type="button" class="leg-expand" data-sale="{{ g.first.pk }}"
+              title="Vazvratlar">&#9656;</button>
+      {% endif %}
       {% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}
       {% comment %}
       Only on the day itself: a marker that never goes away marks nothing. Blue for a
@@ -180,7 +190,7 @@
   {% endcomment %}
   {% if g.returns %}
   <tr class="sale-detail" data-sale="{{ g.first.pk }}" hidden>
-    <td colspan="{% if user.is_admin_role %}10{% else %}4{% endif %}">
+    <td colspan="{{ colspan }}">
       <div class="legs-inline">
         <div class="load-panel-head">
           <strong>Vazvratlar</strong>
@@ -224,6 +234,7 @@
     </td>
   </tr>
   {% endif %}
+  {% endfor %}
   {% endfor %}
 </table>
 </div>

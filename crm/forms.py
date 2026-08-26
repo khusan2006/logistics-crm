@@ -821,6 +821,14 @@ def _clean_number(value):
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _agreed_price(line):
+    """A kelishuv product's narx in the currency it was struck in.
+
+    Same rule `own_side` follows for every qarz: a so'm kelishuv's agreed figure is
+    the so'm one, and the dollar twin beside it is only a derivation."""
+    return line.price_uzs if line.is_som else line.price
+
+
 class ContractLineChoiceSelect(forms.Select):
     """A product <select> listing every kelishuv's products at once. Each option
     carries the kelishuv it belongs to, its qolgan kg and its agreed price, so the
@@ -833,7 +841,10 @@ class ContractLineChoiceSelect(forms.Select):
         if instance is not None:
             option["attrs"]["data-contract"] = str(instance.contract_id)
             option["attrs"]["data-remaining"] = _clean_number(instance.remaining_kg)
-            option["attrs"]["data-price"] = _clean_number(instance.price)
+            # The narx in the currency it was AGREED in — the yuk form paints it
+            # into a read-only box, and a so'm kelishuv's dollar twin painted there
+            # would read as $/kg on a figure nobody ever quoted in dollars.
+            option["attrs"]["data-price"] = _clean_number(_agreed_price(instance))
         return option
 
 
@@ -1042,7 +1053,15 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
 
     Like the kelishuv row, it neither asks for a valyuta nor a kurs: a truck is
     priced in the currency of the kelishuv it is drawn from, and that is the currency
-    its goods land in `shipped_value_own`."""
+    its goods land in `shipped_value_own`.
+
+    It does not ask for a NARX either. Tannarx is agreed once, on the kelishuv, and
+    a yuk only reads it: the box below is shown so the operator can see what the
+    load is costed at, but it is disabled and whatever it holds is thrown away on
+    clean. `price` therefore stays NULL, which is precisely what makes
+    `ShipmentLine.unit_price` follow the kelishuv — edit the agreed narx and every
+    truck drawn from it re-prices at once, instead of staying frozen at the figure
+    the form happened to copy down on the day it was created."""
 
     #: blank narx means "use the kelishuv's" — see ShipmentLine.unit_price
     allow_blank = True
@@ -1055,6 +1074,9 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Read here and nowhere later: _post_clean is about to write None over both,
+        # and by then the row would look like it never had a narx of its own.
+        self._own_pair = (self.instance.price, self.instance.price_uzs)
         # Likewise per product: a fully-shipped line is not offered as a lot, but
         # the line already on this yuk stays selectable while editing it.
         base = (ContractLine.objects.select_related("contract")
@@ -1070,6 +1092,47 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
             lambda ln: f"{ln.contract.code} · {ln.brand} · "
                        f"{_clean_number(ln.remaining_kg)} kg qolgan · "
                        f"{rate(ln.price, ln.price_uzs, ln.currency)}")
+        self._lock_price()
+
+    def _lock_price(self):
+        """Turn the narx box into a window onto the kelishuv.
+
+        `disabled` is Django's own field flag, not just an HTML attribute: the posted
+        value is ignored and `initial` is used instead, so an operator (or a crafted
+        POST) cannot write a narx onto a truck. The box is filled from the kelishuv
+        product — by the server for a row that already has one, by base.html's
+        `prefillFromLine` the moment one is picked — and `clean_price` drops whatever
+        it shows before it can reach the row."""
+        price = self.fields["price"]
+        price.disabled = True
+        line = self._chosen_line()
+        if line is None:
+            price.label = "1 kg narxi (kelishuvdan)"
+        elif self._own_pair[0] is not None:
+            # A legacy row really did go at a narx of its own, so that is what it is
+            # costed at and what the screen has to show. Read-only all the same: it
+            # is a fact about a load that has already shipped.
+            price.label = f"1 kg narxi ({currency_suffix(line.currency)})"
+            self.initial["price"] = (self._own_pair[1] if line.is_som
+                                     else self._own_pair[0])
+        else:
+            price.label = f"1 kg narxi ({currency_suffix(line.currency)}, kelishuvdan)"
+            self.initial["price"] = _agreed_price(line)
+
+    def _chosen_line(self):
+        """The kelishuv product this row hangs off: the saved one, or — on a form
+        handed back after a validation error — the one that was posted.
+
+        The second half is what keeps a rejected form readable. A row that has never
+        been saved has no `contract_line` on its instance, and `prefillFromLine` only
+        fires on a change the operator has already made, so without this the whole
+        screen comes back with empty narx boxes beside the error they have to fix."""
+        if self.instance.contract_line_id:
+            return self.instance.contract_line
+        posted = self.data.get(self.add_prefix("contract_line")) if self.is_bound else None
+        if posted and str(posted).isdigit():
+            return self.fields["contract_line"].queryset.filter(pk=posted).first()
+        return None
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
@@ -1078,10 +1141,29 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         return kg
 
     def clean_price(self):
-        price = self.cleaned_data.get("price")
-        if price is not None and price <= 0:
-            raise forms.ValidationError("Narx musbat bo'lishi kerak")
-        return price
+        """Always nothing. The box only ever displayed a narx it was handed, and
+        storing that figure here would freeze the truck at today's agreement — the
+        single bug this whole form exists to avoid. NULL means "ask the kelishuv",
+        and the mixin nulls the so'm twin alongside it (see `allow_blank`)."""
+        return None
+
+    def _post_clean(self):
+        """...unless the row already had one, which it then keeps.
+
+        Legacy rows — imported, or entered before this box was locked — record loads
+        that really did go at a price of their own, and that is a fact about the past.
+        Handing one back to the kelishuv because somebody opened the yuk to fix a
+        container number would move that lot's tannarx, and the foyda of everything
+        already sold off it, on a save that had nothing to do with either. Nothing can
+        ACQUIRE a narx of its own any more, which is what the rule was about.
+
+        Put back as the stored PAIR rather than re-derived: `clean_price` has to null
+        the narx before the mixin sees it — left in place the row's own figure is read
+        as something the operator just typed and converted a second time, at a kurs
+        that has since moved — so the exact two columns go back afterwards."""
+        super()._post_clean()
+        if self._own_pair[0] is not None:
+            self.instance.price, self.instance.price_uzs = self._own_pair
 
     def clean(self):
         # Seeded before the mixin converts, same as the kelishuv row — except the

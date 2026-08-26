@@ -261,11 +261,41 @@ def test_shipment_own_price_drives_value_and_landed_cost(admin_client, db):
 
 
 def test_shipment_form_price_prefills_from_contract(db):
-    """Each product option carries data-price so the form JS can prefill that row's
-    1 kg narxi from the kelishuv."""
+    """Each product option carries data-price so the form JS can paint that row's
+    1 kg narxi with the kelishuv's."""
     from crm.forms import ShipmentLineForm
     _contract()
     assert "data-price" in str(ShipmentLineForm())
+
+
+def test_the_narx_box_on_a_yuk_is_read_only(db):
+    """Tannarx is agreed once, on the kelishuv. The yuk form shows it so the operator
+    can see what the load costs, and renders it disabled so it cannot be typed over —
+    a truck carrying a narx of its own would stop following the agreement."""
+    from crm.forms import ShipmentLineForm
+    _contract()
+    form = ShipmentLineForm()
+    assert form.fields["price"].disabled
+    assert "disabled" in str(form["price"])
+    assert "kelishuvdan" in str(form.fields["price"].label)
+
+
+def test_a_yuk_created_through_the_form_inherits_the_kelishuv_narx(admin_client, db):
+    """The rule end to end: nothing is stored on the truck — a posted narx included —
+    so correcting the agreed price re-costs every load already drawn from it."""
+    c = _contract()
+    _post_shipment(admin_client, c, kg="400", price="9.99")
+    line = ShipmentLine.objects.get()
+    assert line.price is None and line.price_uzs is None
+    assert line.unit_price == Decimal("1.00")
+
+    agreed = c.lines.first()
+    agreed.price, agreed.price_uzs = Decimal("1.50"), Decimal("18000")
+    agreed.save()
+
+    line.refresh_from_db()
+    assert line.unit_price == Decimal("1.50")
+    assert line.shipment.goods_value == Decimal("600.00")
 
 
 def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db):
@@ -426,7 +456,7 @@ class TestKelishSanasiSort:
         # The header band is a day now. The kelishuv is still named on each row and
         # inside the yuk's own panel — that is where the assertion has to stop.
         assert f'kelishuv-title">Kelishuv {c.code}' not in html
-        assert "kelishuv-row--day" in html
+        assert '<tr class="day-row' in html         # the shared date band instead
 
     def test_hammasi_still_groups_by_kelishuv_when_the_sort_is_off(self, admin_client, db):
         c, *_rest = self._fleet()
