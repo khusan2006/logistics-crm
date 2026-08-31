@@ -186,3 +186,55 @@ def test_a_translator_gets_only_the_two_lists_they_can_read(translator_client, d
 def test_a_skladchi_can_take_the_ombor_but_not_the_kassa(skladchi_client, db):
     assert skladchi_client.get("/ombor/export.xlsx").status_code == 200
     assert skladchi_client.get("/kassa/export.xlsx?davr=all").status_code == 403
+
+
+# ── The columns a role may not read ───────────────────────────────────────────
+#
+# Status codes above say WHICH files a role may take. These say WHAT is inside them:
+# a 200 on a sheet carrying the very figures the page hides is the leak, not the fix.
+
+CONTRACT_MONEY_COLUMNS = ["Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
+                          "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
+
+OMBOR_COST_COLUMNS = ["Tan narx eng past ($)", "Tan narx eng baland ($)",
+                      "Tan narx eng past (so'm)", "Tan narx eng baland (so'm)"]
+
+
+def _headers(resp, index=0):
+    return [c.value for c in _sheet(resp, index)[1]]
+
+
+def test_the_contract_file_holds_no_money_for_a_translator(
+        admin_client, translator_client, db):
+    """Kelishuvlar hides narx / jami / qarz from a tarjimon, so its Excel must too."""
+    make_contract(brand="LLDPE", kg="1000", price="1.20")
+
+    admin_headers = _headers(admin_client.get("/contracts/export.xlsx"))
+    assert all(col in admin_headers for col in CONTRACT_MONEY_COLUMNS)
+
+    resp = translator_client.get("/contracts/export.xlsx")
+    headers = _headers(resp)
+    for col in CONTRACT_MONEY_COLUMNS:
+        assert col not in headers, col
+    # Still the kelishuvlar sheet, just without the ledger.
+    assert "Marka" in headers and "Kg" in headers and "Yuborilgan kg" in headers
+    rows = _rows(resp)
+    assert rows and all(len(row) == len(headers) for row in rows)
+
+
+def test_the_ombor_file_holds_no_tan_narx_for_a_skladchi(
+        admin_client, skladchi_client, db):
+    """Ombor hides tan narx from a skladchi — the margin is not theirs to read."""
+    # Only an arrived truck's lines are in the ombor, so the row has to have landed.
+    make_lot(kg="500", status=ShipmentStatus.arrival(), arrived="2026-07-16")
+
+    admin_headers = _headers(admin_client.get("/ombor/export.xlsx"))
+    assert all(col in admin_headers for col in OMBOR_COST_COLUMNS)
+
+    resp = skladchi_client.get("/ombor/export.xlsx")
+    headers = _headers(resp)
+    for col in OMBOR_COST_COLUMNS:
+        assert col not in headers, col
+    assert "Marka" in headers and "Qoldiq kg" in headers and "Oxirgi kelgan" in headers
+    rows = _rows(resp)
+    assert rows and all(len(row) == len(headers) for row in rows)

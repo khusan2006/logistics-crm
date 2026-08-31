@@ -99,9 +99,10 @@ def test_status_tabs_have_per_status_counts(admin_client, db):
     assert resp.status_code == 200
     tabs = resp.context["tabs"]
     names = [t["status"].name for t in tabs]
-    # no tab for the arrival status — those loads live on the Yakunlangan page
-    assert names == list(ShipmentStatus.objects.filter(is_arrival=False)
-                         .values_list("name", flat=True))
+    # This list's own chain, and no tab for the arrival status — those loads live on
+    # the Yakunlangan page. The birja holatlar belong to the other list entirely.
+    assert names == list(ShipmentStatus.for_kind(birja=False)
+                         .filter(is_arrival=False).values_list("name", flat=True))
     by_name = {t["status"].name: t["count"] for t in tabs}
     assert by_name["Yo'lda"] == 2 and by_name["Bojxona"] == 1
     assert resp.context["total"] == 3

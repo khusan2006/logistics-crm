@@ -84,11 +84,17 @@
         The tarjimon's whole app: Kelishuvlar to read, Yuklar to read and to keep the
         haydovchi and konteyner current. Nothing else in this group is theirs.
         {% endcomment %}
-        <a class="nav-item {% if 'contract' in url_name %}active{% endif %}" href="{% url 'contract_list' %}">
+        {% comment %}
+        `not 'birja' in url_name` because the birja pages are the SAME views under a
+        second name (birja_contract_list), so the substring test below matches them
+        too — and both Kelishuvlar links would light at once.
+        {% endcomment %}
+        <a class="nav-item {% if 'contract' in url_name and 'birja' not in url_name %}active{% endif %}" href="{% url 'contract_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
           <span>Kelishuvlar</span>
         </a>
-        <a class="nav-item {% if 'shipment' in url_name %}active{% endif %}" href="{% url 'shipment_list' %}">
+        {# Same reason as Kelishuvlar above. #}
+        <a class="nav-item {% if 'shipment' in url_name and 'birja' not in url_name %}active{% endif %}" href="{% url 'shipment_list' %}">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>
           <span>Yuklar</span>
         </a>
@@ -106,6 +112,30 @@
           <span>Bojxona</span>
         </a>
         {% endif %}
+      </div>
+      {% endif %}
+
+      {% comment %}
+      Birja — granula bought on the exchange here rather than agreed with a hamkor in
+      Eron. Its own group and not two more links under Logistika: those two ARE the
+      Logistika pair, and a second Kelishuvlar sitting beside the first would be read
+      as a filter of it rather than as a different set of books.
+
+      Admin only, and the views enforce it themselves. A tarjimon's whole job is the
+      Eron road, so nothing on this group is theirs — the same reason Logistlar and
+      Bojxona sit behind the guard above.
+      {% endcomment %}
+      {% if user.is_admin_role %}
+      <div class="nav-group">
+        <div class="nav-group-label">Birja</div>
+        <a class="nav-item {% if url_name == 'birja_contract_list' %}active{% endif %}" href="{% url 'birja_contract_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></span>
+          <span>Birja kelishuvlar</span>
+        </a>
+        <a class="nav-item {% if url_name == 'birja_shipment_list' %}active{% endif %}" href="{% url 'birja_shipment_list' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>
+          <span>Birja yuklar</span>
+        </a>
       </div>
       {% endif %}
 

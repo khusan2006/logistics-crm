@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% load crm_extras %}
-{% block title %}Yuklar · GranulaLog{% endblock %}
-{% block topbar_title %}Yuklar{% endblock %}
+{% block title %}{{ page_title }} · GranulaLog{% endblock %}
+{% block topbar_title %}{{ page_title }}{% endblock %}
+{% comment %}
+Two lists, one template. `birja` says which: the loads coming off the Eron road, or
+the ones bought on the exchange here. A birja yuk IS a yuk — same kelishuv blocks,
+same holat tabs, same Kelish sanasi ordering — so what the flag switches off is only
+what belongs to crossing a border: the QR pills, the QR marker and icon, and the
+Bojxona to'lanmagan group. See crm.views.shipment_list.
+{% endcomment %}
 {% comment %}
 The guard sits INSIDE the block. Wrapping `{% block %}` in `{% if %}` does nothing:
 blocks are resolved by template inheritance before any condition around them runs, so
@@ -9,7 +16,7 @@ the old outer `{% if %}` was inert and a tarjimon saw "Yuk qo'shish" — a butto
 403s on click. shipment_create has always been admin-only; this is what makes the
 screen say so.
 {% endcomment %}
-{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'shipment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yuk qo'shish</a>{% endif %}{% endblock %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url create_url %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Birja yuki qo'shish{% else %}Yuk qo'shish{% endif %}</a>{% endif %}{% endblock %}
 {% block content %}
 
 {% comment %}
@@ -43,7 +50,7 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     {% if default_tab %}<input type="hidden" name="holat" value="{{ default_tab }}">{% endif %}
     <div class="toolbar-search{% if q %} is-active{% endif %}">
       <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="search" name="q" value="{{ q }}" placeholder="{% if show_all %}Barcha yuklar orasidan qidirish…{% else %}Transport, konteyner, marka yoki hamkor bo'yicha qidirish…{% endif %}" autocomplete="off" aria-label="Yuk qidirish">
+      <input type="search" name="q" value="{{ q }}" placeholder="{% if show_all %}Barcha yuklar orasidan qidirish…{% elif birja %}Transport, konteyner yoki marka bo'yicha qidirish…{% else %}Transport, konteyner, marka yoki hamkor bo'yicha qidirish…{% endif %}" autocomplete="off" aria-label="Yuk qidirish">
       {# Clears the search term only — the Hammasi and QR toggles stay where they are. #}
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
@@ -81,12 +88,20 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     The count on QR yo'q is loads whose planned QR day has come and gone with no kod —
     the ones actually worth chasing, and the reason to press it at all.
     {% endcomment %}
+    {% comment %}
+    Not on the birja list. A QR kod is what gets a driver off the Eron border queue,
+    and no birja load has ever crossed one — both pills would answer the same for
+    every row. `_filter_shipments` refuses the param there too, so a hand-typed
+    `?qr=` narrows nothing either.
+    {% endcomment %}
+    {% if not birja %}
     <a class="btn qr-filter{% if qr != 'bor' %} btn-ghost{% endif %}"
        href="{% if qr == 'bor' %}{% querystring qr=None page=None %}{% else %}{% querystring qr='bor' page=None %}{% endif %}"
        title="{% if qr == 'bor' %}Saralashni bekor qilish{% else %}Faqat QR kod berilgan yuklar{% endif %}">QR bor</a>
     <a class="btn qr-filter qr-filter--no{% if qr != 'yoq' %} btn-ghost{% endif %}"
        href="{% if qr == 'yoq' %}{% querystring qr=None page=None %}{% else %}{% querystring qr='yoq' page=None %}{% endif %}"
        title="{% if qr == 'yoq' %}Saralashni bekor qilish{% else %}Faqat QR kod berilmagan yuklar{% endif %}">QR yo'q{% if qr_waiting_count %}<span class="qr-waiting" title="{{ qr_waiting_count }} ta yukning QR kuni o'tib ketgan, kod hali berilmagan">{{ qr_waiting_count }}</span>{% endif %}</a>
+    {% endif %}
     {% comment %}
     Kelish sanasi bo'yicha — bugun kelgan yuklar tepada, keyin kecha kelganlari, and
     on down the calendar. It clears itself when pressed while active, the way the QR
@@ -161,7 +176,8 @@ inside a view with no control left to leave it by.
   Drawn even at zero: an empty group is the good news this screen otherwise has no
   way to deliver, and a pill that vanishes at 0 can only say "look elsewhere".
   {% endcomment %}
-  {% if user.is_admin_role %}
+  {# Nothing to clear on a birja yuk, so no group to send the operator into. #}
+  {% if user.is_admin_role and not birja %}
   <a class="status-tab status-tab--danger status-tab--link{% if customs %} is-active{% endif %}"
      href="{% if customs %}{% querystring customs=None page=None %}{% else %}{% querystring customs=1 page=None %}{% endif %}"
      title="{% if customs %}Saralashni bekor qilish{% else %}Omborga yetib kelgan, lekin bojxona xarajati hali kiritilmagan yuklar{% endif %}">Bojxona to'lanmagan <span class="status-tab-count">{{ customs_pending_count }}</span></a>
@@ -225,7 +241,7 @@ inside a view with no control left to leave it by.
   {% for s in g.shipments %}
   <tr data-status="{{ s.status_id }}" data-overdue="{% if s.is_overdue %}1{% else %}0{% endif %}"
       data-group="{{ g.key }}"
-      class="load-row{% if s.is_overdue %} is-overdue{% endif %}{% if s.has_qr %} has-qr{% elif s.qr_overdue %} qr-late{% endif %}">
+      class="load-row{% if birja %} load-row--birja{% endif %}{% if s.is_overdue %} is-overdue{% endif %}{% if s.has_qr %} has-qr{% elif s.qr_overdue %} qr-late{% endif %}">
     {% comment %}
     The row's left bar is the QR marker: green once the kod is given, yellow while
     it is not. A kechikkan load keeps its red there too — the bar splits in half and
@@ -238,7 +254,7 @@ inside a view with no control left to leave it by.
     one, and the bar is where that difference is already being read.
     {% endcomment %}
     <td class="sticky-col load-toggle" data-load="{{ s.pk }}"
-        title="{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }}{% else %}QR kod berilmagan{% if s.qr_date %} · reja: {{ s.qr_date }}{% if s.qr_overdue %} · {{ s.qr_days_late }} kun kechikdi{% endif %}{% endif %}{% endif %} · bosqichlar va xarajatlarni ochish">
+        title="{% if not birja %}{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }}{% else %}QR kod berilmagan{% if s.qr_date %} · reja: {{ s.qr_date }}{% if s.qr_overdue %} · {{ s.qr_days_late }} kun kechikdi{% endif %}{% endif %}{% endif %} · {% endif %}bosqichlar va xarajatlarni ochish">
       <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
     </td>
@@ -249,7 +265,7 @@ inside a view with no control left to leave it by.
     <td class="num">{{ s.kg|floatformat:"-3" }}</td>
     {% if user.is_admin_role %}
     <td class="num">
-      <div>{% money_both s.goods_value s.goods_value_uzs %}</div>
+      <div>{% money_both s.goods_value s.goods_value_uzs s.contract.currency %}</div>
       <div class="muted load-sub">{{ s.lines.all|length }} mahsulot</div>
     </td>
     {% endif %}
@@ -355,11 +371,13 @@ inside a view with no control left to leave it by.
       extra click buys a `qr_given` that can be trusted — and the modal is still the
       way back, since submitting it empty clears the mark.
       {% endcomment %}
+      {% if not birja %}
       <a class="icon-action act-qr{% if s.has_qr %} is-on{% elif s.qr_overdue %} is-late{% endif %}"
          href="{% url 'shipment_set_qr' s.pk %}" data-modal
          title="{% if s.has_qr %}QR kod berilgan: {{ s.qr_given }} — sanani o'zgartirish yoki belgini olish{% elif s.qr_overdue %}QR kod {{ s.qr_date }} ga rejalashtirilgan, {{ s.qr_days_late }} kun berilmagan{% else %}QR kod berildi deb belgilash{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M21 14v3"/><path d="M17 21h4"/><path d="M14 21h0"/></svg>
       </a>
+      {% endif %}
       <a class="icon-action act-extend" href="{% url 'shipment_extend' s.pk %}" data-modal title="Muddatni uzaytirish">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </a>
@@ -417,6 +435,7 @@ inside a view with no control left to leave it by.
             <span class="lf-value">{{ s.current_transport|default:"—" }}</span>
             {% if s.container %}<span class="lf-sub">Konteyner: {{ s.container }}</span>{% endif %}
           </div>
+          {% if not birja %}
           <div class="lf">
             <span class="lf-label">QR kod</span>
             <span class="lf-value qr-fact">{% if s.has_qr %}Berilgan · {{ s.qr_given }}{% else %}Berilmagan{% endif %}</span>
@@ -427,6 +446,7 @@ inside a view with no control left to leave it by.
             {% endcomment %}
             {% if s.qr_date %}<span class="lf-sub{% if s.qr_overdue %} lf-sub--warn{% endif %}">Beriladigan kun: {{ s.qr_date }}{% if s.qr_overdue %} · {{ s.qr_days_late }} kun kechikdi, hali berilmagan{% endif %}</span>{% endif %}
           </div>
+          {% endif %}
           {% if s.responsible %}
           <div class="lf">
             <span class="lf-label">Mas'ul shaxs</span>
@@ -443,7 +463,7 @@ inside a view with no control left to leave it by.
           {% if user.is_admin_role %}
           <div class="lf">
             <span class="lf-label">Yuk qiymati</span>
-            <span class="lf-value">{% money_both s.goods_value s.goods_value_uzs %}</span>
+            <span class="lf-value">{% money_both s.goods_value s.goods_value_uzs s.contract.currency %}</span>
             <span class="lf-sub">{{ s.kg|floatformat:"-3" }} kg</span>
           </div>
           {% for ln in s.lines.all %}

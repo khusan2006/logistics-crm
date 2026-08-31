@@ -7,6 +7,32 @@ customer payments/debts — plus a money overview (Kassa), a filterable reports
 dashboard, Excel exports, a Telegram overdue-shipments digest, and role-based
 access (admin vs. translator).
 
+## Birja
+
+Not every load comes from Iran any more: some granula is bought on the exchange
+(**birja**) inside Uzbekistan. Those purchases get two screens of their own —
+**Birja kelishuvlar** and **Birja yuklar** — and nothing else. Everything
+downstream stays one set of books: a birja load lands in the same Ombor, is sold
+through the same Sotuvlar, and its money runs through the same Kassa, Qarzlar
+and Hisobotlar.
+
+That works because a birja kelishuv **is** a `Contract` and a birja yuk **is** a
+`Shipment`. What separates them is the counterparty: a singleton `Partner` row
+flagged `is_birja`, created on first use by `crm.models.birja_partner()`. It also
+mints the codes — `slugify("Birja")` is `birja`, so the existing per-hamkor
+counter hands out `birja-1`, `birja-2`, … the same way it hands out `sobir-3`.
+
+A birja load carries no **QR kod** and no **bojxona**: it never crossed a border,
+so those fields are off its form, off its list, and excluded from the "Bojxona
+to'lanmagan" group. Its holat chain is separate too — `ShipmentStatus.scope` is
+`hamkor`, `birja` or `umumiy`, and the arrival status is the one row both chains
+share, since reaching it is what turns any yuk into a warehouse lot. The birja
+statuses ship as placeholders (**Sotib olindi → Yuklandi → Yetkazilmoqda →
+Omborga yetib keldi**) and are meant to be renamed on the Holatlar page once the
+real chain is known.
+
+The Birja pages are admin-only — a tarjimon's job is the Iran road.
+
 ## Stack
 
 Django 6, Postgres (production) / SQLite (local preview), gunicorn +

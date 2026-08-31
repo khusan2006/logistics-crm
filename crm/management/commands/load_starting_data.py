@@ -21,7 +21,7 @@ from django.db import transaction
 from crm.models import (
     Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus, SupplierPayment,
 )
-from crm.seeding import OWNER_PASSWORD, OWNER_USERNAME, ensure_owner, wipe_business_data
+from crm.seeding import OWNER_USERNAME, ensure_owner, wipe_business_data
 
 PARTNERS = [
     {"name": "Pars Polymer Co.", "phone": "+98 912 440 1122", "city": "Tehron",
@@ -89,7 +89,7 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             wipe_business_data()
-            owner = ensure_owner()
+            owner, owner_password = ensure_owner()
             self._load(owner)
 
         self.stdout.write(self.style.SUCCESS(
@@ -97,9 +97,11 @@ class Command(BaseCommand):
             f"{Contract.objects.count()} kelishuv, {SupplierPayment.objects.count()} to'lov, "
             f"{Shipment.objects.count()} yuk."
         ))
-        self.stdout.write(self.style.WARNING(
-            f"Egasi: {OWNER_USERNAME} / {OWNER_PASSWORD} — prodda parolni o'zgartiring."
-        ))
+        if owner_password:
+            self.stdout.write(self.style.WARNING(
+                f"Egasi yaratildi: {OWNER_USERNAME} / {owner_password}\n"
+                "Bu parol faqat shu yerda ko'rsatiladi — kirgach darhol o'zgartiring."
+            ))
 
     def _load(self, owner):
         partners = {

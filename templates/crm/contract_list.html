@@ -1,16 +1,22 @@
 {% extends "base.html" %}
 {% load crm_extras %}
-{% block title %}Kelishuvlar · GranulaLog{% endblock %}
-{% block topbar_title %}Kelishuvlar{% endblock %}
+{% block title %}{{ page_title }} · GranulaLog{% endblock %}
+{% block topbar_title %}{{ page_title }}{% endblock %}
 {% comment %}
+Two lists, one template. `birja` says which: the kelishuvlar struck with a hamkor in
+Eron, or the granula bought on the exchange here. They differ in the words at the top,
+in where the + button goes, and in the hamkor filter — a birja kelishuv has only ever
+the one counterparty, so a select offering it would narrow nothing. Everything else is
+the same page because a birja kelishuv IS a kelishuv; see crm.views.contract_list.
+
 Read-only for a tarjimon: no create, no edit, no delete, no to'lov — and no money
 columns either, the same rule the yuklar list follows. What is left is the kelishuv as
 a logistics document: which marka, how many kg agreed, how many still to come. Every
 hidden control is admin-only in the view as well; hiding it here is the courtesy, not
-the lock.
+the lock. (A tarjimon never reaches the birja list at all — the view 403s them.)
 {% endcomment %}
 {# The guard goes INSIDE the block — see the note in shipment_list.html. #}
-{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'contract_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi kelishuv</a>{% endif %}{% endblock %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url create_url %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Yangi birja kelishuv{% else %}Yangi kelishuv{% endif %}</a>{% endif %}{% endblock %}
 {% block content %}
 
 {% comment %}
@@ -28,7 +34,7 @@ so changing a select keeps it (see crm/_daterange.html).
     {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
     <div class="toolbar-search{% if q %} is-active{% endif %}">
       <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="search" name="q" value="{{ q }}" placeholder="Marka, hamkor yoki kod bo'yicha qidirish…" autocomplete="off" aria-label="Kelishuv qidirish">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ search_placeholder }}" autocomplete="off" aria-label="Kelishuv qidirish">
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
     {% comment %}

@@ -188,10 +188,24 @@ def _pair(main, alt):
 
 
 @register.simple_tag
-def money_both(usd_value, som_value=None):
-    """A total in both currencies: the dollar figure with its so'm twin beneath."""
+def money_both(usd_value, som_value=None, currency=None):
+    """A total in both currencies: the dollar figure with its so'm twin beneath.
+
+    Pass `currency` when the figure DOES have a currency of its own — the goods on a
+    yuk are priced in the one currency their kelishuv was struck in — and the two
+    sides swap so the agreed one leads. That is the rule every other screen follows
+    (`own_side`): a so'm kelishuv reads in so'm from the kelishuvlar list through to
+    the to'lov, and a yuk off it leading with a dollar figure nobody agreed to made
+    that one row the exception.
+
+    Left out, the dollar leads as before. That is right for a genuinely blended
+    total — a truck's xarajatlar are a so'm transport bill beside a dollar bojxona,
+    so neither side is "the one that was agreed" and the app's canonical currency
+    is the honest headline."""
     if som_value is None:
         return usd(usd_value)
+    if _is_som(currency):
+        return _pair(som(som_value), usd(usd_value))
     return _pair(usd(usd_value), som(som_value))
 
 

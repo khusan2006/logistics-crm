@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Exists, F, Max, OuterRef, ProtectedError, Q, Sum
@@ -54,6 +55,7 @@ from .models import (
     ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
     SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
+    birja_partner,
     _by_currency, bron_queue, cash_date_expression, commission_total,
     contract_value_by_currency, convert_pair, pending_expenses_by_currency,
     customer_paid_by_currency, customer_sales_by_currency,
@@ -517,7 +519,13 @@ def partner_list(request):
     q = request.GET.get("q", "").strip()
     # The kelishuvlar come along so each hamkor's qolgan to'lov can be totalled per
     # currency off the prefetch, instead of two queries per row as the page walks it.
-    partners = Partner.objects.prefetch_related(
+    #
+    # The birja row is not on it. It is not a hamkor anybody negotiated with — it is
+    # the exchange standing in as a counterparty so a birja purchase can be an
+    # ordinary kelishuv — and it has no telefon, no shahar and nobody to call. What
+    # is owed on it is read where it is owed: the Qolgan to'lov column of the Birja
+    # kelishuvlar list.
+    partners = Partner.objects.filter(is_birja=False).prefetch_related(
         "contracts__lines__shipment_lines", "contracts__supplier_payments")
     if q:
         partners = partners.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(city__icontains=q))
@@ -818,9 +826,14 @@ def _contract_code_filter(q):
     return Q()
 
 
-def _filter_contracts(request):
+def _filter_contracts(request, birja=False):
     """The kelishuvlar list's own filters — search, hamkor, davr, holat, to'lov, sort —
     in one place, so the page and its Excel button cannot drift apart.
+
+    `birja` picks which of the two lists is being drawn: the kelishuvlar struck with
+    a hamkor in Eron, or the ones bought on the exchange here. It is a parameter and
+    not something read off `request.path`, so the Excel button has to pass the same
+    flag its page did — which is what stops the file from holding the other list.
 
     Returns the rows already narrowed and sorted, plus what the page needs to draw
     its own controls (the faceted to'lov counts among them)."""
@@ -837,6 +850,7 @@ def _filter_contracts(request):
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
     contracts = (Contract.objects.select_related("partner")
+                 .filter(partner__is_birja=birja)
                  .prefetch_related("lines__shipment_lines", "supplier_payments"))
     if q:
         # lines__brand spans a multi-valued relation, so a kelishuv whose products
@@ -878,11 +892,11 @@ def _filter_contracts(request):
     rows.sort(key=sort_key, reverse=sort_reverse)
     return rows, {"q": q, "pay": pay, "partner_id": partner_id, "state": state,
                   "sort": sort, "date_from": date_from, "date_to": date_to,
-                  "pay_tabs": pay_tabs, "pay_applies": pay_applies}
+                  "pay_tabs": pay_tabs, "pay_applies": pay_applies, "birja": birja}
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def contract_list(request):
+def contract_list(request, birja=False):
     """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
     Hamkor narrows in SQL; the rest read computed properties (debt, remaining_kg),
     so they run in Python over prefetched rows — the loads and the payments come in
@@ -894,8 +908,18 @@ def contract_list(request):
     columns are hidden from them too — the same rule the yuklar list already follows
     (tests/test_shipments.py::test_translator_sees_no_price_on_loads). What is left is
     the kelishuv as a logistics document: which marka, how many kg agreed, how many
-    still to come."""
-    rows, f = _filter_contracts(request)
+    still to come.
+
+    `birja=True` draws the same page for the purchases made on the exchange here —
+    one view rather than a copy, because the two lists differ in exactly two ways:
+    which rows they hold, and that a birja kelishuv has no hamkor to filter by
+    (there is only ever the one). Registered twice in the URLconf; see config/urls.
+
+    A tarjimon never reaches the birja page. Their whole job is the Eron road, and
+    the guard is the URLconf's — `role_required` cannot see which list it is on."""
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    rows, f = _filter_contracts(request, birja=birja)
     q, pay, partner_id, state, sort = f["q"], f["pay"], f["partner_id"], f["state"], f["sort"]
     date_from, date_to = f["date_from"], f["date_to"]
     pay_tabs, pay_applies = f["pay_tabs"], f["pay_applies"]
@@ -910,29 +934,46 @@ def contract_list(request):
     # (unfinished business is the working view), so standing there draws no chip —
     # a chip means "this list is narrower than it normally is".
     panel = [
-        {"name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
-         "options": [("", "Hammasi")] + [(p.pk, p.name) for p in Partner.objects.all()]},
         {"name": "state", "label": "Holat", "value": state, "default": "open",
          "options": [("open", "Tugallanmagan"), ("done", "Tugallangan"), ("", "Hammasi")]},
         {"name": "sort", "label": "Saralash", "value": sort, "default": CONTRACT_SORT_DEFAULT,
          "options": [(key, label) for key, label, *_ in CONTRACT_SORTS]},
     ]
+    # No hamkor filter on the birja list: every row on it is the same counterparty,
+    # so the select would offer one option that narrows nothing. The birja hamkor is
+    # kept off the Eron list's select for the mirror reason — none of its rows are
+    # under it.
+    if not birja:
+        panel.insert(0, {
+            "name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
+            "options": [("", "Hammasi")] + [(p.pk, p.name)
+                                            for p in Partner.objects.filter(is_birja=False)]})
     if pay_applies:
-        panel.insert(2, {
+        # After Holat, whichever list this is — one index up when the hamkor select
+        # is there to be counted.
+        panel.insert(2 if not birja else 1, {
             "name": "pay", "label": "To'lov", "value": pay,
             "options": [(t["key"], f"{t['label']} ({t['count']})") for t in pay_tabs],
             "chip_options": [(t["key"], t["label"]) for t in pay_tabs]})
     return render(request, "crm/contract_list.html", {
-        "export_url": reverse("contract_list_export"),
+        "export_url": reverse("birja_contract_list_export" if birja
+                              else "contract_list_export"),
         "filters": _filter_panel(request, panel),
         "page": page, "rows": rows,
         "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
         "sort": sort, "sort_options": [(key, label) for key, label, *_ in CONTRACT_SORTS],
-        "partners": Partner.objects.all(),
+        "partners": Partner.objects.filter(is_birja=False),
         "date_from": date_from, "date_to": date_to,
         "daterange": _daterange_bar(request, date_from, date_to),
         "has_filters": bool((pay and pay_applies) or partner_id or state != "open"),
+        # What the shared template needs to know which of the two lists it is
+        # drawing: the words at the top, and where the + button goes.
+        "birja": birja,
+        "page_title": "Birja kelishuvlar" if birja else "Kelishuvlar",
+        "create_url": "birja_contract_create" if birja else "contract_create",
+        "search_placeholder": ("Marka yoki kod bo'yicha qidirish…" if birja
+                               else "Marka, hamkor yoki kod bo'yicha qidirish…"),
     })
 
 
@@ -950,30 +991,44 @@ def _save_lines(formset, parent):
     formset.save_m2m()
 
 
+def contract_list_url(birja):
+    """Which kelishuvlar list a row belongs back on. The edit and delete views are
+    shared by both — a kelishuv never changes sides — so they ask the row rather
+    than being registered twice."""
+    return reverse("birja_contract_list" if birja else "contract_list")
+
+
 @role_required(User.Role.ADMIN)
-def contract_create(request):
-    form = ContractForm(request.POST or None)
+def contract_create(request, birja=False):
+    """A new kelishuv. `birja=True` opens the same form for a purchase made on the
+    exchange here: no hamkor picker, because there is only ever the one counterparty
+    and the view supplies it — see `crm.models.birja_partner`, which mints the
+    birja-1, birja-2 kod off it exactly the way a hamkor's name mints sobir-3."""
+    form = ContractForm(request.POST or None, birja=birja)
     # The rows are priced in the header's currency, and they are built before the
     # header has been validated — so it is read off the raw POST (contract_currency).
     lines = ContractLineFormSet(
         request.POST or None,
         form_kwargs={"currency": contract_currency(request.POST or None)})
+    title = "Yangi birja kelishuv" if birja else "Yangi kelishuv"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
             with transaction.atomic():
                 contract = form.save(commit=False)
+                if birja:
+                    contract.partner = birja_partner()
                 contract.created_by = request.user
                 contract.save()
                 _save_lines(lines, contract)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Kelishuv", contract.pk,
-                f"Yangi kelishuv: {contract.code} · {contract.brand_summary}",
+                f"Yangi {'birja ' if birja else ''}kelishuv: "
+                f"{contract.code} · {contract.brand_summary}",
             )
             messages.success(request, "Kelishuv qo'shildi")
-            return form_success(request, reverse("contract_list"))
-        return _contract_form_response(request, form, lines, "Yangi kelishuv",
-                                       invalid=True)
-    return _contract_form_response(request, form, lines, "Yangi kelishuv")
+            return form_success(request, contract_list_url(birja))
+        return _contract_form_response(request, form, lines, title, invalid=True)
+    return _contract_form_response(request, form, lines, title)
 
 
 def _contract_form_response(request, form, lines, title, invalid=False):
@@ -985,8 +1040,9 @@ def _contract_form_response(request, form, lines, title, invalid=False):
 
 @role_required(User.Role.ADMIN)
 def contract_edit(request, pk):
-    contract = get_object_or_404(Contract, pk=pk)
-    form = ContractForm(request.POST or None, instance=contract)
+    contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    birja = contract.is_birja
+    form = ContractForm(request.POST or None, instance=contract, birja=birja)
     lines = ContractLineFormSet(
         request.POST or None, instance=contract,
         form_kwargs={"currency": contract_currency(request.POST or None, contract)})
@@ -1005,14 +1061,15 @@ def contract_edit(request, pk):
                 f"Kelishuv tahrirlandi: {contract.code} · {contract.brand_summary}",
             )
             messages.success(request, "Kelishuv yangilandi")
-            return form_reload(request, reverse("contract_list"))
+            return form_reload(request, contract_list_url(birja))
         return _contract_form_response(request, form, lines, title, invalid=True)
     return _contract_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN)
 def contract_delete(request, pk):
-    contract = get_object_or_404(Contract, pk=pk)
+    contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    birja = contract.is_birja
     if request.method == "POST":
         label = f"{contract.code} · {contract.brand_summary}"
         try:
@@ -1022,14 +1079,14 @@ def contract_delete(request, pk):
             messages.success(request, "Kelishuv o'chirildi")
         except ProtectedError:
             messages.error(request, "Kelishuvga to'lov yoki yuk biriktirilgan")
-        return form_reload(request, reverse("contract_list"))
+        return form_reload(request, contract_list_url(birja))
     return render_confirm(
         request,
         "Kelishuvni o'chirish",
         f"“{contract.code} · {contract.brand_summary}” o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
-        cancel_url_name="contract_list",
+        cancel_url_name="birja_contract_list" if birja else "contract_list",
     )
 
 
@@ -1625,8 +1682,38 @@ def customer_payment_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def status_list(request):
-    statuses = ShipmentStatus.objects.all()
-    return render(request, "crm/status_list.html", {"statuses": statuses})
+    """The holat chains, one block each.
+
+    Grouped rather than listed flat because there are two pipelines now and a
+    single column of nine rows says nothing about which yuklar each belongs to —
+    and because the up/down buttons are only meaningful inside a chain: swapping a
+    birja holat past an Eron one reorders neither pipeline.
+
+    The shared arrival row is drawn under BOTH blocks. It is one row and editing it
+    from either place edits the same holat, which is the point: it is the step the
+    two chains meet at."""
+    blocks = []
+    for scope, label, note, birja in [
+        (ShipmentStatus.Scope.HAMKOR, "Hamkor yuklari (Erondan)",
+         "Kelishuv bo'yicha Erondan keladigan yuklarning bosqichlari.", False),
+        (ShipmentStatus.Scope.BIRJA, "Birja yuklari",
+         "Birjadan olingan yuklarning bosqichlari.", True),
+    ]:
+        statuses = list(ShipmentStatus.for_kind(birja))
+        # An arrow is drawn only where it has somewhere to go IN THIS BLOCK. Worked
+        # out here rather than from `forloop.first`/`last`, which count the shared
+        # row too and would offer to swap a birja holat with a step that is not this
+        # chain's to move — the swap `status_move` then refuses, leaving a button
+        # that looks live and does nothing.
+        own = [st for st in statuses if st.scope == scope]
+        blocks.append({
+            "scope": scope, "label": label, "note": note,
+            "rows": [{"status": st,
+                      "movable": st.scope == scope,
+                      "can_up": st.scope == scope and own.index(st) > 0,
+                      "can_down": st.scope == scope and own.index(st) < len(own) - 1}
+                     for st in statuses]})
+    return render(request, "crm/status_list.html", {"blocks": blocks})
 
 
 @role_required(User.Role.ADMIN)
@@ -1635,7 +1722,14 @@ def status_create(request):
     if request.method == "POST":
         if form.is_valid():
             status = form.save(commit=False)
-            max_order = ShipmentStatus.objects.aggregate(m=Max("order"))["m"] or 0
+            # Last in its OWN chain, and still before the arrival row: that one sits
+            # at a deliberately high `order` so both pipelines end on it (see the
+            # 0063 migration). Taking the table-wide maximum would have parked every
+            # new holat after it — a step the operator has to add BEFORE the ombor,
+            # landing after it.
+            max_order = (ShipmentStatus.objects
+                         .filter(scope=status.scope, is_arrival=False)
+                         .aggregate(m=Max("order"))["m"] or 0)
             status.order = max_order + 1
             status.save()
             AuditLog.record(
@@ -1694,7 +1788,11 @@ def status_move(request, pk):
     status = get_object_or_404(ShipmentStatus, pk=pk)
     if request.method == "POST":
         direction = request.POST.get("dir")
-        statuses = list(ShipmentStatus.objects.all())
+        # Within its own chain. Ordering is one number line shared by both, so the
+        # row above a birja holat may well be an Eron one — swapping with it would
+        # move a step the operator cannot see on this block and reorder neither
+        # pipeline the way the arrow promised.
+        statuses = list(ShipmentStatus.objects.filter(scope=status.scope))
         index = next((i for i, s in enumerate(statuses) if s.pk == status.pk), None)
         if index is not None:
             neighbor_index = index - 1 if direction == "up" else index + 1
@@ -1730,16 +1828,28 @@ def customs_pending_loads(shipments):
     `~Exists` rather than `.exclude(expenses__category=...)`: exclude() on a
     multi-valued relation removes a yuk if ANY of its xarajatlar fails to match,
     which on a truck carrying a gruzchi and nothing else is every load in the table.
+
+    Birja loads are dropped outright — they crossed no border, so they owe no
+    clearing and would otherwise never leave this list. Same rule as
+    `Shipment.customs_pending`, which is the Python twin of this query; both have to
+    say it, because the pill's count comes from here and the row's own badge from
+    there.
     """
-    return shipments.filter(arrived__isnull=False).filter(
+    return shipments.filter(arrived__isnull=False,
+                            contract__partner__is_birja=False).filter(
         ~Exists(ShipmentExpense.objects.filter(
             shipment=OuterRef("pk"),
             category=ShipmentExpense.Category.CUSTOMS)))
 
 
-def _filter_shipments(request):
+def _filter_shipments(request, birja=False):
     """The yuklar list's own filters — shared by the page and its Excel button, so the
-    file holds the loads the screen was showing (including the Hammasi/QR toggles)."""
+    file holds the loads the screen was showing (including the Hammasi/QR toggles).
+
+    `birja` picks the pipeline: the loads coming off the Eron road, or the ones
+    bought on the exchange here. Passed in rather than sniffed off `request.path`,
+    so the Excel button must hand over the same flag its page did — otherwise the
+    file would be of the other list."""
     q = request.GET.get("q", "").strip()
     show_all = request.GET.get("all") == "1"
     # Bojxona to'lanmagan — the loads in the ombor whose clearing is still unpaid.
@@ -1755,11 +1865,18 @@ def _filter_shipments(request):
     # column prints what has been sent to the bojxonachi, and a tarjimon typing the
     # param by hand would be reading money off a screen that shows them none of it
     # anywhere else.
-    customs = request.GET.get("customs") == "1" and request.user.is_admin_role
+    #
+    # Never on the birja list: those loads crossed no border, so the group they
+    # would be filtered into is always empty — see `customs_pending_loads`.
+    customs = (request.GET.get("customs") == "1" and request.user.is_admin_role
+               and not birja)
     # Anything else in the URL means no QR filter at all — a typo should show every
     # yuk, not silently drop half of them.
+    #
+    # And no QR filter at all on the birja list: the kod is what gets a driver off
+    # the Eron border queue, and no birja load has ever carried one.
     qr = request.GET.get("qr", "")
-    if qr not in ("bor", "yoq"):
+    if qr not in ("bor", "yoq") or birja:
         qr = ""
     # Kelish sanasi bo'yicha — bugun kelgan yuklar tepada, then kecha's, and so on
     # down the calendar.
@@ -1781,6 +1898,7 @@ def _filter_shipments(request):
     sort = "kelish" if (request.GET.get("sort") == "kelish"
                         and show_all and not customs) else ""
     shipments = (Shipment.objects
+                 .filter(contract__partner__is_birja=birja)
                  .select_related("contract__partner", "status", "customs_agent")
                  .prefetch_related("delays", "legs", "expenses", "customs_payments"))
     if q:
@@ -1812,7 +1930,7 @@ def _filter_shipments(request):
     # …and not counted at all for a tarjimon, who never sees the pill: it is one more
     # subquery per page load to produce a number that is thrown away.
     customs_pending_count = (customs_pending_loads(shipments).count()
-                             if request.user.is_admin_role else 0)
+                             if request.user.is_admin_role and not birja else 0)
     if customs:
         shipments = customs_pending_loads(shipments)
     elif not show_all:
@@ -1820,7 +1938,7 @@ def _filter_shipments(request):
     # Counted before the QR filter narrows anything, so the number on the pill keeps
     # meaning "waiting, among the yuklar you are looking at" — standing on QR bor
     # must not zero out the count of the loads you are not looking at.
-    qr_waiting_count = shipments.filter(
+    qr_waiting_count = 0 if birja else shipments.filter(
         qr_given__isnull=True, qr_date__isnull=False,
         qr_date__lt=timezone.localdate()).count()
     if qr:
@@ -1833,7 +1951,7 @@ def _filter_shipments(request):
         shipments = shipments.order_by(F("arrived").desc(nulls_last=True),
                                        F("eta").asc(nulls_last=True), "-pk")
     return shipments, {"q": q, "show_all": show_all, "qr": qr, "customs": customs,
-                       "sort": sort,
+                       "sort": sort, "birja": birja,
                        "date_from": date_from, "date_to": date_to,
                        "qr_waiting_count": qr_waiting_count,
                        "customs_pending_count": customs_pending_count,
@@ -1913,7 +2031,7 @@ def _sales_by_day(blocks):
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def shipment_list(request):
+def shipment_list(request, birja=False):
     """Loads grouped by kelishuv, with status tabs (in pipeline order) to switch
     the view. Tabs filter client-side; each row carries its status + overdue flag.
 
@@ -1941,8 +2059,22 @@ def shipment_list(request):
     The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
     the loads whose planned QR day has come and gone with no kod, counted on the QR
     yo'q pill, so the ones worth chasing announce themselves without the list having
-    to hide anything to say so."""
-    shipments, f = _filter_shipments(request)
+    to hide anything to say so.
+
+    `birja=True` is the same page for the loads bought on the exchange here. One
+    view rather than a copy: a birja yuk is a yuk, and every mechanic below it —
+    the kelishuv blocks, the holat tabs, the Kelish sanasi ordering, the pager —
+    means exactly what it means on the Eron list. What it does NOT have is a QR kod
+    or a bojxona, both of which are facts about crossing a border; the pills for
+    them are dropped here and `_filter_shipments` refuses the params outright, so a
+    hand-typed `?qr=` cannot narrow a list where the answer is always the same.
+
+    Admin only, guarded here: `role_required` is on the view and cannot see which of
+    the two lists it was reached through, and a tarjimon's whole job is the Eron
+    road."""
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    shipments, f = _filter_shipments(request, birja=birja)
     q, show_all, qr, customs = f["q"], f["show_all"], f["qr"], f["customs"]
     sort = f["sort"]
     date_from, date_to, qr_waiting_count = f["date_from"], f["date_to"], f["qr_waiting_count"]
@@ -2015,7 +2147,9 @@ def shipment_list(request):
             groups = list(page.object_list)
         rows = [s for g in groups for s in g["shipments"]]
 
-    statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
+    # This pipeline's chain only, in its own order — plus the shared arrival holat,
+    # which both end on.
+    statuses = list(ShipmentStatus.for_kind(birja))  # ordered by (order, id)
     # Inside Bojxona to'lanmagan the holat tabs count EVERY yuk, not the rows under
     # them.
     #
@@ -2045,13 +2179,26 @@ def shipment_list(request):
     # to'lanmagan gets you out: the link leaves the group and names the tab to open
     # on, so the press lands where it looks like it will rather than dumping the
     # operator on the default view with a different tab lit.
+    #
+    # On the birja list the chain has no "Yo'lda" to open on — the operator has not
+    # named those steps yet (see the 0063 migration), and hard-coding a placeholder
+    # would break the moment they rename it. So it opens on whatever the FIRST step
+    # of that chain currently is, which is the one a freshly bought load sits in.
     asked_tab = request.GET.get("holat", "")
-    default_tab = None if show_all or customs else next(
-        (t["status"].pk for t in tabs if t["status"].name.casefold() == "yo'lda"), None)
+    default_name = None if birja else "yo'lda"
+    default_tab = None if show_all or customs else (
+        next((t["status"].pk for t in tabs
+              if t["status"].name.casefold() == default_name), None)
+        if default_name else next((t["status"].pk for t in tabs), None))
     if asked_tab.isdigit() and any(t["status"].pk == int(asked_tab) for t in tabs):
         default_tab = int(asked_tab)
     return render(request, "crm/shipment_list.html", {
-        "export_url": reverse("shipment_list_export"),
+        "export_url": reverse("birja_shipment_list_export" if birja
+                              else "shipment_list_export"),
+        # What the shared template needs to know which list it is drawing.
+        "birja": birja,
+        "page_title": "Birja yuklar" if birja else "Yuklar",
+        "create_url": "birja_shipment_create" if birja else "shipment_create",
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
         "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count, "sort": sort,
@@ -2370,15 +2517,31 @@ def _shipment_form_response(request, form, lines, title, invalid=False):
                          extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
 
 
+def shipment_list_url(birja):
+    """Which yuklar list a load belongs back on. The edit, delete and status views
+    are shared — a yuk never changes pipeline — so they ask the row instead of being
+    registered twice."""
+    return reverse("birja_shipment_list" if birja else "shipment_list")
+
+
 @role_required(User.Role.ADMIN)
-def shipment_create(request):
-    form = ShipmentForm(request.POST or None)
+def shipment_create(request, birja=False):
+    """A new yuk. `birja=True` loads it against a birja kelishuv instead: the same
+    form with the QR and bojxonachi boxes gone, and the kelishuv and holat pickers
+    narrowed to that pipeline — see `ShipmentForm`."""
+    form = ShipmentForm(request.POST or None, birja=birja)
     lines = ShipmentLineFormSet(request.POST or None)
+    title = "Yangi birja yuk" if birja else "Yangi yuk"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
             with transaction.atomic():
                 shipment = form.save(commit=False)
                 shipment.created_by = request.user
+                if birja:
+                    # The model's default route is the Eron one, which is what every
+                    # load was until now. A birja truck starts at the exchange and
+                    # never leaves the country.
+                    shipment.origin = "Birja"
                 if shipment.status.is_arrival:
                     shipment.arrived = timezone.localdate()
                 shipment.save()
@@ -2397,9 +2560,9 @@ def shipment_create(request):
                 f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
             )
             messages.success(request, "Yuk qo'shildi")
-            return form_success(request, reverse("shipment_list"))
-        return _shipment_form_response(request, form, lines, "Yangi yuk", invalid=True)
-    return _shipment_form_response(request, form, lines, "Yangi yuk")
+            return form_success(request, shipment_list_url(birja))
+        return _shipment_form_response(request, form, lines, title, invalid=True)
+    return _shipment_form_response(request, form, lines, title)
 
 
 #: What a yuk edit is worth naming afterwards. Anything else — a note, a phone
@@ -2445,7 +2608,10 @@ def _shipment_changes(before, after):
 
 @role_required(User.Role.ADMIN)
 def shipment_edit(request, pk):
-    shipment = get_object_or_404(Shipment, pk=pk)
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner"), pk=pk)
+    # Which pipeline this load is on is the row's to say, not the URL's — `ShipmentForm`
+    # reads it off the instance and scopes the kelishuv and holat pickers to match.
     form = ShipmentForm(request.POST or None, instance=shipment)
     lines = ShipmentLineFormSet(request.POST or None, instance=shipment)
     title = "Yukni tahrirlash"
@@ -2489,15 +2655,24 @@ def shipment_edit(request, pk):
                  else "Yuk tahrirlandi (o'zgarish yo'q)")[:255],
             )
             messages.success(request, "Yuk yangilandi")
-            return form_reload(request, reverse("shipment_list"))
+            return form_reload(request, shipment_list_url(form.birja))
         return _shipment_form_response(request, form, lines, title, invalid=True)
     return _shipment_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def shipment_detail(request, pk):
+    """One yuk's own page. Shared by both pipelines — a load never changes sides, so
+    the template asks the row (`shipment.is_birja`) which Eron-road facts to draw.
+
+    A tarjimon is turned away from a birja load the same way the birja LIST turns
+    them away. Not because the page shows them anything dangerous — it shows the
+    same money-free fields either way — but because a role that cannot reach a set
+    of rows through any screen should not reach one of them by typing its number."""
     shipment = get_object_or_404(
         Shipment.objects.select_related("contract__partner", "status"), pk=pk)
+    if shipment.is_birja and not request.user.is_admin_role:
+        raise PermissionDenied
     return render(request, "crm/shipment_detail.html", {"shipment": shipment})
 
 
@@ -2514,8 +2689,13 @@ def shipment_driver_edit(request, pk):
 
     Everything else about a yuk — its kelishuv, its mahsulotlar, its holat, its
     muddat, its bosqichlar, its xarajatlari — is admin-only, and each of those views
-    enforces that itself."""
-    shipment = get_object_or_404(Shipment, pk=pk)
+    enforces that itself.
+
+    Birja loads are not theirs to touch either — see `shipment_detail`."""
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner"), pk=pk)
+    if shipment.is_birja and not request.user.is_admin_role:
+        raise PermissionDenied
     form = ShipmentDriverForm(request.POST or None, instance=shipment)
     title = f"Yuk #{shipment.pk} — haydovchi va konteyner"
     if request.method == "POST":
@@ -2530,7 +2710,7 @@ def shipment_driver_edit(request, pk):
             messages.success(request, "Haydovchi va konteyner yangilandi")
             # Reload in place: this modal opens from the list AND from the detail
             # page, and a redirect to the list would throw away wherever they were.
-            return form_reload(request, reverse("shipment_list"))
+            return form_reload(request, shipment_list_url(shipment.is_birja))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
 
@@ -2718,8 +2898,14 @@ def shipment_set_status(request, pk):
     # Admin-only outright. A tarjimon used to move a yuk between non-arrival statuses;
     # the holat drives the whole board — what counts as in transit, what is overdue,
     # when a bron becomes sellable — which is more than driver detail.
-    shipment = get_object_or_404(Shipment.objects.select_related("status"), pk=pk)
-    status = get_object_or_404(ShipmentStatus, pk=request.POST.get("status"))
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("status", "contract__partner"), pk=pk)
+    # Only a holat from this load's own chain. The tabs on each list already offer
+    # nothing else, so this is the lock behind the courtesy: posting an Eron holat
+    # onto a birja yuk would put it in a bosqich its own page cannot draw a tab for,
+    # leaving the row invisible on every view of the list it belongs to.
+    status = get_object_or_404(ShipmentStatus.for_kind(shipment.is_birja),
+                               pk=request.POST.get("status"))
     old_name = shipment.status.name
     shipment.status = status
     shipment.arrived = (shipment.arrived or timezone.localdate()) if status.is_arrival else None
@@ -2756,7 +2942,7 @@ def shipment_set_status(request, pk):
     messages.success(request, "Holat yangilandi")
     if brons:
         messages.info(request, f"Bu yukda {brons} ta faol bron bor — sotuvga aylantirish mumkin")
-    return redirect(request.POST.get("next") or "shipment_list")
+    return redirect(request.POST.get("next") or shipment_list_url(shipment.is_birja))
 
 
 @require_POST
@@ -2844,7 +3030,11 @@ def shipment_set_qr(request, pk):
 
 @role_required(User.Role.ADMIN)
 def shipment_delete(request, pk):
-    shipment = get_object_or_404(Shipment, pk=pk)
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner"), pk=pk)
+    # Read while the row still exists — the delete below takes the kelishuv with it,
+    # and the answer decides which list the operator lands back on.
+    birja = shipment.is_birja
     if request.method == "POST":
         label = f"{shipment.brand_summary} · {shipment.kg} kg"
         contract = shipment.contract
@@ -2859,14 +3049,14 @@ def shipment_delete(request, pk):
             messages.success(request, "Yuk o'chirildi")
         except ProtectedError:
             messages.error(request, "Yukka bog'liq ma'lumot bor — o'chirib bo'lmaydi")
-        return form_reload(request, reverse("shipment_list"))
+        return form_reload(request, shipment_list_url(birja))
     return render_confirm(
         request,
         "Yukni o'chirish",
         f"“{shipment.brand_summary} · {shipment.kg} kg” yuki o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
-        cancel_url_name="shipment_list",
+        cancel_url_name="birja_shipment_list" if birja else "shipment_list",
     )
 
 
@@ -6185,17 +6375,32 @@ def reports(request):
 # is not knowable here, a spreadsheet cannot follow the app's toggle, and a figure
 # formatted into a string cannot be summed in Excel.
 
-def _contracts_table(contracts):
+def _contracts_table(contracts, include_money=True):
     """One row per product, so a multi-product kelishuv is readable. The money columns
-    are per kelishuv, so they repeat down its rows."""
+    are per kelishuv, so they repeat down its rows.
+
+    `include_money` drops narx / jami / to'langan / qarz, off for a tarjimon for the
+    same reason the page hides those columns from that role: what a kelishuv costs and
+    what is still owed on it is the hamkor ledger, which a tarjimon sees nowhere in the
+    app. An export the screen will not show is still the screen's data, so the two have
+    to agree — otherwise the Excel button is a way around the rule rather than a copy
+    of what is on it."""
+    price_headers = ["Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)"] if include_money else []
+    owed_headers = ["To'langan ($)", "To'langan (so'm)",
+                    "Qarz ($)", "Qarz (so'm)"] if include_money else []
     headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
-               "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)", "Yuborilgan kg",
-               "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
+               *price_headers, "Yuborilgan kg", *owed_headers]
+
+    def price_cells(ln):
+        return [ln.price, ln.price_uzs, ln.total_value, ln.total_value_uzs] if include_money else []
+
+    def owed_cells(c):
+        return [c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs] if include_money else []
+
     rows = (
         [c.code, c.created, c.partner.name, ln.brand, ln.kg,
-         ln.get_currency_display(), ln.exchange_rate, ln.price, ln.price_uzs,
-         ln.total_value, ln.total_value_uzs, ln.shipped_kg,
-         c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs]
+         ln.get_currency_display(), ln.exchange_rate,
+         *price_cells(ln), ln.shipped_kg, *owed_cells(c)]
         for c in contracts
         for ln in c.lines.all()
     )
@@ -6353,15 +6558,27 @@ def _debtors_table(customers=None):
     return headers, _rows(), None
 
 
-def _ombor_table(groups):
-    """The ombor as it reads on screen: one row per MARKA, its lots folded in."""
+def _ombor_table(groups, include_costs=True):
+    """The ombor as it reads on screen: one row per MARKA, its lots folded in.
+
+    `include_costs` drops the tan narx columns, off for a skladchi because the page
+    hides tan narx from that role: what a marka landed at is the margin, and a
+    skladchi is shown qoldiq and bron, never what the stock cost. The Excel button
+    has to hold the same line the screen does."""
+    cost_headers = ["Tan narx eng past ($)", "Tan narx eng baland ($)",
+                    "Tan narx eng past (so'm)",
+                    "Tan narx eng baland (so'm)"] if include_costs else []
     headers = ["Marka", "Lotlar", "Hamkorlar", "Kirim kg", "Sotilgan kg", "Qoldiq kg",
-               "Bron kg", "Yetmayapti kg", "Tan narx eng past ($)", "Tan narx eng baland ($)",
-               "Tan narx eng past (so'm)", "Tan narx eng baland (so'm)", "Oxirgi kelgan"]
+               "Bron kg", "Yetmayapti kg", *cost_headers, "Oxirgi kelgan"]
+
+    def cost_cells(g):
+        if not include_costs:
+            return []
+        return [g["cost_min"], g["cost_max"], g["cost_min_uzs"], g["cost_max_uzs"]]
+
     rows = (
         [g["brand"], len(g["lots"]), ", ".join(g["partners"]), g["kirim"], g["sold"],
-         g["on_hand"], g["reserved"], g["short"], g["cost_min"], g["cost_max"],
-         g["cost_min_uzs"], g["cost_max_uzs"], g["arrived_last"]]
+         g["on_hand"], g["reserved"], g["short"], *cost_cells(g), g["arrived_last"]]
         for g in groups
     )
     kg_columns = {name: KG for name in
@@ -6487,19 +6704,30 @@ def export_sales(request):
 # exists to prevent.
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def contract_list_export(request):
-    rows, _f = _filter_contracts(request)
-    headers, table, formats = _contracts_table(rows)
-    return xlsx_response("kelishuvlar.xlsx", headers, table, "Kelishuvlar", formats)
+def contract_list_export(request, birja=False):
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    rows, _f = _filter_contracts(request, birja=birja)
+    headers, table, formats = _contracts_table(
+        rows, include_money=request.user.is_admin_role)
+    name = "birja-kelishuvlar.xlsx" if birja else "kelishuvlar.xlsx"
+    sheet = "Birja kelishuvlar" if birja else "Kelishuvlar"
+    return xlsx_response(name, headers, table, sheet, formats)
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def shipment_list_export(request):
-    shipments, _f = _filter_shipments(request)
+def shipment_list_export(request, birja=False):
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    shipments, _f = _filter_shipments(request, birja=birja)
     headers, table, formats = _shipments_table(
         shipments.prefetch_related("lines__contract_line"),
-        include_customs=request.user.is_admin_role)
-    return xlsx_response("yuklar.xlsx", headers, table, "Yuklar", formats)
+        # A birja yuk crosses no border, so its bojxona columns would be a block of
+        # empty cells in every row of the file.
+        include_customs=request.user.is_admin_role and not birja)
+    name = "birja-yuklar.xlsx" if birja else "yuklar.xlsx"
+    sheet = "Birja yuklar" if birja else "Yuklar"
+    return xlsx_response(name, headers, table, sheet, formats)
 
 
 @role_required(User.Role.ADMIN)
@@ -6537,7 +6765,8 @@ def supplier_payment_list_export(request):
 
 @role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def ombor_export(request):
-    headers, table, formats = _ombor_table(_ombor_groups(request)[0])
+    headers, table, formats = _ombor_table(
+        _ombor_groups(request)[0], include_costs=request.user.is_admin_role)
     return xlsx_response("ombor.xlsx", headers, table, "Ombor", formats)
 
 

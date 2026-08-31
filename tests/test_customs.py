@@ -1483,8 +1483,10 @@ class TestPendingView:
         Hammasi."""
         self._pending()
         resp = admin_client.get("/shipments/", {"customs": "1"})
+        # Every holat of THIS list's chain. Bojxona is an Eron-road group, so the
+        # birja holatlar were never among the controls it could lose.
         assert [t["status"].name for t in resp.context["tabs"]] == list(
-            ShipmentStatus.objects.values_list("name", flat=True))
+            ShipmentStatus.for_kind(birja=False).values_list("name", flat=True))
         assert "Hammasi" in resp.content.decode()
 
     def test_the_holat_counts_are_of_every_yuk_not_of_the_group(self, admin_client, db):

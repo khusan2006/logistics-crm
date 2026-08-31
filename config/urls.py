@@ -26,6 +26,24 @@ urlpatterns = [
     path("customers/<int:pk>/delete/", crm_views.customer_delete, name="customer_delete"),
     path("contracts/", crm_views.contract_list, name="contract_list"),
     path("contracts/new/", crm_views.contract_create, name="contract_create"),
+    # Birja — granula bought on the exchange here rather than agreed with a hamkor
+    # in Eron. The SAME views, registered a second time with the flag set: a birja
+    # kelishuv is a Contract and a birja yuk is a Shipment, which is what lets the
+    # ombor, the sotuvlar and the kassa stay one set of books. Edit, delete and the
+    # per-yuk actions are NOT re-registered — a row never changes sides, so those
+    # read the kind off the row itself.
+    path("birja/kelishuvlar/", crm_views.contract_list, {"birja": True},
+         name="birja_contract_list"),
+    path("birja/kelishuvlar/new/", crm_views.contract_create, {"birja": True},
+         name="birja_contract_create"),
+    path("birja/kelishuvlar/export.xlsx", crm_views.contract_list_export,
+         {"birja": True}, name="birja_contract_list_export"),
+    path("birja/yuklar/", crm_views.shipment_list, {"birja": True},
+         name="birja_shipment_list"),
+    path("birja/yuklar/new/", crm_views.shipment_create, {"birja": True},
+         name="birja_shipment_create"),
+    path("birja/yuklar/export.xlsx", crm_views.shipment_list_export,
+         {"birja": True}, name="birja_shipment_list_export"),
     path("contracts/<int:pk>/edit/", crm_views.contract_edit, name="contract_edit"),
     path("contracts/<int:pk>/delete/", crm_views.contract_delete, name="contract_delete"),
     path("supplier-payments/", crm_views.supplier_payment_list, name="supplier_payment_list"),

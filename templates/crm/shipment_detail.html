@@ -6,7 +6,8 @@
 
 <div class="card">
   <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
-    <a class="btn btn-ghost" href="{% url 'shipment_list' %}">&larr; Yuklar ro'yxatiga</a>
+    {# Back to the list this yuk actually lives on — see crm.views.shipment_list_url. #}
+    <a class="btn btn-ghost" href="{% if shipment.is_birja %}{% url 'birja_shipment_list' %}{% else %}{% url 'shipment_list' %}{% endif %}">&larr; Yuklar ro'yxatiga</a>
     <span class="row-actions">
       {% comment %}
       The tarjimon's one write on a yuk, and only theirs — an admin edits the same
@@ -23,11 +24,16 @@
       today's date blind; left that way against the current view it posted an empty
       form, and an empty date is how the mark comes OFF, so the button cleared the
       thing it claimed to set.
+
+      Not on a birja yuk: the kod is what gets a driver off the Eron border queue,
+      and this one never went near one.
       {% endcomment %}
+      {% if not shipment.is_birja %}
       <a class="btn{% if not shipment.has_qr %} btn-ghost{% endif %}"
          href="{% url 'shipment_set_qr' shipment.pk %}" data-modal>
         {% if shipment.has_qr %}QR kod berilgan ✓{% else %}QR kod berildi{% endif %}
       </a>
+      {% endif %}
       <a class="btn" href="{% url 'shipment_extend' shipment.pk %}" data-modal>Muddatni uzaytirish</a>
       {% endif %}
     </span>
@@ -49,7 +55,7 @@
     {% if user.is_admin_role %}
     <div class="stat">
       <div class="muted">Yuk qiymati</div>
-      <div>{% money_both shipment.goods_value shipment.goods_value_uzs %}</div>
+      <div>{% money_both shipment.goods_value shipment.goods_value_uzs shipment.contract.currency %}</div>
     </div>
     {% endif %}
     <div class="stat">
@@ -94,6 +100,12 @@
       <div class="muted">Yetib kelgan</div>
       <div>{{ shipment.arrived|default:"—" }}</div>
     </div>
+    {% comment %}
+    Nothing to say about a kod on a birja yuk. "Berilmagan" would not read as "none
+    was ever needed" — it reads as a truck somebody forgot, which is the same
+    misreading the neutral row bar on the list exists to prevent.
+    {% endcomment %}
+    {% if not shipment.is_birja %}
     <div class="stat">
       <div class="muted">QR kod</div>
       <div>
@@ -113,6 +125,7 @@
         </div>
       </div>
     </div>
+    {% endif %}
   </div>
 </div>
 

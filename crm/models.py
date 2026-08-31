@@ -288,6 +288,12 @@ class Partner(models.Model):
     phone = models.CharField("Telefon", max_length=30, blank=True)
     city = models.CharField("Shahar", max_length=100, blank=True)
     note = models.TextField("Izoh", blank=True)
+    # The birja is not a hamkor anybody negotiated with — it is the exchange itself,
+    # standing in as the counterparty so a birja purchase can be an ordinary
+    # kelishuv. One row carries the flag, and it is what every birja screen filters
+    # on; see `birja_partner`. Not editable: a real hamkor must never become the
+    # birja by a tick in a form, which would re-scope every kelishuv under them.
+    is_birja = models.BooleanField("Birja", default=False, editable=False)
     # Kelishuv codes are frozen once issued, so the high-water mark has to outlive the
     # rows themselves — deleting sobir-3 must not hand 3 out again. The counter only
     # ever climbs; the slug tracks the current name so a rename picks up the sequence.
@@ -316,6 +322,30 @@ class Partner(models.Model):
 
     def __str__(self):
         return self.name
+
+
+#: The name the birja counterparty is created under. It is also what mints the
+#: kelishuv kod: slugify("Birja") is "birja", so the first purchase is birja-1.
+BIRJA_PARTNER_NAME = "Birja"
+
+
+def birja_partner():
+    """The one hamkor row every birja kelishuv is struck against, created on first
+    use.
+
+    Deliberately NOT seeded by a migration. `wipe_business_data()` deletes every
+    Partner, so a migration-created row disappears the first time the operator
+    reloads starting data and never comes back — and the next birja kelishuv would
+    then be minted under a second one, restarting the numbering at birja-1 beside
+    codes that already exist.
+
+    Found by the flag rather than by the name: renaming it (to "Birja savdo", say)
+    must not fork the number line, which is the same rule `Partner.code_slug`
+    follows for a hamkor who changes their name."""
+    partner = Partner.objects.filter(is_birja=True).order_by("pk").first()
+    if partner is None:
+        partner = Partner.objects.create(name=BIRJA_PARTNER_NAME, is_birja=True)
+    return partner
 
 
 class HeldFloat:
@@ -679,6 +709,15 @@ class Contract(models.Model):
         """True when the kelishuv was struck in so'm. Same name the money rows carry,
         so a screen can ask the question of either without knowing which it holds."""
         return self.currency == Currency.UZS
+
+    @property
+    def is_birja(self):
+        """Bought on the exchange here rather than agreed with a hamkor in Eron.
+
+        Read off the hamkor and not stored twice: the counterparty IS the fact, and
+        a second flag on the kelishuv could disagree with it. Every list that asks
+        this selects the partner, so it costs no query."""
+        return self.partner.is_birja
 
     def _own(self, usd_value, uzs_value):
         """Whichever half of a stored pair is the kelishuv's OWN money — see
@@ -1119,9 +1158,22 @@ class ShipmentStatus(models.Model):
     """Admin-editable ordered status chain. Exactly one row is the arrival status —
     reaching it is what turns a shipment into a warehouse lot, so it is protected:
     saving another row as arrival demotes the rest, and the arrival row can't be
-    deleted (guarded in the view)."""
+    deleted (guarded in the view).
 
-    name = models.CharField("Nomi", max_length=100, unique=True)
+    There are two chains, not one: a yuk off the Eron road passes a chegara and a
+    bojxona, a yuk bought on the birja does neither. `scope` says which chain a
+    holat belongs to — and the arrival row belongs to BOTH, since landing in the
+    ombor is the one step the two pipelines share."""
+
+    class Scope(models.TextChoices):
+        HAMKOR = "hamkor", "Hamkor yuklari"
+        BIRJA = "birja", "Birja yuklari"
+        BOTH = "umumiy", "Ikkalasi ham"
+
+    # Not unique on its own any more — see the constraint below.
+    name = models.CharField("Nomi", max_length=100)
+    scope = models.CharField("Qaysi yuklar uchun", max_length=10,
+                             choices=Scope.choices, default=Scope.HAMKOR)
     order = models.PositiveSmallIntegerField("Tartib", default=0)
     is_arrival = models.BooleanField("Omborga kelish holati", default=False)
 
@@ -1129,8 +1181,23 @@ class ShipmentStatus(models.Model):
         ordering = ["order", "id"]
         verbose_name = "Yuk holati"
         verbose_name_plural = "Yuk holatlari"
+        # Unique per chain rather than app-wide. The two pipelines run the same
+        # road in places — a birja load is "Yo'lda" too — and the operator has not
+        # named the birja steps yet, so a rename that collides with an Eron holat
+        # must not be refused for a clash the two chains can never see each other
+        # across.
+        constraints = [models.UniqueConstraint(fields=["name", "scope"],
+                                               name="unique_status_name_per_scope")]
 
     def save(self, *args, **kwargs):
+        # The arrival row is shared by definition. Both chains have to END on it —
+        # it is what turns a yuk into an ombor loti — so promoting a hamkor holat to
+        # arrival must not take the step away from the birja pipeline, which would
+        # leave a birja load with no way of ever landing on the shelf.
+        if self.is_arrival and self.scope != self.Scope.BOTH:
+            self.scope = self.Scope.BOTH
+            if (fields := kwargs.get("update_fields")) is not None:
+                kwargs["update_fields"] = {*fields, "scope"}
         super().save(*args, **kwargs)
         if self.is_arrival:
             ShipmentStatus.objects.exclude(pk=self.pk).update(is_arrival=False)
@@ -1138,6 +1205,13 @@ class ShipmentStatus(models.Model):
     @classmethod
     def arrival(cls):
         return cls.objects.filter(is_arrival=True).first()
+
+    @classmethod
+    def for_kind(cls, birja=False):
+        """The chain one kind of yuk moves along — its own holatlar plus the shared
+        ones, in pipeline order."""
+        own = cls.Scope.BIRJA if birja else cls.Scope.HAMKOR
+        return cls.objects.filter(scope__in=[own, cls.Scope.BOTH])
 
     def __str__(self):
         return self.name
@@ -1554,6 +1628,12 @@ class Shipment(models.Model):
         return f"{self.contract.code} · {self.order_in_contract}-yuk"
 
     @property
+    def is_birja(self):
+        """A load bought on the birja here, not one off the Eron road. Decided by
+        its kelishuv's counterparty — see `Contract.is_birja`."""
+        return self.contract.is_birja
+
+    @property
     def has_qr(self):
         """Whether this load's driver is carrying a QR kod. Green in the yuklar
         table; every load without one is yellow, since "no QR" is itself the fact
@@ -1728,7 +1808,15 @@ class Shipment(models.Model):
         assignment is a label on the row and never a condition of being on it.
 
         What is left is the exact case this exists for: stock on the shelf, being
-        sold, with the bojxona behind it still unpaid."""
+        sold, with the bojxona behind it still unpaid.
+
+        A birja yuk is not in it at all. It was bought inside the country and
+        crossed no border, so there is no clearing to owe — and since it will never
+        carry a bojxona xarajat, "not recorded yet" would be permanent: every birja
+        lot in the ombor would stand in the chase list forever. Its SQL twin
+        `customs_pending_loads` drops them the same way."""
+        if self.is_birja:
+            return False
         return self.arrived is not None and not self.customs_recorded
 
     @property

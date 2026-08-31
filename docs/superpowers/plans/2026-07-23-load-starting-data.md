@@ -15,7 +15,7 @@
 - Method mapping: "Bank o'tkazmasi" → `transfer`, "Naqd" → `cash` (verified `PayMethod` values: `cash`, `card`, `transfer`).
 - Statuses resolved from existing `ShipmentStatus` rows **by name**: `Yo'lda`, `Chegarada`, `Bojxona`, `Tayyorlanmoqda` (seeded by migration `0006`). Never create/wipe `ShipmentStatus`.
 - `logist` → shipment `note` as `"Logist: <name>"`. Skip `audit`, `settings.usdRate`, and the empty `sales`/`cashEntries`/`debtPayments`.
-- Owner: username `otabek`, `role=admin`, staff+superuser, temp password `otabek12345`, created via `get_or_create` (idempotent). All loaded records set `created_by=owner`.
+- Owner: username `otabek`, `role=admin`, staff+superuser, created via `get_or_create` (idempotent). All loaded records set `created_by=owner`. **Superseded (2026-08-27 security review):** the temp password originally written here is gone — the password now comes from `SEED_OWNER_PASSWORD`, or is randomly generated and printed once. Never put a real password in this repo.
 - Empty date strings (`""`) → `NULL`.
 - Do **not** wipe auth users; do **not** touch the existing `seed_demo` command.
 - Follow the existing command style in `crm/management/commands/seed_demo.py` and the test style in `tests/test_seed_and_dashboard.py`.
@@ -169,7 +169,9 @@ from crm.models import (
 )
 
 OWNER_USERNAME = "otabek"
-OWNER_PASSWORD = "otabek12345"
+# Superseded 2026-08-27: see crm/seeding.py — the password is read from
+# SEED_OWNER_PASSWORD or generated randomly, never written down here.
+OWNER_PASSWORD_ENV = "SEED_OWNER_PASSWORD"
 
 # Children before parents — deleting in this order never trips a PROTECT FK.
 WIPE_MODELS = [
@@ -366,7 +368,7 @@ Expected: `3 3 3 4 True`
 
 - [ ] **Step 3 (optional visual check): start the dev server and open the dashboard**
 
-Use the preview tooling (dev server), log in as `otabek / otabek12345`, and confirm partners/contracts/shipments render. Screenshot for the user.
+Use the preview tooling (dev server), log in as `otabek` with the password the command printed, and confirm partners/contracts/shipments render. Screenshot for the user.
 
 ---
 

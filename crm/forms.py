@@ -565,7 +565,13 @@ class ContractForm(forms.ModelForm):
     """The kelishuv header, including the one currency the whole agreement is struck
     and settled in. No kurs is asked for: an agreement in one currency is owed and
     paid in that same currency, and the rate the goods are later costed at is
-    inherited rather than typed (see `latest_exchange_rate`)."""
+    inherited rather than typed (see `latest_exchange_rate`).
+
+    `birja=True` is the same header for a purchase made on the exchange here. The
+    hamkor picker goes away entirely rather than being pre-filled and locked: there
+    is exactly one counterparty a birja kelishuv can have, and a disabled select
+    offering it reads as a choice somebody might have got wrong. The view supplies
+    it — see `crm.models.birja_partner`."""
 
     field_order = ["partner", "currency", "created", "note"]
 
@@ -577,8 +583,20 @@ class ContractForm(forms.ModelForm):
             "note": forms.Textarea(attrs={"rows": 3}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, birja=False, **kwargs):
         super().__init__(*args, **kwargs)
+        self.birja = birja
+        if birja:
+            del self.fields["partner"]
+            # Goods bought on the birja here are priced and settled in so'm. Still
+            # a choice, not a lock: a lot quoted in dollars is the operator's to
+            # record, and freezing the currency would make that unrecordable.
+            if not self.instance.pk:
+                self.fields["currency"].initial = Currency.UZS
+        else:
+            # The birja row is not a hamkor anybody strikes a deal with, so it is
+            # not on offer here — its kelishuvlar are opened from the Birja page.
+            self.fields["partner"].queryset = Partner.objects.filter(is_birja=False)
         if not self.instance.pk:  # new contract → default the date to today
             self.fields["created"].initial = timezone.localdate
         # Re-striking a live kelishuv in the other currency would re-read every
@@ -810,9 +828,26 @@ class ContractChoiceSelect(forms.Select):
 
 
 class ShipmentStatusForm(forms.ModelForm):
+    """A holat and the chain it belongs to. `scope` is a real choice on this form
+    because there are now two pipelines and the operator owns both — the birja one
+    ships as placeholders precisely so it can be renamed and reshaped here."""
+
     class Meta:
         model = ShipmentStatus
-        fields = ["name", "is_arrival"]
+        fields = ["name", "scope", "is_arrival"]
+        help_texts = {
+            "scope": "Bu holat qaysi yuklarda ko'rinadi. «Ikkalasi ham» — "
+                     "har ikkala yo'nalishda.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The arrival row is the one step both chains share, and moving it to one
+        # side would leave the other with no way of landing a yuk in the ombor.
+        if self.instance.pk and self.instance.is_arrival:
+            self.fields["scope"].disabled = True
+            self.fields["scope"].help_text = (
+                "Omborga kelish holati har ikkala yo'nalish uchun umumiy")
 
 
 def _clean_number(value):
@@ -955,29 +990,50 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             shipment=shipment, is_driver_advance=True, method=PayMethod.CASH,
             note="Haydovchiga avans", created_by=user, **fields)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, birja=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # Which pipeline this yuk moves along. Editing reads it off the row —
+        # a load never changes sides, and asking the caller to remember would let
+        # the wrong holatlar onto the form.
+        if birja is None:
+            birja = self.instance.contract.is_birja if self.instance.contract_id else False
+        self.birja = birja
         # Required on the form, still nullable on the model: a yuk with no
         # departure date fell out of the Oylik hisobot "jo'natilgan" count, but
         # rows imported before this rule must stay editable.
         self.fields["sent"].required = True
         # A kelishuv with every kg already on the road has nothing left to load, so
         # it drops off the new-yuk list — but stays when editing its own yuk.
+        #
+        # Narrowed to one side first: a birja yuk can only be loaded against a birja
+        # kelishuv, and offering the Eron ones would let a truck off the exchange be
+        # booked onto a hamkor's agreement — and take its holat chain with it.
         base = (Contract.objects.select_related("partner")
+                .filter(partner__is_birja=birja)
                 .prefetch_related("lines__shipment_lines"))
         self.fields["contract"].queryset = _keep_if(
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
+        # Only the holatlar of this yuk's own chain — plus the shared arrival one.
+        self.fields["status"].queryset = ShipmentStatus.for_kind(birja)
         self.fields["logist"].empty_label = "Logistsiz"
-        # Named at dispatch, paid whenever it is paid. The help text is the whole
-        # point of the field and says so outright: an operator who has watched the
-        # kassa drop every previous time a bojxonachi was named on a yuk will not
-        # otherwise believe this one is free.
-        self.fields["customs_agent"].empty_label = "Hali tanlanmagan"
-        self.fields["customs_agent"].help_text = (
-            "Bu yukni kim rasmiylashtiradi. Faqat belgilash — pul ko'chmaydi, "
-            "kassadan hech narsa yechilmaydi. Bojxona xarajati kiritilmaguncha yuk "
-            "«Bojxona to'lanmagan» ro'yxatida turadi.")
+        if birja:
+            # Both are Eron-road facts. A QR kod is what gets a driver off the
+            # border queue faster, and a bojxonachi clears a load that crossed one;
+            # goods bought on the birja here do neither, so the boxes would be two
+            # more things to leave empty on every single yuk.
+            del self.fields["qr_date"]
+            del self.fields["customs_agent"]
+        else:
+            # Named at dispatch, paid whenever it is paid. The help text is the whole
+            # point of the field and says so outright: an operator who has watched the
+            # kassa drop every previous time a bojxonachi was named on a yuk will not
+            # otherwise believe this one is free.
+            self.fields["customs_agent"].empty_label = "Hali tanlanmagan"
+            self.fields["customs_agent"].help_text = (
+                "Bu yukni kim rasmiylashtiradi. Faqat belgilash — pul ko'chmaydi, "
+                "kassadan hech narsa yechilmaydi. Bojxona xarajati kiritilmaguncha yuk "
+                "«Bojxona to'lanmagan» ro'yxatida turadi.")
         # Yetib kelgan sana is offered only once the yuk HAS arrived — a date beside
         # a load still on the road is an invitation to type one, and a yuk carrying an
         # arrival date while its holat says otherwise would sit in the ombor

@@ -2661,6 +2661,14 @@ ul.errorlist li::before { content: "⚠ "; }
   background: linear-gradient(to right, var(--flag-late) 50%, var(--flag-qr) 50%);
 }
 
+/* A birja yuk was bought inside the country and never queued at a border, so it
+   carries no QR kod at all. Without this it would wear the default yellow bar,
+   which does not mean "no kod needed" — it means "kod still not given", and every
+   birja row would read as a truck somebody had forgotten. Neutral instead; a late
+   one still shows its red, since that fact is the bar's other job. */
+.load-row--birja td.load-toggle::before { background: var(--border); }
+.load-row--birja.is-overdue td.load-toggle::before { background: var(--flag-late); }
+
 /* A load whose planned QR day has passed keeps the yellow "no kod" bar — it IS
    still no kod — but pulses it. A third colour would read as a third state and
    compete with the red kechikkan half beside it; motion says "overdue" without

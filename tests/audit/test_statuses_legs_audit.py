@@ -99,15 +99,23 @@ def test_moving_a_status_down_then_up_restores_the_exact_chain(admin_client):
 
 def test_walking_the_last_status_to_the_top_keeps_the_orders_unique_and_dense(admin_client):
     """(d) After a full walk the order column must still be the same set of
-    numbers — no duplicate (which would freeze the row) and no drift."""
+    numbers — no duplicate (which would freeze the row) and no drift.
+
+    Walked inside ONE chain. There are two pipelines since birja (hamkor holatlar,
+    birja holatlar, and the arrival row both end on), and `status_move` swaps only
+    with a neighbour of the same scope — a walk across the whole table would stall
+    at the first row belonging to the other chain, which is the point of the
+    scoping rather than a defect in it."""
+    chain = list(ShipmentStatus.objects.filter(scope=ShipmentStatus.Scope.HAMKOR))
     before_orders = sorted(s.order for s in ShipmentStatus.objects.all())
-    walker = ShipmentStatus.objects.last()
-    for _ in range(ShipmentStatus.objects.count() - 1):
+    walker = chain[-1]
+    for _ in range(len(chain) - 1):
         _move_status(admin_client, walker.pk, "up")
     orders = [s.order for s in ShipmentStatus.objects.all()]
     assert sorted(orders) == before_orders
     assert len(set(orders)) == len(orders)
-    assert ShipmentStatus.objects.first().pk == walker.pk
+    assert (ShipmentStatus.objects
+            .filter(scope=ShipmentStatus.Scope.HAMKOR).first().pk == walker.pk)
 
 
 def test_moving_the_only_remaining_status_is_a_no_op(admin_client):
@@ -174,7 +182,7 @@ def test_designating_another_status_as_arrival_demotes_the_old_one(admin_client)
     """(c) Documented in ShipmentStatus (crm/models.py:617): saving another row as
     arrival demotes the rest. Exactly one, always."""
     target = _named("Chegarada")
-    admin_client.post(f"/statuses/{target.pk}/edit/", {"name": "Chegarada", "is_arrival": "on"})
+    admin_client.post(f"/statuses/{target.pk}/edit/", {"name": "Chegarada", "scope": "hamkor", "is_arrival": "on"})
     assert ShipmentStatus.objects.filter(is_arrival=True).count() == 1
     assert ShipmentStatus.arrival().pk == target.pk
 
@@ -193,7 +201,7 @@ def test_designating_another_status_as_arrival_demotes_the_old_one(admin_client)
                    strict=False)
 def test_the_arrival_flag_cannot_be_edited_away(admin_client):
     arrival = ShipmentStatus.arrival()
-    admin_client.post(f"/statuses/{arrival.pk}/edit/", {"name": arrival.name})
+    admin_client.post(f"/statuses/{arrival.pk}/edit/", {"name": arrival.name, "scope": arrival.scope})
     assert ShipmentStatus.arrival() is not None
 
 
@@ -349,7 +357,7 @@ def test_a_lot_that_has_been_sold_from_cannot_be_un_arrived(admin_client, admin_
 def test_the_pipeline_tabs_account_for_every_active_load(admin_client):
     bojxona = _named("Bojxona")
     make_shipment(status=bojxona)
-    admin_client.post(f"/statuses/{bojxona.pk}/edit/", {"name": "Bojxona", "is_arrival": "on"})
+    admin_client.post(f"/statuses/{bojxona.pk}/edit/", {"name": "Bojxona", "scope": "hamkor", "is_arrival": "on"})
     context = admin_client.get("/shipments/").context
     assert context["total"] == 1
     assert sum(tab["count"] for tab in context["tabs"]) == context["total"]
