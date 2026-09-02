@@ -167,6 +167,22 @@ def rate(usd_value, som_value=None, currency=None):
         return "—"
 
 
+@register.simple_tag
+def rate_typed(value, currency):
+    """A per-kg figure that is stored in the ROW'S OWN currency rather than as a
+    dollar/so'm pair — a birja transport's agreed rate (ShipmentExpense.rate_per_kg).
+
+    `rate` above picks a side out of a stored pair; this one has no side to pick,
+    only a figure and the money it was quoted in. The formatting is the same either
+    way, so the two read alike wherever they land next to each other."""
+    if value is None:
+        return "—"
+    try:
+        return _som_rate(value) if _is_som(currency) else f"{_trim(value)} $/kg"
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+
+
 # ── Totals spanning both currencies ──────────────────────────────────────────────
 #
 # A total cannot pick a side the way a row can. A mijoz's qarz is three sotuvlar in

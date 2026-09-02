@@ -542,6 +542,9 @@ inside a view with no control left to leave it by.
             {% else %}
             <p class="muted" style="margin: 6px 0 0;">Xarajat yo'q. Yo'l, bojxona va boshqa sarflar shu yukning tan narxiga qo'shiladi.</p>
             {% endif %}
+            {# Outside the if: a kelishuv's share is on the tannarx whether or not #}
+            {# this truck has a xarajat of its own. #}
+            {% include "crm/_kelishuv_per_kg.html" with contract=s.contract %}
           </div>
           {% endif %}
         </div>

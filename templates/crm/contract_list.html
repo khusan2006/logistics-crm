@@ -137,6 +137,15 @@ so changing a select keeps it (see crm/_daterange.html).
       <a class="icon-action" href="{% url 'supplier_payment_create' %}?contract={{ c.pk }}" data-modal title="To'lov">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
       </a>
+      {% comment %}
+      Kelishuv xarajatlari — a broker's cut and anything else agreed for the whole
+      agreement. It lives on the row because a kelishuv has no detail page of its
+      own, next to the to'lov for the same reason: both are money against THIS
+      kelishuv.
+      {% endcomment %}
+      <a class="icon-action" href="{% url 'contract_expense_create' %}?contract={{ c.pk }}" data-modal title="Xarajatlar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      </a>
       <a class="icon-action act-edit" href="{% url 'contract_edit' c.pk %}" data-modal title="Tahrirlash">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </a>

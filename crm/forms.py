@@ -3,14 +3,15 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.urls import reverse_lazy
 from django.utils import timezone
 
 from .models import (
-    LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
-    CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
-    LogistPayment, OtherExpense, Partner,
+    LEGACY_RATE, Contract, ContractExpense, ContractLine, Currency, Customer,
+    sync_contract_birja_transport,
+    CustomerPayment, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
+    Konvertatsiya, Logist, LogistPayment, OtherExpense, Partner,
     FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
     Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
@@ -586,6 +587,11 @@ class ContractForm(forms.ModelForm):
     def __init__(self, *args, birja=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.birja = birja
+        # The transport rate used to be asked for here. It moved to the kelishuv's
+        # Xarajatlar modal, where every other kelishuv-level cost is entered — one
+        # screen for "what does this agreement cost us", rather than a per-kg box on
+        # the header form and a broker two clicks away. The column still lives on
+        # Contract; only where it is typed changed. See ContractExpenseForm.
         if birja:
             del self.fields["partner"]
             # Goods bought on the birja here are priced and settled in so'm. Still
@@ -2975,10 +2981,12 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         one of the two would rewrite that one while silently leaving the other, so
         the box stays empty and additive and those rows are edited from the jadval.
 
-        The haydovchi avansi is never one of them whatever else the turkum holds: the
-        yuk form owns that row and rewrites it on every save (sync_driver_advance),
-        so a figure typed over it here would be undone the next time the yuk is
-        edited."""
+        Two rows are never one of them whatever else the turkum holds, because
+        neither is this form's to rewrite: the haydovchi avansi, which the yuk form
+        owns (sync_driver_advance), and a birja yuk's transport, which is derived
+        from its kelishuv's rate (sync_birja_transport). A figure typed over either
+        would be put back the next time the yuk was saved, with nothing on screen to
+        say the correction had been thrown away."""
         if shipment is None or not getattr(shipment, "pk", None):
             return {}, {}
         found = {}
@@ -2986,7 +2994,8 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
             found.setdefault(row.category, []).append(row)
         recorded, others = {}, {}
         for category, rows in found.items():
-            managed = [row for row in rows if not row.is_driver_advance]
+            managed = [row for row in rows
+                       if not row.is_driver_advance and not row.is_auto_transport]
             if len(managed) == 1:
                 recorded[category] = managed[0]
             rest = [row for row in rows if row is not recorded.get(category)]
@@ -3194,10 +3203,11 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         rows were entered at different kursi would otherwise have every one of them
         re-rated by a submit that touched nothing."""
         shipment = self.cleaned_data["shipment"]
-        # Its own yuk, and never the haydovchi avansi: a hand-built payload naming
-        # somebody else's row must not reach it through here.
-        rewritable = {row.pk: row
-                      for row in shipment.expenses.exclude(is_driver_advance=True)}
+        # Its own yuk, and never a row this form does not own — the haydovchi avansi
+        # or a derived birja transport. A hand-built payload naming one of those must
+        # not reach it through here.
+        rewritable = {row.pk: row for row in shipment.expenses.exclude(
+            Q(is_driver_advance=True) | Q(is_auto_transport=True))}
         rate = self.cleaned_data["exchange_rate"]
         note = self.cleaned_data.get("note", "")
         typed_by_category = dict(self.entries)
@@ -3323,6 +3333,168 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         if commit:
             obj.save()
         return obj
+
+
+class ContractExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """A cost that belongs to the kelishuv rather than to one of its trucks.
+
+    Three shapes in one form, decided by the turkum. A broker is agreed as a
+    PERCENTAGE of the whole agreement, so that box asks for the foiz and works the
+    sum out. Transport on the birja road is a RATE PER KG. Everything else is a sum
+    somebody was quoted. Every box is on the form and the picker hides the ones that
+    do not apply — and `clean` reads the SUBMITTED turkum and refuses the boxes it
+    did not want, so a figure can never be read back as the wrong kind of number.
+
+    A broker's fee is booked in the KELISHUV's own money whatever the valyuta picker
+    says, because the base it is a percentage of is the kelishuv's value. Forcing it
+    is the only way the two can be talking about the same figure.
+
+    **Transport saves no row of its own.** It is an arrangement, not a payment: it
+    writes `Contract.transport_rate_per_kg` and the money appears later, per yuk, as
+    each truck lands (`sync_birja_transport`). A ModelForm whose save() sometimes
+    writes the PARENT and returns None is unusual enough to say out loud — it is
+    here so the operator has one screen for "what does this kelishuv cost us"
+    instead of a per-kg box on the header form and a broker two clicks away."""
+
+    rate_per_kg = forms.DecimalField(
+        label="1 kg uchun", max_digits=14, decimal_places=4, required=False,
+        min_value=Decimal("0"),
+        help_text="Yuk omborga yetib kelganda shu narxda xarajat o'zi yoziladi",
+        widget=forms.NumberInput(attrs={"step": "0.0001", "min": "0"}))
+
+    class Meta:
+        model = ContractExpense
+        fields = ["contract", "date", "category", "percent", "currency", "amount",
+                  "exchange_rate", "method", "fee_percent", "note"]
+        widgets = {"date": date_widget(), "contract": forms.HiddenInput()}
+        help_texts = {
+            "percent": "Kelishuvning to'liq qiymatidan, kelishuv valyutasida olinadi",
+            "note": "Ixtiyoriy"}
+
+    field_order = ["date", "category", "percent", "amount", "currency",
+                   "exchange_rate", "method", "fee_percent", "note"]
+
+    def __init__(self, *args, contract=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.contract = contract or getattr(self.instance, "contract", None)
+        # Transport is the exchange road's arrangement: on the Eron side a logist
+        # quotes a price for the run and hands the driver an avans out of it, which
+        # the yuk form already asks for. Offering a per-kg box there would be a
+        # second, contradictory answer to one question, so the turkum is not on the
+        # picker at all.
+        if not (self.contract and self.contract.is_birja):
+            self.fields["category"].choices = [
+                (value, label) for value, label in self.fields["category"].choices
+                if value != ContractExpense.Category.TRANSPORT]
+            del self.fields["rate_per_kg"]
+        else:
+            _group_thousands(self.fields["rate_per_kg"])
+            self.fields["rate_per_kg"].widget.attrs["data-for-category"] = "transport"
+        # No box is required at field level: exactly one applies, and which one is
+        # not known until the turkum is read in clean(). Requiring them here would
+        # make every submission fail.
+        self.fields["amount"].required = False
+        self.fields["percent"].required = False
+        self.fields["percent"].widget.attrs.update({"step": "0.01", "min": "0",
+                                                    "max": "100"})
+        # Hooks for the toggle in base.html: the picker names the turkum, each box
+        # says which turkum it belongs to.
+        self.fields["category"].widget.attrs["data-expense-category"] = ""
+        self.fields["percent"].widget.attrs["data-for-category"] = "broker"
+        self.fields["amount"].widget.attrs["data-not-category"] = "broker transport"
+        # The valyuta goes with the sum box. A broker's fee is booked in the
+        # kelishuv's money whatever this says (see clean), so leaving the picker on
+        # screen offers a choice that is quietly overruled — the same thing the
+        # hidden sum box exists to avoid.
+        self.fields["currency"].widget.attrs["data-not-category"] = "broker transport"
+        # And the kurs goes with any money at all. A transport RATE books nothing
+        # here; the kurs it is eventually converted at is the one in force when the
+        # truck lands, which sync_birja_transport reads for itself.
+        self.fields["exchange_rate"].widget.attrs["data-not-category"] = "transport"
+
+    def clean_percent(self):
+        return _clean_percent(self.cleaned_data.get("percent"))
+
+    @property
+    def is_transport(self):
+        """True when this submission is the transport ARRANGEMENT rather than a
+        xarajat row — the one turkum that writes the kelishuv and saves nothing
+        here. The view branches on it, because such a save has no row to stamp with
+        a created_by."""
+        return (self.cleaned_data.get("category")
+                == ContractExpense.Category.TRANSPORT)
+
+    def clean(self):
+        cleaned = super().clean()
+        contract = cleaned.get("contract")
+        if cleaned.get("category") == ContractExpense.Category.TRANSPORT:
+            rate = cleaned.get("rate_per_kg")
+            if not rate:
+                self.add_error("rate_per_kg", "1 kg narxini kiriting")
+            elif contract is None or not contract.kg:
+                self.add_error("rate_per_kg",
+                               "Kelishuvda mahsulot yo'q — avval kg kiriting")
+            return cleaned
+        if cleaned.get("category") != ContractExpense.Category.BROKER:
+            # A sum somebody was quoted. The mixin has already converted it; all that
+            # is left is to check there IS one, and to clear any foiz so the row
+            # cannot claim it was worked out a way it was not.
+            cleaned["percent"] = None
+            if cleaned.get("amount") is None:
+                self.add_error("amount", "Summani kiriting")
+            return cleaned
+        percent, rate = cleaned.get("percent"), cleaned.get("exchange_rate")
+        if percent is None:
+            self.add_error("percent", "Broker foizini kiriting")
+            return cleaned
+        if percent <= 0:
+            self.add_error("percent", "Musbat son kiriting")
+            return cleaned
+        if not rate or rate <= 0:
+            self.add_error("exchange_rate", "Dollar kursini kiriting")
+            return cleaned
+        if contract is None or not contract.kg:
+            self.add_error("percent",
+                           "Kelishuvda mahsulot yo'q — avval kg va narx kiriting")
+            return cleaned
+        currency = contract.currency
+        base = contract._own(contract.total_value, contract.total_value_uzs)
+        typed = (base * percent / 100).quantize(Decimal("0.01"))
+        cleaned["currency"] = currency
+        cleaned["amount"], cleaned[self.uzs_field] = convert_pair(typed, currency, rate)
+        return cleaned
+
+    def _post_clean(self):
+        """No instance is built for the transport arrangement — there is no row.
+
+        ModelForm would otherwise construct a ContractExpense and validate it, and
+        that one has no summa, because a rate is not a sum. Skipped rather than
+        given a placeholder amount, which would be a figure in the books that nobody
+        agreed to and that no screen could explain."""
+        if self.is_transport:
+            return
+        super()._post_clean()
+
+    def save(self, commit=True):
+        """A xarajat row — or, for transport, the kelishuv itself.
+
+        The arrangement is stored where it has always been stored
+        (`Contract.transport_rate_per_kg`); only the screen it is typed on changed.
+        Saving it re-syncs the kelishuv's landed yuklar at once, so correcting a
+        rate reaches trucks nobody is going to open.
+
+        Returns the KELISHUV in that case, not None. The caller needs the instance
+        this actually wrote: the one the view loaded from the URL is a different
+        object with the old rate still on it, and an audit line read off that copy
+        records whatever the rate USED to be — which is worse than no line at all,
+        because it looks like a record of the change."""
+        if not self.is_transport:
+            return super().save(commit)
+        contract = self.cleaned_data["contract"]
+        contract.transport_rate_per_kg = self.cleaned_data["rate_per_kg"]
+        contract.save(update_fields=["transport_rate_per_kg"])
+        sync_contract_birja_transport(contract)
+        return contract
 
 
 class LogistForm(forms.ModelForm):

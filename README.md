@@ -31,7 +31,80 @@ statuses ship as placeholders (**Sotib olindi → Yuklandi → Yetkazilmoqda →
 Omborga yetib keldi**) and are meant to be renamed on the Holatlar page once the
 real chain is known.
 
+Its transport is not typed per truck at all. A birja haydovchi is paid so much a
+kilo of what he brings in, and paid when he brings it — three facts the operator
+already maintains — so a birja **kelishuv** carries a `transport_rate_per_kg`
+(entered in its Xarajatlar modal, see below) and `sync_birja_transport` turns it
+into a xarajat on each of its yuklar as they land: rate × the yuk's kg, dated the
+day it arrived.
+
+The row is derived, not entered, and behaves like it. Move the arrival date and
+it moves; take the yuk back off arrival and it goes, the way a haydovchi avansi
+goes when its logist is removed. Correcting the rate on the kelishuv re-prices
+every yuk under it, landed ones included — the opposite of what a hand-entered
+`CashEntry` does, and right here precisely because nobody typed this one. Only
+the kurs is kept once booked, so an edit elsewhere never restates the so'm value
+of cash already handed over.
+
+It hangs off `Shipment.save()`, which all four arrival writers pass through, plus
+a second call from the yuk views once the mahsulot rows exist (a yuk being
+created has no kg yet at its first save) and one from the kelishuv form when the
+rate itself changes. The row is flagged `is_auto_transport`, which keeps every
+by-hand screen off it: the xarajat grid will not show or delete it, and
+`expense_edit`/`expense_delete` send the operator to the kelishuv instead of
+letting them make a correction the next sync would silently undo.
+
+Nothing was needed for the kassa timing: Transport is already in
+`ShipmentExpense.ARRIVAL_CATEGORIES`, and the row is dated the arrival, so
+`cash_date` is that day. The Eron road is untouched — there a logist quotes the
+run and hands the driver an avans out of it, and the rate field is not on its
+kelishuv form.
+
 The Birja pages are admin-only — a tarjimon's job is the Iran road.
+
+## Kelishuv xarajatlari
+
+Some costs belong to the AGREEMENT, not to any one truck. A broker is paid a
+percentage of the whole kelishuv, once, for the kelishuv. Before `ContractExpense`
+every xarajat had to hang off a yuk, so such a cost was either left out of the
+books or pinned to whichever truck happened to be open — inflating that one load's
+tannarx and every foyda taken off it.
+
+They are entered from the **Xarajatlar** action on a kelishuv row (a kelishuv has
+no detail page; the row is the kelishuv, the same way its To'lov and Tahrirlash
+modals work). This is the one screen for "what does this agreement cost us", and
+the turkum decides the shape:
+
+- **Broker** — a percentage of the kelishuv's full value, booked in the kelishuv's
+  own currency.
+- **Transport** (birja only) — a price per kg. The odd one out: it saves no row
+  here at all. It writes `Contract.transport_rate_per_kg`, and the money appears
+  later on each yuk as it lands. It shows in the table as a row that states what it
+  does and how many yuklar it has already been written to.
+- **Boshqa** — a sum somebody was quoted.
+
+The picker hides the boxes that do not apply and `clean` refuses them, so a figure
+can never be read back as the wrong kind of number.
+
+The money leaves the kassa **once**, at kelishuv level — its own `Kelishuv
+xarajatlari` bar in the Oqim and its own row in the Chiqim daftar. Each yuk carries
+its share through `Contract.expenses_per_kg` → `ShipmentLine.landed_cost_per_kg`,
+which is the same spread the vositachi cut has always had and the one funnel every
+foyda in the app reads. Nothing is pushed down as a `ShipmentExpense`: a copy on
+every truck would put one payment in the kassa N+1 times.
+
+`sync_contract_expenses` re-multiplies the percentage rows when the kelishuv's own
+value moves — a marka added, a narx corrected. Sums somebody typed are left where
+they were put.
+
+This is deliberately **not** the vositachi cut, which stays exactly where it is on
+the hamkor to'lovlar (`SupplierPayment.commission_percent`, live on most of them).
+That one is a slice of each payment as it goes out; this is a share of the
+agreement. Both spread per kg, and they add up side by side in the tannarx.
+
+`Contract.expenses_total` and `expenses_per_kg` count only the rows that ARE money
+here — a transport rate is not among them, because its money is booked per yuk and
+counting it twice is exactly the mistake this separation exists to prevent.
 
 ## Stack
 

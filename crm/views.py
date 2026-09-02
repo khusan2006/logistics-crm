@@ -35,6 +35,7 @@ from .forms import (
     parse_return_rows, returns_without,
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
+    ContractExpenseForm,
     SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
     ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
     ShipmentLineFormSet,
@@ -55,7 +56,11 @@ from .models import (
     ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
     SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
+    ContractExpense,
     birja_partner,
+    sync_contract_expenses,
+    sync_birja_transport,
+    sync_contract_birja_transport,
     _by_currency, bron_queue, cash_date_expression, commission_total,
     contract_value_by_currency, convert_pair, pending_expenses_by_currency,
     customer_paid_by_currency, customer_sales_by_currency,
@@ -100,6 +105,9 @@ PRICED_SALE_PREFETCH = (
     "lots__line__shipment__expenses", "lots__line__shipment__lines",
     "lots__line__contract_line__contract__lines",
     "lots__line__contract_line__contract__supplier_payments",
+    # The kelishuv's own xarajatlar are in the tannarx too (`expenses_per_kg`), so
+    # a foyda that did not load them would cost the same ten queries a sotuv.
+    "lots__line__contract_line__contract__expenses",
 )
 
 
@@ -1056,6 +1064,14 @@ def contract_edit(request, pk):
                 # cost, and that is the ceiling every hamkor to'lov is placed
                 # against — so the kelishuv is placed again. See shipment_create.
                 reconcile_supplier_allocations(contract)
+                # A transport rate corrected here reaches no yuk on its own: the
+                # xarajat is synced when a YUK is saved, and none of them were.
+                # By the owner's decision this re-prices landed loads too.
+                sync_contract_birja_transport(contract)
+                # A broker's fee is a percentage of the agreement, so changing what
+                # the agreement covers changes the fee. Sums somebody typed are left
+                # alone — see sync_contract_expenses.
+                sync_contract_expenses(contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
                 f"Kelishuv tahrirlandi: {contract.code} · {contract.brand_summary}",
@@ -1900,7 +1916,17 @@ def _filter_shipments(request, birja=False):
     shipments = (Shipment.objects
                  .filter(contract__partner__is_birja=birja)
                  .select_related("contract__partner", "status", "customs_agent")
-                 .prefetch_related("delays", "legs", "expenses", "customs_payments"))
+                 .prefetch_related(
+                     "delays", "legs", "expenses", "customs_payments",
+                     # The kelishuv side of every yuk's tannarx: its kg, the hamkor
+                     # to'lovlar the vositachi cut is taken off, and its own
+                     # xarajatlar (`Contract.cost_per_kg`). The panel has always
+                     # printed a tan narx that reads all three — unprefetched that
+                     # was three queries per yuk on a page listing fifty of them,
+                     # and the line naming the kelishuv's share would have asked for
+                     # them a second time.
+                     "contract__lines", "contract__supplier_payments",
+                     "contract__expenses"))
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
@@ -2550,6 +2576,11 @@ def shipment_create(request, birja=False):
                 # dispatch form rather than waiting for somebody to remember it as
                 # an xarajat later.
                 form.sync_driver_advance(shipment, request.user)
+                # Now that the mahsulot rows exist, the yuk has a kg — which is what
+                # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
+                # already ran this, but on a yuk being created it ran against no
+                # lines at all.
+                sync_birja_transport(shipment)
                 # A truck changes what its marka COSTS (`expected_value`), which is
                 # the ceiling every hamkor to'lov is placed against. Money that
                 # spilled onto the next marka — or sat as the hamkor's avans —
@@ -2641,6 +2672,11 @@ def shipment_edit(request, pk):
                 shipment.save()
                 _save_lines(lines, shipment)
                 form.sync_driver_advance(shipment, request.user)
+                # Now that the mahsulot rows exist, the yuk has a kg — which is what
+                # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
+                # already ran this, but on a yuk being created it ran against no
+                # lines at all.
+                sync_birja_transport(shipment)
                 # Editing a yuk re-prices its marka, so every to'lov on the kelishuv
                 # is placed again — see shipment_create.
                 reconcile_supplier_allocations(shipment.contract)
@@ -3118,6 +3154,9 @@ def expense_create(request):
 @role_required(User.Role.ADMIN)
 def expense_edit(request, pk):
     expense = get_object_or_404(ShipmentExpense, pk=pk)
+    refusal = _refuse_derived(request, expense)
+    if refusal:
+        return refusal
     form = ShipmentExpenseForm(request.POST or None, instance=expense)
     title = "Xarajatni tahrirlash"
     if request.method == "POST":
@@ -3134,8 +3173,170 @@ def expense_edit(request, pk):
 
 
 @role_required(User.Role.ADMIN)
+def contract_expense_create(request):
+    """The kelishuv's own xarajatlar — what it already carries, and a box to add one.
+
+    Opened from the kelishuvlar list rather than from a detail page, because a
+    kelishuv has no detail page: the list row IS the kelishuv, the way the to'lov and
+    tahrirlash modals on the same row already work.
+
+    The rows are listed above the form for the same reason the yuk's grid opens
+    filled: coming back to add a broker to a kelishuv that already carries one wants
+    to show that, not offer an empty box beside it."""
+    asked = (request.POST.get("contract") if request.method == "POST"
+             else request.GET.get("contract")) or ""
+    contract = (Contract.objects.select_related("partner")
+                .prefetch_related("lines", "expenses")
+                .filter(pk=asked).first() if asked.isdigit() else None)
+    initial = {"contract": asked}
+    if contract:
+        initial["currency"] = contract.currency
+    # The transport pseudo-row's Tahrirlash opens this same modal with its turkum
+    # already chosen, so editing the rate is one click rather than a picker hunt.
+    asked_category = request.GET.get("category")
+    if asked_category in ContractExpense.Category.values:
+        initial["category"] = asked_category
+        if asked_category == ContractExpense.Category.TRANSPORT and contract:
+            initial["rate_per_kg"] = contract.transport_rate_per_kg
+    form = ContractExpenseForm(request.POST or None, initial=initial,
+                               contract=contract)
+    title = "Kelishuv xarajatlari"
+
+    def respond(invalid=False):
+        return form_response(
+            request, form, title, invalid=invalid,
+            modal_template="crm/_contract_expenses_modal.html",
+            extra_context={
+                "contract": contract,
+                "rows": contract.expenses.all() if contract else [],
+                # How much of the transport arrangement has already turned into
+                # money — the half of it the operator cannot see from this screen.
+                "logged_transport": (
+                    ShipmentExpense.objects.filter(
+                        shipment__contract=contract, is_auto_transport=True).count()
+                    if contract else 0)})
+
+    if request.method == "POST":
+        if form.is_valid():
+            if form.is_transport:
+                # No row of its own: this turkum edits the kelishuv's arrangement,
+                # and the money shows up on each yuk as it lands.
+                #
+                # The audit line is read off what save() RETURNS, not off the copy
+                # this view loaded from the URL — that one is a different instance
+                # still carrying the old rate, and a line written from it records
+                # what the rate used to be while looking like a record of the change.
+                edited = form.save()
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Kelishuv", edited.pk,
+                    f"Transport narxi: {edited.transport_rate_per_kg} / 1 kg · "
+                    f"kelishuv {edited.code}")
+                messages.success(request, "Transport narxi saqlandi")
+            else:
+                expense = form.save(commit=False)
+                expense.created_by = request.user
+                expense.save()
+                AuditLog.record(
+                    request.user, AuditLog.Action.CREATE, "Kelishuv xarajati",
+                    expense.pk,
+                    f"Yangi kelishuv xarajati: {expense.get_category_display()} · "
+                    f"{expense.amount}$ · kelishuv {expense.contract.code}")
+                messages.success(request, "Xarajat qo'shildi")
+            return form_reload(request, contract_list_url(
+                contract.is_birja if contract else False))
+        return respond(invalid=True)
+    return respond()
+
+
+@role_required(User.Role.ADMIN)
+def contract_transport_clear(request, pk):
+    """Drop a kelishuv's transport arrangement.
+
+    Not just a field going blank: every landed yuk on the kelishuv carries a xarajat
+    that this rate produced, and clearing it takes all of them out of the kassa. The
+    confirm says how many, because that is the part the operator cannot see from
+    here."""
+    contract = get_object_or_404(Contract.objects.select_related("partner")
+                                 .prefetch_related("shipments"), pk=pk)
+    logged = ShipmentExpense.objects.filter(shipment__contract=contract,
+                                            is_auto_transport=True).count()
+    if request.method == "POST":
+        contract.transport_rate_per_kg = None
+        contract.save(update_fields=["transport_rate_per_kg"])
+        sync_contract_birja_transport(contract)
+        AuditLog.record(request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
+                        f"Transport narxi o'chirildi · kelishuv {contract.code}")
+        messages.success(request, "Transport narxi o'chirildi")
+        return form_reload(request, contract_list_url(contract.is_birja))
+    return render_confirm(
+        request, "Transport narxini o'chirish",
+        (f"Kelishuv {contract.code} transport narxi o'chirilsinmi? "
+         f"Shu narxdan yozilgan {logged} ta yuk xarajati ham o'chadi."),
+        "O'chirish", confirm_class="btn-danger", cancel_url_name="contract_list")
+
+
+@role_required(User.Role.ADMIN)
+def contract_expense_edit(request, pk):
+    expense = get_object_or_404(
+        ContractExpense.objects.select_related("contract__partner"), pk=pk)
+    form = ContractExpenseForm(request.POST or None, instance=expense,
+                               contract=expense.contract)
+    title = "Kelishuv xarajatini tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Kelishuv xarajati", expense.pk,
+                f"Kelishuv xarajati tahrirlandi: {expense.amount}$ · "
+                f"kelishuv {expense.contract.code}")
+            messages.success(request, "Xarajat yangilandi")
+            return form_reload(request,
+                               contract_list_url(expense.contract.is_birja))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def contract_expense_delete(request, pk):
+    expense = get_object_or_404(
+        ContractExpense.objects.select_related("contract__partner"), pk=pk)
+    if request.method == "POST":
+        amount, contract = expense.amount, expense.contract
+        expense.delete()
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Kelishuv xarajati", pk,
+            f"Kelishuv xarajati o'chirildi: {amount}$ · kelishuv {contract.code}")
+        messages.success(request, "Xarajat o'chirildi")
+        return form_reload(request, contract_list_url(contract.is_birja))
+    return render_confirm(
+        request, "Xarajatni o'chirish",
+        f"{expense.get_category_display()} · {expense.amount}$ — o'chirilsinmi?",
+        "O'chirish", confirm_class="btn-danger", cancel_url_name="contract_list")
+
+
+def _refuse_derived(request, expense):
+    """Send the operator to the kelishuv when they try to hand-edit a derived row.
+
+    A birja yuk's transport is worked out from its kelishuv's rate every time the
+    yuk is saved (`sync_birja_transport`). Editing the row here would look like it
+    worked and then be silently put back, so the screens do not offer the buttons —
+    and this is the lock behind that courtesy, for a URL typed or followed from an
+    old tab. Refused rather than 404'd: the row is real and the operator is right
+    that it is wrong; what they need is where to go and change it."""
+    if not expense.is_auto_transport:
+        return None
+    messages.info(request,
+                  "Bu xarajat kelishuvdagi transport narxidan hisoblanadi — "
+                  "o'zgartirish uchun kelishuvni tahrirlang")
+    return redirect("shipment_detail", pk=expense.shipment_id)
+
+
+@role_required(User.Role.ADMIN)
 def expense_delete(request, pk):
     expense = get_object_or_404(ShipmentExpense, pk=pk)
+    refusal = _refuse_derived(request, expense)
+    if refusal:
+        return refusal
     if request.method == "POST":
         amount, shipment_id = expense.amount, expense.shipment_id
         expense.delete()
@@ -5135,6 +5336,11 @@ WATERFALL_EXPENSE_GROUPS = [
 WATERFALL_EXPENSE_OTHER = "Boshqa yuk xarajatlari"
 #: The `OtherExpense` rows — ijara, ish haqi, soliq. One bar: they carry no turkum.
 WATERFALL_OTHER_EXPENSE = "Boshqa chiqimlar"
+#: The `ContractExpense` rows — a broker's cut and whatever else was agreed for a
+#: whole kelishuv. Its own bar rather than folded into the yuk xarajatlar: this money
+#: is paid once for an agreement, and reading it inside a per-truck total would put
+#: it in the one place it is NOT spent.
+WATERFALL_CONTRACT_EXPENSE = "Kelishuv xarajatlari"
 
 
 def _typed_decimal(raw):
@@ -5312,6 +5518,10 @@ def _kassa_window(request):
         "customs_pays": _range(CustomsPayment.objects.select_related("agent", "shipment")),
         # The "proche chiqim": money out that belongs to no yuk and no counterparty.
         "other_expenses": _range(OtherExpense.objects.all()),
+        # Kelishuv-level money: a broker's cut, paid once for the agreement. Its
+        # kelishuv rides along because every row prints which one it belongs to.
+        "contract_expenses": _range(ContractExpense.objects.select_related(
+            "contract__partner")),
         # Vazvrat money handed back. Dated on `paid_date` and not on the model's
         # `date` property, which is a promise until the money moves — a promised
         # payout has not left the till and has no business in a chiqim daftar. Only
@@ -5380,7 +5590,7 @@ def _kassa_ledger_rows(window):
     expenses, logist_pays = window["expenses"], window["logist_pays"]
     customs_pays, other_expenses = window["customs_pays"], window["other_expenses"]
     kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
-    refunds = window["refunds"]
+    refunds, contract_expenses = window["refunds"], window["contract_expenses"]
 
     # Kirim ledger: money in — mijoz to'lovlari and ta'sischi kapitali, newest first.
     # Dicts rather than the model objects this list used to hold: two unrelated models
@@ -5536,6 +5746,21 @@ def _kassa_ledger_rows(window):
             "kind": "other", "pk": x.pk, "date": x.date, "obj": x, "group": x.group,
             "crossed": x.crosses_currency,
             "title": x.note,
+            "method_code": x.method, "method": x.get_method_display(),
+            "currency": x.currency, "exchange_rate": x.exchange_rate,
+            "amount_uzs": x.amount_uzs, "amount": x.amount,
+        })
+    # Money agreed for a whole kelishuv — a broker's cut — rather than for a truck.
+    # Titled by the kelishuv it belongs to, since that is the only thing that says
+    # which agreement is being paid for; the foiz rides along on the ones that were
+    # agreed as a percentage, because the sum alone cannot be checked against it.
+    for x in contract_expenses:
+        percent = f" ({x.percent}%)" if x.is_percent else ""
+        outflow_rows.append({
+            "kind": "contract_expense", "pk": x.pk, "date": x.date, "obj": x,
+            "group": x.group, "crossed": x.crosses_currency,
+            "title": (f"{x.get_category_display()}{percent} · "
+                      f"kelishuv {x.contract.code}"),
             "method_code": x.method, "method": x.get_method_display(),
             "currency": x.currency, "exchange_rate": x.exchange_rate,
             "amount_uzs": x.amount_uzs, "amount": x.amount,
@@ -5751,6 +5976,7 @@ def kassa(request):
     cust_pays, sup_pays, expenses = window["cust_pays"], window["sup_pays"], window["expenses"]
     logist_pays, customs_pays = window["logist_pays"], window["customs_pays"]
     other_expenses = window["other_expenses"]
+    contract_expenses = window["contract_expenses"]
     kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
 
     # Sliced in Python, not with `.filter(method=…)`: these querysets are walked in
@@ -5762,7 +5988,7 @@ def kassa(request):
     period_in, period_kapital_in = list(cust_pays), list(kapital_in)
     period_kapital_out = list(kapital_out)
     period_out = [*sup_pays, *expenses, *logist_pays, *customs_pays, *other_expenses,
-                  *window["refunds"]]
+                  *contract_expenses, *window["refunds"]]
 
     balances = {}
     net_in = net_out = Decimal("0")
@@ -5854,7 +6080,8 @@ def kassa(request):
                  .filter(_cash_date__isnull=False, _cash_date__lt=date_from),
                  LogistPayment.objects.filter(date__lt=date_from),
                  CustomsPayment.objects.filter(date__lt=date_from),
-                 OtherExpense.objects.filter(date__lt=date_from))
+                 OtherExpense.objects.filter(date__lt=date_from),
+                 ContractExpense.objects.filter(date__lt=date_from))
         prior_kapital = Kapital.objects.filter(date__lt=date_from)
         opening = (_in(prior[0]) + _kapital(prior_kapital)
                    - sum((_out(q) for q in prior[1:]), Decimal("0")))
@@ -5871,7 +6098,8 @@ def kassa(request):
     # `net_in` is already net of it — so billing it again here would take the same
     # money out twice and the waterfall would stop landing on the ledger total.
     outgoing = (list(sup_pays) + list(expenses) + list(logist_pays)
-                + list(customs_pays) + list(other_expenses) + list(window["refunds"]))
+                + list(customs_pays) + list(other_expenses)
+                + list(contract_expenses) + list(window["refunds"]))
     fees = sum((r.fee_amount for r in outgoing), Decimal("0"))
     fees_uzs = sum((r.fee_amount_uzs for r in outgoing), Decimal("0"))
 
@@ -5906,6 +6134,9 @@ def kassa(request):
     other_amount = sum((x.amount for x in other_expenses), Decimal("0"))
     other_amount_uzs = sum((x.amount_uzs for x in other_expenses), Decimal("0"))
     steps.append((WATERFALL_OTHER_EXPENSE, -other_amount, -other_amount_uzs))
+    contract_amount = sum((x.amount for x in contract_expenses), Decimal("0"))
+    contract_amount_uzs = sum((x.amount_uzs for x in contract_expenses), Decimal("0"))
+    steps.append((WATERFALL_CONTRACT_EXPENSE, -contract_amount, -contract_amount_uzs))
     steps.append(("Bank foizi", -fees, -fees_uzs))
     # A step worth nothing is a bar with no bar — drop it rather than draw a label
     # against empty space. Bank foizi is usually the one: it is barely used.

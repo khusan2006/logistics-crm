@@ -1386,6 +1386,78 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
   box-shadow: var(--shadow-lg);
 }
 .modal--sm { width: min(440px, calc(100vw - var(--sidebar-w) - 32px)); }
+
+/* ── Kelishuv xarajatlari modal ──────────────────────────────────────────────
+   Three things in one dialog: the kelishuv's own figures, what it already costs,
+   and the box to add another. Wider than a plain form modal because the middle
+   one is a table — selected by content with :has(), the same trick the yuk's
+   xarajat grid uses, so no JS has to know a modal's size. */
+.modal:has(.cexp-form) { width: min(700px, calc(100vw - var(--sidebar-w) - 32px)); }
+/* The kelishuv's facts as labelled tiles rather than one dot-separated sentence.
+   The figures here are read (is this the right kelishuv? what is a percentage OF?)
+   rather than skimmed, and a run-on line makes each of them something to hunt for.
+   Its own compact tile instead of the dashboard's `.stat`, whose 23px value is
+   built for a page and shouts inside a dialog. */
+/* The modal's own horizontal padding lives on `.modal-head` and `form.stacked`
+   (22px each), so anything BETWEEN them has to carry it or it runs edge to edge
+   and clips — which is exactly what the facts and the table did. */
+.cexp-body { padding: 14px 22px 0; }
+.cexp-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.cexp-fact {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  min-width: 0;
+}
+.cexp-fact .label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.cexp-fact .value {
+  font-size: 15px;
+  font-weight: 700;
+  margin-top: 3px;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.cexp-fact .sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+/* An empty kelishuv says so in a panel of its own rather than as a bare sentence
+   floating between the facts and the form, where it reads as a caption for
+   whichever of the two the eye lands on first. */
+.cexp-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r);
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.cexp-empty strong { display: block; color: var(--text); margin-bottom: 3px; }
+/* Names the half of the dialog below it. Without it the form runs straight on from
+   the table and the first box reads as another column of it. */
+.cexp-section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin: 20px 0 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.cexp-total {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
 /* The xarajat grid needs the room: three boxes across, each carrying a figure and
    two dropdowns. Selected by content via :has() so no JS has to know the modal's
    size — and where :has() is missing the dialog simply stays its usual width. */

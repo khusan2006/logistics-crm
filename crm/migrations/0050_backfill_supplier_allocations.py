@@ -20,6 +20,20 @@ from django.db import migrations
 
 
 def backfill(apps, schema_editor):
+    # Asked of the HISTORICAL model first, and this is the whole reason it is here:
+    # the live one below selects every column the models declare TODAY, and on a
+    # database being built from scratch those columns do not exist yet at this point
+    # in the sequence. Any field added to Contract afterwards broke this migration
+    # for every fresh install and every test run — which is exactly what happened
+    # when `transport_rate_per_kg` was added.
+    #
+    # An empty table is also the honest reason to stop: this places to'lovlar that
+    # were entered BEFORE they could be placed, and a database with no kelishuvlar
+    # on it has none of those. The live engine is only reached where there is
+    # legacy money to spread, which is a database that had rows before this ran.
+    if not apps.get_model("crm", "Contract").objects.exists():
+        return
+
     from crm.models import Contract, reconcile_supplier_allocations
 
     for contract in Contract.objects.all():

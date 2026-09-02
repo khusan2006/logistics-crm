@@ -1744,6 +1744,46 @@
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
   })();
 
+  // A form whose TURKUM decides which box applies. On the kelishuv xarajatlari a
+  // broker is agreed as a percentage of the whole agreement, transport as a price
+  // per kg, and everything else as a plain sum — so exactly one money box means
+  // anything at a time.
+  //
+  // Hidden rather than left on screen to be filled in and then quietly ignored.
+  // The server refuses the wrong box either way (ContractExpenseForm.clean), but a
+  // form showing two money boxes and using only one of them is unreadable.
+  //
+  // Fields are marked server-side with data-expense-category / data-for-category /
+  // data-not-category.
+  (function () {
+    // The whole labelled row goes, not just the input: a stranded «Foiz (%):»
+    // label over nothing is worse than the box it used to introduce.
+    function row(el) { return el.closest('p') || el.parentNode; }
+    // Space-separated, because a box is usually wrong for SEVERAL turkumlar at once
+    // — a summa box means nothing on a broker (a foiz) or on a transport (a rate).
+    function names(value) { return (value || '').split(/\s+/); }
+    function apply(select) {
+      var form = select.closest('form') || document;
+      form.querySelectorAll('[data-for-category]').forEach(function (el) {
+        row(el).hidden = names(el.dataset.forCategory).indexOf(select.value) === -1;
+      });
+      form.querySelectorAll('[data-not-category]').forEach(function (el) {
+        row(el).hidden = names(el.dataset.notCategory).indexOf(select.value) !== -1;
+      });
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-expense-category]').forEach(apply);
+    }
+    document.addEventListener('change', function (e) {
+      if (e.target.matches && e.target.matches('[data-expense-category]')) {
+        apply(e.target);
+      }
+    });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+  })();
+
   // Konvertatsiya: the second sum fills itself in.
   //
   // Whatever the operator types, the box they have not touched works itself out:

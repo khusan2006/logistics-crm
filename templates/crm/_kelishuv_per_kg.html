@@ -1,0 +1,20 @@
+{% comment %}
+The part of a yuk's tannarx that is NOT on the yuk.
+
+Both yuk screens print the truck's own xarajatlar and what they add to a kg. Neither
+said anything about the vositachi cut or the kelishuv's broker, which land in the
+same tannarx through `Contract.cost_per_kg` — so a load priced at 1,2400 with
+0,0150 of xarajat showed a tan narx of 1,2736 and no way at all to see where the
+rest came from. This is that rest, named where the other per-kg figure is read.
+
+Silent when the kelishuv adds nothing, and it names only the halves that are
+actually there: "vositachi 0,0186 + kelishuv xarajati 0,0000" states a broker that
+does not exist.
+
+Takes `contract`.
+{% endcomment %}
+{% if contract.cost_per_kg %}
+<p class="muted" style="margin: 6px 0 0;">
+  Kelishuvdan 1 kg ga yana {{ contract.cost_per_kg|floatformat:"-4" }} $ qo'shiladi{% if contract.commission_per_kg and contract.expenses_per_kg %} — vositachi {{ contract.commission_per_kg|floatformat:"-4" }} + kelishuv xarajati {{ contract.expenses_per_kg|floatformat:"-4" }}{% elif contract.expenses_per_kg %} — kelishuv xarajati{% else %} — vositachi ulushi{% endif %}
+</p>
+{% endif %}
