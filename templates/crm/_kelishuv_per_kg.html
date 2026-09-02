@@ -12,9 +12,16 @@ actually there: "vositachi 0,0186 + kelishuv xarajati 0,0000" states a broker th
 does not exist.
 
 Takes `contract`.
+
+Held in `{% templatetag openblock %} with {% templatetag closeblock %}` because each
+of the three is a PROPERTY that walks the kelishuv's to'lovlar and xarajatlar every
+time the template names it — six lookups here would be six sums, and on a yuk's own
+page (which prefetches nothing) six rounds of queries for one line of text.
 {% endcomment %}
-{% if contract.cost_per_kg %}
+{% with total=contract.cost_per_kg comm=contract.commission_per_kg exp=contract.expenses_per_kg %}
+{% if total %}
 <p class="muted" style="margin: 6px 0 0;">
-  Kelishuvdan 1 kg ga yana {{ contract.cost_per_kg|floatformat:"-4" }} $ qo'shiladi{% if contract.commission_per_kg and contract.expenses_per_kg %} — vositachi {{ contract.commission_per_kg|floatformat:"-4" }} + kelishuv xarajati {{ contract.expenses_per_kg|floatformat:"-4" }}{% elif contract.expenses_per_kg %} — kelishuv xarajati{% else %} — vositachi ulushi{% endif %}
+  Kelishuvdan 1 kg ga yana {{ total|floatformat:"-4" }} $ qo'shiladi{% if comm and exp %} — vositachi {{ comm|floatformat:"-4" }} + kelishuv xarajati {{ exp|floatformat:"-4" }}{% elif exp %} — kelishuv xarajati{% else %} — vositachi ulushi{% endif %}
 </p>
 {% endif %}
+{% endwith %}
