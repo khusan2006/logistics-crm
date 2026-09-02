@@ -13,10 +13,10 @@ does not exist.
 
 Takes `contract`.
 
-Held in `{% templatetag openblock %} with {% templatetag closeblock %}` because each
-of the three is a PROPERTY that walks the kelishuv's to'lovlar and xarajatlar every
-time the template names it — six lookups here would be six sums, and on a yuk's own
-page (which prefetches nothing) six rounds of queries for one line of text.
+Bound in one `with` block because each of the three is a PROPERTY that walks the
+kelishuv's to'lovlar and xarajatlar every time the template names it — six lookups
+here would be six sums, and on a yuk's own page (which prefetches nothing) six
+rounds of queries for one line of text.
 {% endcomment %}
 {% with total=contract.cost_per_kg comm=contract.commission_per_kg exp=contract.expenses_per_kg %}
 {% if total %}
