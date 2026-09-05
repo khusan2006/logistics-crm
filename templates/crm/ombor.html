@@ -95,10 +95,13 @@
             it is settled from whichever lot is oldest, so a per-lot bron figure
             would be an invention. The marka row above carries it.
             {% endcomment %}
-            <th>Lot</th><th>Kelishuv</th><th>Hamkor</th><th>Kelgan sana</th>
+            {# No Hamkor: the kelishuv kod already names whose it is. #}
+            <th>Lot</th><th>Kelishuv</th><th>Kelgan sana</th>
             <th class="num">Kirim</th><th class="num">Sotilgan</th>
             <th class="num">Qoldiq</th>
-            {% if user.is_admin_role %}<th class="num">Tan narx</th><th></th>{% endif %}
+            {% if user.is_admin_role %}
+            <th class="num">Tan narx ($)</th><th class="num">Tan narx (so'm)</th><th></th>
+            {% endif %}
           </tr>
           {% for lot in g.open_lots %}
           <tr>{% include "crm/_ombor_lot_cells.html" %}</tr>
@@ -116,7 +119,7 @@
           </tr>
           {% endfor %}
           <tr>
-            <td colspan="{% if user.is_admin_role %}9{% else %}7{% endif %}">
+            <td colspan="{% if user.is_admin_role %}9{% else %}6{% endif %}">
               <button type="button" class="btn btn-sm btn-ghost" data-done-toggle="{{ forloop.counter }}"
                       data-label-open="{{ g.done_lots|length }} ta tugagan lotni yashirish"
                       data-label-closed="{{ g.done_lots|length }} ta tugagan lotni ko'rsatish">
@@ -147,7 +150,7 @@
           {% for r in g.brons %}
           <tr>
             <td><span class="qpos{% if forloop.first %} qpos--first{% endif %}">{{ forloop.counter }}</span></td>
-            <td>{{ r.customer.name }}</td>
+            <td>{{ r.customer.name|lotin }}</td>
             <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
             <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
               {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>

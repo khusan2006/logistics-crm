@@ -168,6 +168,21 @@ def rate(usd_value, som_value=None, currency=None):
 
 
 @register.simple_tag
+def rate_som(value):
+    """A per-kg figure in so'm, on its own — the so'm half of a tannarx given a
+    COLUMN of its own rather than stacked under the dollar one by `rate_both`.
+
+    Where the two sides sit side by side the column heading already says which is
+    which, so nothing here has to pick a side or fall back to the other."""
+    if value is None:
+        return "—"
+    try:
+        return _som_rate(Decimal(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+
+
+@register.simple_tag
 def rate_typed(value, currency):
     """A per-kg figure that is stored in the ROW'S OWN currency rather than as a
     dollar/so'm pair — a birja transport's agreed rate (ShipmentExpense.rate_per_kg).

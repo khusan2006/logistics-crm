@@ -10,7 +10,6 @@ broken page rather than as a limit, same as the kelishuv kod does for a tarjimon
 <td>{% if user.is_admin_role %}<a class="load-id" href="{% url 'lot_detail' lot.pk %}" title="Lot tarixi">#{{ lot.pk }}</a>
     {% else %}<span class="load-id">#{{ lot.pk }}</span>{% endif %}</td>
 <td>{{ lot.shipment.contract.code }}</td>
-<td>{{ lot.shipment.contract.partner.name }}</td>
 <td>{{ lot.arrived }}</td>
 <td class="num">{{ lot.kg|floatformat:"-3" }}</td>
 {% comment %}
@@ -21,7 +20,15 @@ back on a vazvrat and is on the shelf again.
   {% if lot.returned_kg %}<div class="vz load-sub">+{{ lot.returned_kg|floatformat:"-3" }} qaytdi</div>{% endif %}</td>
 <td class="num"><strong>{{ lot.available_kg|floatformat:"-3" }}</strong></td>
 {% if user.is_admin_role %}
-<td class="num">{% rate lot.landed_cost_per_kg lot.landed_cost_per_kg_uzs lot.currency %}</td>
+{% comment %}
+Two columns rather than the marka row's stacked pair: the lot is bought in dollars
+but sold and thought about in so'm, and the operator reads DOWN a column comparing
+one lot against the next. Stacked, the so'm figures sit in the gaps between the
+dollar ones and the eye has to hop. `rate` printed only the side the lot was booked
+in, which is always the dollar one.
+{% endcomment %}
+<td class="num">{% rate_typed lot.landed_cost_per_kg 'usd' %}</td>
+<td class="num">{% rate_som lot.landed_cost_per_kg_uzs %}</td>
 <td class="row-actions">
   {% if lot.available_kg > 0 %}
   <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal title="Shu lotdan sotish">Sotish</a>
