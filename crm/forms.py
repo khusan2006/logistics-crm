@@ -16,7 +16,8 @@ from .models import (
     Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
-    customer_balance_by_currency, latest_exchange_rate, _by_currency,
+    customer_balance_by_currency, last_sale_prices_by_customer,
+    latest_exchange_rate, _by_currency,
 )
 from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
@@ -320,9 +321,11 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
     positive_error = "Narx musbat bo'lishi kerak"
 
 
-class CustomerBronSelect(forms.Select):
-    """A mijoz <select> whose options carry the markalar that mijoz still has an
-    open bron for, so the form's JS can ask the question only when there is one.
+class CustomerFactsSelect(forms.Select):
+    """A mijoz <select> whose options carry what the sotuv form's JS needs to know
+    about that mijoz: the markalar they still have an open bron for, and — where
+    they are one of the mijozlar whose narx is repeated visit to visit — what each
+    marka last went out at.
 
     Same idea as ContractChoiceSelect: the answer travels on the option, because
     which mijoz is buying is not known until they pick one and a round trip per
@@ -330,14 +333,34 @@ class CustomerBronSelect(forms.Select):
 
     #: {customer_id: [brand, ...]}, set by the form.
     bron_brands = {}
+    #: {customer_id: {brand: (usd, uzs)}}, set by the form. Empty for every mijoz
+    #: who is not flagged for it, which is nearly all of them.
+    last_prices = {}
+
+    def _for(self, table, value):
+        """One mijoz's row out of a {customer_id: …} table.
+
+        The pk arrives as an int on some paths and as a ModelChoiceIteratorValue
+        wrapping a str on others, so it is unwrapped and tried both ways rather
+        than trusted to be either."""
+        pk = getattr(value, "value", value)
+        row = table.get(pk if isinstance(pk, int) else None)
+        if row is None and str(pk).isdigit():
+            row = table.get(int(pk))
+        return row
 
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
-        pk = getattr(value, "value", value)
-        brands = self.bron_brands.get(pk if isinstance(pk, int) else None)
-        if brands is None and str(pk).isdigit():
-            brands = self.bron_brands.get(int(pk))
+        brands = self._for(self.bron_brands, value)
         option["attrs"]["data-bron-brands"] = json.dumps(sorted(brands or []))
+        # Only on a mijoz who HAS one, so the attribute's presence is itself the
+        # answer to "does this mijoz's narx repeat" and the other few hundred
+        # options do not each carry an empty object.
+        prices = self._for(self.last_prices, value)
+        if prices:
+            option["attrs"]["data-last-prices"] = json.dumps(
+                {brand: {"usd": str(usd_price), "uzs": str(uzs_price)}
+                 for brand, (usd_price, uzs_price) in sorted(prices.items())})
         return option
 
 
@@ -377,9 +400,13 @@ class BronDrawFormMixin:
             if bron.remaining_kg > 0:
                 brons.setdefault(bron.customer_id, set()).add(bron.brand)
         picker = self.fields["customer"]
-        widget = CustomerBronSelect(attrs=dict(picker.widget.attrs))
+        widget = CustomerFactsSelect(attrs=dict(picker.widget.attrs))
         widget.choices = picker.widget.choices     # keeps the field's queryset
         widget.bron_brands = brons
+        # What this mijoz last paid for each marka, for the few mijozlar whose narx
+        # is the same visit after visit. One query, and none at all when no mijoz is
+        # flagged — see `last_sale_prices_by_customer`.
+        widget.last_prices = last_sale_prices_by_customer()
         picker.widget = widget
         # Which marka is being sold: a select on the by-brand form, a fixed one on
         # the per-lot form, where the lot already decided it.
@@ -467,7 +494,7 @@ class CustomerForm(forms.ModelForm):
 
     class Meta:
         model = Customer
-        fields = ["name", "phone", "address", "note"]
+        fields = ["name", "phone", "address", "note", "prefill_last_price"]
         widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def __init__(self, *args, **kwargs):
@@ -1624,11 +1651,11 @@ def _customer_picker_widget():
     them too when two mijoz share a name.
 
     Progressive enhancement: the native select stays in the DOM and still submits,
-    which is what lets CustomerBronSelect keep stamping its options and the
+    which is what lets CustomerFactsSelect keep stamping its options and the
     quick-add keep appending to it, both untouched.
 
     A function rather than one shared widget: a widget carries per-form state —
-    its choices, and the CustomerBronSelect that BronDrawFormMixin swaps in — so
+    its choices, and the CustomerFactsSelect that BronDrawFormMixin swaps in — so
     three forms sharing one object would tread on each other."""
     return forms.Select(attrs={
         "data-combobox": "",

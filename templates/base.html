@@ -2626,6 +2626,132 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
+  // The narx a mijoz who buys at a settled price already pays. Some mijozlar take
+  // the same markalar over and over at a figure that does not move between visits,
+  // and for them the operator was looking up last month's sotuv and typing it back
+  // in from memory. The mijoz <option> carries what each marka last went out at
+  // (CustomerFactsSelect), so the box opens with it and they confirm instead.
+  //
+  // Only into an EMPTY box, and only for a mijoz who is flagged for it — nothing
+  // here overrides a figure somebody typed, and a mijoz who is quoted afresh every
+  // time carries no prices at all and is untouched.
+  (function () {
+    //: set on a box THIS wrote, so a later valyuta change may repaint it while a
+    //: typed figure is left alone. Cleared the moment the operator types.
+    var MINE = 'pricePrefilled';
+
+    // "1.6500" → "1.65", "18000.00" → "18000". The column's padding is not what
+    // was agreed, and the money formatter only trims a value the page was SERVED
+    // with — a figure written by script arrives after that and would keep its
+    // zeros, which is the one place in the app a narx reads padded.
+    function trim(text) {
+      return text.indexOf('.') === -1 ? text
+        : text.replace(/0+$/, '').replace(/\.$/, '');
+    }
+    function pricesFor(form) {
+      var customer = form.querySelector('select[name=customer]');
+      var option = customer && customer.options[customer.selectedIndex];
+      try {
+        return JSON.parse((option && option.getAttribute('data-last-prices')) || 'null');
+      } catch (err) { return null; }
+    }
+    // Which side of the stored pair to write. A sotuv agreed in so'm must not open
+    // with a dollar figure standing in a so'm box.
+    function side(form) {
+      var currency = window.pickedControl
+        ? window.pickedControl(form, '[data-money-currency]')
+        : form.querySelector('[data-money-currency]');
+      return String((currency && currency.value) || 'usd').toLowerCase() === 'uzs'
+        ? 'uzs' : 'usd';
+    }
+    // A sotuv's rows each name their own marka; the per-lot form has no marka picker
+    // at all — the lot already decided it — and carries the name on the bron box.
+    function rows(form) {
+      var out = [];
+      form.querySelectorAll('[data-line-row]').forEach(function (row) {
+        var brand = row.querySelector('[data-bron-brand]');
+        var price = row.querySelector('input[name$="-price"]');
+        if (brand && price) { out.push({ brand: brand.value || '', price: price }); }
+      });
+      if (out.length) { return out; }
+      var box = form.querySelector('[data-bron-draw]');
+      var fixed = box ? (box.getAttribute('data-bron-fixed-brand') || '') : '';
+      var flat = form.querySelector('input[name=price]');
+      return (fixed && flat) ? [{ brand: fixed, price: flat }] : [];
+    }
+    function update(form) {
+      var prices = pricesFor(form);
+      var key = side(form);
+      rows(form).forEach(function (row) {
+        var box = row.price;
+        var was_mine = box.dataset[MINE] === '1';
+        // A figure the operator typed is theirs. Ours is repainted, so switching
+        // valyuta after the fill does not leave a dollar narx in a so'm box.
+        if (box.value && !was_mine) { return; }
+        var found = prices && prices[row.brand] && prices[row.brand][key];
+        if (!found) {
+          // Nothing on record for this pairing. Clear only what we put there.
+          if (was_mine) {
+            box.value = '';
+            delete box.dataset[MINE];
+            box.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          return;
+        }
+        found = trim(found);
+        if (box.value === found && was_mine) { return; }
+        box.value = found;
+        box.dataset[MINE] = '1';
+        // The formatter groups the thousands and the narx preview re-reads it —
+        // both listen for `input`, so a value written by script has to say so.
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    function enhance(root) {
+      root = root || document;
+      // `modal:loaded` fires with the modal body — which HOLDS the form — and again
+      // with a single cloned row, which is INSIDE one. Both have to land on the
+      // form itself, so a row is walked up before the body is searched down.
+      var own = root.closest && root.closest('form');
+      if (own) { update(own); return; }
+      root.querySelectorAll('form').forEach(function (form) {
+        if (form.querySelector('select[name=customer]')) { update(form); }
+      });
+    }
+    document.addEventListener('input', function (e) {
+      // Typed over: the box is the operator's from here on. Guarded on isTrusted so
+      // the `input` we dispatch ourselves above does not immediately disown it.
+      if (e.isTrusted && e.target.dataset && e.target.dataset[MINE] === '1') {
+        delete e.target.dataset[MINE];
+      }
+    });
+    document.addEventListener('change', function (e) {
+      if (!e.target.closest) { return; }
+      var form = e.target.closest('form');
+      if (!form || !form.querySelector('select[name=customer]')) { return; }
+      if (e.target.matches('select[name=customer], [data-bron-brand], [data-money-currency]')) {
+        update(form);
+      }
+    });
+    // The reys button clones a row WITH the marka above it already chosen, and sets
+    // it AFTER the row is added — so a new row is read on the next tick rather than
+    // on modal:loaded, which fires while its marka is still blank. Same deferral,
+    // for the same reason, as the currency-label retitle above. The mahsulot button
+    // leaves the marka empty and is filled by the change handler when one is
+    // picked; going through here too costs nothing.
+    //
+    // (The button faces are deliberately not spelled here: a test reads the served
+    // page for them to tell a sotuv form from a kelishuv one.)
+    document.addEventListener('click', function (e) {
+      var add = e.target.closest && e.target.closest('[data-line-add]');
+      var form = add && add.closest('form');
+      if (form) { setTimeout(function () { update(form); }, 0); }
+    });
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    if (document.readyState !== 'loading') { enhance(); }
+    else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
+  })();
+
   // Grab-and-drag a table that is wider than its box. On a laptop with no
   // horizontal wheel the only way sideways was the scrollbar at the bottom of a
   // long table, which means scrolling down to reach it and losing the rows you

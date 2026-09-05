@@ -6,6 +6,7 @@ from django.utils import timezone
 from conftest import line_data
 from crm.models import (
     AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
+    last_sale_prices_by_customer,
 )
 
 
@@ -1105,3 +1106,104 @@ def test_pressing_one_lens_turns_the_other_off(admin_client, db):
     html = admin_client.get("/sales/?changed=today").content.decode()
     assert "new=today" in html          # the green link is offered…
     assert "changed=today&amp;new=today" not in html and "new=today&amp;changed=today" not in html
+
+
+class TestLastPricePrefill:
+    """The narx a mijoz who buys at a settled price already pays.
+
+    Some mijozlar take the same markalar over and over at a figure that does not
+    move between visits, and for them the operator was looking up last month's
+    sotuv and typing it back in from memory. The mijoz's <option> carries what each
+    marka last went out at, so the box opens with it and they confirm instead.
+
+    Off per mijoz by default: most are quoted afresh every time, and a box that
+    opens holding a stale narx reads as agreed rather than as blank."""
+
+    def _sell(self, admin_client, lot, customer, price, on):
+        resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
+            "customer": customer.pk, "kg": "100", "currency": "usd",
+            "exchange_rate": "12000", "price": price,
+            "date": on, "debt_deadline": "", "note": "",
+        })
+        assert resp.status_code == 302
+
+    def test_the_latest_sotuv_of_each_marka_is_what_is_offered(self, admin_client, db):
+        lot = _lot(kg="10000", brand="LLDPE")
+        other = _lot(kg="10000", brand="HDPE")
+        customer = _customer()
+        customer.prefill_last_price = True
+        customer.save(update_fields=["prefill_last_price"])
+
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-25")
+        self._sell(admin_client, other, customer, "1.10", "2026-07-20")
+
+        prices = last_sale_prices_by_customer()
+        assert prices[customer.pk]["LLDPE"][0] == Decimal("1.6500")
+        assert prices[customer.pk]["HDPE"][0] == Decimal("1.1000")
+
+    def test_two_sotuv_on_one_day_are_settled_by_which_was_entered_second(
+            self, admin_client, db):
+        """The one the operator would read off Sotuvlar as "what we sold it for
+        last time" — the sana alone cannot tell them apart."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        customer.prefill_last_price = True
+        customer.save(update_fields=["prefill_last_price"])
+
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+        self._sell(admin_client, lot, customer, "1.55", "2026-07-18")
+
+        assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.5500")
+
+    def test_a_mijoz_who_is_not_flagged_is_left_out_entirely(self, admin_client, db):
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+        assert last_sale_prices_by_customer() == {}
+
+    def test_both_currencies_travel_so_a_som_sotuv_opens_in_som(
+            self, admin_client, db):
+        """Which side the browser fills is the SOTUV's own valyuta, so a so'm sotuv
+        must never open with a dollar figure standing in a so'm box."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        customer.prefill_last_price = True
+        customer.save(update_fields=["prefill_last_price"])
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
+
+        usd_price, uzs_price = last_sale_prices_by_customer()[customer.pk]["LLDPE"]
+        assert usd_price == Decimal("1.6500")
+        assert uzs_price == Decimal("19800.00")
+
+    def test_the_sotuv_form_stamps_it_on_that_mijozs_option_only(
+            self, admin_client, db):
+        lot = _lot(kg="10000", brand="LLDPE")
+        regular = _customer("Alisher Mebel")
+        regular.prefill_last_price = True
+        regular.save(update_fields=["prefill_last_price"])
+        walk_in = _customer("Bekzod")
+        self._sell(admin_client, lot, regular, "1.65", "2026-07-18")
+        self._sell(admin_client, lot, walk_in, "1.90", "2026-07-19")
+
+        html = admin_client.get("/sales/new/").content.decode()
+        # `data-last-prices="` and not the bare name: base.html's own JS reads the
+        # attribute by name on every page, so the name alone matches everywhere.
+        assert html.count('data-last-prices="') == 1
+        assert "1.6500" in html and "19800.00" in html
+        # the walk-in's narx is nobody's default and must not be shipped at all
+        assert "1.9000" not in html
+
+    def test_the_edit_form_does_not_offer_it(self, admin_client, db):
+        """Editing an existing sotuv is not the place: the narx in the box is the
+        one that WAS agreed on that sotuv, and repainting it from a later one would
+        rewrite history on Saqlash."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        customer.prefill_last_price = True
+        customer.save(update_fields=["prefill_last_price"])
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
+        sale = Sale.objects.get(line=lot)
+
+        html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
+        assert 'data-last-prices="' not in html

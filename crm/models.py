@@ -600,6 +600,23 @@ class Customer(models.Model):
     phone = models.CharField("Telefon", max_length=30, blank=True)
     address = models.CharField("Manzil", max_length=300, blank=True)
     note = models.TextField("Izoh", blank=True)
+    # A mijoz who buys the same markalar over and over at a narx that does not move
+    # between visits. For them the sotuv form opens with the last narx this marka
+    # went out at ALREADY in the box, so the operator confirms a figure instead of
+    # looking up what was agreed last month and typing it from memory.
+    #
+    # Per mijoz and off by default, because it is only safe where it is true. Most
+    # mijozlar are quoted afresh every time, and a box that opens pre-filled with a
+    # stale narx is worse than an empty one — a wrong figure that looks agreed reads
+    # as confirmed rather than as blank. The one it was asked for is Rise servise.
+    #
+    # Never a ceiling and never a default the server applies: the fill happens in
+    # the browser, into an EMPTY box, and the operator can type over it.
+    prefill_last_price = models.BooleanField(
+        "Narx oxirgi sotuvdan olinsin", default=False,
+        help_text="Sotuv formasi shu mijozga shu marka oxirgi marta qanday narxda "
+                  "sotilgan bo'lsa, o'sha narx bilan ochiladi. Narxni qo'lda "
+                  "o'zgartirish mumkin.")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -2744,6 +2761,37 @@ def bron_brands():
                .select_related("contract_line")}
     brands |= {lot.brand for lot in arrived_lots()}
     return sorted(brands)
+
+
+def last_sale_prices_by_customer():
+    """{customer_id: {brand: (price_usd, price_uzs)}} — the narx each marka last
+    went out at, for the mijozlar whose sotuv form is asked to open with it
+    (`Customer.prefill_last_price`).
+
+    Only the flagged ones. This is a per-mijoz habit rather than a rule of the app —
+    most are quoted afresh every time — and walking every mijoz's sotuvlar to build
+    a table the form would then throw away is work for nothing.
+
+    Latest wins, by sana and then by id: two sotuvlar of one marka on the same day
+    are settled by which was entered second, which is the one the operator would
+    read off the Sotuvlar list as "what we sold it for last time".
+
+    Both currencies are carried. Which of them the form fills is the SOTUV's own
+    valyuta, decided in the browser when the row is filled — a sotuv agreed in so'm
+    must not open with a dollar figure standing in a so'm box."""
+    flagged = list(Customer.objects.filter(prefill_last_price=True)
+                   .values_list("pk", flat=True))
+    if not flagged:
+        return {}
+    prices = {}
+    # Oldest first, so a later sotuv of the same marka simply writes over it — one
+    # pass, and no per-row comparison of dates that the ordering already settles.
+    for sale in (Sale.objects.filter(customer_id__in=flagged)
+                 .select_related("line__contract_line")
+                 .order_by("date", "pk")):
+        prices.setdefault(sale.customer_id, {})[sale.line.brand] = (
+            sale.price, sale.price_uzs)
+    return prices
 
 
 def fifo_lots(brand):
