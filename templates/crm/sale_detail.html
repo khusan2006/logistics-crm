@@ -13,7 +13,7 @@
   <div class="stat-grid">
     <div class="stat">
       <div class="muted">Mijoz</div>
-      <div>{{ sale.customer.name }}</div>
+      <div>{{ sale.customer.name|lotin }}</div>
     </div>
     <div class="stat">
       <div class="muted">Lot</div>
@@ -123,7 +123,7 @@ form would drift into a second answer.
   same header row the yuk panel uses.
   {% endcomment %}
   <div class="load-panel-head" style="margin-bottom: 14px;">
-    <h3 style="margin: 0;">Vazvrat — {{ sale.customer.name }}</h3>
+    <h3 style="margin: 0;">Vazvrat — {{ sale.customer.name|lotin }}</h3>
     <a class="btn" href="{% url 'return_create' %}?sale={{ sale.pk }}" data-modal>+ Vazvrat</a>
   </div>
 

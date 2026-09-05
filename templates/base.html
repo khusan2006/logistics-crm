@@ -2443,6 +2443,10 @@
       pop.className = 'combobox-pop';
       pop.setAttribute('role', 'listbox');
       pop.hidden = true;
+      // The pop is built OUTSIDE the <select>, so a `data-lotin` on the select does
+      // not cover it and the transliterator would convert the very names the select
+      // was marked to protect. Carried across, the two read the same.
+      if (select.hasAttribute('data-lotin')) { pop.setAttribute('data-lotin', ''); }
 
       select.parentNode.insertBefore(wrap, select);
       wrap.appendChild(select);

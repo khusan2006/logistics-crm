@@ -104,7 +104,7 @@ adding it up by hand.
     {% for r in brons %}
     <tr>
       <td><span class="qpos{% if forloop.first %} qpos--first{% endif %}">{{ forloop.counter }}</span></td>
-      <td>{{ r.customer.name }}</td>
+      <td>{{ r.customer.name|lotin }}</td>
       <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
       <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
         {% if r.fulfilled_kg %}<div class="muted">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>
@@ -131,8 +131,8 @@ adding it up by hand.
     {% for s in sales %}
     <tr>
       <td>{{ s.date }}</td>
-      <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' s.pk %}">{{ s.customer.name }}</a>
-          {% else %}{{ s.customer.name }}{% endif %}
+      <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' s.pk %}">{{ s.customer.name|lotin }}</a>
+          {% else %}{{ s.customer.name|lotin }}{% endif %}
           <div class="muted">sotuv #{{ s.pk }}</div></td>
       <td class="num"><strong>{{ s.kg|floatformat:"-3" }}</strong></td>
       {% comment %}

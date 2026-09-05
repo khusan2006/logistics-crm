@@ -29,6 +29,31 @@ NBSP = "\u00a0"
 
 
 @register.filter
+def lotin(value):
+    """Text the OPERATOR typed, kept in the alphabet they typed it in.
+
+    Everything on screen is served in lotin and transliterated to kiril in the
+    browser (static/js/yozuv.js), which is right for the app's own words — they are
+    Uzbek and the reader picks the script. A mijoz's ism is not one of the app's
+    words: it is a name, entered once and searched for by exactly those letters.
+    Converted, "Rise servise" reads as "Рисе сервисе", which is neither the name nor
+    anything the qidiruv can find, and the operator ends up comparing a spelling on
+    screen against a different spelling in their hand.
+
+    `data-lotin` is the transliterator's own opt-out — its walker refuses the marked
+    element and everything under it — so one span around the value is the whole
+    mechanism. A filter rather than 23 hand-written spans so the rule is greppable
+    and reads the same at every site.
+
+    Blank in, blank out: an empty span would turn a missing manzil into a cell that
+    is not quite empty, and `|default:"—"` after this would never fire."""
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    return format_html('<span data-lotin>{}</span>', text)
+
+
+@register.filter
 def usd(value):
     """Format a number as USD: $1 200, $1 234.56, $0.8 \u2014 space-grouped thousands
     and no trailing zeros. Blank-safe.

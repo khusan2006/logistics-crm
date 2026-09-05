@@ -17,10 +17,10 @@ shows how many rows picking it would leave.
     {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
   <label>Mijoz
-    <select name="customer" data-combobox>
+    <select name="customer" data-combobox data-lotin>
       <option value="">Hammasi</option>
       {% for c in customers %}
-      <option value="{{ c.pk }}"{% if customer_id == c.pk|stringformat:"s" %} selected{% endif %}>{{ c.name }}</option>
+      <option value="{{ c.pk }}"{% if customer_id == c.pk|stringformat:"s" %} selected{% endif %}>{{ c.name|lotin }}</option>
       {% endfor %}
     </select>
   </label>
@@ -70,7 +70,7 @@ shows how many rows picking it would leave.
     the pencil in the actions.
     {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'debt_customer' r.customer_id %}">{{ r.customer.name }}</a>
+      <a href="{% url 'debt_customer' r.customer_id %}">{{ r.customer.name|lotin }}</a>
     </td>
     <td>{{ r.created_at|date:"d.m.Y" }}</td>
     <td>{{ r.brand }}</td>
@@ -91,7 +91,7 @@ shows how many rows picking it would leave.
       {% if r.status == "active" %}
         {% if r.servable_kg > 0 %}
           <span class="badge badge-ok">Berish mumkin</span>
-          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name }} bron qilgan{% endif %}</div>
+          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name|lotin }} bron qilgan{% endif %}</div>
         {% else %}
           <span class="badge badge-warning">Mol kutilmoqda</span>
           <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>

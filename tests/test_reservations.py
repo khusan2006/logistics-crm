@@ -777,4 +777,7 @@ def test_the_bron_row_links_the_name_to_that_mijoz_page(admin_client, db):
     customer = _customer()
     _reserve(admin_client, "LLDPE", customer, kg="6000")
     html = admin_client.get("/reservations/").content.decode()
-    assert f'href="/debts/{customer.pk}/">{customer.name}</a>' in html
+    # The ism is in its own `data-lotin` span — the operator's text, which the
+    # transliterator leaves alone (see test_yozuv) — so the link wraps the span.
+    assert (f'href="/debts/{customer.pk}/"><span data-lotin>{customer.name}</span></a>'
+            in html)

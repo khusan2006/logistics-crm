@@ -325,10 +325,14 @@ def test_a_mijoz_with_no_dealings_gets_an_empty_history_not_a_crash(admin_client
 
 def test_the_mijozlar_list_links_the_name_to_that_mijoz_page(admin_client, db):
     """Tahrirlash is the pencil beside the name, so the name itself is free to open
-    the page that actually says something about the mijoz."""
+    the page that actually says something about the mijoz.
+
+    The ism sits in its own `data-lotin` span — it is the operator's text and the
+    transliterator leaves it alone (see test_yozuv) — so the link wraps the span."""
     customer = _customer()
     html = admin_client.get("/customers/").content.decode()
-    assert f'href="/debts/{customer.pk}/">{customer.name}</a>' in html
+    assert (f'href="/debts/{customer.pk}/"><span data-lotin>{customer.name}</span></a>'
+            in html)
 
 
 def _paid_off_som_sale(customer, deadline="2026-07-20"):

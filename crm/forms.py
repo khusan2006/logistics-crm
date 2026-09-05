@@ -1632,6 +1632,13 @@ def _customer_picker_widget():
     three forms sharing one object would tread on each other."""
     return forms.Select(attrs={
         "data-combobox": "",
+        # The names in here are the operator's own text, so the transliterator is
+        # kept off the whole list — an <option> holds one text node and cannot have
+        # the ism marked up inside it, which is what `lotin` does everywhere else.
+        # The cost is that the "qarz"/"avans" tail on the balance picker stays in
+        # lotin too; the name being the one the operator typed is worth more, since
+        # it is the string they are matching against and typing to filter by.
+        "data-lotin": "",
         # What the box says while it is empty. The blank row it stands in for
         # carries no label at all now — see _customer_phone_field.
         "data-placeholder": "Mijozni tanlang",
@@ -2216,6 +2223,8 @@ def _customer_payer_field(field):
     field.queryset = Customer.objects.prefetch_related("sales__returns", "customer_payments")
     field.label_from_instance = customer_option_label
     field.widget.attrs.setdefault("data-combobox", "")
+    # Same reason as the sotuv picker: a mijoz's ism is theirs, not the app's Uzbek.
+    field.widget.attrs.setdefault("data-lotin", "")
     field.widget.attrs.setdefault("data-placeholder", "Mijozni tanlang")
     # "" and not None, for the reason spelled out in `_customer_phone_field`: None
     # DELETES the empty row and books the form against whoever sorts first. Blank

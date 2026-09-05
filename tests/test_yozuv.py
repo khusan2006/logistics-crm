@@ -87,6 +87,34 @@ def test_what_the_operator_typed_is_never_transliterated(admin_client):
     assert "placeholder" in attrs and "title" in attrs
 
 
+def test_a_mijozs_own_text_is_left_in_the_alphabet_it_was_typed_in(admin_client):
+    """A mijoz's ism, telefon and manzil are the operator's text, not the app's Uzbek.
+
+    "Rise servise" transliterated reads "Рисе сервисе", which is neither the name on
+    the invoice nor anything the qidiruv can find — the rows in the database are
+    lotin, so the operator would be matching one spelling on screen against another
+    in their hand. `data-lotin` is the transliterator's own opt-out and the walker
+    refuses the marked element and everything under it."""
+    from crm.models import Customer
+    Customer.objects.create(name="Rise servise", phone="+998 97 738 60 66",
+                            address="Zangata")
+    html = _page(admin_client, "/customers/")
+    assert "<span data-lotin>Rise servise</span>" in html
+    assert "<span data-lotin>Zangata</span>" in html
+
+
+def test_a_mijoz_picker_is_left_in_lotin_whole(admin_client):
+    """An <option> is one text node: the ism inside it cannot be marked up the way
+    the tables mark it, so the mark goes on the select and covers the list."""
+    from crm.forms import SaleCreateForm
+
+    assert SaleCreateForm().fields["customer"].widget.attrs.get("data-lotin") == ""
+    # The searchable list is built OUTSIDE the select, so the mark has to be carried
+    # onto it or the popup would show the very names the select was marked to keep.
+    html = _page(admin_client)
+    assert "pop.setAttribute('data-lotin', '')" in html
+
+
 def test_the_search_box_still_searches_the_stored_lotin(admin_client):
     """Known limit, pinned so it is a decision rather than a surprise: the rows in the
     database are lotin, so a qidiruv typed in kiril finds nothing. The placeholder is

@@ -145,7 +145,7 @@ xlsx links below pass `request.GET` straight through, so they export this same w
     </tr>
     {% for row in customer_rows %}
     <tr>
-      <td class="sticky-col"><a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a></td>
+      <td class="sticky-col"><a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name|lotin }}</a></td>
       <td>{% for currency, amount in row.sotildi %}<div class="cell-line">{% money_in amount currency %}</div>{% empty %}—{% endfor %}</td>
       <td>{% for currency, amount in row.tolandi %}<div class="cell-line">{% money_in amount currency %}</div>{% empty %}—{% endfor %}</td>
       <td class="{% if row.qarz %}late{% endif %}">{% for currency, amount in row.qarz %}<div class="cell-line">{% money_in amount currency %}</div>{% empty %}—{% endfor %}</td>

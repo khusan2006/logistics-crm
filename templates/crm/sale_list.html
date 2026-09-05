@@ -106,7 +106,7 @@
       <button type="button" class="leg-expand" data-sale="{{ g.first.pk }}"
               title="Vazvratlar">&#9656;</button>
       {% endif %}
-      {% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name }}</a>{% else %}{{ g.first.customer.name }}{% endif %}
+      {% if user.is_admin_role %}<a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.customer.name|lotin }}</a>{% else %}{{ g.first.customer.name|lotin }}{% endif %}
       {% comment %}
       Only on the day itself: a marker that never goes away marks nothing. Blue for a
       sotuv that MOVED today — vazvrat, tahrir, bekor qilish — with the title naming
@@ -194,7 +194,7 @@
       <div class="legs-inline">
         <div class="load-panel-head">
           <strong>Vazvratlar</strong>
-          <span class="muted">{{ g.first.customer.name }} ·
+          <span class="muted">{{ g.first.customer.name|lotin }} ·
             {{ g.returned_kg|floatformat:"-3" }} kg qaytgan</span>
           {% if user.is_admin_role %}
           <a class="btn btn-ghost btn-sm" style="margin-left:auto;"
