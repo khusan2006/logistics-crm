@@ -73,6 +73,7 @@ from .models import (
     reconcile_customer_allocations, reconcile_supplier_allocations,
     trim_sale_allocations, allocate_refund, pending_refunds,
     pending_refunds_by_currency, LEGACY_RATE,
+    latest_exchange_rate,
     uzs_slice,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
@@ -2262,13 +2263,59 @@ def ombor(request):
     groups, q = _ombor_groups(request)
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {
-        "page": page, "q": q, "export_url": reverse("ombor_export")})
+        "page": page, "q": q, "kurs": _ombor_kurs(request),
+        "export_url": reverse("ombor_export")})
+
+
+def _ombor_kurs(request):
+    """The kurs the ombor's so'm tannarx is drawn at — today's, one figure for the
+    whole page.
+
+    Everywhere else in the app a so'm figure is stated at the kurs its OWN row was
+    booked at, so a past figure cannot move after the fact. The ombor is the one
+    screen where that is the wrong answer: nearly every kelishuv is struck in
+    dollars, and the question being asked here is "what would this cost me in so'm
+    today, to decide what to sell it for today". Converting each lot at the rate its
+    truck was entered at answers a different question and leaves two lots of the same
+    granula incomparable.
+
+    So it is a presentation figure and nothing else — no row is re-rated, nothing is
+    stored, and the dollar column beside it is still the recorded one. Typed into the
+    box on top of the page, carried in the querystring so the search, the paging and
+    the Excel button all show the same one, and remembered in the session so the page
+    opens where it was left.
+
+    Falls back to the last kurs somebody actually typed anywhere in the app
+    (`latest_exchange_rate`), which is the closest thing to today's the book has."""
+    raw = (request.GET.get("kurs") or "")
+    # The box is a data-money input, so what comes back may be space-grouped and may
+    # use a comma for the decimal — the same shapes `toNumeric` cleans up in the JS.
+    raw = raw.replace("\u00a0", "").replace(" ", "").replace(",", ".").strip()
+    if raw:
+        try:
+            typed = Decimal(raw)
+        except (ArithmeticError, ValueError):
+            typed = None
+        if typed is not None and typed > 0:
+            request.session["ombor_kurs"] = str(typed)
+            return typed
+    stored = request.session.get("ombor_kurs")
+    if stored:
+        try:
+            return Decimal(stored)
+        except (ArithmeticError, ValueError):
+            pass
+    return latest_exchange_rate()
 
 
 def _ombor_groups(request):
     """The ombor rows — one per marka, its lots folded in — shared by the page and its
     Excel button."""
     q = request.GET.get("q", "").strip()
+    # One kurs for every so'm figure on the page, and the same one the Excel button
+    # writes: the querystring rides along with the download, so the file and the
+    # screen cannot disagree about what the stock is worth.
+    kurs = _ombor_kurs(request)
     # Oldest arrival first — the FIFO consumption order sales draw from.
     # Every lot prints a tannarx, and a tannarx reaches into the truck's xarajatlar
     # AND the kelishuv's to'lovlar (`ShipmentLine.landed_cost_per_kg`). Loaded here
@@ -2323,9 +2370,14 @@ def _ombor_groups(request):
         # table opens them, and each one's own page carries the full hand-over.
         g["open_lots"] = [lot for lot in g["lots"] if lot.available_kg > 0]
         g["done_lots"] = [lot for lot in g["lots"] if lot.available_kg <= 0]
-        # The so'm range is taken from the same lots rather than converting the
-        # dollar range, so each end is stated at the kurs its own lot was booked at.
-        costed = [(lot.landed_cost_per_kg, lot.landed_cost_per_kg_uzs) for lot in g["lots"]]
+        # Every lot's so'm tannarx at the ONE kurs the page is drawn at — see
+        # `_ombor_kurs`. Stamped on the lot the way `servable_kg` is below, because
+        # the row that prints it is a shared partial and re-deriving it there would
+        # let the marka row and its lots disagree.
+        for lot in g["lots"]:
+            lot.cost_uzs = (lot.landed_cost_per_kg * kurs).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+        costed = [(lot.landed_cost_per_kg, lot.cost_uzs) for lot in g["lots"]]
         g["cost_min"], g["cost_min_uzs"] = min(costed)
         g["cost_max"], g["cost_max_uzs"] = max(costed)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])

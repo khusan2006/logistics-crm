@@ -10,6 +10,24 @@
     <input type="search" name="q" value="{{ q }}" placeholder="Marka, hamkor yoki kelishuv raqami bo'yicha qidirish…" autocomplete="off" aria-label="Ombor qidirish">
     {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
+  {% comment %}
+  Bugungi kurs. Nearly every kelishuv is struck in dollars, so the so'm tannarx on
+  this page is an ESTIMATE — "what would this cost me in so'm today" — rather than a
+  recorded figure, and one kurs for the whole page is what makes two lots
+  comparable. Nothing is saved against a lot: type a different number and only what
+  is on screen (and in the Excel) changes. See `_ombor_kurs`.
+
+  Inside the search form on purpose: it submits with the qidiruv, so changing the
+  kurs does not throw away what the operator was looking at.
+  {% endcomment %}
+  {% if user.is_admin_role %}
+  <label class="ombor-kurs" title="So'm tan narx shu kursda hisoblanadi — faqat ko'rish uchun, hech qayerga yozilmaydi">
+    <span>Bugungi kurs</span>
+    <input type="text" name="kurs" value="{{ kurs|unlocalize }}" inputmode="decimal"
+           data-money data-submit-on-change autocomplete="off"
+           aria-label="Bugungi kurs (1$ = so'm)">
+  </label>
+  {% endif %}
   {# Downloads the markalar the search has left, not the whole ombor. #}
   {% include "crm/_excel_button.html" %}
 </form>

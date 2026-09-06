@@ -24,11 +24,14 @@ back on a vazvrat and is on the shelf again.
 Two columns rather than the marka row's stacked pair: the lot is bought in dollars
 but sold and thought about in so'm, and the operator reads DOWN a column comparing
 one lot against the next. Stacked, the so'm figures sit in the gaps between the
-dollar ones and the eye has to hop. `rate` printed only the side the lot was booked
-in, which is always the dollar one.
+dollar ones and the eye has to hop.
+
+The so'm side is `cost_uzs` and not the lot's own stored twin: it is this page's
+estimate at the kurs typed on top of it, the same one for every lot. See
+`_ombor_kurs` for why the ombor is the one screen that does not use each row's own.
 {% endcomment %}
 <td class="num">{% rate_typed lot.landed_cost_per_kg 'usd' %}</td>
-<td class="num">{% rate_som lot.landed_cost_per_kg_uzs %}</td>
+<td class="num">{% rate_som lot.cost_uzs %}</td>
 <td class="row-actions">
   {% if lot.available_kg > 0 %}
   <a class="btn btn-sm" href="{% url 'sale_create' %}?lot={{ lot.pk }}" data-modal title="Shu lotdan sotish">Sotish</a>

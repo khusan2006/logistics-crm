@@ -2386,10 +2386,25 @@
   // so the same markup on other pages silently did nothing.
   document.addEventListener('change', function (e) {
     var el = e.target;
-    if (!el.matches || !el.matches('[data-autosubmit] select, [data-autosubmit] input[type=checkbox], [data-autosubmit] input[type=date]')) {
+    // `[data-submit-on-change]` is the same idea for a TEXT box that is a filter
+    // rather than a search — Ombor's bugungi kurs. It has to be opted into per
+    // input: a form with two text boxes and no submit button does not submit on
+    // Enter at all (the browser only does that with exactly one), so a box like
+    // this is otherwise typed into and then silently ignored.
+    if (!el.matches || !el.matches('[data-autosubmit] select, [data-autosubmit] input[type=checkbox], [data-autosubmit] input[type=date], input[data-submit-on-change]')) {
       return;
     }
     var form = el.closest('form');
+    if (!form) { return; }
+    if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+  });
+  // Enter inside such a box means "apply it", the way it does in every other filter
+  // — without this the operator has to click away from the box to see the answer.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !e.target.matches
+        || !e.target.matches('input[data-submit-on-change]')) { return; }
+    e.preventDefault();
+    var form = e.target.closest('form');
     if (!form) { return; }
     if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
   });

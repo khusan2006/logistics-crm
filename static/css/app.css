@@ -1719,6 +1719,17 @@ ul.errorlist li::before { content: "⚠ "; }
 .searchbar select,
 .searchbar input[type=date] { padding-left: 9px; padding-right: 9px; }
 .searchbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+/* Bugungi kurs on Ombor. Narrow — it holds five digits and nothing else — and the
+   figure itself reads as a number rather than as body text, because it is the one
+   input on the bar whose VALUE is doing work on the table below. */
+.ombor-kurs input {
+  width: 92px;
+  max-width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+}
 
 /* Location cell in the client list: pin icon + address, easy to scan */
 .cell-loc { display: inline-flex; align-items: center; gap: 6px; }
