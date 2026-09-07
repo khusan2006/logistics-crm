@@ -323,8 +323,7 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
 
 class CustomerFactsSelect(forms.Select):
     """A mijoz <select> whose options carry what the sotuv form's JS needs to know
-    about that mijoz: the markalar they still have an open bron for, and — where
-    they are one of the mijozlar whose narx is repeated visit to visit — what each
+    about that mijoz: the markalar they still have an open bron for, and what each
     marka last went out at.
 
     Same idea as ContractChoiceSelect: the answer travels on the option, because
@@ -333,8 +332,8 @@ class CustomerFactsSelect(forms.Select):
 
     #: {customer_id: [brand, ...]}, set by the form.
     bron_brands = {}
-    #: {customer_id: {brand: (usd, uzs)}}, set by the form. Empty for every mijoz
-    #: who is not flagged for it, which is nearly all of them.
+    #: {customer_id: {brand: (usd, uzs)}}, set by the form. Empty for a mijoz who
+    #: has not bought from us yet.
     last_prices = {}
 
     def _for(self, table, value):
@@ -353,9 +352,8 @@ class CustomerFactsSelect(forms.Select):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
         brands = self._for(self.bron_brands, value)
         option["attrs"]["data-bron-brands"] = json.dumps(sorted(brands or []))
-        # Only on a mijoz who HAS one, so the attribute's presence is itself the
-        # answer to "does this mijoz's narx repeat" and the other few hundred
-        # options do not each carry an empty object.
+        # Only on a mijoz who HAS one, so a mijoz who has never bought does not
+        # carry an empty object for the browser to read nothing out of.
         prices = self._for(self.last_prices, value)
         if prices:
             option["attrs"]["data-last-prices"] = json.dumps(
@@ -403,9 +401,9 @@ class BronDrawFormMixin:
         widget = CustomerFactsSelect(attrs=dict(picker.widget.attrs))
         widget.choices = picker.widget.choices     # keeps the field's queryset
         widget.bron_brands = brons
-        # What this mijoz last paid for each marka, for the few mijozlar whose narx
-        # is the same visit after visit. One query, and none at all when no mijoz is
-        # flagged — see `last_sale_prices_by_customer`.
+        # What this mijoz last paid for each marka, so the narx box opens with the
+        # figure the operator would otherwise look up — see
+        # `last_sale_prices_by_customer`. One query for the whole picker.
         widget.last_prices = last_sale_prices_by_customer()
         picker.widget = widget
         # Which marka is being sold: a select on the by-brand form, a fixed one on
@@ -494,7 +492,7 @@ class CustomerForm(forms.ModelForm):
 
     class Meta:
         model = Customer
-        fields = ["name", "phone", "address", "note", "prefill_last_price"]
+        fields = ["name", "phone", "address", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def __init__(self, *args, **kwargs):

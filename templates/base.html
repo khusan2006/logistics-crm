@@ -2641,15 +2641,13 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
-  // The narx a mijoz who buys at a settled price already pays. Some mijozlar take
-  // the same markalar over and over at a figure that does not move between visits,
-  // and for them the operator was looking up last month's sotuv and typing it back
-  // in from memory. The mijoz <option> carries what each marka last went out at
-  // (CustomerFactsSelect), so the box opens with it and they confirm instead.
+  // The narx this mijoz last paid for this marka. The operator was looking up last
+  // month's sotuv and typing the figure back in from memory; the mijoz <option>
+  // carries what each marka last went out at (CustomerFactsSelect), so the box
+  // opens with it and they confirm — or type over it — instead.
   //
-  // Only into an EMPTY box, and only for a mijoz who is flagged for it — nothing
-  // here overrides a figure somebody typed, and a mijoz who is quoted afresh every
-  // time carries no prices at all and is untouched.
+  // Only into an EMPTY box: nothing here overrides a figure somebody typed. A mijoz
+  // who has never bought a marka carries no narx for it and is left untouched.
   (function () {
     //: set on a box THIS wrote, so a later valyuta change may repaint it while a
     //: typed figure is left alone. Cleared the moment the operator types.

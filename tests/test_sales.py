@@ -1109,15 +1109,14 @@ def test_pressing_one_lens_turns_the_other_off(admin_client, db):
 
 
 class TestLastPricePrefill:
-    """The narx a mijoz who buys at a settled price already pays.
+    """The narx this mijoz last paid for this marka.
 
-    Some mijozlar take the same markalar over and over at a figure that does not
-    move between visits, and for them the operator was looking up last month's
-    sotuv and typing it back in from memory. The mijoz's <option> carries what each
-    marka last went out at, so the box opens with it and they confirm instead.
+    The operator was looking up last month's sotuv and typing the figure back in
+    from memory. The mijoz's <option> carries what each marka last went out at, so
+    the box opens with it and they confirm — or type over it — instead.
 
-    Off per mijoz by default: most are quoted afresh every time, and a box that
-    opens holding a stale narx reads as agreed rather than as blank."""
+    Every mijoz: the last narx is just what they paid last time, and a new quote is
+    typed over the old one."""
 
     def _sell(self, admin_client, lot, customer, price, on):
         resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
@@ -1131,8 +1130,6 @@ class TestLastPricePrefill:
         lot = _lot(kg="10000", brand="LLDPE")
         other = _lot(kg="10000", brand="HDPE")
         customer = _customer()
-        customer.prefill_last_price = True
-        customer.save(update_fields=["prefill_last_price"])
 
         self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
         self._sell(admin_client, lot, customer, "1.65", "2026-07-25")
@@ -1148,19 +1145,45 @@ class TestLastPricePrefill:
         last time" — the sana alone cannot tell them apart."""
         lot = _lot(kg="10000", brand="LLDPE")
         customer = _customer()
-        customer.prefill_last_price = True
-        customer.save(update_fields=["prefill_last_price"])
 
         self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
         self._sell(admin_client, lot, customer, "1.55", "2026-07-18")
 
         assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.5500")
 
-    def test_a_mijoz_who_is_not_flagged_is_left_out_entirely(self, admin_client, db):
+    def test_a_narx_typed_over_is_the_one_the_next_sotuv_opens_with(
+            self, admin_client, db):
+        """Nothing is snapshotted: the table is read off the saved sotuvlar at every
+        render, so the operator changes the standing narx by selling at the new one
+        — or by correcting the last sotuv, which is the same thing to this table."""
         lot = _lot(kg="10000", brand="LLDPE")
         customer = _customer()
+
         self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
-        assert last_sale_prices_by_customer() == {}
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-25")
+        assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.6500")
+
+        latest = Sale.objects.filter(customer=customer).order_by("date", "pk").last()
+        resp = admin_client.post(f"/sales/{latest.pk}/edit/", {
+            "customer": customer.pk, "line": lot.pk, "kg": "100",
+            "currency": "usd", "exchange_rate": "12000", "price": "1.72",
+            "date": "2026-07-25", "debt_deadline": "", "note": "",
+        })
+        assert resp.status_code == 302
+        assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.7200")
+
+    def test_a_marka_this_mijoz_has_never_bought_is_left_empty(self, admin_client, db):
+        """No narx on record is not the same as a narx of zero — the box opens blank
+        and the operator types what was agreed."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        _lot(kg="10000", brand="HDPE")
+        customer = _customer("Alisher Mebel")
+        newcomer = _customer("Bekzod")
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+
+        prices = last_sale_prices_by_customer()
+        assert "HDPE" not in prices[customer.pk]
+        assert newcomer.pk not in prices
 
     def test_both_currencies_travel_so_a_som_sotuv_opens_in_som(
             self, admin_client, db):
@@ -1168,31 +1191,28 @@ class TestLastPricePrefill:
         must never open with a dollar figure standing in a so'm box."""
         lot = _lot(kg="10000", brand="LLDPE")
         customer = _customer()
-        customer.prefill_last_price = True
-        customer.save(update_fields=["prefill_last_price"])
         self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
 
         usd_price, uzs_price = last_sale_prices_by_customer()[customer.pk]["LLDPE"]
         assert usd_price == Decimal("1.6500")
         assert uzs_price == Decimal("19800.00")
 
-    def test_the_sotuv_form_stamps_it_on_that_mijozs_option_only(
+    def test_the_sotuv_form_stamps_every_mijoz_who_has_bought_before(
             self, admin_client, db):
         lot = _lot(kg="10000", brand="LLDPE")
         regular = _customer("Alisher Mebel")
-        regular.prefill_last_price = True
-        regular.save(update_fields=["prefill_last_price"])
-        walk_in = _customer("Bekzod")
+        occasional = _customer("Bekzod")
+        _customer("Dilshod")                    # has never bought anything
         self._sell(admin_client, lot, regular, "1.65", "2026-07-18")
-        self._sell(admin_client, lot, walk_in, "1.90", "2026-07-19")
+        self._sell(admin_client, lot, occasional, "1.90", "2026-07-19")
 
         html = admin_client.get("/sales/new/").content.decode()
         # `data-last-prices="` and not the bare name: base.html's own JS reads the
         # attribute by name on every page, so the name alone matches everywhere.
-        assert html.count('data-last-prices="') == 1
+        assert html.count('data-last-prices="') == 2
         assert "1.6500" in html and "19800.00" in html
-        # the walk-in's narx is nobody's default and must not be shipped at all
-        assert "1.9000" not in html
+        assert "1.9000" in html
+        # the mijoz with no sotuvlar carries no empty object for the JS to read
 
     def test_the_edit_form_does_not_offer_it(self, admin_client, db):
         """Editing an existing sotuv is not the place: the narx in the box is the
@@ -1200,8 +1220,6 @@ class TestLastPricePrefill:
         rewrite history on Saqlash."""
         lot = _lot(kg="10000", brand="LLDPE")
         customer = _customer()
-        customer.prefill_last_price = True
-        customer.save(update_fields=["prefill_last_price"])
         self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
         sale = Sale.objects.get(line=lot)
 
