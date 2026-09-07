@@ -319,6 +319,32 @@
     return '$' + sign + parts.join('.');
   };
 
+  // Is this a screen where putting focus in a box opens a keyboard? Nothing here
+  // may focus a field on its own on one: the keyboard covers half the page, and on
+  // an in-app browser — the CRM is usually opened from Telegram — the swipe that
+  // collapses it lands on the field instead. The operator taps what they want to
+  // fill; we do not decide it for them.
+  //
+  // Asked of the pointer, not the width: a phone held sideways is wider than any
+  // breakpoint here and behaves exactly the same. Read fresh each time rather than
+  // once at load, so a tablet switched between touch and a trackpad keeps up.
+  window.opensKeyboard = function () {
+    return window.matchMedia
+      && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  };
+
+  // Focus a box only where that does not open a keyboard. On touch the field is
+  // brought into view instead — which is the whole point at a validation error,
+  // where the operator has to be shown WHICH box is wrong.
+  window.focusField = function (el) {
+    if (!el) { return; }
+    if (window.opensKeyboard()) {
+      if (el.scrollIntoView) { el.scrollIntoView({ block: 'center' }); }
+      return;
+    }
+    el.focus();
+  };
+
   // A control group's CHOSEN element. A <select> carries its value on the one
   // element, so a plain querySelector finds the answer; a RADIO GROUP spreads the
   // same name — and the same data- hook — across every option, and only the CHECKED
@@ -519,7 +545,7 @@
       var errEl = panel.querySelector('.qa-error');
       var name = nameEl.value.trim();
       errEl.textContent = '';
-      if (!name) { errEl.textContent = 'Ism kiriting'; nameEl.focus(); return; }
+      if (!name) { errEl.textContent = 'Ism kiriting'; window.focusField(nameEl); return; }
       // A duplicate warning only counts for the exact name it was shown for
       if (saveBtn.dataset.dupName !== name) { saveBtn.dataset.dupOk = ''; }
       var form = saveBtn.closest('form');
@@ -559,7 +585,7 @@
         e.preventDefault();
         var panel = toggle.closest('.qa-container').querySelector('.quick-add-panel');
         panel.hidden = !panel.hidden;
-        if (!panel.hidden) { var n = panel.querySelector('.qa-name'); if (n) { n.focus(); } }
+        if (!panel.hidden) { window.focusField(panel.querySelector('.qa-name')); }
         return;
       }
       var save = e.target.closest('.qa-save');
@@ -580,7 +606,7 @@
       var errEl = panel.querySelector('.qap-error');
       var name = nameEl.value.trim();
       errEl.textContent = '';
-      if (!name) { errEl.textContent = 'Nom kiriting'; nameEl.focus(); return; }
+      if (!name) { errEl.textContent = 'Nom kiriting'; window.focusField(nameEl); return; }
       if (saveBtn.dataset.dupName !== name) { saveBtn.dataset.dupOk = ''; }
       var form = saveBtn.closest('form');
       var token = form.querySelector('[name=csrfmiddlewaretoken]').value;
@@ -617,7 +643,7 @@
         e.preventDefault();
         var panel = toggle.closest('.qap-container').querySelector('.qap-panel');
         panel.hidden = !panel.hidden;
-        if (!panel.hidden) { var n = panel.querySelector('.qap-name'); if (n) { n.focus(); } }
+        if (!panel.hidden) { window.focusField(panel.querySelector('.qap-name')); }
         return;
       }
       var save = e.target.closest('.qap-save');
@@ -960,7 +986,7 @@
         input.value = display(cc, p.nat);
         mirror(input);
         input.addEventListener('input', function () { reformat(input); mirror(input); });
-        sel.addEventListener('change', function () { reformat(input); input.placeholder = COUNTRIES[sel.value].ph; mirror(input); input.focus(); });
+        sel.addEventListener('change', function () { reformat(input); input.placeholder = COUNTRIES[sel.value].ph; mirror(input); window.focusField(input); });
       });
     }
     window.enhancePhoneIntl = enhance;
@@ -1172,7 +1198,7 @@
       // visible on a Dollar row. Same event the modal loader fires.
       document.dispatchEvent(new CustomEvent('modal:loaded', { detail: row }));
       var first = row.querySelector('input, select');
-      if (first) { first.focus(); }
+      window.focusField(first);
       return row;
     }
     function removeRow(set, row) {
@@ -1627,7 +1653,7 @@
       if (window.enhancePhoneIntl) { window.enhancePhoneIntl(panel); }
       btn.addEventListener('click', function () {
         panel.hidden = !panel.hidden;
-        if (!panel.hidden) { panel.querySelector('.qa-name').focus(); }
+        if (!panel.hidden) { window.focusField(panel.querySelector('.qa-name')); }
       });
       panel.querySelector('.qa-cancel').addEventListener('click', function () { panel.hidden = true; });
       panel.querySelector('.qa-save').addEventListener('click', function () {
@@ -2413,6 +2439,10 @@
   // the user stops typing, so the list filters without a button. Clearing the box
   // submits an empty query (removing the filter). After the reload we restore focus
   // to the search input so the user can keep typing seamlessly.
+  //
+  // On a touch screen we do NOT: the page reloads on its own every 350ms, so
+  // restoring focus each time re-opened a keyboard the operator had just dismissed
+  // and held the page there. Their tap is what puts the caret back.
   (function () {
     var timers = new WeakMap();
     document.addEventListener('input', function (e) {
@@ -2426,6 +2456,7 @@
       }, 350));
     });
     function restoreFocus() {
+      if (window.opensKeyboard()) { return; }
       var input = document.querySelector('[data-live-search] input[name=q]');
       if (input && input.value) {
         input.focus();

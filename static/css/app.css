@@ -3504,3 +3504,38 @@ form.stacked .lineset-field--fee_bearer label {
    the same rule `.listbar > .searchbar` and `> .daterange-bar` already follow. */
 .listbar > .viewswitch { margin-bottom: 0; }
 @media (max-width: 620px) { .viewswitch { display: flex; } .viewswitch-opt { flex: 1; text-align: center; } }
+
+
+/* ── Touch: no zoom on focus ─────────────────────────────────────────────────
+   Safari zooms the whole page into any text field it focuses whose font is under
+   16px, and a zoomed page swallows the swipe that collapses an in-app browser —
+   so an operator who opened the CRM from Telegram and tapped a qidiruv box was
+   shut in it until they pinched back out. 16px on the controls a phone actually
+   focuses is the one fix every engine honours; capping the viewport's scale would
+   work too, but it takes deliberate pinch-zoom away with it, and a wide jadval is
+   read on a phone by zooming in.
+
+   `hover: none` rather than a width: a phone held sideways is wider than any
+   breakpoint drawn here and zooms just the same.
+
+   Last in the file on purpose. Several of these boxes are restyled by a later
+   component rule at the same specificity, and only source order puts this above
+   them.
+
+   The two 86px satellites of the xarajat grid (.xfee, .xmini) are the deliberate
+   exception: nothing in this stylesheet restacks that grid for a narrow screen, and
+   16px in an 86px box would break the row it was sized to fit. .xpayer is listed
+   even though it sits beside them — it spans the whole cell rather than the 86px,
+   so it has the room. */
+@media (hover: none) and (pointer: coarse) {
+  input[type=text], input[type=email], input[type=password],
+  input[type=number], input[type=date], input[type=tel],
+  input[type=search], select, textarea,
+  .toolbar-search input[type=search],
+  .combobox-input,
+  .xcell input,
+  .modal form.stacked .xcell-payer select.xpayer, .xcell-payer select.xpayer,
+  .status-select {
+    font-size: 16px;
+  }
+}
