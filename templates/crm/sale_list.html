@@ -134,20 +134,55 @@
     The kg the mijoz kept. A row whose granula partly came back says so underneath
     rather than quietly printing a smaller number, which would read as a typo — and
     the money columns beside it are net of the same vazvrat.
+
+    On a sotuv of several mahsulotlar the kg arrives SUMMED, with the per-lot split
+    behind a caret. "How much granula did this mijoz take" is the question the column
+    is read for, and it is the one figure the stacked lines never showed — the
+    operator was adding 2 790 and 210 in their head beside a Jami that was already
+    added up for them. The split is the second question, so it is one press away.
+
+    Only this column folds, and only on a multi-lot sotuv: the narxlar stay per
+    mahsulot because they are per-kg figures that cannot be summed, and a single-lot
+    row has nothing to fold.
     {% endcomment %}
-    <td>
-      {% for s in g.sales %}
-      <div class="cell-line">
-        {{ s.net_kg|floatformat:"-3" }}
-        {% comment %}
-        Under the figure rather than beside it: inline, the note stretched the Kg
-        column wide enough to push the money columns off the edge of the table.
-        {% endcomment %}
-        {% if s.returned_kg %}
-        <div class="vz load-sub">−{{ s.returned_kg|floatformat:"-3" }} qaytdi</div>
+    <td class="kg-cell{% if g.count > 1 %} kg-toggle{% endif %}"
+        {% if g.count > 1 %}data-kg="{{ g.first.pk }}" title="Mahsulotlar bo'yicha ko'rish"{% endif %}>
+      {% comment %}
+      The caret sits outside the two views, centred against however tall the cell is,
+      so it does not move when the cell swaps what it shows — and so it is still
+      there, in the same place, to close what it opened.
+      {% endcomment %}
+      {% if g.count > 1 %}
+      <button type="button" class="leg-expand" aria-label="Mahsulotlar bo'yicha kg">&#9656;</button>
+      {% endif %}
+      <div class="kg-body">
+        {% if g.count > 1 %}
+        <div class="kg-sum">
+          {{ g.kg|floatformat:"-3" }}
+          {% if g.returned_kg %}
+          <div class="vz load-sub">−{{ g.returned_kg|floatformat:"-3" }} qaytdi</div>
+          {% endif %}
+        </div>
         {% endif %}
+        {% comment %}
+        The same .cell-line stack as before, so an opened kg column still lines up
+        row for row with the markalar and narxlar beside it.
+        {% endcomment %}
+        <div class="kg-lines"{% if g.count > 1 %} hidden{% endif %}>
+          {% for s in g.sales %}
+          <div class="cell-line">
+            {{ s.net_kg|floatformat:"-3" }}
+            {% comment %}
+            Under the figure rather than beside it: inline, the note stretched the Kg
+            column wide enough to push the money columns off the edge of the table.
+            {% endcomment %}
+            {% if s.returned_kg %}
+            <div class="vz load-sub">−{{ s.returned_kg|floatformat:"-3" }} qaytdi</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
       </div>
-      {% endfor %}
     </td>
     {% if user.is_admin_role %}
     <td>{% for s in g.sales %}<div class="cell-line">{% rate s.cost_price s.cost_price_uzs s.currency %}</div>{% endfor %}</td>
@@ -168,15 +203,20 @@
     <td>{% money g.profit g.profit_uzs g.first.currency %}</td>
     <td{% if g.owing %} class="late"{% endif %}>{% money g.remaining g.remaining_uzs g.first.currency %}</td>
     {% comment %}
-    A sotuv of several mahsulotlar gets ONE action — open it. Tahrirlash and
-    O'chirish work on a single lot's row (that is what carries the kg and the narx
-    being corrected), and an icon that silently picked the first of three would be
-    worse than no icon; the sotuv's own page lists every row with its own pair.
+    The same pair on every row, whatever the sotuv carries. A multi-mahsulot sotuv
+    used to get an eye instead — open the sotuv's page and edit a lot at a time —
+    because Tahrirlash worked on ONE lot's row and an icon that silently picked the
+    first of three would be worse than no icon. It gets its own door now: the whole
+    sotuv, in the form it was typed in, and O'chirish takes all of it. The mijoz's
+    name still opens the sotuv's page for anybody who wants to read it row by row.
     {% endcomment %}
     <td class="row-actions">
       {% if g.count > 1 %}
-      <a class="icon-action" href="{% url 'sale_detail' g.first.pk %}" title="Sotuvni ochish">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+      <a class="icon-action act-edit" href="{% url 'sale_group_edit' g.first.pk %}" data-modal title="Tahrirlash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </a>
+      <a class="icon-action act-delete" href="{% url 'sale_group_delete' g.first.pk %}" data-modal title="O'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
       </a>
       {% else %}{% with s=g.first %}{% include "crm/_sale_row_actions.html" %}{% endwith %}{% endif %}
     </td>
@@ -270,6 +310,25 @@
     btn.classList.toggle('is-open', willOpen);
     btn.closest('tr').classList.toggle('is-expanded', willOpen);
   }
+
+  // The kg column of a multi-lot sotuv: summed by default, opened into its
+  // mahsulotlar by the caret. It is the same ▸ control as everywhere else, but it
+  // swaps what the CELL shows rather than opening a panel under the row — the split
+  // belongs in the column it belongs to, beside the markalar it splits by.
+  document.querySelectorAll('.kg-toggle').forEach(function (cell) {
+    cell.addEventListener('click', function (e) {
+      if (e.target.closest('a')) { return; }
+      var sum = cell.querySelector('.kg-sum');
+      var lines = cell.querySelector('.kg-lines');
+      var btn = cell.querySelector('.leg-expand');
+      if (!sum || !lines || !btn) { return; }
+      var willOpen = lines.hidden;
+      lines.hidden = !willOpen;
+      sum.hidden = willOpen;
+      btn.classList.toggle('is-open', willOpen);
+      cell.title = willOpen ? 'Jami kg' : "Mahsulotlar bo'yicha ko'rish";
+    });
+  });
 
   document.querySelectorAll('.sale-toggle').forEach(function (cell) {
     cell.addEventListener('click', function (e) {

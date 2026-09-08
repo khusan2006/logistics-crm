@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.utils import timezone
 
-from conftest import line_data
+from conftest import line_data, return_rows
 from crm.models import (
     AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
     last_sale_prices_by_customer,
@@ -1225,3 +1225,172 @@ class TestLastPricePrefill:
 
         html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
         assert 'data-last-prices="' not in html
+
+
+class TestEditingAWholeSotuv:
+    """A sotuv of several mahsulotlar is edited and deleted as ONE thing — the trip
+    to the counter it was entered as, in the same form it was typed in.
+
+    Sotuvlar used to hand these rows an eye: open the sotuv's page, correct one lot
+    at a time. That is the right shape for the STORED rows (a marka split across two
+    lots is two of them) and the wrong shape for the deal, which is what an operator
+    corrects — they change the mijoz, or the kg of a marka, not FIFO's arithmetic."""
+
+    def _post(self, client, customer, *rows, **extra):
+        data = {"customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+                "date": "2026-07-24", "debt_deadline": "", "note": "",
+                **line_data(*rows)}
+        data.update(extra)
+        return client.post("/sales/new/", data)
+
+    def _two_marka_sotuv(self, client):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        customer = Customer.objects.create(name="Ikki marka")
+        self._post(client, customer,
+                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                   {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        return customer, list(Sale.objects.order_by("pk"))
+
+    def _edit(self, client, sale, *rows, initial=0, **extra):
+        data = {"customer": sale.customer_id, "currency": "usd",
+                "exchange_rate": "12000", "date": "2026-07-24",
+                "debt_deadline": "", "note": "", **line_data(*rows, initial=initial)}
+        data.update(extra)
+        return client.post(f"/sales/{sale.pk}/group/edit/", data)
+
+    def test_the_form_opens_with_every_mahsulot_filled_in(self, admin_client, db):
+        """The same modal a new sotuv is typed in, holding what was typed."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        html = admin_client.get(f"/sales/{rows[0].pk}/group/edit/").content.decode()
+        assert 'name="lines-0-brand"' in html and 'name="lines-1-brand"' in html
+        import re as _re
+        kgs = _re.findall(r'name="lines-\d-kg"[^>]*value="([^"]*)"', html)
+        prices = _re.findall(r'name="lines-\d-price"[^>]*value="([^"]*)"', html)
+        # Decimals as the single-row edit form already prefills them.
+        assert kgs == ["100.000", "50.000"], (kgs, prices)
+        assert prices == ["1.5000", "3.0000"], (kgs, prices)
+
+    def test_saving_it_unchanged_changes_nothing(self, admin_client, db):
+        """The sotuv's own kg are already off the shelf; the ceiling has to let it
+        stand on them, or an untouched Saqlash is refused."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        before = [(s.pk, s.kg, s.price) for s in rows]
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 302
+        assert [(s.pk, s.kg, s.price) for s in Sale.objects.order_by("pk")] == before
+
+    def test_the_header_moves_every_mahsulot_at_once(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        other = Customer.objects.create(name="Boshqa mijoz")
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          customer=other.pk, note="tuzatildi")
+        assert resp.status_code == 302
+        moved = list(Sale.objects.order_by("pk"))
+        assert {s.customer_id for s in moved} == {other.pk}
+        assert {s.note for s in moved} == {"tuzatildi"}
+        # An untouched kg keeps its rows — and everything hanging off them.
+        assert [s.pk for s in moved] == [s.pk for s in rows]
+
+    def test_changing_one_marka_leaves_the_other_alone(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        hdpe = [s for s in rows if s.line.brand == "HDPE"]
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "250", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 302
+        after = list(Sale.objects.order_by("pk"))
+        assert sum(s.kg for s in after if s.line.brand == "LLDPE") == Decimal("250")
+        assert [s.pk for s in after if s.line.brand == "HDPE"] == [s.pk for s in hdpe]
+        assert len({s.group for s in after}) == 1
+
+    def test_a_mahsulot_can_be_struck_out(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        assert resp.status_code == 302
+        assert {s.line.brand for s in Sale.objects.all()} == {"LLDPE"}
+
+    def test_a_mahsulot_can_be_added(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        _lot_at("PP", "300", "1.10", "2026-07-12")
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          {"brand": "PP", "kg": "70", "price": "2.00"})
+        assert resp.status_code == 302
+        after = Sale.objects.all()
+        assert {s.line.brand for s in after} == {"LLDPE", "HDPE", "PP"}
+        assert len({s.group for s in after}) == 1
+
+    def test_a_marka_with_a_vazvrat_is_not_re_sliced_behind_the_operator(
+            self, admin_client, db):
+        """A vazvrat line is deleted with the sotuv row it came off, so a kg change
+        that rewrites those rows would take back goods the mijoz really returned.
+        The edit stops and says which marka to sort out first."""
+        customer, rows = self._two_marka_sotuv(admin_client)
+        lldpe = next(s for s in rows if s.line.brand == "LLDPE")
+        admin_client.post("/returns/new/", return_rows(
+            (lldpe.pk, "10"), customer=customer, date="2026-07-25"))
+        assert lldpe.returns.count() == 1
+
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "250", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 200
+        assert "vazvrat" in resp.content.decode()
+        assert lldpe.returns.count() == 1
+        assert Sale.objects.get(pk=lldpe.pk).kg == Decimal("100")
+
+    def test_deleting_it_takes_every_mahsulot(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        resp = admin_client.post(f"/sales/{rows[0].pk}/group/delete/")
+        assert resp.status_code == 302
+        assert not Sale.objects.exists()
+
+    def test_a_one_mahsulot_sotuv_still_uses_its_own_door(self, admin_client, db):
+        """A group that holds one row is the ordinary sotuv, and gets the ordinary
+        form — one door for it rather than two that must be kept in step."""
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Bitta marka")
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        sale = Sale.objects.get()
+        html = admin_client.get(f"/sales/{sale.pk}/group/edit/").content.decode()
+        assert 'name="lines-0-brand"' not in html and 'name="kg"' in html
+
+    def test_a_header_only_edit_leaves_other_sotuvlar_where_they_are(
+            self, admin_client, db):
+        """Nothing came off the shelf, so FIFO has nothing to re-answer. Replaying
+        the marka anyway would rewrite the lots of every OTHER sotuv of it that is
+        not on FIFO order — the hand-picked and the typed-in-late."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        other = Customer.objects.create(name="Boshqa sotuv")
+        self._post(admin_client, other, {"brand": "LLDPE", "kg": "40", "price": "1.50"})
+        outsider = Sale.objects.exclude(pk__in=[s.pk for s in rows]).get()
+        before = [(sl.line_id, sl.kg) for sl in outsider.lots.order_by("pk")]
+
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          note="faqat izoh")
+        assert resp.status_code == 302
+        outsider.refresh_from_db()
+        assert [(sl.line_id, sl.kg) for sl in outsider.lots.order_by("pk")] == before
+
+    def test_the_spare_row_under_the_mahsulotlar_is_not_a_row(self, admin_client, db):
+        """What the browser actually posts: the sotuv's rows plus the empty one the
+        form always carries — whose marka <select> posts the first marka in the
+        ombor, filled in by nobody. It must not be read as a third mahsulot with two
+        empty boxes, which is what refused every save from the real modal."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          {"brand": "LLDPE", "kg": "", "price": "", "reys": ""},
+                          initial=2)
+        assert resp.status_code == 302
+        assert Sale.objects.count() == len(rows)

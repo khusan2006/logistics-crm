@@ -1751,6 +1751,21 @@ class SaleLineForm(forms.Form):
         _group_thousands(self.fields["kg"])
         _group_thousands(self.fields["price"])
 
+    def has_changed(self):
+        """A spare row with empty kg and narx boxes is not a row anybody typed.
+
+        Django decides that off `has_changed()`, and the marka <select> defeats it:
+        an untouched select posts the first marka in the ombor, so a blank spare row
+        looks filled in and is then refused for the two boxes the operator never
+        meant to touch. The figures are what say whether a row was typed — which is
+        what lets the edit form carry a spare row under the sotuv's own mahsulotlar,
+        and “+ Mahsulot qo'shish” leave an unused one behind."""
+        if not self.is_bound:
+            return super().has_changed()
+        if any(self.data.get(self.add_prefix(name)) for name in ("kg", "price")):
+            return super().has_changed()
+        return False
+
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
         if kg is not None and kg <= 0:
@@ -1774,6 +1789,12 @@ class BaseSaleLineFormSet(forms.BaseFormSet):
     one marka are checked as a SUM against the shelf, which is the thing the old
     refusal was really protecting (two rows each passing on their own, then taking
     twice what is there)."""
+
+    #: {marka: kg} this submission may re-take because it already holds them.
+    #: Empty when a sotuv is being CREATED — nothing is held yet. On an edit the
+    #: sotuv's own kg are already off the shelf, so without this a form resubmitted
+    #: unchanged would be refused for taking granula it is itself standing on.
+    allowance = {}
 
     def rows(self):
         """The rows that mean something — filled in and not struck out."""
@@ -1802,7 +1823,7 @@ class BaseSaleLineFormSet(forms.BaseFormSet):
             # and a mijoz, and the operator is the one who decides whether to keep it
             # today — granula refused to a buyer standing at the counter is a sale
             # lost to a rule that was never the mijoz's.
-            available = brand_on_hand_kg(brand)
+            available = brand_on_hand_kg(brand) + self.allowance.get(brand, Decimal("0"))
             if kg <= available:
                 continue
             # On the LAST reys of that marka, which is the one that broke the ceiling
@@ -1824,7 +1845,7 @@ SaleLineFormSet = forms.formset_factory(
     SaleLineForm, formset=BaseSaleLineFormSet, extra=1, can_delete=True)
 
 
-class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
+class SaleHeaderForm(InheritedRateMixin, forms.ModelForm):
     """The header of a sotuv: who is buying, in what currency, on what terms.
 
     WHAT is being sold lives in `SaleLineFormSet` beside it — a sotuv may carry
@@ -1857,6 +1878,21 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
         # future date by definition.
         no_future_date(self.fields["date"])
         _customer_phone_field(self.fields["customer"])
+
+
+class SaleCreateForm(BronDrawFormMixin, SaleHeaderForm):
+    """The header as it is TYPED: the same fields, plus the Brondan ushlansin
+    question, which only a new sotuv asks. An edit never re-asks it — whether a
+    sotuv came out of a bron is decided when it is entered and survives every
+    correction, exactly as `sale_edit` already treats it."""
+
+
+class SaleGroupEditForm(SaleHeaderForm):
+    """The header of an EXISTING multi-mahsulot sotuv.
+
+    Bare `SaleHeaderForm`: no bron question for the reason above, and no lot/kg/narx
+    of its own — those are the Mahsulot rows beside it, which on an edit are the
+    sotuv's own rows read back out of its FIFO slices."""
 
 
 class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
@@ -1962,10 +1998,19 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     class Meta:
         model = Reservation
         fields = ["customer", "brand", "kg", "currency", "price", "exchange_rate", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 2})}
+        widgets = {
+            "note": forms.Textarea(attrs={"rows": 2}),
+            # The same mijoz picker the sotuv forms carry, for the same reason: the
+            # list runs to hundreds of names in the operator's own spelling, and a
+            # native select can only be scrolled. A bron is the same kind of promise
+            # to the same kind of mijoz — including one who has bought nothing yet,
+            # which is why this keeps the quick-add the payment pickers leave off.
+            "customer": _customer_picker_widget(),
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        _customer_phone_field(self.fields["customer"])
         stock = {row["brand"]: row for row in brand_stock_costed()}
         choices = []
         for brand in bron_brands():

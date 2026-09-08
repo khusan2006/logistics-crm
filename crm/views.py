@@ -36,7 +36,8 @@ from .forms import (
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     ContractExpenseForm,
-    SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
+    SaleCreateForm, SaleForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
+    ShipmentExpenseForm,
     ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
     ShipmentLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
@@ -4077,6 +4078,272 @@ def sale_delete(request, pk):
         request,
         "Sotuvni o'chirish",
         f"“{sale.kg} kg · {sale.customer.name}” sotuvi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="sale_list",
+    )
+
+
+def _group_rows(sales):
+    """A sotuv's FIFO slices read back as the Mahsulot rows they were TYPED as.
+
+    A row the operator typed ("2 790 kg 2102 campaund at 1.5") becomes one Sale per
+    lot it took to fill, so the stored rows are finer than the rows anybody entered.
+    An edit has to put the typed rows back on the screen — three lines saying 2 790,
+    1 250 and 9 750 are not the sotuv the operator remembers making, and correcting
+    a kg on one of them would be correcting FIFO's arithmetic rather than the deal.
+
+    Keyed by (marka, reys), which is exactly what one typed row is: the same marka
+    twice means two mashina, and those stay two rows."""
+    rows, index = [], {}
+    for sale in sales:
+        key = (sale.line.brand, sale.reys)
+        row = index.get(key)
+        if row is None:
+            row = index[key] = {"brand": key[0], "reys": key[1], "kg": Decimal("0"),
+                                "price": sale.price_own, "sales": []}
+            rows.append(row)
+        row["kg"] += sale.kg
+        row["sales"].append(sale)
+    return rows
+
+
+def _group_label(rows):
+    """"2 790 kg 2102 campaund, 210 kg ftor oq" — a sotuv named by what is in it."""
+    return ", ".join(f"{_kg(row['kg'])} kg {row['brand']}"
+                     + (f" ({row['reys']}-reys)" if row["reys"] else "")
+                     for row in rows)
+
+
+def _blocking_return(sales):
+    """The first slice among these that a vazvrat has already come off.
+
+    A vazvrat line points at a SOTUV row and is deleted with it (CASCADE), so
+    rewriting a row that has one would silently take back goods the mijoz really
+    brought back. The edit stops instead and says which marka to sort out first —
+    changing a kg is a correction, losing a vazvrat is not."""
+    for sale in sales:
+        if sale.returns.all():
+            return sale
+    return None
+
+
+@role_required(User.Role.ADMIN)
+def sale_group_edit(request, pk):
+    """Tahrirlash for a sotuv of several mahsulotlar — the whole trip to the counter
+    in the form it was typed in, rather than one lot slice of it.
+
+    The single-row door (`sale_edit`) stays exactly where it was and is what a
+    one-product sotuv still opens; this is its multi-product twin, and a group that
+    has shrunk to one row is handed straight back to it.
+
+    Nothing is deleted and recreated. A row whose kg and narx did not move keeps its
+    Sale rows, their pks, their vazvratlar and their history — which is what lets the
+    ordinary edit (a mijoz typed wrong, a sana a day out) be exactly that. Only a row
+    whose KG changed is re-sliced, because where the kg come from is FIFO's answer
+    and it changes with them."""
+    sale = get_object_or_404(Sale, pk=pk)
+    rows_now = sale.group_sales
+    if len(rows_now) == 1:
+        return sale_edit(request, rows_now[0].pk)
+    current = _group_rows(rows_now)
+    head = rows_now[0]
+    title = "Sotuvni tahrirlash"
+
+    form = SaleGroupEditForm(request.POST or None, instance=head)
+    lines = SaleLineFormSet(
+        request.POST or None, prefix="lines",
+        initial=None if request.method == "POST" else [
+            {"brand": row["brand"], "kg": row["kg"], "price": row["price"],
+             "reys": row["reys"]} for row in current])
+    # The sotuv's own kg are already off the shelf, so the ceiling has to let it
+    # stand on them — otherwise saving a sotuv unchanged is refused for taking
+    # granula it is itself holding.
+    allowance = defaultdict(Decimal)
+    for row in current:
+        allowance[row["brand"]] += row["kg"]
+    lines.allowance = allowance
+
+    if request.method == "POST" and form.is_valid() and lines.is_valid():
+        data = form.cleaned_data
+        currency, rate = data["currency"], data["exchange_rate"]
+        typed = lines.rows()
+        reys_numbers = _reys_numbers(typed)
+        wanted = {}
+        for line, reys in zip(typed, reys_numbers):
+            take = line.cleaned_data
+            wanted[(take["brand"], reys)] = (take["kg"], take["price"], line)
+        was = {(row["brand"], row["reys"]): row for row in current}
+
+        # Every row about to lose its Sale rows — the ones whose kg moved and the
+        # ones struck out altogether. Asked BEFORE anything is written, so a sotuv
+        # with a vazvrat on one marka is refused whole rather than half-edited.
+        doomed = []
+        for key, row in was.items():
+            if key not in wanted or wanted[key][0] != row["kg"]:
+                doomed.append((key, row))
+        for key, row in doomed:
+            blocked = _blocking_return(row["sales"])
+            if blocked is None:
+                continue
+            message = (f"“{row['brand']}” bo'yicha vazvrat bor — avval vazvratni "
+                       f"tahrirlang, keyin bu mahsulotning kg'sini o'zgartiring")
+            if key in wanted:
+                wanted[key][2].add_error("kg", message)
+            else:
+                lines.non_form_errors().append(message)
+        if any(line.errors for line in lines.forms) or lines.non_form_errors():
+            return _sale_form_response(request, form, lines, title, invalid=True)
+
+        moved = head.customer_id != data["customer"].pk
+        previous_customer = head.customer
+        # Only the markalar whose KG moved: a header-only correction (a mijoz typed
+        # wrong, a sana a day out) takes nothing off the shelf and must not set FIFO
+        # loose on every marka the sotuv happens to mention.
+        changed_brands = {brand for (brand, _reys), _row in doomed}
+        changed_brands |= {brand for (brand, _reys) in wanted if (brand, _reys) not in was}
+        # Asked BEFORE the edit lands, exactly as a single-row edit asks it: whether
+        # the chain may move is a fact about the sotuvlar behind this one AS THEY
+        # STAND, and a plan replayed afterwards would describe a chain the edit has
+        # already disturbed. A marka whose later sotuvlar are not on FIFO order is
+        # left alone — those assignments came from somewhere else (a hand-picked lot,
+        # a sotuv typed in days late) and a shift would quietly overwrite them.
+        may_shift = {}
+        for brand in sorted(changed_brands):
+            anchor = min((s for s in rows_now if s.line.brand == brand),
+                         key=lambda s: (s.date, s.pk), default=head)
+            may_shift[brand] = not blockers(replay(brand), anchor)
+        slices, sold = [], []
+        with transaction.atomic():
+            for key, row in doomed:
+                for old in row["sales"]:
+                    # The promise this slice settled is unkept again until the new
+                    # slices draw it down; releasing first is the same order
+                    # `sale_edit` uses, and for the same reason — releasing after
+                    # would give back the NEW kg rather than what was taken.
+                    release_bron(old)
+                    old.delete()
+            for (brand, reys), (kg, price, _line) in wanted.items():
+                usd, uzs = convert_pair(price, currency, rate, "0.0001")
+                row = was.get((brand, reys))
+                if row is not None and row["kg"] == kg:
+                    # Untouched kg: the slices stay exactly where FIFO put them,
+                    # with everything that hangs off them. Only what the header and
+                    # the narx say about them is rewritten.
+                    for kept in row["sales"]:
+                        kept.customer = data["customer"]
+                        kept.price, kept.price_uzs = usd, uzs
+                        kept.currency, kept.exchange_rate = currency, rate
+                        kept.date = data["date"]
+                        kept.debt_deadline = data["debt_deadline"]
+                        kept.note = data["note"]
+                        kept.save()
+                        slices.append(kept)
+                else:
+                    remaining = kg
+                    from_bron = any(s.reservation_id for s in (row or {}).get("sales", []))
+                    for lot in fifo_lots(brand):
+                        if remaining <= 0:
+                            break
+                        take = min(lot.available_kg, remaining)
+                        fresh = Sale.objects.create(
+                            customer=data["customer"], line=lot, kg=take,
+                            price=usd, price_uzs=uzs,
+                            currency=currency, exchange_rate=rate,
+                            group=head.group, reys=reys,
+                            date=data["date"], debt_deadline=data["debt_deadline"],
+                            note=data["note"], created_by=head.created_by,
+                        )
+                        slices.append(fresh)
+                        remaining -= take
+                        # A row that came out of a bron goes on coming out of it:
+                        # whether a sotuv draws on a promise is decided when it is
+                        # entered and must survive a correction to its kg.
+                        if from_bron:
+                            draw_down_bron(fresh)
+                sold.append(f"{_kg(kg)} kg {brand}"
+                            + (f" ({reys}-reys)" if reys else ""))
+
+        if moved:
+            # Slices of the PREVIOUS mijoz's to'lovlar cannot follow the sotuv to
+            # somebody else — the money would read as paid here while still counting
+            # against the mijoz who handed it over.
+            for row in slices:
+                row.allocations.all().delete()
+        for row in slices:
+            trim_sale_allocations(row)
+        reconcile_customer_allocations(data["customer"])
+        if moved:
+            reconcile_customer_allocations(previous_customer)
+        # The kg of these markalar moved, so FIFO's answer for each of them moved
+        # with it. The new slices already came off `fifo_lots`, so a marka that may
+        # not shift needs nothing further — it is the sotuvlar BEHIND it that the
+        # replay would have rewritten, and those are the ones being protected.
+        spread = set()
+        own = {row.pk for row in slices}
+        for brand in sorted(changed_brands):
+            if not may_shift.get(brand):
+                continue
+            spread.update(pk for pk in apply_plan(replay(brand)) if pk not in own)
+
+        AuditLog.record(
+            request.user, AuditLog.Action.UPDATE, "Sotuv", slices[0].pk if slices else pk,
+            f"Sotuv tahrirlandi: {_group_label(current)} → {', '.join(sold)} · "
+            f"{data['customer'].name}"
+            + (f" · {len(spread)} ta sotuvning loti siljidi" if spread else ""),
+        )
+        if spread:
+            messages.success(request, f"Sotuv yangilandi · {len(spread)} ta sotuvning "
+                                      f"loti va tannarxi FIFO bo'yicha qayta hisoblandi")
+        elif changed_brands and not all(may_shift.values()):
+            messages.success(request, "Sotuv yangilandi · keyingi sotuvlar FIFO "
+                                      "tartibida emas, shuning uchun ular tegilmadi")
+        else:
+            messages.success(request, "Sotuv yangilandi")
+        return form_reload(request, reverse("sale_list"))
+
+    invalid = request.method == "POST"
+    return _sale_form_response(request, form, lines, title, invalid=invalid)
+
+
+@role_required(User.Role.ADMIN)
+def sale_group_delete(request, pk):
+    """O'chirish for the whole sotuv — every mahsulot on it, in one go.
+
+    A sotuv of three markalar is one thing the operator entered and one thing they
+    delete; leaving two thirds of it behind because the row on Sotuvlar only knew
+    about one lot is not a smaller deletion, it is a wrong one. All or nothing, so a
+    slice that refuses to go takes the rest of the sotuv with it back."""
+    sale = get_object_or_404(Sale, pk=pk)
+    rows = sale.group_sales
+    if len(rows) == 1:
+        return sale_delete(request, rows[0].pk)
+    current = _group_rows(rows)
+    customer = sale.customer
+    label = f"{_group_label(current)} · {customer.name}"
+    if request.method == "POST":
+        try:
+            with transaction.atomic():
+                for row in rows:
+                    # Each slice gives back the bron kg it was holding, exactly as a
+                    # single-row deletion does.
+                    release_bron(row)
+                    row.delete()
+        except ProtectedError:
+            messages.error(request, "Sotuvga bog'liq ma'lumot bor — o'chirib bo'lmaydi")
+        else:
+            # Their allocations went with them (CASCADE); that money is avans again,
+            # and the mijoz's other open sotuvlar have first claim on it.
+            reconcile_customer_allocations(customer)
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Sotuv", pk,
+                            f"Sotuv o'chirildi ({len(rows)} lot): {label}")
+            messages.success(request, "Sotuv o'chirildi")
+        return form_reload(request, reverse("sale_list"))
+    return render_confirm(
+        request,
+        "Sotuvni o'chirish",
+        f"“{label}” sotuvi butunlay o'chiriladi ({len(current)} mahsulot). "
+        f"Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="sale_list",

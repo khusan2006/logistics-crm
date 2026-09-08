@@ -3088,6 +3088,17 @@ form.stacked .lineset-field[hidden] { display: none; }
   }
 }
 
+/* ── The Kg column of a sotuv of several mahsulotlar ────────────────────────
+   Summed by default, opened into its lots by the ▸ beside it. The caret and the
+   figures are middle-aligned against each other, so the caret sits still while the
+   cell grows from one line to three — it must not move under the finger that is
+   pressing it. */
+.kg-cell { white-space: nowrap; }
+.kg-toggle { cursor: pointer; }
+.kg-toggle > .kg-body { display: inline-block; vertical-align: middle; }
+.kg-toggle > .leg-expand { margin-right: 8px; }
+.kg-sum { font-variant-numeric: tabular-nums; }
+
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
 /* The reys number beside a marka — which mashina of that load the row went out on.
