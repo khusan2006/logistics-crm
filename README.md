@@ -108,18 +108,26 @@ counting it twice is exactly the mistake this separation exists to prevent.
 
 ## Stack
 
-Django 6, Postgres (production) / SQLite (local preview), gunicorn +
-whitenoise, django-axes (brute-force login protection), openpyxl (Excel
-exports/import). All money is stored and displayed in USD.
+Django 6, Postgres everywhere — Railway in production, a container from
+`docker-compose.yml` locally — gunicorn + whitenoise, django-axes (brute-force
+login protection), openpyxl (Excel exports/import). All money is stored and
+displayed in USD.
 
 ## Local development
 
-### Option A — SQLite preview (fastest, no Postgres needed)
+Development runs on the same engine as production. `docker-compose.yml` brings
+up a Postgres 18 container (18 because Railway is 18.6, so a production dump
+restores locally without complaint), and it reads its database name, user,
+password and host port straight from `.env` — the same `POSTGRES_*` names
+Django reads, so there is one place to change them.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
+
+cp .env.example .env          # then fill in SECRET_KEY and POSTGRES_PASSWORD
+docker compose up -d --wait   # Postgres, ready before the next line runs
 
 python manage.py migrate --settings=config.settings_dev
 python manage.py seed_demo --settings=config.settings_dev   # optional demo data
@@ -127,23 +135,30 @@ python manage.py createsuperuser --settings=config.settings_dev  # or use the se
 python manage.py runserver --settings=config.settings_dev
 ```
 
-`config/settings_dev.py` inherits the real settings and only swaps the
-database for a local `dev.sqlite3` file, so it exercises the same
-apps/middleware/templates as production.
+`config/settings_dev.py` no longer swaps the database out — it inherits the
+real one and overrides nothing but `ALLOWED_HOSTS` and the login lockout, so a
+local run exercises the same engine, apps, middleware and templates as
+production. Dropping the `--settings` flag runs against the same database
+through `config/settings.py`; the flag only adds the local conveniences.
 
-### Option B — Postgres via `.env`
+`POSTGRES_PORT` is the HOST port and defaults to **5434**, not 5432 — several
+projects on one machine otherwise fight over the standard port. Compose maps it
+to 5432 inside the container.
 
-Copy `.env.example` to `.env` and fill in the values (see
-[Environment variables](#environment-variables) below), make sure Postgres is
-running and the database/user exist, then:
+| | |
+|---|---|
+| `docker compose ps` | is it healthy yet |
+| `docker compose logs -f db` | what Postgres is saying |
+| `docker compose stop` | stop it, keeping the data |
+| `docker compose down -v` | stop it AND throw the data away |
 
-```bash
-pip install -r requirements.txt -r requirements-dev.txt
-python manage.py migrate
-python manage.py seed_demo   # optional demo data
-python manage.py createsuperuser
-python manage.py runserver
-```
+The data lives in the `granulalog_pgdata` volume and survives `stop`, `down`
+and image upgrades — only `down -v` discards it.
+
+### Running against a copy of production
+
+`config/settings_prodcopy.py` is a separate path with its own throwaway
+container on port 55432; see that file's docstring.
 
 ## Running tests
 
@@ -152,7 +167,9 @@ pytest
 ```
 
 Tests run against `config.settings_test` (an isolated SQLite database) via
-`pytest.ini` / `pytest-django`. A few tests drive a real browser with
+`pytest.ini` / `pytest-django` — deliberately still SQLite, and deliberately
+not the dev database: the suite recreates its schema on every run and wants to
+do that in milliseconds without a container being up. A few tests drive a real browser with
 Playwright — after installing dev requirements, run once:
 
 ```bash
