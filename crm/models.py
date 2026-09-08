@@ -818,8 +818,13 @@ class Contract(models.Model):
     def brand_summary(self):
         """Every product, named in full — "2102 repak, ftor oq". Abbreviating to
         "2102 repak +1" hid exactly what the operator needs when picking a
-        kelishuv from a dropdown."""
-        return ", ".join(ln.brand for ln in self.lines.all())
+        kelishuv from a dropdown.
+
+        Each marka once, in the order it first appears. A kelishuv may hold the
+        same marka more than once — a birja purchase takes it in lots at whatever
+        the exchange was asking that hour — and "и 1561, и 1561, и 1561" names one
+        granula three times without saying anything the first mention did not."""
+        return ", ".join(dict.fromkeys(ln.brand for ln in self.lines.all()))
 
     @property
     def paid_total(self):
@@ -1217,8 +1222,18 @@ class ContractLine(MoneyEntry):
     def payable_left_own(self):
         return own_side(self.contract, self.payable_left, self.payable_left_uzs)
 
+    @property
+    def agreed_price(self):
+        """The narx this product was struck at, in the kelishuv's own currency.
+
+        Same rule `own_side` follows for every qarz: a so'm kelishuv's agreed figure
+        is the so'm one, and the dollar twin beside it is only a derivation."""
+        return self.price_uzs if self.is_som else self.price
+
     def __str__(self):
-        return f"{self.brand} · {self.kg} kg"
+        """Named with its narx, because the marka alone no longer identifies a row:
+        one kelishuv may hold "и 1561" three times, at three prices."""
+        return f"{self.brand} · {self.kg} kg · {self.agreed_price}"
 
 
 class ShipmentStatus(models.Model):
@@ -1916,8 +1931,10 @@ class Shipment(models.Model):
 
     @property
     def brand_summary(self):
-        """Every product on the truck, named in full."""
-        return ", ".join(ln.brand for ln in self.lines.all())
+        """Every product on the truck, named in full — each marka once, the same
+        rule `Contract.brand_summary` follows and for the same reason: a truck may
+        carry two lots of one marka bought at two prices."""
+        return ", ".join(dict.fromkeys(ln.brand for ln in self.lines.all()))
 
     def __str__(self):
         return f"Yuk #{self.pk} · {self.brand_summary} · {self.kg} kg"

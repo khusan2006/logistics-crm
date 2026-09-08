@@ -1,5 +1,5 @@
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date as _date, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from urllib.parse import urlparse
@@ -170,16 +170,24 @@ def _truck_count(count, planned, sent):
     return f"{floatformat(count, -1)} / {total}" if total else floatformat(count, -1)
 
 
-def _chart_line(contract, ln):
+def _chart_line(contract, ln, repeated=False):
     """One marka's row in the Kelishuvlar bajarilishi card: a Yuk bar and a To'lov
     bar, each carrying its own mashina count.
 
-    Built here rather than inline so every figure is read once."""
+    Built here rather than inline so every figure is read once.
+
+    `repeated` says this marka is on the kelishuv more than once — a birja purchase
+    takes one granula in lots at whatever the exchange is asking — and the row then
+    prints the narx beside the name, which is the only thing telling the lots apart.
+    Only then: on a kelishuv whose markalar are all distinct the name already says
+    which row this is, and the narx would be a figure the card never needed."""
     paid = contract._own(ln.paid_total, ln.paid_total_uzs)
     due = contract._own(ln.expected_value, ln.expected_value_uzs)
     sent, planned = ln.truck_progress
     return {
         "brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
+        "show_price": repeated,
+        "price": ln.price, "price_uzs": ln.price_uzs, "currency": ln.currency,
         "pct": _bar_pct(ln.shipped_kg, ln.kg),
         "sent": sent, "planned": planned,
         # The mashina figures ride INSIDE the bars, so each bar needs its own:
@@ -312,6 +320,7 @@ def dashboard(request):
         # needs a truck. Only worth the extra lines when there is more than one;
         # a single-marka kelishuv would just be the same bar twice.
         lines = list(contract.lines.all())
+        brand_counts = Counter(ln.brand for ln in lines)
 
         chart_contracts.append({
             "contract": contract,
@@ -322,7 +331,7 @@ def dashboard(request):
             # to'lov, now that a to'lov names the product it bought: a kelishuv
             # can be square on one marka and untouched on the other, which one
             # gold bar across both could not say.
-            "lines": [_chart_line(contract, ln)
+            "lines": [_chart_line(contract, ln, repeated=brand_counts[ln.brand] > 1)
                       for ln in lines] if len(lines) > 1 else [],
             # What was paid before a to'lov could name a marka. Shown as its own
             # row rather than folded into one of them: nobody has said which it
@@ -1016,8 +1025,12 @@ def contract_create(request, birja=False):
     form = ContractForm(request.POST or None, birja=birja)
     # The rows are priced in the header's currency, and they are built before the
     # header has been validated — so it is read off the raw POST (contract_currency).
+    # `birja` handed down as well: whether one marka may be taken in several lots
+    # is the formset's rule to enforce, and it cannot read the answer off the
+    # kelishuv — the birja hamkor is only put on it below, after both forms have
+    # validated. See `BaseContractLineFormSet`.
     lines = ContractLineFormSet(
-        request.POST or None,
+        request.POST or None, birja=birja,
         form_kwargs={"currency": contract_currency(request.POST or None)})
     title = "Yangi birja kelishuv" if birja else "Yangi kelishuv"
     if request.method == "POST":
@@ -1053,7 +1066,7 @@ def contract_edit(request, pk):
     birja = contract.is_birja
     form = ContractForm(request.POST or None, instance=contract, birja=birja)
     lines = ContractLineFormSet(
-        request.POST or None, instance=contract,
+        request.POST or None, instance=contract, birja=birja,
         form_kwargs={"currency": contract_currency(request.POST or None, contract)})
     title = "Kelishuvni tahrirlash"
     if request.method == "POST":

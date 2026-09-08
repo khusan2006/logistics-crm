@@ -817,25 +817,68 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         return cleaned
 
 
+def _line_identity(cleaned, with_price):
+    """What makes one kelishuv mahsulot row different from another.
+
+    Always the marka — case- and space-insensitive, because "и 1561" and " И 1561"
+    are the same granula typed by two hands. On a birja kelishuv the agreed narx
+    joins it, which is what lets one marka be taken in several lots there; see
+    `BaseContractLineFormSet`.
+
+    Read in the kelishuv's own currency rather than as the stored pair. Every row
+    here is in that one currency (the formset hands it down), but an existing row
+    keeps the kurs it was booked at — so two so'm rows agreed at the same 16 500
+    can hold different dollar twins, and comparing those would call one typo two
+    lots."""
+    brand = (cleaned.get("brand") or "").strip().casefold()
+    if not with_price:
+        return brand, None
+    price = (cleaned.get("price_uzs") if cleaned.get("currency") == Currency.UZS
+             else cleaned.get("price"))
+    return brand, price
+
+
 class BaseContractLineFormSet(forms.BaseInlineFormSet):
     """A kelishuv is its products, so at least one row must survive, and the same
-    brand must not appear twice — two rows of "2102 repak" would split one product's
-    qolgan kg across two counters."""
+    marka must not appear twice — two rows of "2102 repak" would split one
+    product's qolgan kg across two counters.
+
+    On a BIRJA kelishuv that split is the point. The exchange sells one granula
+    through the day at whatever it is asking, so a single purchase is routinely
+    "и 1561" three times over: 30 000 kg at 16 600, 30 000 more at 16 500, 7 000
+    at 16 400. Each is its own lot — a mashina is booked against the row it was
+    priced out of, and the ombor already blends one marka's lots at different
+    landed costs (`brand_stock_costed`). Keying on the marka alone left the
+    operator splitting one purchase across three kelishuvlar.
+
+    So there the narx joins the key, and only the same marka at the SAME narx is
+    refused: nothing distinguishes those two rows, so it is the operator's finger,
+    not a second lot. A hamkor kelishuv is unchanged — it is one agreement
+    negotiated at one price per marka, and a marka repeated there is a slip.
+
+    Which side this is cannot be read off `self.instance`: a kelishuv being
+    CREATED has no hamkor on it yet (the birja one is supplied after the form
+    validates, see `crm.views.contract_create`), so the views hand it down."""
+
+    def __init__(self, *args, birja=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.birja = birja
 
     def clean(self):
         super().clean()
         if any(self.errors):
             return
-        brands, kept = [], 0
+        seen, kept = [], 0
         for form in self.forms:
             if not form.cleaned_data or form.cleaned_data.get("DELETE"):
                 continue
             kept += 1
-            brand = (form.cleaned_data.get("brand") or "").strip().casefold()
-            if brand in brands:
-                form.add_error("brand", "Bu mahsulot ro'yxatda bor")
+            key = _line_identity(form.cleaned_data, with_price=self.birja)
+            if key in seen:
+                form.add_error("brand", "Bu mahsulot shu narxda ro'yxatda bor"
+                               if self.birja else "Bu mahsulot ro'yxatda bor")
             else:
-                brands.append(brand)
+                seen.append(key)
         if not kept:
             raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
 
@@ -888,11 +931,9 @@ def _clean_number(value):
 
 
 def _agreed_price(line):
-    """A kelishuv product's narx in the currency it was struck in.
-
-    Same rule `own_side` follows for every qarz: a so'm kelishuv's agreed figure is
-    the so'm one, and the dollar twin beside it is only a derivation."""
-    return line.price_uzs if line.is_som else line.price
+    """A kelishuv product's narx in the currency it was struck in — see
+    `ContractLine.agreed_price`, which the model's own `__str__` reads through."""
+    return line.agreed_price
 
 
 class ContractLineChoiceSelect(forms.Select):
@@ -1512,8 +1553,13 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         self.fields["contract_line"].queryset = (
             ContractLine.objects.filter(contract__in=self.fields["contract"].queryset)
             .select_related("contract").order_by("contract_id", "position", "id"))
+        # With the narx on it, the same way the yuk form's product list carries one.
+        # A kelishuv may hold one marka several times over — the birja sells it in
+        # lots at whatever it is asking that hour — and "и 1561 · 30 000 kg" twice
+        # over gives the operator no way to say which lot the money is for.
         self.fields["contract_line"].label_from_instance = (
-            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
+            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg · "
+                       f"{rate(ln.price, ln.price_uzs, ln.currency)}")
         # A real choice again, and named as one. It was demoted to a bare prompt
         # while `clean` refused it — but a to'lov that names no marka is now the
         # ZAKLAD, and `allocate_supplier_payment` splits it across the kelishuv by

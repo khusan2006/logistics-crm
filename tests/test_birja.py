@@ -17,7 +17,7 @@ from conftest import line_data, make_shipment, supplier_payment_rows
 
 from crm.models import (
     Contract, ContractLine, Currency, Partner, Shipment, ShipmentExpense,
-    ShipmentStatus, birja_partner,
+    ShipmentStatus, birja_partner, brand_stock_costed,
 )
 
 pytestmark = pytest.mark.django_db
@@ -149,6 +149,148 @@ def test_a_birja_kelishuv_can_still_be_struck_in_dollars(admin_client):
     contract = Contract.objects.get()
     assert contract.currency == Currency.USD and not contract.is_som
     assert contract.lines.first().price == Decimal("1.0500")
+
+
+# ── One marka, several lots ──────────────────────────────────────────────────────
+#
+# The birja sells the same granula through the day at whatever it is asking, so one
+# purchase is routinely "и 1561" three times at three prices. The Mahsulotlar
+# formset used to key on the marka alone and rejected everything after the first
+# row, leaving the operator to split one purchase across three kelishuvlar.
+#
+# BIRJA ONLY. A hamkor kelishuv is one agreement negotiated at one price per marka,
+# so a marka repeated there is still a slip — see the last test in this block, and
+# `BaseContractLineFormSet` for why the views have to hand the side down.
+
+def test_one_marka_can_be_bought_in_lots_at_different_prices(admin_client):
+    """The shape off the exchange floor: 30 000 at 16 600, 30 000 at 16 500,
+    7 000 at 16 400 — one kelishuv, three lots of one granula."""
+    resp = admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600",
+                     "planned_trucks": "2"},
+                    {"brand": "и 1561", "kg": "30000", "price": "16500",
+                     "planned_trucks": "2"},
+                    {"brand": "и 1561", "kg": "7000", "price": "16400",
+                     "planned_trucks": "1"})})
+    assert resp.status_code == 302
+    contract = Contract.objects.get()
+    assert [ln.price_uzs for ln in contract.lines.all()] == [
+        Decimal("16600.00"), Decimal("16500.00"), Decimal("16400.00")]
+    # Each lot keeps its own qolgan kg — a truck is booked against the lot it was
+    # priced out of, not against a marka-wide pool.
+    assert [ln.remaining_kg for ln in contract.lines.all()] == [
+        Decimal("30000.000"), Decimal("30000.000"), Decimal("7000.000")]
+
+
+def test_the_same_marka_at_the_same_narx_is_still_a_double_entry(admin_client):
+    """The narx is what makes two rows two lots. Without one they are the same row
+    typed twice, which is the mistake the rule was always for."""
+    resp = admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600"},
+                    {"brand": "И 1561 ", "kg": "7000", "price": "16600"})})
+    assert resp.status_code == 200
+    assert not Contract.objects.exists()
+    assert "shu narxda" in resp.content.decode()
+
+
+def test_the_same_narx_typed_two_ways_is_still_the_same_narx(admin_client):
+    """16600 and 16600.0 are one price, so they are one row twice.
+
+    The comparison is on what `convert_pair` STORED, not on the two strings — both
+    land on the same quantized Decimal, and a rule that read the raw text would let
+    a trailing zero split one lot into two."""
+    resp = admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600"},
+                    {"brand": "и 1561", "kg": "7000", "price": "16600.0"})})
+    assert resp.status_code == 200
+    assert not Contract.objects.exists()
+
+
+def test_a_marka_taken_in_lots_is_named_once_in_the_summary(admin_client, db):
+    """`brand_summary` heads dropdowns, the yuklar list and every audit line.
+    "и 1561, и 1561, и 1561" names one granula three times and says nothing the
+    first mention did not."""
+    admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600"},
+                    {"brand": "и 1561", "kg": "7000", "price": "16400"},
+                    {"brand": "ftor oq", "kg": "1000", "price": "15000"})})
+    contract = Contract.objects.get()
+    assert contract.brand_summary == "и 1561, ftor oq"
+
+
+def test_a_truck_is_booked_against_the_lot_it_was_priced_out_of(admin_client, db):
+    """The point of keeping the lots apart: a mashina taken off the 16 500 lot
+    leaves the 16 600 one untouched. One marka-wide qolgan counter could not say
+    which of the two still owes a truck."""
+    admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600"},
+                    {"brand": "и 1561", "kg": "30000", "price": "16500"})})
+    contract = Contract.objects.get()
+    dear, cheap = contract.lines.all()
+
+    make_shipment(contract_line=cheap, kg="24000")
+
+    assert dear.remaining_kg == Decimal("30000.000")
+    assert cheap.remaining_kg == Decimal("6000.000")
+
+
+def test_the_ombor_still_sees_one_marka_however_many_lots_bought_it(admin_client, db):
+    """Downstream nothing changes: the shelf is stocked by MARKA, and lots of one
+    marka at different landed costs blend into one tannarx — the rule
+    `brand_stock_costed` already followed for two kelishuvlar, now reached by two
+    rows of one."""
+    admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600"},
+                    {"brand": "и 1561", "kg": "30000", "price": "16500"})})
+    contract = Contract.objects.get()
+    for line in contract.lines.all():
+        make_shipment(contract_line=line, kg="10000",
+                      status=ShipmentStatus.arrival(), sent="2026-07-05",
+                      eta="2026-07-15", arrived="2026-07-16")
+
+    rows = brand_stock_costed()
+    assert [r["brand"] for r in rows] == ["и 1561"]
+    assert rows[0]["on_hand"] == Decimal("20000.000")
+    # One kelishuv behind it, named once — both lots came off birja-1.
+    assert rows[0]["codes"] == [contract.code]
+
+
+def test_the_tolov_picker_prices_each_lot_of_a_repeated_marka(admin_client, db):
+    """Which lot the money is for is a real question once one marka is on the
+    kelishuv twice — and "и 1561 · 30 000 kg" twice over cannot put it."""
+    from crm.forms import SupplierPaymentForm
+
+    admin_client.post("/birja/kelishuvlar/new/", {
+        "currency": "uzs", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "и 1561", "kg": "30000", "price": "16600"},
+                    {"brand": "и 1561", "kg": "30000", "price": "16500"})})
+    field = SupplierPaymentForm().fields["contract_line"]
+    labels = [field.label_from_instance(ln)
+              for ln in Contract.objects.get().lines.all()]
+    assert len(set(labels)) == 2
+    assert all("и 1561" in label for label in labels)
+
+
+def test_a_hamkor_kelishuv_still_refuses_one_marka_twice_at_any_narx(admin_client, db):
+    """The rule is the birja's alone. A hamkor kelishuv is negotiated at one price
+    per marka, so a second "2102 repak" is a slip however it is priced — and it
+    says so in the words it always did, with no narx in them."""
+    partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
+    resp = admin_client.post("/contracts/new/", {
+        "partner": partner.pk, "currency": "usd", "created": "2026-07-04", "note": "",
+        **line_data({"brand": "2102 repak", "kg": "30000", "price": "1.05"},
+                    {"brand": "2102 repak", "kg": "7000", "price": "1.02"})})
+    assert resp.status_code == 200
+    assert not Contract.objects.exists()
+    html = resp.content.decode()
+    assert "Bu mahsulot ro&#x27;yxatda bor" in html
+    assert "shu narxda" not in html
 
 
 def test_a_som_narx_is_stored_on_both_sides_with_the_typed_one_exact(admin_client):

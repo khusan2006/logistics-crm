@@ -2182,6 +2182,17 @@ ul.errorlist li::before { content: "⚠ "; }
   color: var(--text);
 }
 .cprog-marka-name { overflow-wrap: anywhere; }
+/* The narx beside a marka the kelishuv holds twice over. Lighter and lighter-weight
+   than the name it follows: it is there to tell two identical names apart, not to
+   compete with them for the eye. `margin-left: auto` is deliberately NOT used — the
+   figure belongs to the name, and pushed to the far edge it reads as a column. */
+.cprog-marka-price {
+  margin-left: 6px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
 /* The mashina count, centred in the bar it belongs to. The tracks in this card
    are taller than the ones in Top mahsulotlar for exactly this reason — 9px holds
    no text. Only here: the other cards' bars carry no label and would just look fat.
