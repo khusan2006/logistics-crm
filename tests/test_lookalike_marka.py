@@ -139,3 +139,49 @@ class TestMergingThePairAlreadyEntered:
         make_contract(brand="i 1561")
         with pytest.raises(CommandError):
             call_command("merge_brand", "i 1561", into="i 1561", stdout=StringIO())
+
+    def test_a_new_name_needs_saying_so(self, admin_client, db):
+        """A typo in --into would otherwise rename a live marka to nothing anybody is
+        looking for. `--allow-new` is how a plain rename says it means it."""
+        make_contract(brand="i 1561")
+        with pytest.raises(CommandError):
+            call_command("merge_brand", "i 1561", into="и 1561", stdout=StringIO())
+        call_command("merge_brand", "i 1561", into="и 1561", allow_new=True,
+                     apply=True, stdout=StringIO())
+        assert ContractLine.objects.filter(brand="и 1561").count() == 1
+        assert not ContractLine.objects.filter(brand="i 1561").exists()
+
+
+class TestTheKirilMigrationMap:
+    """`0070_markalar_kirilcha` moves every marka to the alphabet the ombor works in.
+
+    The map is written out by hand, and a hand-written map is where a merge nobody
+    asked for gets born: two entries landing on one name join two products silently.
+    """
+
+    @property
+    def _map(self):
+        from importlib import import_module
+        return import_module("crm.migrations.0070_markalar_kirilcha").KIRIL
+
+    def test_every_new_name_is_actually_kiril(self):
+        """A target still carrying latin letters would leave the list in two
+        alphabets, which is the thing the migration exists to end."""
+        latin = {kiril for kiril in self._map.values()
+                 if any(ch.isascii() and ch.isalpha() for ch in kiril)}
+        assert not latin, f"lotin harflar qolgan: {latin}"
+
+    def test_no_two_markalar_land_on_the_same_name(self):
+        """One target per source. `i 1561` → `и 1561` IS a merge, but it merges with a
+        name already in the books rather than with another entry of this map — a
+        collision here would be a typo joining two live products."""
+        targets = list(self._map.values())
+        assert len(targets) == len(set(targets)), "ikkita marka bitta nomga tushyapti"
+
+    def test_repac_and_repak_stay_apart(self):
+        """Whether those two are one granula is a question nobody has answered, and
+        joining them is the answer that cannot be undone."""
+        assert self._map["2102 repac"] != self._map["2102 repak"]
+
+    def test_the_one_deliberate_merge_is_still_there(self):
+        assert self._map["i 1561"] == "и 1561"

@@ -69,6 +69,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--apply", action="store_true",
             help="write the change; without it nothing is saved")
+        parser.add_argument(
+            "--allow-new", action="store_true",
+            help="--into is a name that does not exist yet: a plain rename rather "
+                 "than a merge")
 
     def handle(self, *args, **options):
         source, into, apply_it = options["source"], options["into"], options["apply"]
@@ -79,15 +83,21 @@ class Command(BaseCommand):
         bron_count = Reservation.objects.filter(brand=source).count()
         if not line_count and not bron_count:
             raise CommandError(f"{source!r} nomli marka topilmadi")
-        if not ContractLine.objects.filter(brand=into).exists():
-            raise CommandError(f"{into!r} nomli marka topilmadi — --into ni tekshiring")
+        # A typo in --into would otherwise rename a real marka to nothing anybody
+        # is looking for, silently. `--allow-new` is how a rename says it means it.
+        joins = ContractLine.objects.filter(brand=into).exists()
+        if not joins and not options["allow_new"]:
+            raise CommandError(
+                f"{into!r} nomli marka topilmadi — --into ni tekshiring, yoki yangi "
+                f"nomga ko'chirmoqchi bo'lsangiz --allow-new qo'shing")
 
-        self.stdout.write("BIRLASHTIRISH")
+        self.stdout.write("BIRLASHTIRISH" if joins else "QAYTA NOMLASH (yangi nom)")
         for label, name in (("ketadi ", source), ("qoladi ", into)):
             self.stdout.write(f"  {label} {name!r}   {_codepoints(name)}")
         self.stdout.write("")
-        for label, name in (("OLDIN — " + source, source), ("OLDIN — " + into, into)):
-            self._report(label, _shape(name))
+        reported = [source] + ([into] if joins else [])
+        for name in reported:
+            self._report("OLDIN — " + name, _shape(name))
 
         if not apply_it:
             self.stdout.write(self.style.WARNING(
