@@ -2819,7 +2819,14 @@ def draw_down_bron(sale):
 
     Their own brons only, oldest first: somebody else's bron is somebody else's
     promise and this sotuv does not settle it. A sotuv that already came FROM a
-    bron is left alone — `reservation_convert` has booked it."""
+    bron is left alone — `reservation_convert` has booked it.
+
+    And only brons that already EXISTED when the sotuv was entered: a promise made
+    afterwards is not one this sotuv can have served. Live that costs nothing, since
+    a sotuv being saved now is younger than every bron on the board. It matters when
+    past sales are replayed — `merge_brand` does exactly that after two names for one
+    marka are joined — where without it a fresh bron would be eaten by sales that
+    predate it."""
     if sale.reservation_id:
         return Decimal("0")
     remaining, drawn = sale.kg, Decimal("0")
@@ -2827,6 +2834,8 @@ def draw_down_bron(sale):
         if remaining <= 0:
             break
         if bron.customer_id != sale.customer_id:
+            continue
+        if sale.created_at and bron.created_at > sale.created_at:
             continue
         take = min(bron.remaining_kg, remaining)
         bron.fulfilled_kg += take

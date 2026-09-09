@@ -21,6 +21,7 @@ from .models import (
 )
 from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
+from .yozuv import reads_the_same, to_kiril
 from .templatetags.crm_extras import rate, som, usd
 
 
@@ -770,6 +771,33 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
             # is signed.
             "planned_trucks": forms.NumberInput(attrs={"min": "1", "placeholder": "—"}),
         }
+
+    def clean_brand(self):
+        """Refuse a marka that would be indistinguishable from one already on the
+        books.
+
+        This is the one box in the app where a marka is TYPED — everywhere else it is
+        picked from a list — so it is the only place the collision can be born. It was
+        born here on 2026-09-04: `и 1561` was entered beside an existing `i 1561`, the
+        screen transliterates lotin to kiril and drew both as `и 1561`, and the two
+        went on as separate products. A 150 000 kg bron then stood untouched while its
+        holder bought 36 000 kg of the same granula, because every join the app makes
+        on a marka is an exact string match (see the merge_brand command).
+
+        The SAME name is fine and normal — a second kelishuv for a product already
+        bought. Only a name that reads identically while differing is refused, and the
+        message names the one it collides with so the operator can just use it."""
+        brand = (self.cleaned_data.get("brand") or "").strip()
+        if not brand:
+            return brand
+        known = ContractLine.objects.values_list("brand", flat=True).distinct()
+        twin = next((name for name in known if reads_the_same(brand, name)), None)
+        if twin:
+            raise forms.ValidationError(
+                f"“{twin}” markasi allaqachon bor va ekranda bundan farq qilmaydi — "
+                f"ikkalasi ham “{to_kiril(brand)}” bo'lib ko'rinadi. O'sha nomni "
+                f"yozing, yoki farqi ko'rinadigan boshqa nom tanlang.")
+        return brand
 
     def __init__(self, *args, currency=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1728,7 +1756,12 @@ class SaleLineForm(forms.Form):
     while the valyuta and the kurs stay on the header. One sotuv is one deal, struck
     in one currency; the price is the part that differs per product."""
 
-    brand = forms.ChoiceField(label="Marka (ombordan)")
+    brand = forms.ChoiceField(
+        label="Marka (ombordan)",
+        # A marka is a name — kept in the alphabet it was typed in, the same
+        # rule mijoz ismi follows. Without it the list draws `i 1561` and
+        # `и 1561` identically and cannot be picked from.
+        widget=forms.Select(attrs={"data-lotin": ""}))
     kg = forms.DecimalField(label="Sotilgan kg", max_digits=12, decimal_places=3)
     price = forms.DecimalField(label="1 kg sotuv narxi", max_digits=14, decimal_places=4)
     # WHICH mashina of the sotuv this product went out on. A truck can carry more
@@ -1993,7 +2026,10 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     #: the narx is optional on a bron — the price can be agreed later
     allow_blank = True
 
-    brand = forms.ChoiceField(label="Marka")
+    brand = forms.ChoiceField(
+        label="Marka",
+        # Kept in its own alphabet — see the note on SaleLineForm.brand.
+        widget=forms.Select(attrs={"data-lotin": ""}))
 
     class Meta:
         model = Reservation
