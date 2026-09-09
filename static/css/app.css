@@ -306,6 +306,18 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 html[data-theme="dark"] #theme-toggle .ico-moon { display: none; }
 html[data-theme="dark"] #theme-toggle .ico-sun { display: block; }
 
+/* Yozuv (kiril / lotin). The page is served in lotin and converted to kiril in the
+   browser, so between parse and conversion there is a moment of the wrong alphabet
+   — hidden rather than shown, because a page that flickers through a second script
+   reads as a page that has loaded wrong. Set and cleared by base.html, never by CSS
+   alone: without JS the attribute never appears and nothing is ever hidden. */
+html[data-yozuv-wait] body { visibility: hidden; }
+/* The face is the script it switches TO, matching the Mavzu button above. */
+#yozuv-toggle { font-size: 12px; font-weight: 700; letter-spacing: 0.01em; }
+#yozuv-toggle .yozuv-kiril, #yozuv-toggle .yozuv-lotin { display: none; }
+html[data-yozuv="kiril"] #yozuv-toggle .yozuv-lotin { display: inline; }
+html[data-yozuv="lotin"] #yozuv-toggle .yozuv-kiril { display: inline; }
+
 .content { padding: 22px 24px 48px; max-width: none; width: 100%; margin: 0; }
 
 /* ============================================================
@@ -1374,6 +1386,78 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
   box-shadow: var(--shadow-lg);
 }
 .modal--sm { width: min(440px, calc(100vw - var(--sidebar-w) - 32px)); }
+
+/* ── Kelishuv xarajatlari modal ──────────────────────────────────────────────
+   Three things in one dialog: the kelishuv's own figures, what it already costs,
+   and the box to add another. Wider than a plain form modal because the middle
+   one is a table — selected by content with :has(), the same trick the yuk's
+   xarajat grid uses, so no JS has to know a modal's size. */
+.modal:has(.cexp-form) { width: min(700px, calc(100vw - var(--sidebar-w) - 32px)); }
+/* The kelishuv's facts as labelled tiles rather than one dot-separated sentence.
+   The figures here are read (is this the right kelishuv? what is a percentage OF?)
+   rather than skimmed, and a run-on line makes each of them something to hunt for.
+   Its own compact tile instead of the dashboard's `.stat`, whose 23px value is
+   built for a page and shouts inside a dialog. */
+/* The modal's own horizontal padding lives on `.modal-head` and `form.stacked`
+   (22px each), so anything BETWEEN them has to carry it or it runs edge to edge
+   and clips — which is exactly what the facts and the table did. */
+.cexp-body { padding: 14px 22px 0; }
+.cexp-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.cexp-fact {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  min-width: 0;
+}
+.cexp-fact .label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.cexp-fact .value {
+  font-size: 15px;
+  font-weight: 700;
+  margin-top: 3px;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.cexp-fact .sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+/* An empty kelishuv says so in a panel of its own rather than as a bare sentence
+   floating between the facts and the form, where it reads as a caption for
+   whichever of the two the eye lands on first. */
+.cexp-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r);
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.cexp-empty strong { display: block; color: var(--text); margin-bottom: 3px; }
+/* Names the half of the dialog below it. Without it the form runs straight on from
+   the table and the first box reads as another column of it. */
+.cexp-section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin: 20px 0 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.cexp-total {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
 /* The xarajat grid needs the room: three boxes across, each carrying a figure and
    two dropdowns. Selected by content via :has() so no JS has to know the modal's
    size — and where :has() is missing the dialog simply stays its usual width. */
@@ -1483,6 +1567,17 @@ select.status-select, select.xmini, select.xpayer,
   background-image: none;
 }
 input::placeholder, textarea::placeholder { color: var(--text-faint); }
+/* A box that shows a figure rather than asking for one — the yuk's tan narx, read
+   off its kelishuv. Every browser greys a disabled input its own way, and left to
+   them it reads as a field that has broken rather than one that was never a
+   question. Muted text on the page's own surface, and no focus frame to promise an
+   edit that is not on offer. */
+input:disabled, select:disabled, textarea:disabled {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-style: dashed;
+  cursor: default;
+}
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
@@ -1624,6 +1719,17 @@ ul.errorlist li::before { content: "⚠ "; }
 .searchbar select,
 .searchbar input[type=date] { padding-left: 9px; padding-right: 9px; }
 .searchbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+/* Bugungi kurs on Ombor. Narrow — it holds five digits and nothing else — and the
+   figure itself reads as a number rather than as body text, because it is the one
+   input on the bar whose VALUE is doing work on the table below. */
+.ombor-kurs input {
+  width: 92px;
+  max-width: 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+}
 
 /* Location cell in the client list: pin icon + address, easy to scan */
 .cell-loc { display: inline-flex; align-items: center; gap: 6px; }
@@ -2076,6 +2182,17 @@ ul.errorlist li::before { content: "⚠ "; }
   color: var(--text);
 }
 .cprog-marka-name { overflow-wrap: anywhere; }
+/* The narx beside a marka the kelishuv holds twice over. Lighter and lighter-weight
+   than the name it follows: it is there to tell two identical names apart, not to
+   compete with them for the eye. `margin-left: auto` is deliberately NOT used — the
+   figure belongs to the name, and pushed to the far edge it reads as a column. */
+.cprog-marka-price {
+  margin-left: 6px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
 /* The mashina count, centred in the bar it belongs to. The tracks in this card
    are taller than the ones in Top mahsulotlar for exactly this reason — 9px holds
    no text. Only here: the other cards' bars carry no label and would just look fat.
@@ -2638,6 +2755,14 @@ ul.errorlist li::before { content: "⚠ "; }
   background: linear-gradient(to right, var(--flag-late) 50%, var(--flag-qr) 50%);
 }
 
+/* A birja yuk was bought inside the country and never queued at a border, so it
+   carries no QR kod at all. Without this it would wear the default yellow bar,
+   which does not mean "no kod needed" — it means "kod still not given", and every
+   birja row would read as a truck somebody had forgotten. Neutral instead; a late
+   one still shows its red, since that fact is the bar's other job. */
+.load-row--birja td.load-toggle::before { background: var(--border); }
+.load-row--birja.is-overdue td.load-toggle::before { background: var(--flag-late); }
+
 /* A load whose planned QR day has passed keeps the yellow "no kod" bar — it IS
    still no kod — but pulses it. A third colour would read as a third state and
    compete with the red kechikkan half beside it; motion says "overdue" without
@@ -2695,6 +2820,14 @@ ul.errorlist li::before { content: "⚠ "; }
   font-weight: 700;
   line-height: 1;
 }
+/* Bojxona to'lanmagan sits in the holat row as the last pill, after Kechikkan and
+   wearing its danger colours — the two are the same kind of thing: not a stage a yuk
+   moved to, but a problem it is carrying.
+
+   The one difference is that it is an <a>, since it needs a round trip (its loads
+   are the arrived ones, which the default queryset never sends). Everything below
+   just makes a link sit in a row of buttons without giving itself away. */
+.status-tab--link { text-decoration: none; }
 .load-id { font-weight: 700; }
 .load-partner { font-weight: 600; color: var(--text); }
 .load-sub { font-size: 12px; margin-top: 1px; }
@@ -2704,6 +2837,11 @@ ul.errorlist li::before { content: "⚠ "; }
 .status-select { padding: 5px 10px; border-radius: 999px; font-size: 13px; field-sizing: content; min-width: 92px; max-width: 170px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; transition: border-color .2s ease, box-shadow .2s ease; }
 .status-select:hover { border-color: var(--accent); }
 .status-select.is-saved { border-color: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+/* The bojxonachi picker wears the holat control's looks — it is filled in the same
+   way, down a column — and greys itself while nobody is named, so the column can
+   still be read at a glance as assigned vs not without anyone opening it. */
+.customs-select { max-width: 200px; }
+.customs-select.is-unset { color: var(--text-faint); border-style: dashed; }
 
 /* Route arrow (from → to) wherever a leg or a load's route is written inline */
 .route-arrow { color: var(--text-faint); margin: 0 2px; }
@@ -2724,6 +2862,21 @@ ul.errorlist li::before { content: "⚠ "; }
 .kelishuv-title { font-weight: 700; color: var(--accent); }
 .kelishuv-sub { color: var(--text); font-weight: 600; }
 .kelishuv-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
+/* A date band — the same shape as the kelishuv header above, holding a day. Shared
+   by the yuklar sorted on kelish sanasi and by Sotuvlar, where it replaced a Sana
+   column that repeated one date down twenty rows.
+
+   No accent stripe and no accent title: a kelishuv kod is a thing you can open and a
+   date is not, so wearing the link colour would promise a destination this header
+   has not got. Bugun takes them back — it is the band both lists exist to put on
+   top. */
+.day-row > td { background: var(--table-head); padding: 9px 14px; border-top: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--border-strong); }
+.day-row.is-today > td { box-shadow: inset 3px 0 0 var(--accent); }
+.day-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.day-title { font-weight: 700; color: var(--text); }
+.day-row.is-today .day-title { color: var(--accent); }
+.day-sub { color: var(--text-muted); font-weight: 600; }
+.day-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;
@@ -2866,6 +3019,25 @@ form.stacked .lineset-field[hidden] { display: none; }
 .lineset-rm[disabled] { opacity: 0.35; cursor: not-allowed; }
 .lineset-del { display: none; }        /* the − button drives DELETE */
 .lineset-add { margin-top: 10px; }
+/* Mahsulot qo'shish and Reys qo'shish sit side by side and wrap together on a
+   phone rather than stacking full-width, which read as two unrelated controls. */
+.lineset-adds { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The header over one reys's rows — which mashina they went out on, and the way to
+   put another granula on that same truck. It reads as a divider between lorry-loads
+   rather than as a card of its own, so it carries a rule and no background. */
+.reys-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.reys-head:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.reys-head .reys-no { margin-left: 0; }
+.reys-head-label { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+/* Pushed to the end so the trucks' own numbers line up down the left edge. */
+.reys-head .btn { margin-left: auto; }
 
 /* Wide enough for a row: the product spans the top, the numbers sit beneath it.
    Four columns, placed explicitly rather than left to auto-flow — the row grew a
@@ -2916,8 +3088,38 @@ form.stacked .lineset-field[hidden] { display: none; }
   }
 }
 
+/* ── The Kg column of a sotuv of several mahsulotlar ────────────────────────
+   Summed by default, opened into its lots by the ▸ beside it. The caret and the
+   figures are middle-aligned against each other, so the caret sits still while the
+   cell grows from one line to three — it must not move under the finger that is
+   pressing it. */
+.kg-cell { white-space: nowrap; }
+.kg-toggle { cursor: pointer; }
+.kg-toggle > .kg-body { display: inline-block; vertical-align: middle; }
+.kg-toggle > .leg-expand { margin-right: 8px; }
+.kg-sum { font-variant-numeric: tabular-nums; }
+
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
+/* The reys number beside a marka — which mashina of that load the row went out on.
+   A circle rather than "2-reys" in words: it sits in a cell that already carries a
+   lot id and a marka name, and the whole point is that it is read at a glance down
+   a column of them. Tabular figures so ① and ⑩ line up in that column. */
+.reys-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
 
 /* Bronlar — one row per mijoz and sana, that day's markalar stacked line by line.
    Reading the row means reading ACROSS it: this marka, its place in the queue, its
@@ -3348,3 +3550,38 @@ form.stacked .lineset-field--fee_bearer label {
    the same rule `.listbar > .searchbar` and `> .daterange-bar` already follow. */
 .listbar > .viewswitch { margin-bottom: 0; }
 @media (max-width: 620px) { .viewswitch { display: flex; } .viewswitch-opt { flex: 1; text-align: center; } }
+
+
+/* ── Touch: no zoom on focus ─────────────────────────────────────────────────
+   Safari zooms the whole page into any text field it focuses whose font is under
+   16px, and a zoomed page swallows the swipe that collapses an in-app browser —
+   so an operator who opened the CRM from Telegram and tapped a qidiruv box was
+   shut in it until they pinched back out. 16px on the controls a phone actually
+   focuses is the one fix every engine honours; capping the viewport's scale would
+   work too, but it takes deliberate pinch-zoom away with it, and a wide jadval is
+   read on a phone by zooming in.
+
+   `hover: none` rather than a width: a phone held sideways is wider than any
+   breakpoint drawn here and zooms just the same.
+
+   Last in the file on purpose. Several of these boxes are restyled by a later
+   component rule at the same specificity, and only source order puts this above
+   them.
+
+   The two 86px satellites of the xarajat grid (.xfee, .xmini) are the deliberate
+   exception: nothing in this stylesheet restacks that grid for a narrow screen, and
+   16px in an 86px box would break the row it was sized to fit. .xpayer is listed
+   even though it sits beside them — it spans the whole cell rather than the 86px,
+   so it has the room. */
+@media (hover: none) and (pointer: coarse) {
+  input[type=text], input[type=email], input[type=password],
+  input[type=number], input[type=date], input[type=tel],
+  input[type=search], select, textarea,
+  .toolbar-search input[type=search],
+  .combobox-input,
+  .xcell input,
+  .modal form.stacked .xcell-payer select.xpayer, .xcell-payer select.xpayer,
+  .status-select {
+    font-size: 16px;
+  }
+}

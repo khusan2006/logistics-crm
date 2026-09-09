@@ -66,7 +66,7 @@ search never drops the way the list was already narrowed.
     the pencil in the actions.
     {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'debt_customer' g.customer.pk %}">{{ g.customer.name }}</a>
+      <a href="{% url 'debt_customer' g.customer.pk %}">{{ g.customer.name|lotin }}</a>
     </td>
     <td>{{ g.date|date:"d.m.Y" }}</td>
     <td>{% for r in g.items %}<div class="cell-line">{{ r.brand }}</div>{% endfor %}</td>
@@ -112,7 +112,7 @@ search never drops the way the list was already narrowed.
         {% if r.status == "active" %}
           {% if r.servable_kg > 0 %}
             <span class="badge badge-ok">Berish mumkin</span>
-            <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name }} bron qilgan{% endif %}</div>
+            <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name|lotin }} bron qilgan{% endif %}</div>
           {% else %}
             <span class="badge badge-warning">Mol kutilmoqda</span>
             <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>

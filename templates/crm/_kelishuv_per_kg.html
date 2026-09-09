@@ -1,0 +1,27 @@
+{% comment %}
+The part of a yuk's tannarx that is NOT on the yuk.
+
+Both yuk screens print the truck's own xarajatlar and what they add to a kg. Neither
+said anything about the vositachi cut or the kelishuv's broker, which land in the
+same tannarx through `Contract.cost_per_kg` — so a load priced at 1,2400 with
+0,0150 of xarajat showed a tan narx of 1,2736 and no way at all to see where the
+rest came from. This is that rest, named where the other per-kg figure is read.
+
+Silent when the kelishuv adds nothing, and it names only the halves that are
+actually there: "vositachi 0,0186 + kelishuv xarajati 0,0000" states a broker that
+does not exist.
+
+Takes `contract`.
+
+Bound in one `with` block because each of the three is a PROPERTY that walks the
+kelishuv's to'lovlar and xarajatlar every time the template names it — six lookups
+here would be six sums, and on a yuk's own page (which prefetches nothing) six
+rounds of queries for one line of text.
+{% endcomment %}
+{% with total=contract.cost_per_kg comm=contract.commission_per_kg exp=contract.expenses_per_kg %}
+{% if total %}
+<p class="muted" style="margin: 6px 0 0;">
+  Kelishuvdan 1 kg ga yana {{ total|floatformat:"-4" }} $ qo'shiladi{% if comm and exp %} — vositachi {{ comm|floatformat:"-4" }} + kelishuv xarajati {{ exp|floatformat:"-4" }}{% elif exp %} — kelishuv xarajati{% else %} — vositachi ulushi{% endif %}
+</p>
+{% endif %}
+{% endwith %}

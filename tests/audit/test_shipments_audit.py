@@ -14,6 +14,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from conftest import make_shipment
 from crm.models import (
     LEGACY_RATE,
     Contract, ContractLine, Currency, Customer, Logist, LogistPayment, Partner, Sale,
@@ -142,46 +143,50 @@ def _money_snapshot(shipment):
 
 
 # =====================================================================
-# (a) ROUND-TRIP — the typed side is stored bit-exact, the other derived
+# (a) ROUND-TRIP — the agreed narx reaches the lot bit-exact
 # =====================================================================
+#
+# A narx is typed once, on the kelishuv. The yuk form has no box to type another
+# one into (`ShipmentLineForm._lock_price`), so what these probe is the JOURNEY:
+# the figure the operator agreed has to arrive on the lot untouched rather than
+# being re-derived from its own conversion somewhere along the way.
 
-def test_a_som_line_stores_the_typed_som_bit_exact(admin_client):
-    """14 040 so'm/kg typed at 12 000 → the so'm side is the agreed figure, the
-    dollar side is derived once at four decimals."""
+def test_a_som_narx_reaches_the_lot_bit_exact(admin_client):
+    """14 040 so'm/kg agreed at 12 000 → the so'm side is the agreed figure, the
+    dollar side is derived once at four decimals, and the lot reads both."""
     contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="uzs", price="14040", exchange_rate="12000")
+    yuk = _one_line_yuk(admin_client, contract)
     line = yuk.lines.get()
+    assert line.price is None and line.price_uzs is None   # nothing of its own
     assert line.currency == Currency.UZS
-    assert line.price_uzs == Decimal("14040.00")   # typed, untouched
-    assert line.price == Decimal("1.1700")         # derived
-    assert line.exchange_rate == Decimal("12000.00")
-    # and each side of the value is built from its own stored column, never from
-    # a conversion of the other
+    assert line.unit_currency == Currency.UZS
+    assert line.unit_price_uzs == Decimal("14040.00")      # agreed, untouched
+    assert line.unit_price == Decimal("1.1700")            # derived
+    # and each side of the value is built from its own column, never from a
+    # conversion of the other
     assert line.goods_value == Decimal("1170.00")
     assert line.goods_value_uzs == Decimal("14040000.00")
 
 
-def test_a_dollar_line_stores_the_typed_dollar_bit_exact(admin_client):
-    contract = _contract()
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="usd", price="1.17", exchange_rate="12000")
+def test_a_dollar_narx_reaches_the_lot_bit_exact(admin_client):
+    contract = _contract(typed="1.17", rate="12000")
+    yuk = _one_line_yuk(admin_client, contract)
     line = yuk.lines.get()
+    assert line.price is None and line.price_uzs is None
     assert line.currency == Currency.USD
-    assert line.price == Decimal("1.1700")
-    assert line.price_uzs == Decimal("14040.00")
+    assert line.unit_price == Decimal("1.1700")
+    assert line.unit_price_uzs == Decimal("14040.00")
 
 
 def test_a_som_narx_that_does_not_divide_keeps_four_decimals(admin_client):
     """A per-kg narx carries four decimals, not two — 12 345 so'm at 10 850 is
     1.1378 $/kg, and rounding that to 1.14 would move a 24-tonne lot by $53."""
     contract = _contract(kg="30000", currency=Currency.UZS, typed="12345", rate="10850")
-    yuk = _one_line_yuk(admin_client, contract, kg="24000",
-                        currency="uzs", price="12345", exchange_rate="10850")
+    yuk = _one_line_yuk(admin_client, contract, kg="24000")
     line = yuk.lines.get()
-    assert line.price_uzs == Decimal("12345.00")
-    assert line.price == Decimal("1.1378")         # 1.137788… half-up at 4dp
-    # and the so'm value of the load is the typed narx times the kg, undiluted
+    assert line.unit_price_uzs == Decimal("12345.00")
+    assert line.unit_price == Decimal("1.1378")    # 1.137788… half-up at 4dp
+    # and the so'm value of the load is the agreed narx times the kg, undiluted
     assert line.goods_value_uzs == Decimal("296280000.00")
 
 
@@ -189,93 +194,112 @@ def test_a_som_narx_that_does_not_divide_keeps_four_decimals(admin_client):
 #     boundaries: blank kurs, zero kurs, zero/negative narx, extremes
 # =====================================================================
 
-def test_a_priced_line_always_has_a_usable_kurs_to_inherit(admin_client):
-    """A narx with no kurs has only one of its two values and could never join a
-    so'm total. The operator is no longer asked for one, so the guarantee moved: the
-    row inherits the last rate entered, and an empty book still yields LEGACY_RATE —
-    there is no path left that reaches convert_pair without one."""
+def test_a_line_always_has_a_usable_kurs_of_its_own(admin_client):
+    """A row still needs a kurs even though it no longer holds a narx: it is what
+    `in_som` restates a landed cost through. The operator is not asked for one, so
+    the row inherits the last rate entered, and an empty book still yields
+    LEGACY_RATE — there is no path left that reaches convert_pair without one."""
     contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
     resp = _create(admin_client, contract,
-                   {"contract_line": contract.lines.first().pk, "kg": "1000",
-                    "price": "14040"})
+                   {"contract_line": contract.lines.first().pk, "kg": "1000"})
     assert resp.status_code == 302
     line = Shipment.objects.latest("pk").lines.get()
     assert line.exchange_rate == LEGACY_RATE
-    assert line.price_uzs == Decimal("14040.00")
-    assert line.price == Decimal("1.1700")           # 14040 / 12000
+    assert line.price is None and line.price_uzs is None
+    assert line.unit_price_uzs == Decimal("14040.00")
+    assert line.unit_price == Decimal("1.1700")       # 14040 / 12000
 
 
-@pytest.mark.parametrize("price", ["0", "-1.5"])
-def test_a_zero_or_negative_narx_is_refused(admin_client, price):
+@pytest.mark.parametrize("price", ["0", "-1.5", "9.99", "not-a-number"])
+def test_a_narx_posted_onto_a_truck_never_lands(admin_client, price):
+    """There is nothing left to refuse: the narx box is `disabled`, so Django reads
+    `initial` instead of the POST and the row is saved with no narx at all. Zero, a
+    negative, a better offer and outright junk all end the same way — the lot costs
+    what the kelishuv says it costs.
+
+    Posted rather than typed on purpose. A read-only box is a UI courtesy; this is
+    the guarantee underneath it, and it has to hold for a payload the browser never
+    produced."""
     contract = _contract()
     resp = _create(admin_client, contract,
                    {"contract_line": contract.lines.first().pk, "kg": "1000",
                     "currency": "usd", "price": price, "exchange_rate": "12000"})
-    assert resp.status_code == 200
-    assert not Shipment.objects.exists()
+    assert resp.status_code == 302
+    line = Shipment.objects.latest("pk").lines.get()
+    assert line.price is None and line.price_uzs is None
+    assert line.unit_price == Decimal("1.0000") == contract.lines.first().price
 
 
-def test_an_extreme_kurs_still_round_trips_the_typed_side(admin_client):
-    """A tiny kurs and a huge one are both storable; the typed side must survive
+def test_an_extreme_kurs_still_round_trips_the_agreed_side(admin_client):
+    """A tiny kurs and a huge one are both storable; the agreed side must survive
     either, because it is never re-derived from the conversion."""
-    huge = _contract(kg="20000")
-    yuk = _one_line_yuk(admin_client, huge, kg="1000",
-                        currency="usd", price="1.17", exchange_rate="999999.99")
-    line = yuk.lines.get()
-    assert line.price == Decimal("1.1700")
-    assert line.price_uzs == Decimal("1169999.99")
+    huge = _contract(kg="20000", typed="1.17", rate="999999.99")
+    line = _one_line_yuk(admin_client, huge, kg="1000").lines.get()
+    assert line.unit_price == Decimal("1.1700")
+    assert line.unit_price_uzs == Decimal("1169999.99")
 
     tiny = _contract(kg="20000", currency=Currency.UZS, typed="5", rate="0.01")
-    yuk2 = _one_line_yuk(admin_client, tiny, kg="1000",
-                         currency="uzs", price="5", exchange_rate="0.01")
-    line2 = yuk2.lines.get()
-    assert line2.price_uzs == Decimal("5.00")      # typed side untouched
-    assert line2.price == Decimal("500.0000")      # 5 / 0.01
+    line2 = _one_line_yuk(admin_client, tiny, kg="1000").lines.get()
+    assert line2.unit_price_uzs == Decimal("5.00")     # agreed side untouched
+    assert line2.unit_price == Decimal("500.0000")     # 5 / 0.01
 
 
 # =====================================================================
 # (c) CURRENCY STICKINESS
 # =====================================================================
 
-def test_a_som_line_saves_as_som_and_reopens_bound_to_som(admin_client):
+def test_a_som_lot_saves_as_som_and_reopens_showing_so_m(admin_client):
     contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="uzs", price="14040", exchange_rate="12000")
+    yuk = _one_line_yuk(admin_client, contract)
     line = yuk.lines.get()
     assert line.currency == "uzs"
-    # the so'm column holds the typed figure, NOT a dollar-interpreted one
-    assert line.price_uzs == Decimal("14040.00")
-    assert line.price_uzs != Decimal("14040") * Decimal("12000")
+    # the lot reads the kelishuv's so'm column, NOT a dollar-interpreted figure
+    assert line.unit_price_uzs == Decimal("14040.00")
+    assert line.unit_price_uzs != Decimal("14040") * Decimal("12000")
 
     resp = admin_client.get(f"/shipments/{yuk.pk}/edit/")
     sub = resp.context["lines"].forms[0]
     # No pickers on the row any more — it reads so'm because its kelishuv does, and
     # the kurs it was booked at stays on the row without being typed.
     assert "currency" not in sub.fields and "exchange_rate" not in sub.fields
-    assert Decimal(str(sub["price"].value())) == Decimal("14040.00")
     assert line.exchange_rate == Decimal("12000.00")
 
 
-# Regression guard. This was an xfail documenting the so'm-edit defect; it passes
-# since MoneyEntryFormMixin._seed_typed_side (crm/forms.py) opens a so'm row showing
-# its so'm figure. Kept as a test so the defect cannot come back.
+# Regression guard. This was an xfail documenting the so'm-edit defect: the narx box
+# was painted with the DERIVED dollar figure under a So'm label. The box is a
+# read-only window onto the kelishuv now, and it must still show the so'm side of it.
 def test_the_edit_form_shows_the_som_figure_in_the_narx_box(admin_client):
     contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="uzs", price="14040", exchange_rate="12000")
-    resp = admin_client.get(f"/shipments/{yuk.pk}/edit/")
-    sub = resp.context["lines"].forms[0]
+    yuk = _one_line_yuk(admin_client, contract)
+    sub = admin_client.get(f"/shipments/{yuk.pk}/edit/").context["lines"].forms[0]
+    assert sub.fields["price"].disabled
     assert Decimal(str(sub["price"].value())) == Decimal("14040.00")
+    assert "so'm" in str(sub.fields["price"].label)
+
+
+def test_a_narx_box_left_empty_by_an_error_is_repainted_from_the_kelishuv(admin_client):
+    """A form handed back rejected must still show what the truck costs.
+
+    The box is filled by the server from the row's kelishuv product; a row that has
+    never been saved has no product on its instance yet, so the posted one is read
+    instead. Without that the operator gets the whole screen back with blank narx
+    boxes beside the error they have to fix."""
+    contract = _contract(kg="1000", typed="1.17")
+    resp = _create(admin_client, contract,
+                   {"contract_line": contract.lines.first().pk, "kg": "9999"})
+    assert resp.status_code == 200          # over the kelishuv's qolgan kg
+    sub = resp.context["lines"].forms[0]
+    assert Decimal(str(sub["price"].value())) == Decimal("1.1700")
 
 
 def test_a_lot_cannot_be_switched_to_the_other_currency_on_its_own(admin_client):
     """The old complaint was that a row would not stay on the currency it was set to.
-    It cannot be set at all now: a lot is priced in its kelishuv's currency, so a
-    posted valyuta is ignored rather than half-applied to one row of a truck whose
-    qarz is measured on the other side."""
-    contract = _contract()
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="usd", price="1.17", exchange_rate="12000")
+    Neither half can be set at all now: a lot is priced in its kelishuv's currency at
+    its kelishuv's narx, so a posted valyuta AND a posted narx are both ignored
+    rather than half-applied to one row of a truck whose qarz is measured on the
+    other side."""
+    contract = _contract(typed="1.17")
+    yuk = _one_line_yuk(admin_client, contract)
     payload = _echo_edit_payload(admin_client, yuk, **{
         "lines-0-currency": "uzs", "lines-0-price": "1.30",
         "lines-0-exchange_rate": "13000"})
@@ -283,7 +307,8 @@ def test_a_lot_cannot_be_switched_to_the_other_currency_on_its_own(admin_client)
     line = yuk.lines.get()
     line.refresh_from_db()
     assert line.currency == Currency.USD == contract.currency
-    assert line.price == Decimal("1.3000")           # the narx did land
+    assert line.price is None                        # the narx did not land
+    assert line.unit_price == Decimal("1.1700")      # still the kelishuv's
     assert line.exchange_rate == Decimal("12000.00")  # at the kurs it was booked with
 
 
@@ -332,32 +357,31 @@ def test_editing_only_the_transport_leaves_a_som_lots_money_alone(admin_client):
 
 
 def test_correcting_the_kg_of_a_dollar_lot_leaves_its_narx_alone(admin_client):
-    """The control for the test below: on a dollar lot, correcting the kg rewrites
-    the row and the narx comes back out unchanged."""
-    contract = _contract()
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="usd", price="1.17", exchange_rate="12000")
+    """The control for the test below: correcting the kg rewrites the row, and what
+    the lot costs comes back out unchanged."""
+    contract = _contract(typed="1.17")
+    yuk = _one_line_yuk(admin_client, contract)
     payload = _echo_edit_payload(admin_client, yuk, **{"lines-0-kg": "1100"})
     assert admin_client.post(f"/shipments/{yuk.pk}/edit/", payload).status_code == 302
     line = yuk.lines.get()
     assert line.kg == Decimal("1100.000")
-    assert line.price == Decimal("1.1700") and line.price_uzs == Decimal("14040.00")
+    assert line.price is None
+    assert (line.unit_price, line.unit_price_uzs) == (Decimal("1.1700"),
+                                                      Decimal("14040.00"))
 
 
-# Regression guard. Was an xfail documenting the so'm-edit defect; it passes since
-# MoneyEntryFormMixin._seed_typed_side (crm/forms.py) opens a so'm row showing its
-# so'm figure. Kept as a test so the defect cannot come back.
+# Regression guard. Was an xfail documenting the so'm-edit defect: a so'm row was
+# re-read as dollars on the way back in and lost its narx to a division by the kurs.
 def test_correcting_the_kg_of_a_som_lot_leaves_its_narx_alone(admin_client):
     contract = _contract(currency=Currency.UZS, typed="14040", rate="12000")
-    yuk = _one_line_yuk(admin_client, contract,
-                        currency="uzs", price="14040", exchange_rate="12000")
+    yuk = _one_line_yuk(admin_client, contract)
     payload = _echo_edit_payload(admin_client, yuk, **{"lines-0-kg": "1100"})
     assert admin_client.post(f"/shipments/{yuk.pk}/edit/", payload).status_code == 302
     line = yuk.lines.get()
     assert line.kg == Decimal("1100.000")
     assert line.currency == "uzs"
-    assert line.price_uzs == Decimal("14040.00")
-    assert line.price == Decimal("1.1700")
+    assert line.unit_price_uzs == Decimal("14040.00")
+    assert line.unit_price == Decimal("1.1700")
 
 
 # Regression guard. Was an xfail documenting the same defect the logist audit pins:
@@ -370,7 +394,7 @@ def test_a_driver_advance_is_not_re_rated_when_the_yuk_is_resaved(admin_client, 
                                  exchange_rate=Decimal("12000"))
     contract = _contract()
     row = {"contract_line": contract.lines.first().pk, "kg": "1000",
-           "currency": "usd", "price": "1.17", "exchange_rate": "12000"}
+           "exchange_rate": "12000"}
     resp = _create(admin_client, contract, row,
                    logist=logist.pk, driver_advance="100")
     assert resp.status_code == 302
@@ -400,15 +424,14 @@ def test_a_yuk_total_equals_its_lines_across_two_brands(admin_client):
     of that side's rows — never a re-conversion of the other."""
     contract = Contract.objects.create(partner=_partner(), created="2026-07-01",
                                        currency=Currency.UZS)
-    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="13000",
+    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="16250",
                        currency=Currency.UZS, rate="13000")
     b = _contract_line(contract, brand="HDPE", kg="10000", typed="16901",
                        currency=Currency.UZS, rate="13000")
     resp = _create(
         admin_client, contract,
-        {"contract_line": a.pk, "kg": "1000", "price": "16250",
-         "exchange_rate": "13000"},
-        {"contract_line": b.pk, "kg": "2000", "price": "16901"})
+        {"contract_line": a.pk, "kg": "1000", "exchange_rate": "13000"},
+        {"contract_line": b.pk, "kg": "2000"})
     assert resp.status_code == 302
     yuk = Shipment.objects.latest("pk")
 
@@ -424,22 +447,18 @@ def test_the_kelishuv_shipped_value_equals_the_sum_of_its_yuk_lines(admin_client
     """What we owe the hamkor is built out of the trucks; both currency sides must
     reconcile to the same rows the Yuklar page shows."""
     contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
-    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.00")
-    b = _contract_line(contract, brand="HDPE", kg="10000", typed="1.00")
-    _create(admin_client, contract,
-            {"contract_line": a.pk, "kg": "1000", "price": "1.25",
-             "exchange_rate": "12000"})
-    _create(admin_client, contract,
-            {"contract_line": b.pk, "kg": "2000", "price": "1.10",
-             "exchange_rate": "13000"})
+    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.25", rate="12000")
+    b = _contract_line(contract, brand="HDPE", kg="10000", typed="1.10", rate="13000")
+    _create(admin_client, contract, {"contract_line": a.pk, "kg": "1000"})
+    _create(admin_client, contract, {"contract_line": b.pk, "kg": "2000"})
     contract.refresh_from_db()
 
     lines = [ln for yuk in contract.shipments.all() for ln in yuk.lines.all()]
     assert contract.shipped_value == sum(ln.goods_value for ln in lines)
     assert contract.shipped_value_uzs == sum(ln.goods_value_uzs for ln in lines)
     assert contract.shipped_value == Decimal("1250.00") + Decimal("2200.00")
-    # each truck carries the kurs of the day it was booked, so the so'm side is not
-    # the dollar side times any single rate
+    # each MARKA carries the kurs of the day it was agreed — the trucks read it off
+    # the kelishuv — so the so'm side is not the dollar side times any single rate
     assert contract.shipped_value_uzs == Decimal("15000000.00") + Decimal("28600000.00")
     assert contract.shipped_value_own == contract.shipped_value
 
@@ -448,13 +467,11 @@ def test_landed_cost_is_the_narx_plus_the_freight_share_plus_the_vositachi_cut(a
     """Freight is charged per truck, so it splits by kg across every brand on it;
     the yuk's per-kg figure and each lot's landed cost must agree."""
     contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
-    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.00")
-    b = _contract_line(contract, brand="HDPE", kg="10000", typed="2.00")
+    a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.25")
+    b = _contract_line(contract, brand="HDPE", kg="10000", typed="2.50")
     resp = _create(admin_client, contract,
-                   {"contract_line": a.pk, "kg": "1000", "currency": "usd",
-                    "price": "1.25", "exchange_rate": "12000"},
-                   {"contract_line": b.pk, "kg": "3000", "currency": "usd",
-                    "price": "2.50", "exchange_rate": "12000"})
+                   {"contract_line": a.pk, "kg": "1000", "exchange_rate": "12000"},
+                   {"contract_line": b.pk, "kg": "3000"})
     assert resp.status_code == 302
     yuk = Shipment.objects.latest("pk")
     ShipmentExpense.objects.create(
@@ -474,12 +491,12 @@ def test_landed_cost_is_the_narx_plus_the_freight_share_plus_the_vositachi_cut(a
 
 
 # =====================================================================
-#     price inheritance: a blank narx means "use the kelishuv's"
+#     price inheritance: a truck is costed at its kelishuv's narx
 # =====================================================================
 
 def test_a_blank_narx_inherits_the_dollar_kelishuv_price_on_both_sides(admin_client):
     contract = _contract(typed="1.30", currency=Currency.USD, rate="12000")
-    yuk = _one_line_yuk(admin_client, contract, kg="1000", price="")
+    yuk = _one_line_yuk(admin_client, contract, kg="1000")
     line = yuk.lines.get()
     assert line.price is None and line.price_uzs is None
     assert line.unit_price == Decimal("1.3000")
@@ -494,8 +511,8 @@ def test_a_blank_narx_inherits_a_som_kelishuv_narx_and_reads_in_som(admin_client
     the kelishuv's currency — printing a so'm figure with a dollar sign was the
     documented reason `unit_currency` exists."""
     contract = _contract(typed="16900", currency=Currency.UZS, rate="13000")
-    yuk = _one_line_yuk(admin_client, contract, kg="1000", price="",
-                        currency="usd", exchange_rate="12000")
+    yuk = _one_line_yuk(admin_client, contract, kg="1000",
+                        exchange_rate="12000")
     line = yuk.lines.get()
     assert line.unit_currency == Currency.UZS
     assert line.unit_price_uzs == Decimal("16900.00")
@@ -512,8 +529,8 @@ def test_a_blank_narx_inherits_a_som_kelishuv_narx_and_reads_in_som(admin_client
                    strict=False)
 def test_an_inherited_narx_is_costed_in_som_at_the_kelishuvs_own_kurs(admin_client):
     contract = _contract(typed="16900", currency=Currency.UZS, rate="13000")
-    yuk = _one_line_yuk(admin_client, contract, kg="1000", price="",
-                        currency="usd", exchange_rate="12000")
+    yuk = _one_line_yuk(admin_client, contract, kg="1000",
+                        exchange_rate="12000")
     line = yuk.lines.get()
     # no expenses and no vositachi cut, so tannarx == the narx itself
     assert line.landed_cost_per_kg == line.unit_price
@@ -531,40 +548,62 @@ def test_an_inherited_narx_is_costed_in_som_at_the_kelishuvs_own_kurs(admin_clie
                    strict=False)
 def test_ombor_prints_an_inherited_som_tannarx_in_som(admin_client):
     contract = _contract(typed="16900", currency=Currency.UZS, rate="13000")
-    yuk = _one_line_yuk(admin_client, contract, kg="1000", price="",
-                        currency="usd", exchange_rate="12000")
+    yuk = _one_line_yuk(admin_client, contract, kg="1000",
+                        exchange_rate="12000")
     admin_client.post(f"/shipments/{yuk.pk}/status/", {"status": ShipmentStatus.arrival().pk})
     html = admin_client.get("/ombor/").content.decode()
     assert "so'm/kg" in html and "$/kg" not in html
     assert f"16{NBSP}900 so'm/kg" in html
 
 
-def test_editing_the_kelishuv_narx_moves_inherited_lots_but_not_priced_ones(admin_client):
-    """Documented design: `unit_price` reads the kelishuv price live, so an
-    inheriting truck re-prices when the kelishuv does, while a truck that set its
-    own narx is frozen at what it actually went at."""
+def test_editing_the_kelishuv_narx_re_prices_every_truck_drawn_from_it(admin_client):
+    """The whole point of a yuk not holding a narx of its own.
+
+    A truck built on this screen stores nothing, so `unit_price` asks the kelishuv
+    every time it is read. Correct the agreed narx and every load already drawn from
+    that marka re-prices with it — goods value, tannarx and the hamkor's qarz all
+    follow, instead of the kelishuv moving and the trucks staying at the figure the
+    form copied down on the day each one was entered."""
     contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
     a = _contract_line(contract, brand="LLDPE", kg="10000", typed="1.00")
     b = _contract_line(contract, brand="HDPE", kg="10000", typed="1.00")
     _create(admin_client, contract,
-            {"contract_line": a.pk, "kg": "1000", "price": ""},
-            {"contract_line": b.pk, "kg": "1000", "currency": "usd",
-             "price": "1.00", "exchange_rate": "12000"})
+            {"contract_line": a.pk, "kg": "1000"},
+            {"contract_line": b.pk, "kg": "1000"})
     yuk = Shipment.objects.latest("pk")
     assert yuk.goods_value == Decimal("2000.00")
 
-    a.price = Decimal("2.0000")
-    a.price_uzs = Decimal("24000.00")
+    a.price, a.price_uzs = Decimal("2.0000"), Decimal("24000.00")
     a.save()
-    b.price = Decimal("2.0000")
-    b.price_uzs = Decimal("24000.00")
-    b.save()
 
     yuk = Shipment.objects.get(pk=yuk.pk)
     lots = {ln.brand: ln for ln in yuk.lines.all()}
-    assert lots["LLDPE"].unit_price == Decimal("2.0000")   # inherited → moved
-    assert lots["HDPE"].unit_price == Decimal("1.0000")    # own narx → frozen
+    assert lots["LLDPE"].unit_price == Decimal("2.0000")   # re-priced with its marka
+    assert lots["LLDPE"].unit_price_uzs == Decimal("24000.00")
+    assert lots["HDPE"].unit_price == Decimal("1.0000")    # the other marka untouched
     assert yuk.goods_value == Decimal("3000.00")
+    # and what the kelishuv now expects to pay moves with it
+    contract.refresh_from_db()
+    assert contract.expected_value == contract.total_value
+
+
+def test_a_legacy_truck_carrying_its_own_narx_is_still_frozen_at_it(admin_client):
+    """The other half of `unit_price`, and the reason the column survives.
+
+    No screen can write a narx onto a truck any more, but the importer and the
+    pre-lock book both carry loads that really did go at a figure of their own. Such
+    a row is read as it stands rather than being re-priced out from under a sotuv
+    that was costed off it."""
+    contract = Contract.objects.create(partner=_partner(), created="2026-07-01")
+    line = _contract_line(contract, brand="HDPE", kg="10000", typed="1.00")
+    lot = make_shipment(contract_line=line, kg="1000", price="1.00").lines.get()
+
+    line.price, line.price_uzs = Decimal("2.0000"), Decimal("24000.00")
+    line.save()
+
+    lot.refresh_from_db()
+    assert lot.unit_price == Decimal("1.0000")
+    assert lot.shipment.goods_value == Decimal("1000.00")
 
 
 # =====================================================================

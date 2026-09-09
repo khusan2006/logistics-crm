@@ -44,7 +44,7 @@ about — so every lot reads as "vazifadon-3 · 2-yuk" with the day it landed.
         {% for s in plan.blocked %}
         <tr>
           <td><a href="{% url 'sale_detail' s.pk %}" target="_blank">#{{ s.pk }}</a>
-              <div class="muted">{{ s.customer.name }}</div>
+              <div class="muted">{{ s.customer.name|lotin }}</div>
               <div class="muted">{{ s.date|date:"d.m.y" }}</div></td>
           <td class="num">{{ s.kg|floatformat:"-3" }}</td>
           {# the kelishuv kod already carries the hamkor's name, so it is not repeated #}
@@ -70,7 +70,7 @@ about — so every lot reads as "vazifadon-3 · 2-yuk" with the day it landed.
         {% for row in plan.rows %}
         <tr{% if row.is_edited %} class="row-accent"{% endif %}>
           <td>#{{ row.sale.pk }}{% if row.is_edited %} · shu sotuv{% endif %}
-              <div class="muted">{{ row.sale.customer.name }}</div>
+              <div class="muted">{{ row.sale.customer.name|lotin }}</div>
               <div class="muted">{{ row.sale.date|date:"d.m.y" }}</div></td>
           <td>
             <div class="muted">{{ row.from_lot.label }} <span aria-hidden="true">↓</span></div>

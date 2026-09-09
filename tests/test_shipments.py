@@ -1,3 +1,4 @@
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -98,9 +99,10 @@ def test_status_tabs_have_per_status_counts(admin_client, db):
     assert resp.status_code == 200
     tabs = resp.context["tabs"]
     names = [t["status"].name for t in tabs]
-    # no tab for the arrival status — those loads live on the Yakunlangan page
-    assert names == list(ShipmentStatus.objects.filter(is_arrival=False)
-                         .values_list("name", flat=True))
+    # This list's own chain, and no tab for the arrival status — those loads live on
+    # the Yakunlangan page. The birja holatlar belong to the other list entirely.
+    assert names == list(ShipmentStatus.for_kind(birja=False)
+                         .filter(is_arrival=False).values_list("name", flat=True))
     by_name = {t["status"].name: t["count"] for t in tabs}
     assert by_name["Yo'lda"] == 2 and by_name["Bojxona"] == 1
     assert resp.context["total"] == 3
@@ -260,11 +262,41 @@ def test_shipment_own_price_drives_value_and_landed_cost(admin_client, db):
 
 
 def test_shipment_form_price_prefills_from_contract(db):
-    """Each product option carries data-price so the form JS can prefill that row's
-    1 kg narxi from the kelishuv."""
+    """Each product option carries data-price so the form JS can paint that row's
+    1 kg narxi with the kelishuv's."""
     from crm.forms import ShipmentLineForm
     _contract()
     assert "data-price" in str(ShipmentLineForm())
+
+
+def test_the_narx_box_on_a_yuk_is_read_only(db):
+    """Tannarx is agreed once, on the kelishuv. The yuk form shows it so the operator
+    can see what the load costs, and renders it disabled so it cannot be typed over —
+    a truck carrying a narx of its own would stop following the agreement."""
+    from crm.forms import ShipmentLineForm
+    _contract()
+    form = ShipmentLineForm()
+    assert form.fields["price"].disabled
+    assert "disabled" in str(form["price"])
+    assert "kelishuvdan" in str(form.fields["price"].label)
+
+
+def test_a_yuk_created_through_the_form_inherits_the_kelishuv_narx(admin_client, db):
+    """The rule end to end: nothing is stored on the truck — a posted narx included —
+    so correcting the agreed price re-costs every load already drawn from it."""
+    c = _contract()
+    _post_shipment(admin_client, c, kg="400", price="9.99")
+    line = ShipmentLine.objects.get()
+    assert line.price is None and line.price_uzs is None
+    assert line.unit_price == Decimal("1.00")
+
+    agreed = c.lines.first()
+    agreed.price, agreed.price_uzs = Decimal("1.50"), Decimal("18000")
+    agreed.save()
+
+    line.refresh_from_db()
+    assert line.unit_price == Decimal("1.50")
+    assert line.shipment.goods_value == Decimal("600.00")
 
 
 def test_active_list_groups_by_contract_and_shows_price_per_kg(admin_client, db):
@@ -358,6 +390,138 @@ def test_hammasi_never_splits_a_kelishuv_across_pages(admin_client, db):
             # both of the kelishuv's yuklar, whatever holat they are in
             assert len(g["shipments"]) == 2
     assert len(seen) == 12
+
+
+class TestKelishSanasiSort:
+    """Hammasi, saralangan: bugun kelgan yuklar eng tepada, keyin kecha kelganlari,
+    va shu tartibda pastga.
+
+    The sort is on `arrived` and not on the row date the davr filter uses — see
+    `_filter_shipments`. That is what these hold: a load whose taxminiy kelish is
+    next week must not sit above one that actually landed this morning."""
+
+    def _fleet(self):
+        """One kelishuv, four yuklar: landed today, kecha, a week ago — plus one
+        still on the road. Entered in none of those orders, so a passing assertion
+        cannot be the insertion order wearing a disguise."""
+        today = date.today()
+        c = _contract(kg="200000")
+        week = make_shipment(contract=c, kg="100", transport="01 007 AAA",
+                             arrived=today - timedelta(days=7),
+                             status=ShipmentStatus.arrival())
+        # ETA in the future: sorting on Coalesce(arrived, eta) would put this first.
+        moving = make_shipment(contract=c, kg="100", transport="01 000 YOL",
+                               eta=today + timedelta(days=3))
+        bugun = make_shipment(contract=c, kg="100", transport="01 001 AAA",
+                              arrived=today, status=ShipmentStatus.arrival())
+        kecha = make_shipment(contract=c, kg="100", transport="01 002 AAA",
+                              arrived=today - timedelta(days=1),
+                              status=ShipmentStatus.arrival())
+        return c, bugun, kecha, week, moving
+
+    def test_the_days_run_backwards_from_bugun(self, admin_client, db):
+        _c, bugun, kecha, week, moving = self._fleet()
+        rows = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish"}).context["shipments"]
+        assert [s.pk for s in rows] == [bugun.pk, kecha.pk, week.pk, moving.pk]
+
+    def test_yoldagi_yuklar_come_last_and_are_not_dropped(self, admin_client, db):
+        """Hammasi means hammasi — a sort must not quietly become a filter. A yuk
+        with no kelgan kun has nowhere on the calendar, so it goes to the end."""
+        _c, _bugun, _kecha, _week, moving = self._fleet()
+        soon = make_shipment(contract=_c, kg="100", transport="01 111 YOL",
+                             eta=date.today() + timedelta(days=1))
+        rows = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish"}).context["shipments"]
+        # Both are there, behind everything that has landed, nearest ETA first.
+        assert [s.pk for s in rows[-2:]] == [soon.pk, moving.pk]
+
+    def test_the_blocks_are_days_and_bugun_and_kecha_are_named(self, admin_client, db):
+        _c, bugun, kecha, week, moving = self._fleet()
+        resp = admin_client.get("/shipments/", {"all": "1", "sort": "kelish"})
+        groups = resp.context["groups"]
+        assert [g["label"] for g in groups] == ["Bugun", "Kecha", "", "Hali kelmagan"]
+        assert [[s.pk for s in g["shipments"]] for g in groups] == [
+            [bugun.pk], [kecha.pk], [week.pk], [moving.pk]]
+        # An older day carries no word, so the header prints the date itself.
+        assert groups[2]["day"] == date.today() - timedelta(days=7)
+        assert "Bugun" in resp.content.decode()
+
+    def test_the_kelishuv_blocks_step_aside(self, admin_client, db):
+        """The day is the grouping in this view, so the kelishuv header is not drawn
+        — sorting the kelishuv blocks themselves would answer "which kelishuv had
+        something land recently", which is a different question."""
+        c, *_rest = self._fleet()
+        html = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish"}).content.decode()
+        # The header band is a day now. The kelishuv is still named on each row and
+        # inside the yuk's own panel — that is where the assertion has to stop.
+        assert f'kelishuv-title">Kelishuv {c.code}' not in html
+        assert '<tr class="day-row' in html         # the shared date band instead
+
+    def test_hammasi_still_groups_by_kelishuv_when_the_sort_is_off(self, admin_client, db):
+        c, *_rest = self._fleet()
+        groups = admin_client.get("/shipments/", {"all": "1"}).context["groups"]
+        assert [g["contract"].pk for g in groups] == [c.pk]
+
+    def test_it_pages_by_yuk_rather_than_by_kelishuv(self, admin_client, db):
+        c = _contract(kg="900000")
+        for i in range(55):
+            make_shipment(contract=c, kg="100", transport=f"01 {i:03d} AAA",
+                          arrived=date.today() - timedelta(days=i),
+                          status=ShipmentStatus.arrival())
+        page = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish"}).context["page"]
+        assert page.paginator.count == 55 and len(page.object_list) == 50
+
+    def test_a_search_keeps_the_sort(self, admin_client, db):
+        _c, bugun, *_rest = self._fleet()
+        html = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish"}).content.decode()
+        assert '<input type="hidden" name="sort" value="kelish">' in html
+        # …and the sort keeps the search.
+        rows = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish", "q": "001"}).context["shipments"]
+        assert [s.pk for s in rows] == [bugun.pk]
+
+    def test_the_active_view_cannot_be_sorted_by_a_day_none_of_it_has_reached(
+            self, admin_client, db):
+        """Every arrived load is dropped before the sort could reach it, so there
+        the param means nothing — and it is refused rather than ignored quietly,
+        which is what keeps the kelishuv grouping on that view."""
+        c, *_rest = self._fleet()
+        resp = admin_client.get("/shipments/", {"sort": "kelish"})
+        assert resp.context["sort"] == ""
+        assert [g["contract"].pk for g in resp.context["groups"]] == [c.pk]
+
+    def test_bojxona_tolanmagan_keeps_its_own_row_set(self, admin_client, db):
+        self._fleet()
+        resp = admin_client.get("/shipments/", {"all": "1", "customs": "1", "sort": "kelish"})
+        assert resp.context["sort"] == ""
+
+    def test_the_pill_is_drawn_on_hammasi_alone(self, admin_client, db):
+        """Pressing it is what puts `sort=kelish` on the URL, so the link's own href
+        is what says the button is there to press."""
+        self._fleet()
+        assert "sort=kelish" in admin_client.get(
+            "/shipments/", {"all": "1"}).content.decode()
+        assert "sort=kelish" not in admin_client.get("/shipments/").content.decode()
+        assert "sort=kelish" not in admin_client.get(
+            "/shipments/", {"all": "1", "customs": "1"}).content.decode()
+
+    def test_leaving_hammasi_drops_the_sort(self, admin_client, db):
+        self._fleet()
+        html = admin_client.get(
+            "/shipments/", {"all": "1", "sort": "kelish"}).content.decode()
+        # The way out carries no sort — the active view would only throw it away.
+        out = re.search(r'href="([^"]+)"[^>]*>\s*Faol yuklar', html)
+        assert out and "sort" not in out.group(1)
+
+    def test_a_typo_leaves_the_page_in_kelishuv_order(self, admin_client, db):
+        c, *_rest = self._fleet()
+        resp = admin_client.get("/shipments/", {"all": "1", "sort": "kelisj"})
+        assert resp.context["sort"] == ""
+        assert [g["contract"].pk for g in resp.context["groups"]] == [c.pk]
 
 
 def test_the_old_done_url_now_lands_on_hammasi(admin_client, db):

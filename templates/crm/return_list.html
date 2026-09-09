@@ -32,7 +32,7 @@ owed in August — hiding it because the window moved is how a debt gets forgott
       </tr>
       {% for s in owed %}
       <tr>
-        <td class="sticky-col">{{ s.batch.customer.name }}</td>
+        <td class="sticky-col">{{ s.batch.customer.name|lotin }}</td>
         {# Red: money out of the kassa that has not left yet, not a figure to read past. #}
         <td class="amt-owed">{% money_in s.amount_own s.currency %}</td>
         <td>{% include "crm/_method_badge.html" with code=s.method label=s.get_method_display %}</td>
@@ -98,7 +98,7 @@ owed in August — hiding it because the window moved is how a debt gets forgott
   {% for b in page %}
   <tr>
     <td class="sticky-col">{{ b.date }}</td>
-    <td>{{ b.customer.name }}</td>
+    <td>{{ b.customer.name|lotin }}</td>
     {% comment %}
     Every line of the visit, each naming the sotuv it came off — the same tie the form
     made when the kg were typed, so a vazvrat can always be read back to its narx.

@@ -53,8 +53,8 @@ row does not read as a short delivery.
     {% for r in rows %}
     <tr>
       <td>{{ r.sale.date }}</td>
-      <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' r.sale.pk %}">{{ r.sale.customer.name }}</a>
-          {% else %}{{ r.sale.customer.name }}{% endif %}
+      <td>{% if user.is_admin_role %}<a href="{% url 'sale_detail' r.sale.pk %}">{{ r.sale.customer.name|lotin }}</a>
+          {% else %}{{ r.sale.customer.name|lotin }}{% endif %}
           <div class="muted">sotuv #{{ r.sale.pk }}</div></td>
       <td class="num"><strong>{{ r.kg|floatformat:"-3" }}</strong></td>
       {% if user.is_admin_role %}

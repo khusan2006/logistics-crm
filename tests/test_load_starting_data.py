@@ -6,11 +6,13 @@ The command wipes existing business data and loads the fixed prototype dataset
 preserved. Re-running resets to the same baseline (wipe-then-load).
 """
 from decimal import Decimal
+from io import StringIO
 
 from django.core.management import call_command
 
 from accounts.models import User
 from crm.models import Contract, Partner, Shipment, SupplierPayment
+from crm.seeding import ensure_owner
 
 
 def test_creates_exact_dataset(db):
@@ -70,3 +72,63 @@ def test_rerun_is_idempotent(db):
     assert SupplierPayment.objects.count() == 3
     assert Shipment.objects.count() == 4
     assert User.objects.filter(username="otabek").count() == 1
+
+
+# ── The owner's password ──────────────────────────────────────────────────────
+#
+# A password in the repository is a password every past employee still knows, and
+# this account is a superuser. So: SEED_OWNER_PASSWORD when set, otherwise random.
+
+def test_the_owner_password_comes_from_the_environment(db, monkeypatch):
+    monkeypatch.setenv("SEED_OWNER_PASSWORD", "sirli-parol-123")
+    owner, shown_once = ensure_owner()
+
+    assert owner.check_password("sirli-parol-123")
+    # Nothing to echo: the operator already knows a password they configured.
+    assert shown_once is None
+
+
+def test_without_the_env_var_the_owner_gets_a_random_password(db, monkeypatch):
+    monkeypatch.delenv("SEED_OWNER_PASSWORD", raising=False)
+    owner, shown_once = ensure_owner()
+
+    assert shown_once, "birinchi kirish uchun parol qaytarilishi kerak"
+    assert owner.check_password(shown_once)
+    assert len(shown_once) >= 16
+    # The password that used to sit in git must not be what anyone gets.
+    assert not owner.check_password("otabek12345")
+
+
+def test_the_command_prints_the_password_on_creation_and_never_again(db, monkeypatch):
+    """A redeploy re-runs this command. It must not echo credentials every time —
+    the first run is the one that has something the operator does not already know."""
+    monkeypatch.delenv("SEED_OWNER_PASSWORD", raising=False)
+
+    first = StringIO()
+    call_command("load_starting_data", noinput=True, stdout=first)
+    assert "Egasi yaratildi" in first.getvalue()
+
+    second = StringIO()
+    call_command("load_starting_data", noinput=True, stdout=second)
+    assert "Egasi yaratildi" not in second.getvalue()
+
+
+def test_a_configured_password_is_never_echoed(db, monkeypatch):
+    monkeypatch.setenv("SEED_OWNER_PASSWORD", "sirli-parol-123")
+
+    out = StringIO()
+    call_command("load_starting_data", noinput=True, stdout=out)
+
+    assert "sirli-parol-123" not in out.getvalue()
+
+
+def test_a_rerun_never_resets_a_password_the_operator_changed(db, monkeypatch):
+    monkeypatch.delenv("SEED_OWNER_PASSWORD", raising=False)
+    owner, _first = ensure_owner()
+    owner.set_password("operator-uni-ozgartirdi")
+    owner.save()
+
+    again, shown_once = ensure_owner()
+
+    assert shown_once is None
+    assert again.check_password("operator-uni-ozgartirdi")

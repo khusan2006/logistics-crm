@@ -7,20 +7,127 @@ customer payments/debts — plus a money overview (Kassa), a filterable reports
 dashboard, Excel exports, a Telegram overdue-shipments digest, and role-based
 access (admin vs. translator).
 
+## Birja
+
+Not every load comes from Iran any more: some granula is bought on the exchange
+(**birja**) inside Uzbekistan. Those purchases get two screens of their own —
+**Birja kelishuvlar** and **Birja yuklar** — and nothing else. Everything
+downstream stays one set of books: a birja load lands in the same Ombor, is sold
+through the same Sotuvlar, and its money runs through the same Kassa, Qarzlar
+and Hisobotlar.
+
+That works because a birja kelishuv **is** a `Contract` and a birja yuk **is** a
+`Shipment`. What separates them is the counterparty: a singleton `Partner` row
+flagged `is_birja`, created on first use by `crm.models.birja_partner()`. It also
+mints the codes — `slugify("Birja")` is `birja`, so the existing per-hamkor
+counter hands out `birja-1`, `birja-2`, … the same way it hands out `sobir-3`.
+
+A birja load carries no **QR kod** and no **bojxona**: it never crossed a border,
+so those fields are off its form, off its list, and excluded from the "Bojxona
+to'lanmagan" group. Its holat chain is separate too — `ShipmentStatus.scope` is
+`hamkor`, `birja` or `umumiy`, and the arrival status is the one row both chains
+share, since reaching it is what turns any yuk into a warehouse lot. The birja
+statuses ship as placeholders (**Sotib olindi → Yuklandi → Yetkazilmoqda →
+Omborga yetib keldi**) and are meant to be renamed on the Holatlar page once the
+real chain is known.
+
+Its transport is not typed per truck at all. A birja haydovchi is paid so much a
+kilo of what he brings in, and paid when he brings it — three facts the operator
+already maintains — so a birja **kelishuv** carries a `transport_rate_per_kg`
+(entered in its Xarajatlar modal, see below) and `sync_birja_transport` turns it
+into a xarajat on each of its yuklar as they land: rate × the yuk's kg, dated the
+day it arrived.
+
+The row is derived, not entered, and behaves like it. Move the arrival date and
+it moves; take the yuk back off arrival and it goes, the way a haydovchi avansi
+goes when its logist is removed. Correcting the rate on the kelishuv re-prices
+every yuk under it, landed ones included — the opposite of what a hand-entered
+`CashEntry` does, and right here precisely because nobody typed this one. Only
+the kurs is kept once booked, so an edit elsewhere never restates the so'm value
+of cash already handed over.
+
+It hangs off `Shipment.save()`, which all four arrival writers pass through, plus
+a second call from the yuk views once the mahsulot rows exist (a yuk being
+created has no kg yet at its first save) and one from the kelishuv form when the
+rate itself changes. The row is flagged `is_auto_transport`, which keeps every
+by-hand screen off it: the xarajat grid will not show or delete it, and
+`expense_edit`/`expense_delete` send the operator to the kelishuv instead of
+letting them make a correction the next sync would silently undo.
+
+Nothing was needed for the kassa timing: Transport is already in
+`ShipmentExpense.ARRIVAL_CATEGORIES`, and the row is dated the arrival, so
+`cash_date` is that day. The Eron road is untouched — there a logist quotes the
+run and hands the driver an avans out of it, and the rate field is not on its
+kelishuv form.
+
+The Birja pages are admin-only — a tarjimon's job is the Iran road.
+
+## Kelishuv xarajatlari
+
+Some costs belong to the AGREEMENT, not to any one truck. A broker is paid a
+percentage of the whole kelishuv, once, for the kelishuv. Before `ContractExpense`
+every xarajat had to hang off a yuk, so such a cost was either left out of the
+books or pinned to whichever truck happened to be open — inflating that one load's
+tannarx and every foyda taken off it.
+
+They are entered from the **Xarajatlar** action on a kelishuv row (a kelishuv has
+no detail page; the row is the kelishuv, the same way its To'lov and Tahrirlash
+modals work). This is the one screen for "what does this agreement cost us", and
+the turkum decides the shape:
+
+- **Broker** — a percentage of the kelishuv's full value, booked in the kelishuv's
+  own currency.
+- **Transport** (birja only) — a price per kg. The odd one out: it saves no row
+  here at all. It writes `Contract.transport_rate_per_kg`, and the money appears
+  later on each yuk as it lands. It shows in the table as a row that states what it
+  does and how many yuklar it has already been written to.
+- **Boshqa** — a sum somebody was quoted.
+
+The picker hides the boxes that do not apply and `clean` refuses them, so a figure
+can never be read back as the wrong kind of number.
+
+The money leaves the kassa **once**, at kelishuv level — its own `Kelishuv
+xarajatlari` bar in the Oqim and its own row in the Chiqim daftar. Each yuk carries
+its share through `Contract.expenses_per_kg` → `ShipmentLine.landed_cost_per_kg`,
+which is the same spread the vositachi cut has always had and the one funnel every
+foyda in the app reads. Nothing is pushed down as a `ShipmentExpense`: a copy on
+every truck would put one payment in the kassa N+1 times.
+
+`sync_contract_expenses` re-multiplies the percentage rows when the kelishuv's own
+value moves — a marka added, a narx corrected. Sums somebody typed are left where
+they were put.
+
+This is deliberately **not** the vositachi cut, which stays exactly where it is on
+the hamkor to'lovlar (`SupplierPayment.commission_percent`, live on most of them).
+That one is a slice of each payment as it goes out; this is a share of the
+agreement. Both spread per kg, and they add up side by side in the tannarx.
+
+`Contract.expenses_total` and `expenses_per_kg` count only the rows that ARE money
+here — a transport rate is not among them, because its money is booked per yuk and
+counting it twice is exactly the mistake this separation exists to prevent.
+
 ## Stack
 
-Django 6, Postgres (production) / SQLite (local preview), gunicorn +
-whitenoise, django-axes (brute-force login protection), openpyxl (Excel
-exports/import). All money is stored and displayed in USD.
+Django 6, Postgres everywhere — Railway in production, a container from
+`docker-compose.yml` locally — gunicorn + whitenoise, django-axes (brute-force
+login protection), openpyxl (Excel exports/import). All money is stored and
+displayed in USD.
 
 ## Local development
 
-### Option A — SQLite preview (fastest, no Postgres needed)
+Development runs on the same engine as production. `docker-compose.yml` brings
+up a Postgres 18 container (18 because Railway is 18.6, so a production dump
+restores locally without complaint), and it reads its database name, user,
+password and host port straight from `.env` — the same `POSTGRES_*` names
+Django reads, so there is one place to change them.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
+
+cp .env.example .env          # then fill in SECRET_KEY and POSTGRES_PASSWORD
+docker compose up -d --wait   # Postgres, ready before the next line runs
 
 python manage.py migrate --settings=config.settings_dev
 python manage.py seed_demo --settings=config.settings_dev   # optional demo data
@@ -28,23 +135,30 @@ python manage.py createsuperuser --settings=config.settings_dev  # or use the se
 python manage.py runserver --settings=config.settings_dev
 ```
 
-`config/settings_dev.py` inherits the real settings and only swaps the
-database for a local `dev.sqlite3` file, so it exercises the same
-apps/middleware/templates as production.
+`config/settings_dev.py` no longer swaps the database out — it inherits the
+real one and overrides nothing but `ALLOWED_HOSTS` and the login lockout, so a
+local run exercises the same engine, apps, middleware and templates as
+production. Dropping the `--settings` flag runs against the same database
+through `config/settings.py`; the flag only adds the local conveniences.
 
-### Option B — Postgres via `.env`
+`POSTGRES_PORT` is the HOST port and defaults to **5434**, not 5432 — several
+projects on one machine otherwise fight over the standard port. Compose maps it
+to 5432 inside the container.
 
-Copy `.env.example` to `.env` and fill in the values (see
-[Environment variables](#environment-variables) below), make sure Postgres is
-running and the database/user exist, then:
+| | |
+|---|---|
+| `docker compose ps` | is it healthy yet |
+| `docker compose logs -f db` | what Postgres is saying |
+| `docker compose stop` | stop it, keeping the data |
+| `docker compose down -v` | stop it AND throw the data away |
 
-```bash
-pip install -r requirements.txt -r requirements-dev.txt
-python manage.py migrate
-python manage.py seed_demo   # optional demo data
-python manage.py createsuperuser
-python manage.py runserver
-```
+The data lives in the `granulalog_pgdata` volume and survives `stop`, `down`
+and image upgrades — only `down -v` discards it.
+
+### Running against a copy of production
+
+`config/settings_prodcopy.py` is a separate path with its own throwaway
+container on port 55432; see that file's docstring.
 
 ## Running tests
 
@@ -53,7 +167,9 @@ pytest
 ```
 
 Tests run against `config.settings_test` (an isolated SQLite database) via
-`pytest.ini` / `pytest-django`. A few tests drive a real browser with
+`pytest.ini` / `pytest-django` — deliberately still SQLite, and deliberately
+not the dev database: the suite recreates its schema on every run and wants to
+do that in milliseconds without a container being up. A few tests drive a real browser with
 Playwright — after installing dev requirements, run once:
 
 ```bash

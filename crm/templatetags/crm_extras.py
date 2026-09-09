@@ -29,6 +29,31 @@ NBSP = "\u00a0"
 
 
 @register.filter
+def lotin(value):
+    """Text the OPERATOR typed, kept in the alphabet they typed it in.
+
+    Everything on screen is served in lotin and transliterated to kiril in the
+    browser (static/js/yozuv.js), which is right for the app's own words — they are
+    Uzbek and the reader picks the script. A mijoz's ism is not one of the app's
+    words: it is a name, entered once and searched for by exactly those letters.
+    Converted, "Rise servise" reads as "Рисе сервисе", which is neither the name nor
+    anything the qidiruv can find, and the operator ends up comparing a spelling on
+    screen against a different spelling in their hand.
+
+    `data-lotin` is the transliterator's own opt-out — its walker refuses the marked
+    element and everything under it — so one span around the value is the whole
+    mechanism. A filter rather than 23 hand-written spans so the rule is greppable
+    and reads the same at every site.
+
+    Blank in, blank out: an empty span would turn a missing manzil into a cell that
+    is not quite empty, and `|default:"—"` after this would never fire."""
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    return format_html('<span data-lotin>{}</span>', text)
+
+
+@register.filter
 def usd(value):
     """Format a number as USD: $1 200, $1 234.56, $0.8 \u2014 space-grouped thousands
     and no trailing zeros. Blank-safe.
@@ -167,6 +192,37 @@ def rate(usd_value, som_value=None, currency=None):
         return "—"
 
 
+@register.simple_tag
+def rate_som(value):
+    """A per-kg figure in so'm, on its own — the so'm half of a tannarx given a
+    COLUMN of its own rather than stacked under the dollar one by `rate_both`.
+
+    Where the two sides sit side by side the column heading already says which is
+    which, so nothing here has to pick a side or fall back to the other."""
+    if value is None:
+        return "—"
+    try:
+        return _som_rate(Decimal(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+
+
+@register.simple_tag
+def rate_typed(value, currency):
+    """A per-kg figure that is stored in the ROW'S OWN currency rather than as a
+    dollar/so'm pair — a birja transport's agreed rate (ShipmentExpense.rate_per_kg).
+
+    `rate` above picks a side out of a stored pair; this one has no side to pick,
+    only a figure and the money it was quoted in. The formatting is the same either
+    way, so the two read alike wherever they land next to each other."""
+    if value is None:
+        return "—"
+    try:
+        return _som_rate(value) if _is_som(currency) else f"{_trim(value)} $/kg"
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+
+
 # ── Totals spanning both currencies ──────────────────────────────────────────────
 #
 # A total cannot pick a side the way a row can. A mijoz's qarz is three sotuvlar in
@@ -188,10 +244,24 @@ def _pair(main, alt):
 
 
 @register.simple_tag
-def money_both(usd_value, som_value=None):
-    """A total in both currencies: the dollar figure with its so'm twin beneath."""
+def money_both(usd_value, som_value=None, currency=None):
+    """A total in both currencies: the dollar figure with its so'm twin beneath.
+
+    Pass `currency` when the figure DOES have a currency of its own — the goods on a
+    yuk are priced in the one currency their kelishuv was struck in — and the two
+    sides swap so the agreed one leads. That is the rule every other screen follows
+    (`own_side`): a so'm kelishuv reads in so'm from the kelishuvlar list through to
+    the to'lov, and a yuk off it leading with a dollar figure nobody agreed to made
+    that one row the exception.
+
+    Left out, the dollar leads as before. That is right for a genuinely blended
+    total — a truck's xarajatlar are a so'm transport bill beside a dollar bojxona,
+    so neither side is "the one that was agreed" and the app's canonical currency
+    is the honest headline."""
     if som_value is None:
         return usd(usd_value)
+    if _is_som(currency):
+        return _pair(som(som_value), usd(usd_value))
     return _pair(usd(usd_value), som(som_value))
 
 

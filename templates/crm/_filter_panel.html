@@ -39,7 +39,10 @@ never drops the question the user was asking.
     {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
     {% for field in filters.fields %}
     <label>{{ field.label }}
-      <select name="{{ field.name }}"{% if field.combobox %} data-combobox{% endif %}>
+      {% comment %}`lotin`: a list of NAMES people typed — kept in their own
+      alphabet, the same opt-out the Mijoz select carried before it moved into
+      this panel.{% endcomment %}
+      <select name="{{ field.name }}"{% if field.combobox %} data-combobox{% endif %}{% if field.lotin %} data-lotin{% endif %}>
         {% for value, label in field.options %}
         <option value="{{ value }}"{% if field.value == value %} selected{% endif %}>{{ label }}</option>
         {% endfor %}

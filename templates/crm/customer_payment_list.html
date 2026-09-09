@@ -49,7 +49,7 @@ changing a select never drops the period the user chose.
   {% for p in page %}
   <tr>
     <td class="sticky-col">{{ p.date }}</td>
-    <td><a href="{% url 'customer_edit' p.customer_id %}">{{ p.customer.name }}</a></td>
+    <td><a href="{% url 'customer_edit' p.customer_id %}">{{ p.customer.name|lotin }}</a></td>
     <td>{% money p.amount p.amount_uzs p.currency %}</td>
     <td>
       <strong class="money-in">{% money p.net_amount p.net_amount_uzs p.currency %}</strong>

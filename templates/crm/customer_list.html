@@ -27,10 +27,10 @@
     tahrirlash is the pencil beside it, so the link is not spent on a modal.
     {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'debt_customer' c.pk %}">{{ c.name }}</a>
+      <a href="{% url 'debt_customer' c.pk %}">{{ c.name|lotin }}</a>
     </td>
-    <td>{{ c.phone|default:"—" }}</td>
-    <td>{{ c.address|default:"—" }}</td>
+    <td>{{ c.phone|lotin|default:"—" }}</td>
+    <td>{{ c.address|lotin|default:"—" }}</td>
     <td>{% if c.last_sale %}{{ c.last_sale|date:"d.m.Y" }}{% else %}<span class="muted">—</span>{% endif %}</td>
     <td>{% if c.last_payment %}{{ c.last_payment|date:"d.m.Y" }}{% else %}<span class="muted">—</span>{% endif %}</td>
     <td class="cell-balance">

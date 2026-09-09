@@ -1,14 +1,15 @@
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date as _date, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from django.contrib import messages
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Max, ProtectedError, Q, Sum
+from django.db.models import Count, Exists, F, Max, OuterRef, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
 from django.http import Http404, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
@@ -34,7 +35,9 @@ from .forms import (
     parse_return_rows, returns_without,
     CustomsAgentForm, CustomsPaymentForm,
     ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
-    SaleCreateForm, SaleForm, SaleLineFormSet, SaleLotForm, ShipmentExpenseForm,
+    ContractExpenseForm,
+    SaleCreateForm, SaleForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
+    ShipmentExpenseForm,
     ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
     ShipmentLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
@@ -54,6 +57,11 @@ from .models import (
     ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
     SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
+    ContractExpense,
+    birja_partner,
+    sync_contract_expenses,
+    sync_birja_transport,
+    sync_contract_birja_transport,
     _by_currency, bron_queue, cash_date_expression, commission_total,
     contract_value_by_currency, convert_pair, pending_expenses_by_currency,
     customer_paid_by_currency, customer_sales_by_currency,
@@ -66,6 +74,7 @@ from .models import (
     reconcile_customer_allocations, reconcile_supplier_allocations,
     trim_sale_allocations, allocate_refund, pending_refunds,
     pending_refunds_by_currency, LEGACY_RATE,
+    latest_exchange_rate,
     uzs_slice,
 )
 from .utils import form_reload, form_response, form_success, is_ajax, render_confirm
@@ -98,6 +107,9 @@ PRICED_SALE_PREFETCH = (
     "lots__line__shipment__expenses", "lots__line__shipment__lines",
     "lots__line__contract_line__contract__lines",
     "lots__line__contract_line__contract__supplier_payments",
+    # The kelishuv's own xarajatlar are in the tannarx too (`expenses_per_kg`), so
+    # a foyda that did not load them would cost the same ten queries a sotuv.
+    "lots__line__contract_line__contract__expenses",
 )
 
 
@@ -159,16 +171,24 @@ def _truck_count(count, planned, sent):
     return f"{floatformat(count, -1)} / {total}" if total else floatformat(count, -1)
 
 
-def _chart_line(contract, ln):
+def _chart_line(contract, ln, repeated=False):
     """One marka's row in the Kelishuvlar bajarilishi card: a Yuk bar and a To'lov
     bar, each carrying its own mashina count.
 
-    Built here rather than inline so every figure is read once."""
+    Built here rather than inline so every figure is read once.
+
+    `repeated` says this marka is on the kelishuv more than once — a birja purchase
+    takes one granula in lots at whatever the exchange is asking — and the row then
+    prints the narx beside the name, which is the only thing telling the lots apart.
+    Only then: on a kelishuv whose markalar are all distinct the name already says
+    which row this is, and the narx would be a figure the card never needed."""
     paid = contract._own(ln.paid_total, ln.paid_total_uzs)
     due = contract._own(ln.expected_value, ln.expected_value_uzs)
     sent, planned = ln.truck_progress
     return {
         "brand": ln.brand, "shipped_kg": ln.shipped_kg, "kg": ln.kg,
+        "show_price": repeated,
+        "price": ln.price, "price_uzs": ln.price_uzs, "currency": ln.currency,
         "pct": _bar_pct(ln.shipped_kg, ln.kg),
         "sent": sent, "planned": planned,
         # The mashina figures ride INSIDE the bars, so each bar needs its own:
@@ -301,6 +321,7 @@ def dashboard(request):
         # needs a truck. Only worth the extra lines when there is more than one;
         # a single-marka kelishuv would just be the same bar twice.
         lines = list(contract.lines.all())
+        brand_counts = Counter(ln.brand for ln in lines)
 
         chart_contracts.append({
             "contract": contract,
@@ -311,7 +332,7 @@ def dashboard(request):
             # to'lov, now that a to'lov names the product it bought: a kelishuv
             # can be square on one marka and untouched on the other, which one
             # gold bar across both could not say.
-            "lines": [_chart_line(contract, ln)
+            "lines": [_chart_line(contract, ln, repeated=brand_counts[ln.brand] > 1)
                       for ln in lines] if len(lines) > 1 else [],
             # What was paid before a to'lov could name a marka. Shown as its own
             # row rather than folded into one of them: nobody has said which it
@@ -517,7 +538,13 @@ def partner_list(request):
     q = request.GET.get("q", "").strip()
     # The kelishuvlar come along so each hamkor's qolgan to'lov can be totalled per
     # currency off the prefetch, instead of two queries per row as the page walks it.
-    partners = Partner.objects.prefetch_related(
+    #
+    # The birja row is not on it. It is not a hamkor anybody negotiated with — it is
+    # the exchange standing in as a counterparty so a birja purchase can be an
+    # ordinary kelishuv — and it has no telefon, no shahar and nobody to call. What
+    # is owed on it is read where it is owed: the Qolgan to'lov column of the Birja
+    # kelishuvlar list.
+    partners = Partner.objects.filter(is_birja=False).prefetch_related(
         "contracts__lines__shipment_lines", "contracts__supplier_payments")
     if q:
         partners = partners.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(city__icontains=q))
@@ -818,9 +845,14 @@ def _contract_code_filter(q):
     return Q()
 
 
-def _filter_contracts(request):
+def _filter_contracts(request, birja=False):
     """The kelishuvlar list's own filters — search, hamkor, davr, holat, to'lov, sort —
     in one place, so the page and its Excel button cannot drift apart.
+
+    `birja` picks which of the two lists is being drawn: the kelishuvlar struck with
+    a hamkor in Eron, or the ones bought on the exchange here. It is a parameter and
+    not something read off `request.path`, so the Excel button has to pass the same
+    flag its page did — which is what stops the file from holding the other list.
 
     Returns the rows already narrowed and sorted, plus what the page needs to draw
     its own controls (the faceted to'lov counts among them)."""
@@ -837,6 +869,7 @@ def _filter_contracts(request):
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
     contracts = (Contract.objects.select_related("partner")
+                 .filter(partner__is_birja=birja)
                  .prefetch_related("lines__shipment_lines", "supplier_payments"))
     if q:
         # lines__brand spans a multi-valued relation, so a kelishuv whose products
@@ -878,11 +911,11 @@ def _filter_contracts(request):
     rows.sort(key=sort_key, reverse=sort_reverse)
     return rows, {"q": q, "pay": pay, "partner_id": partner_id, "state": state,
                   "sort": sort, "date_from": date_from, "date_to": date_to,
-                  "pay_tabs": pay_tabs, "pay_applies": pay_applies}
+                  "pay_tabs": pay_tabs, "pay_applies": pay_applies, "birja": birja}
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def contract_list(request):
+def contract_list(request, birja=False):
     """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
     Hamkor narrows in SQL; the rest read computed properties (debt, remaining_kg),
     so they run in Python over prefetched rows — the loads and the payments come in
@@ -894,8 +927,18 @@ def contract_list(request):
     columns are hidden from them too — the same rule the yuklar list already follows
     (tests/test_shipments.py::test_translator_sees_no_price_on_loads). What is left is
     the kelishuv as a logistics document: which marka, how many kg agreed, how many
-    still to come."""
-    rows, f = _filter_contracts(request)
+    still to come.
+
+    `birja=True` draws the same page for the purchases made on the exchange here —
+    one view rather than a copy, because the two lists differ in exactly two ways:
+    which rows they hold, and that a birja kelishuv has no hamkor to filter by
+    (there is only ever the one). Registered twice in the URLconf; see config/urls.
+
+    A tarjimon never reaches the birja page. Their whole job is the Eron road, and
+    the guard is the URLconf's — `role_required` cannot see which list it is on."""
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    rows, f = _filter_contracts(request, birja=birja)
     q, pay, partner_id, state, sort = f["q"], f["pay"], f["partner_id"], f["state"], f["sort"]
     date_from, date_to = f["date_from"], f["date_to"]
     pay_tabs, pay_applies = f["pay_tabs"], f["pay_applies"]
@@ -910,29 +953,46 @@ def contract_list(request):
     # (unfinished business is the working view), so standing there draws no chip —
     # a chip means "this list is narrower than it normally is".
     panel = [
-        {"name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
-         "options": [("", "Hammasi")] + [(p.pk, p.name) for p in Partner.objects.all()]},
         {"name": "state", "label": "Holat", "value": state, "default": "open",
          "options": [("open", "Tugallanmagan"), ("done", "Tugallangan"), ("", "Hammasi")]},
         {"name": "sort", "label": "Saralash", "value": sort, "default": CONTRACT_SORT_DEFAULT,
          "options": [(key, label) for key, label, *_ in CONTRACT_SORTS]},
     ]
+    # No hamkor filter on the birja list: every row on it is the same counterparty,
+    # so the select would offer one option that narrows nothing. The birja hamkor is
+    # kept off the Eron list's select for the mirror reason — none of its rows are
+    # under it.
+    if not birja:
+        panel.insert(0, {
+            "name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
+            "options": [("", "Hammasi")] + [(p.pk, p.name)
+                                            for p in Partner.objects.filter(is_birja=False)]})
     if pay_applies:
-        panel.insert(2, {
+        # After Holat, whichever list this is — one index up when the hamkor select
+        # is there to be counted.
+        panel.insert(2 if not birja else 1, {
             "name": "pay", "label": "To'lov", "value": pay,
             "options": [(t["key"], f"{t['label']} ({t['count']})") for t in pay_tabs],
             "chip_options": [(t["key"], t["label"]) for t in pay_tabs]})
     return render(request, "crm/contract_list.html", {
-        "export_url": reverse("contract_list_export"),
+        "export_url": reverse("birja_contract_list_export" if birja
+                              else "contract_list_export"),
         "filters": _filter_panel(request, panel),
         "page": page, "rows": rows,
         "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
         "sort": sort, "sort_options": [(key, label) for key, label, *_ in CONTRACT_SORTS],
-        "partners": Partner.objects.all(),
+        "partners": Partner.objects.filter(is_birja=False),
         "date_from": date_from, "date_to": date_to,
         "daterange": _daterange_bar(request, date_from, date_to),
         "has_filters": bool((pay and pay_applies) or partner_id or state != "open"),
+        # What the shared template needs to know which of the two lists it is
+        # drawing: the words at the top, and where the + button goes.
+        "birja": birja,
+        "page_title": "Birja kelishuvlar" if birja else "Kelishuvlar",
+        "create_url": "birja_contract_create" if birja else "contract_create",
+        "search_placeholder": ("Marka yoki kod bo'yicha qidirish…" if birja
+                               else "Marka, hamkor yoki kod bo'yicha qidirish…"),
     })
 
 
@@ -950,30 +1010,48 @@ def _save_lines(formset, parent):
     formset.save_m2m()
 
 
+def contract_list_url(birja):
+    """Which kelishuvlar list a row belongs back on. The edit and delete views are
+    shared by both — a kelishuv never changes sides — so they ask the row rather
+    than being registered twice."""
+    return reverse("birja_contract_list" if birja else "contract_list")
+
+
 @role_required(User.Role.ADMIN)
-def contract_create(request):
-    form = ContractForm(request.POST or None)
+def contract_create(request, birja=False):
+    """A new kelishuv. `birja=True` opens the same form for a purchase made on the
+    exchange here: no hamkor picker, because there is only ever the one counterparty
+    and the view supplies it — see `crm.models.birja_partner`, which mints the
+    birja-1, birja-2 kod off it exactly the way a hamkor's name mints sobir-3."""
+    form = ContractForm(request.POST or None, birja=birja)
     # The rows are priced in the header's currency, and they are built before the
     # header has been validated — so it is read off the raw POST (contract_currency).
+    # `birja` handed down as well: whether one marka may be taken in several lots
+    # is the formset's rule to enforce, and it cannot read the answer off the
+    # kelishuv — the birja hamkor is only put on it below, after both forms have
+    # validated. See `BaseContractLineFormSet`.
     lines = ContractLineFormSet(
-        request.POST or None,
+        request.POST or None, birja=birja,
         form_kwargs={"currency": contract_currency(request.POST or None)})
+    title = "Yangi birja kelishuv" if birja else "Yangi kelishuv"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
             with transaction.atomic():
                 contract = form.save(commit=False)
+                if birja:
+                    contract.partner = birja_partner()
                 contract.created_by = request.user
                 contract.save()
                 _save_lines(lines, contract)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Kelishuv", contract.pk,
-                f"Yangi kelishuv: {contract.code} · {contract.brand_summary}",
+                f"Yangi {'birja ' if birja else ''}kelishuv: "
+                f"{contract.code} · {contract.brand_summary}",
             )
             messages.success(request, "Kelishuv qo'shildi")
-            return form_success(request, reverse("contract_list"))
-        return _contract_form_response(request, form, lines, "Yangi kelishuv",
-                                       invalid=True)
-    return _contract_form_response(request, form, lines, "Yangi kelishuv")
+            return form_success(request, contract_list_url(birja))
+        return _contract_form_response(request, form, lines, title, invalid=True)
+    return _contract_form_response(request, form, lines, title)
 
 
 def _contract_form_response(request, form, lines, title, invalid=False):
@@ -985,10 +1063,11 @@ def _contract_form_response(request, form, lines, title, invalid=False):
 
 @role_required(User.Role.ADMIN)
 def contract_edit(request, pk):
-    contract = get_object_or_404(Contract, pk=pk)
-    form = ContractForm(request.POST or None, instance=contract)
+    contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    birja = contract.is_birja
+    form = ContractForm(request.POST or None, instance=contract, birja=birja)
     lines = ContractLineFormSet(
-        request.POST or None, instance=contract,
+        request.POST or None, instance=contract, birja=birja,
         form_kwargs={"currency": contract_currency(request.POST or None, contract)})
     title = "Kelishuvni tahrirlash"
     if request.method == "POST":
@@ -1000,19 +1079,28 @@ def contract_edit(request, pk):
                 # cost, and that is the ceiling every hamkor to'lov is placed
                 # against — so the kelishuv is placed again. See shipment_create.
                 reconcile_supplier_allocations(contract)
+                # A transport rate corrected here reaches no yuk on its own: the
+                # xarajat is synced when a YUK is saved, and none of them were.
+                # By the owner's decision this re-prices landed loads too.
+                sync_contract_birja_transport(contract)
+                # A broker's fee is a percentage of the agreement, so changing what
+                # the agreement covers changes the fee. Sums somebody typed are left
+                # alone — see sync_contract_expenses.
+                sync_contract_expenses(contract)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
                 f"Kelishuv tahrirlandi: {contract.code} · {contract.brand_summary}",
             )
             messages.success(request, "Kelishuv yangilandi")
-            return form_reload(request, reverse("contract_list"))
+            return form_reload(request, contract_list_url(birja))
         return _contract_form_response(request, form, lines, title, invalid=True)
     return _contract_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN)
 def contract_delete(request, pk):
-    contract = get_object_or_404(Contract, pk=pk)
+    contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    birja = contract.is_birja
     if request.method == "POST":
         label = f"{contract.code} · {contract.brand_summary}"
         try:
@@ -1022,14 +1110,14 @@ def contract_delete(request, pk):
             messages.success(request, "Kelishuv o'chirildi")
         except ProtectedError:
             messages.error(request, "Kelishuvga to'lov yoki yuk biriktirilgan")
-        return form_reload(request, reverse("contract_list"))
+        return form_reload(request, contract_list_url(birja))
     return render_confirm(
         request,
         "Kelishuvni o'chirish",
         f"“{contract.code} · {contract.brand_summary}” o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
-        cancel_url_name="contract_list",
+        cancel_url_name="birja_contract_list" if birja else "contract_list",
     )
 
 
@@ -1625,8 +1713,38 @@ def customer_payment_delete(request, pk):
 
 @role_required(User.Role.ADMIN)
 def status_list(request):
-    statuses = ShipmentStatus.objects.all()
-    return render(request, "crm/status_list.html", {"statuses": statuses})
+    """The holat chains, one block each.
+
+    Grouped rather than listed flat because there are two pipelines now and a
+    single column of nine rows says nothing about which yuklar each belongs to —
+    and because the up/down buttons are only meaningful inside a chain: swapping a
+    birja holat past an Eron one reorders neither pipeline.
+
+    The shared arrival row is drawn under BOTH blocks. It is one row and editing it
+    from either place edits the same holat, which is the point: it is the step the
+    two chains meet at."""
+    blocks = []
+    for scope, label, note, birja in [
+        (ShipmentStatus.Scope.HAMKOR, "Hamkor yuklari (Erondan)",
+         "Kelishuv bo'yicha Erondan keladigan yuklarning bosqichlari.", False),
+        (ShipmentStatus.Scope.BIRJA, "Birja yuklari",
+         "Birjadan olingan yuklarning bosqichlari.", True),
+    ]:
+        statuses = list(ShipmentStatus.for_kind(birja))
+        # An arrow is drawn only where it has somewhere to go IN THIS BLOCK. Worked
+        # out here rather than from `forloop.first`/`last`, which count the shared
+        # row too and would offer to swap a birja holat with a step that is not this
+        # chain's to move — the swap `status_move` then refuses, leaving a button
+        # that looks live and does nothing.
+        own = [st for st in statuses if st.scope == scope]
+        blocks.append({
+            "scope": scope, "label": label, "note": note,
+            "rows": [{"status": st,
+                      "movable": st.scope == scope,
+                      "can_up": st.scope == scope and own.index(st) > 0,
+                      "can_down": st.scope == scope and own.index(st) < len(own) - 1}
+                     for st in statuses]})
+    return render(request, "crm/status_list.html", {"blocks": blocks})
 
 
 @role_required(User.Role.ADMIN)
@@ -1635,7 +1753,14 @@ def status_create(request):
     if request.method == "POST":
         if form.is_valid():
             status = form.save(commit=False)
-            max_order = ShipmentStatus.objects.aggregate(m=Max("order"))["m"] or 0
+            # Last in its OWN chain, and still before the arrival row: that one sits
+            # at a deliberately high `order` so both pipelines end on it (see the
+            # 0063 migration). Taking the table-wide maximum would have parked every
+            # new holat after it — a step the operator has to add BEFORE the ombor,
+            # landing after it.
+            max_order = (ShipmentStatus.objects
+                         .filter(scope=status.scope, is_arrival=False)
+                         .aggregate(m=Max("order"))["m"] or 0)
             status.order = max_order + 1
             status.save()
             AuditLog.record(
@@ -1694,7 +1819,11 @@ def status_move(request, pk):
     status = get_object_or_404(ShipmentStatus, pk=pk)
     if request.method == "POST":
         direction = request.POST.get("dir")
-        statuses = list(ShipmentStatus.objects.all())
+        # Within its own chain. Ordering is one number line shared by both, so the
+        # row above a birja holat may well be an Eron one — swapping with it would
+        # move a step the operator cannot see on this block and reorder neither
+        # pipeline the way the arrow promised.
+        statuses = list(ShipmentStatus.objects.filter(scope=status.scope))
         index = next((i for i, s in enumerate(statuses) if s.pk == status.pk), None)
         if index is not None:
             neighbor_index = index - 1 if direction == "up" else index + 1
@@ -1710,39 +1839,121 @@ def status_move(request, pk):
     return redirect("status_list")
 
 
-def _filter_shipments(request):
+def customs_pending_loads(shipments):
+    """Narrow a yuklar queryset to the ones sitting in the ombor with their bojxona
+    still unpaid — arrived, and no bojxona xarajat on the books.
+
+    The SQL twin of `Shipment.customs_pending` — same rule, asked of the database so
+    the group can be counted and paged without walking every load in Python.
+
+    `arrived__isnull=False` is the same test `arrived_lots` uses to decide what is on
+    the shelf, so the group is exactly "stock we are selling" minus "stock whose
+    clearing is settled". A truck still on the road is not in it: its bojxona is not
+    unpaid, it is not yet due, and letting the pipeline in would bury the few rows
+    that need chasing.
+
+    Nothing about the bojxonachi is asked. A landed load owes its clearing whether or
+    not somebody wrote down who would handle it, and requiring the name would make
+    this a list of loads that had been FILLED IN rather than of loads that are OWED.
+
+    `~Exists` rather than `.exclude(expenses__category=...)`: exclude() on a
+    multi-valued relation removes a yuk if ANY of its xarajatlar fails to match,
+    which on a truck carrying a gruzchi and nothing else is every load in the table.
+
+    Birja loads are dropped outright — they crossed no border, so they owe no
+    clearing and would otherwise never leave this list. Same rule as
+    `Shipment.customs_pending`, which is the Python twin of this query; both have to
+    say it, because the pill's count comes from here and the row's own badge from
+    there.
+    """
+    return shipments.filter(arrived__isnull=False,
+                            contract__partner__is_birja=False).filter(
+        ~Exists(ShipmentExpense.objects.filter(
+            shipment=OuterRef("pk"),
+            category=ShipmentExpense.Category.CUSTOMS)))
+
+
+def _filter_shipments(request, birja=False):
     """The yuklar list's own filters — shared by the page and its Excel button, so the
-    file holds the loads the screen was showing (including the Hammasi/QR toggles)."""
+    file holds the loads the screen was showing (including the Hammasi/QR toggles).
+
+    `birja` picks the pipeline: the loads coming off the Eron road, or the ones
+    bought on the exchange here. Passed in rather than sniffed off `request.path`,
+    so the Excel button must hand over the same flag its page did — otherwise the
+    file would be of the other list."""
     q = request.GET.get("q", "").strip()
     show_all = request.GET.get("all") == "1"
+    # Bojxona to'lanmagan — the loads in the ombor whose clearing is still unpaid.
+    #
+    # It sits beside the holat tabs and is deliberately NOT one. A yuk in it already
+    # has a holat — "Omborga yetib keldi" — so this is a second question asked of the
+    # same load, not a stage it moved to. And it cannot be a client-side tab like
+    # Kechikkan either: those filter rows the page already sent, and the default view
+    # drops every arrived load before the browser ever sees it. Which is exactly the
+    # set this needs.
+    #
+    # Admin only, and enforced here rather than by hiding the pill: the group's own
+    # column prints what has been sent to the bojxonachi, and a tarjimon typing the
+    # param by hand would be reading money off a screen that shows them none of it
+    # anywhere else.
+    #
+    # Never on the birja list: those loads crossed no border, so the group they
+    # would be filtered into is always empty — see `customs_pending_loads`.
+    customs = (request.GET.get("customs") == "1" and request.user.is_admin_role
+               and not birja)
     # Anything else in the URL means no QR filter at all — a typo should show every
     # yuk, not silently drop half of them.
+    #
+    # And no QR filter at all on the birja list: the kod is what gets a driver off
+    # the Eron border queue, and no birja load has ever carried one.
     qr = request.GET.get("qr", "")
-    if qr not in ("bor", "yoq"):
+    if qr not in ("bor", "yoq") or birja:
         qr = ""
+    # Kelish sanasi bo'yicha — bugun kelgan yuklar tepada, then kecha's, and so on
+    # down the calendar.
+    #
+    # It sorts on `arrived` and NOT on the row date the davr filter uses
+    # (`Coalesce(arrived, eta)`): "kelgan" is the day a yuk actually walked into the
+    # ombor, and a descending sort over the coalesced date would have parked next
+    # month's taxminiy arrivals above everything that has really landed — the exact
+    # rows this ordering exists to put on top. Loads still on the road have no
+    # kelgan kun at all, so they gather at the end, soonest ETA first: that is the
+    # only reading of "not yet" that keeps the list one calendar.
+    #
+    # Hammasi only. The active view drops every arrived load before this point, so
+    # there ordering by the day they arrived would be sorting a set in which
+    # nothing has; and Bojxona to'lanmagan replaces the row set with its own
+    # question, which the toolbar does not draw this button on either. Both are
+    # enforced here rather than by hiding the pill, so a hand-typed `?sort=` cannot
+    # reorder a view whose order means something else.
+    sort = "kelish" if (request.GET.get("sort") == "kelish"
+                        and show_all and not customs) else ""
     shipments = (Shipment.objects
-                 .select_related("contract__partner", "status")
-                 .prefetch_related("delays", "legs", "expenses"))
-    if not show_all:
-        shipments = shipments.filter(arrived__isnull=True)
+                 .filter(contract__partner__is_birja=birja)
+                 .select_related("contract__partner", "status", "customs_agent")
+                 .prefetch_related(
+                     "delays", "legs", "expenses", "customs_payments",
+                     # The kelishuv side of every yuk's tannarx: its kg, the hamkor
+                     # to'lovlar the vositachi cut is taken off, and its own
+                     # xarajatlar (`Contract.cost_per_kg`). The panel has always
+                     # printed a tan narx that reads all three — unprefetched that
+                     # was three queries per yuk on a page listing fifty of them,
+                     # and the line naming the kelishuv's share would have asked for
+                     # them a second time.
+                     "contract__lines", "contract__supplier_payments",
+                     "contract__expenses"))
     if q:
         shipments = shipments.filter(
             Q(transport__icontains=q) | Q(container__icontains=q)
             | Q(contract__lines__brand__icontains=q) | Q(contract__partner__name__icontains=q)
             | Q(driver_name__icontains=q) | Q(responsible__icontains=q)).distinct()
-    # Counted before the QR filter narrows anything, so the number on the pill keeps
-    # meaning "waiting, among the yuklar you are looking at" — standing on QR bor
-    # must not zero out the count of the loads you are not looking at.
-    qr_waiting_count = shipments.filter(
-        qr_given__isnull=True, qr_date__isnull=False,
-        qr_date__lt=timezone.localdate()).count()
-    if qr:
-        # The date is what says the kod was handed over, so its absence is "yo'q".
-        shipments = shipments.filter(qr_given__isnull=qr == "yoq")
     # The load's own sana, defined exactly as the row prints it: the day it arrived,
     # or the day it is expected while it is still moving (see _load_date_cell.html).
     # A yuk carrying neither date has no place on a calendar and drops out of a
     # narrowed window — it is still there with the filter off.
+    #
+    # Applied here rather than last so that everything below it — the counts as much
+    # as the rows — is talking about the same davr.
     date_from, date_to = _date_window(request)
     if date_from or date_to:
         shipments = shipments.annotate(row_date=Coalesce("arrived", "eta"))
@@ -1750,18 +1961,128 @@ def _filter_shipments(request):
             shipments = shipments.filter(row_date__gte=date_from)
         if date_to:
             shipments = shipments.filter(row_date__lte=date_to)
-    return shipments, {"q": q, "show_all": show_all, "qr": qr,
+    # Every yuk the search and the davr allow, before any view narrows it further.
+    # The holat tabs count THIS and never the rows on screen — see `shipment_list`.
+    every_load = shipments
+    # Counted before the arrived filter, not after: a to'lanmagan load is always an
+    # ARRIVED one, and the pill has to say how many exist from whichever view the
+    # operator is standing in — a count that reads 0 on the default page and 6 on
+    # Hammasi is worse than no count.
+    # …and not counted at all for a tarjimon, who never sees the pill: it is one more
+    # subquery per page load to produce a number that is thrown away.
+    customs_pending_count = (customs_pending_loads(shipments).count()
+                             if request.user.is_admin_role and not birja else 0)
+    if customs:
+        shipments = customs_pending_loads(shipments)
+    elif not show_all:
+        shipments = shipments.filter(arrived__isnull=True)
+    # Counted before the QR filter narrows anything, so the number on the pill keeps
+    # meaning "waiting, among the yuklar you are looking at" — standing on QR bor
+    # must not zero out the count of the loads you are not looking at.
+    qr_waiting_count = 0 if birja else shipments.filter(
+        qr_given__isnull=True, qr_date__isnull=False,
+        qr_date__lt=timezone.localdate()).count()
+    if qr:
+        # The date is what says the kod was handed over, so its absence is "yo'q".
+        shipments = shipments.filter(qr_given__isnull=qr == "yoq")
+    # Applied to the queryset rather than to the rows the page builds, so the Excel
+    # button hands over the file in the order the screen was showing it — the whole
+    # reason the filters live in here and not in the view.
+    if sort:
+        shipments = shipments.order_by(F("arrived").desc(nulls_last=True),
+                                       F("eta").asc(nulls_last=True), "-pk")
+    return shipments, {"q": q, "show_all": show_all, "qr": qr, "customs": customs,
+                       "sort": sort, "birja": birja,
                        "date_from": date_from, "date_to": date_to,
-                       "qr_waiting_count": qr_waiting_count}
+                       "qr_waiting_count": qr_waiting_count,
+                       "customs_pending_count": customs_pending_count,
+                       "every_load": every_load}
+
+
+# How many yuklar one page of the Kelish sanasi view holds. Counted in loads and not
+# in kelishuvlar, the way the default Hammasi pager is: this view has no kelishuv
+# blocks to keep whole, and a day is a small enough unit that splitting one across a
+# page break costs nothing — the header repeats and the reader keeps reading.
+LOADS_PER_DATE_PAGE = 50
+
+
+def _day_label(day):
+    """The WORD a date band goes by, or "" for a day that is only its date.
+
+    Only bugun and kecha get one. Those are the two the reader is actually looking
+    for, and the two a bare "24-avgust" makes them work out; every other day is
+    clearer as the date it is. The date itself is handed to the template as a date
+    object and named there, so the month keeps Django's l10n rather than being
+    spelled here — the same reason `_daterange_bar` does it."""
+    today = timezone.localdate()
+    if day == today:
+        return "Bugun"
+    if day == today - timedelta(days=1):
+        return "Kecha"
+    return ""
+
+
+def _loads_by_day(rows):
+    """The Kelish sanasi view's grouping: one block per day, newest day first, with
+    the loads still on the road gathered at the end.
+
+    `rows` must already be ordered the way `_filter_shipments` orders them for this
+    view — the blocks come out in whatever order the rows walk past, so the sort is
+    what puts Bugun on top and Hali kelmagan at the bottom, not this function."""
+    groups, by_day = [], {}
+    for s in rows:
+        g = by_day.get(s.arrived)
+        if g is None:
+            g = by_day[s.arrived] = {
+                "key": s.arrived.isoformat() if s.arrived else "kelmagan",
+                "day": s.arrived, "shipments": [],
+                # The tail's own line: yo'ldagi yuklar are kept rather than dropped
+                # — Hammasi means hammasi, and a sort must not become a filter.
+                "note": "" if s.arrived else "hali yo'lda — taxminiy kelish sanasi bo'yicha",
+                # A yuk with no kelgan kun has nowhere on the calendar, so its block
+                # is named for the fact rather than for a date it has not got.
+                "label": _day_label(s.arrived) if s.arrived else "Hali kelmagan"}
+            groups.append(g)
+        g["shipments"].append(s)
+    return groups
+
+
+def _sales_by_day(blocks):
+    """Sotuvlar banded by the day they were struck — one header per sana, and the
+    sotuvlar of that day under it.
+
+    The sana used to be a column, repeating the same date down twenty rows to say
+    something that changes three times on the page. As a band it is said once, and
+    the list reads the way the operator asks about it: what went out today, then what
+    went out yesterday.
+
+    `blocks` arrives in the list's own order (newest sotuv first), so the bands come
+    out newest-first by walking it — nothing is sorted here, and a page of the pager
+    bands exactly the rows it holds."""
+    days, by_day = [], {}
+    for block in blocks:
+        day = block["first"].date
+        band = by_day.get(day)
+        if band is None:
+            band = by_day[day] = {"key": day.isoformat(), "day": day,
+                                  "label": _day_label(day), "blocks": []}
+            days.append(band)
+        band["blocks"].append(block)
+    return days
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def shipment_list(request):
+def shipment_list(request, birja=False):
     """Loads grouped by kelishuv, with status tabs (in pipeline order) to switch
     the view. Tabs filter client-side; each row carries its status + overdue flag.
 
     Two modes: the default shows only loads still moving, while `?all=1` (Hammasi)
     adds the arrived ones and paginates, since that set only grows.
+
+    `?customs=1` (Bojxona to'lanmagan) is a third: the loads standing in the ombor
+    with no bojxona xarajat against them — see `customs_pending_loads`. It replaces
+    the arrived filter with its inverse rather than narrowing what the default view
+    already shows, since those are the loads the default view exists to exclude.
 
     `?qr=bor|yoq` narrows to the loads whose driver carries a QR kod, or the ones
     whose driver does not. Server-side rather than a third client-side tab: it has to
@@ -1770,12 +2091,33 @@ def shipment_list(request):
     page), and narrowing the queryset is what makes the tab counts beside it say how
     many of THOSE loads sit in each holat.
 
+    `?sort=kelish` (Kelish sanasi bo'yicha) reorders Hammasi by the day each yuk
+    landed — bugun's arrivals on top, kecha's under them, and so on — and swaps the
+    kelishuv blocks for day ones, since under that order the day IS the grouping.
+    Hammasi only, and it pages by yuk rather than by kelishuv; see
+    `_filter_shipments` for why it sorts on `arrived` alone.
+
     The page opens unfiltered. `qr_waiting_count` is what stands in for a default:
     the loads whose planned QR day has come and gone with no kod, counted on the QR
     yo'q pill, so the ones worth chasing announce themselves without the list having
-    to hide anything to say so."""
-    shipments, f = _filter_shipments(request)
-    q, show_all, qr = f["q"], f["show_all"], f["qr"]
+    to hide anything to say so.
+
+    `birja=True` is the same page for the loads bought on the exchange here. One
+    view rather than a copy: a birja yuk is a yuk, and every mechanic below it —
+    the kelishuv blocks, the holat tabs, the Kelish sanasi ordering, the pager —
+    means exactly what it means on the Eron list. What it does NOT have is a QR kod
+    or a bojxona, both of which are facts about crossing a border; the pills for
+    them are dropped here and `_filter_shipments` refuses the params outright, so a
+    hand-typed `?qr=` cannot narrow a list where the answer is always the same.
+
+    Admin only, guarded here: `role_required` is on the view and cannot see which of
+    the two lists it was reached through, and a tarjimon's whole job is the Eron
+    road."""
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    shipments, f = _filter_shipments(request, birja=birja)
+    q, show_all, qr, customs = f["q"], f["show_all"], f["qr"], f["customs"]
+    sort = f["sort"]
     date_from, date_to, qr_waiting_count = f["date_from"], f["date_to"], f["qr_waiting_count"]
     shipments = list(shipments)
 
@@ -1788,62 +2130,128 @@ def shipment_list(request):
 
     # Group under the kelishuv (newest load first inside). Built from every row,
     # before any paging: a kelishuv is the unit this page is read in.
+    #
+    # …unless Kelish sanasi bo'yicha is on, where the day is that unit instead. The
+    # kelishuv blocks are not a header the rows could keep while the order changes
+    # around them — they ARE the order, and sorting the blocks themselves would
+    # answer a different question ("which kelishuv had something land recently")
+    # than the one being asked ("which yuklar came in today"). So that view pages
+    # the flat list and groups the page by the day; the kelishuv survives on every
+    # row as the hamkor name under the marka, and in the yuk's own panel.
     groups = []
-    by_contract = {}
-    for s in shipments:
-        g = by_contract.get(s.contract_id)
-        if g is None:
-            g = by_contract[s.contract_id] = {"contract": s.contract, "shipments": []}
-            groups.append(g)
-        g["shipments"].append(s)
-    for g in groups:
-        g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
+    if sort:
+        page = Paginator(shipments, LOADS_PER_DATE_PAGE).get_page(request.GET.get("page"))
+        rows = list(page.object_list)
+        # Grouped AFTER paging, so a day straddling a page break is drawn under its
+        # own header on both — each saying how many of that day are on THIS page,
+        # rather than a number whose rest the reader cannot see.
+        groups = _loads_by_day(rows)
+    else:
+        by_contract = {}
+        for s in shipments:
+            g = by_contract.get(s.contract_id)
+            if g is None:
+                g = by_contract[s.contract_id] = {"key": s.contract_id,
+                                                  "contract": s.contract, "shipments": []}
+                groups.append(g)
+            g["shipments"].append(s)
+        for g in groups:
+            g["shipments"].sort(key=lambda s: s.created_at, reverse=True)
 
-    # Then keep each HAMKOR whole. Ordering the kelishuvlar by recency alone
-    # interleaved them — one partner's kelishuv, then another's, then the first
-    # partner's again — so reading everything going to one hamkor meant hunting
-    # the same name down a page it appeared on four separate times.
+        # Then keep each HAMKOR whole. Ordering the kelishuvlar by recency alone
+        # interleaved them — one partner's kelishuv, then another's, then the first
+        # partner's again — so reading everything going to one hamkor meant hunting
+        # the same name down a page it appeared on four separate times.
+        #
+        # A hamkor takes the position of their newest kelishuv rather than an
+        # alphabetical slot, so the page still opens on the most recent work; inside
+        # the block the kelishuvlar stay newest-first, as before.
+        newest_by_partner = {}
+        for g in groups:
+            partner_id = g["contract"].partner_id
+            newest_by_partner[partner_id] = max(
+                newest_by_partner.get(partner_id, 0), g["contract"].pk)
+        groups.sort(key=lambda g: (-newest_by_partner[g["contract"].partner_id],
+                                   -g["contract"].pk))
+
+        # Hammasi can grow without bound, so page it — by KELISHUV, not by yuk.
+        # Paging the flat list cut a kelishuv wherever its 20th load happened to
+        # fall, leaving the rest of that kelishuv's yuklar under a second copy of
+        # the same header a page later. And because the list runs newest-first, that
+        # cut landed almost exactly along the status line: the moving loads on one
+        # page, the arrived ones on the next, which is what made a kelishuv look
+        # split by holat.
+        #
+        # The active view stays whole, as the pipeline is meant to be scanned.
+        page = Paginator(groups, 10).get_page(request.GET.get("page")) if show_all else None
+        if page is not None:
+            groups = list(page.object_list)
+        rows = [s for g in groups for s in g["shipments"]]
+
+    # This pipeline's chain only, in its own order — plus the shared arrival holat,
+    # which both end on.
+    statuses = list(ShipmentStatus.for_kind(birja))  # ordered by (order, id)
+    # Inside Bojxona to'lanmagan the holat tabs count EVERY yuk, not the rows under
+    # them.
     #
-    # A hamkor takes the position of their newest kelishuv rather than an
-    # alphabetical slot, so the page still opens on the most recent work; inside
-    # the block the kelishuvlar stay newest-first, as before.
-    newest_by_partner = {}
-    for g in groups:
-        partner_id = g["contract"].partner_id
-        newest_by_partner[partner_id] = max(
-            newest_by_partner.get(partner_id, 0), g["contract"].pk)
-    groups.sort(key=lambda g: (-newest_by_partner[g["contract"].partner_id],
-                               -g["contract"].pk))
-
-    # Hammasi can grow without bound, so page it — by KELISHUV, not by yuk. Paging
-    # the flat list cut a kelishuv wherever its 20th load happened to fall, leaving
-    # the rest of that kelishuv's yuklar under a second copy of the same header a
-    # page later. And because the list runs newest-first, that cut landed almost
-    # exactly along the status line: the moving loads on one page, the arrived ones
-    # on the next, which is what made a kelishuv look split by holat.
+    # Counting the rows was right while the tabs only ever filtered what was already
+    # on screen — that is what makes Kechikkan's siblings keep their numbers when it
+    # is pressed. This group is a server round trip that replaces the row set, so the
+    # same code answered "Yo'lda 0, Bojxona 0, Chegarada 0" — six controls reporting
+    # an emptiness that is about the filter and not about the yuklar. A number that
+    # only means something once you know which view produced it is worse than none.
     #
-    # The active view stays whole, as the pipeline is meant to be scanned.
-    page = Paginator(groups, 10).get_page(request.GET.get("page")) if show_all else None
-    if page is not None:
-        groups = list(page.object_list)
-    rows = [s for g in groups for s in g["shipments"]]
-
-    statuses = list(ShipmentStatus.objects.all())  # ordered by (order, id)
-    # The arrival status only earns a tab in Hammasi — in the active view nothing
-    # can be sitting in it.
+    # So in the group they say what they say everywhere else, and clicking one leaves
+    # the group for that holat (`?holat=`, below). One view is active at a time, and
+    # the row is a view picker rather than six filters stacked on a seventh.
+    if customs:
+        counts = dict(f["every_load"].values_list("status")
+                      .annotate(n=Count("pk")).values_list("status", "n"))
+    # The arrival status only earns a tab where arrived loads can appear — in the
+    # active view nothing can be sitting in it. Bojxona to'lanmagan is all of them.
     tabs = [{"status": st, "count": counts.get(st.pk, 0)}
-            for st in statuses if show_all or not st.is_arrival]
+            for st in statuses if show_all or customs or not st.is_arrival]
     # The active view opens on Yo'lda — the loads actually moving are what the
     # logist watches. Resolved by name (statuses are editable) and simply absent
     # if renamed away. Hammasi opens unfiltered: it was asked for to show
     # everything, so preselecting a tab would defeat it.
-    default_tab = None if show_all else next(
-        (t["status"].pk for t in tabs if t["status"].name.casefold() == "yo'lda"), None)
+    #
+    # `?holat=` overrides both. It is how a holat tab pressed inside Bojxona
+    # to'lanmagan gets you out: the link leaves the group and names the tab to open
+    # on, so the press lands where it looks like it will rather than dumping the
+    # operator on the default view with a different tab lit.
+    #
+    # On the birja list the chain has no "Yo'lda" to open on — the operator has not
+    # named those steps yet (see the 0063 migration), and hard-coding a placeholder
+    # would break the moment they rename it. So it opens on whatever the FIRST step
+    # of that chain currently is, which is the one a freshly bought load sits in.
+    asked_tab = request.GET.get("holat", "")
+    default_name = None if birja else "yo'lda"
+    default_tab = None if show_all or customs else (
+        next((t["status"].pk for t in tabs
+              if t["status"].name.casefold() == default_name), None)
+        if default_name else next((t["status"].pk for t in tabs), None))
+    if asked_tab.isdigit() and any(t["status"].pk == int(asked_tab) for t in tabs):
+        default_tab = int(asked_tab)
     return render(request, "crm/shipment_list.html", {
-        "export_url": reverse("shipment_list_export"),
+        "export_url": reverse("birja_shipment_list_export" if birja
+                              else "shipment_list_export"),
+        # What the shared template needs to know which list it is drawing.
+        "birja": birja,
+        "page_title": "Birja yuklar" if birja else "Yuklar",
+        "create_url": "birja_shipment_create" if birja else "shipment_create",
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,
         "total": len(shipments), "overdue_count": overdue_count,
-        "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count,
+        "q": q, "qr": qr, "qr_waiting_count": qr_waiting_count, "sort": sort,
+        "customs": customs, "customs_pending_count": f["customs_pending_count"],
+        # Only fetched for the view that draws the picker — every other yuklar page
+        # would be paying for a list it never renders.
+        "customs_agents": CustomsAgent.objects.all() if customs else [],
+        # The row template's full-width cells (kelishuv header, route panel) have to
+        # span whatever the header actually drew, and Bojxonachi is one more column
+        # on this view only. Counted here rather than as a template expression that
+        # every future column would have to be added to by hand.
+        "colspan": 8 + (2 if request.user.is_admin_role else 0) + (1 if customs else 0),
         "default_tab": default_tab, "show_all": show_all, "page": page,
         "date_from": date_from, "date_to": date_to,
         "daterange": _daterange_bar(request, date_from, date_to),
@@ -1869,13 +2277,59 @@ def ombor(request):
     groups, q = _ombor_groups(request)
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     return render(request, "crm/ombor.html", {
-        "page": page, "q": q, "export_url": reverse("ombor_export")})
+        "page": page, "q": q, "kurs": _ombor_kurs(request),
+        "export_url": reverse("ombor_export")})
+
+
+def _ombor_kurs(request):
+    """The kurs the ombor's so'm tannarx is drawn at — today's, one figure for the
+    whole page.
+
+    Everywhere else in the app a so'm figure is stated at the kurs its OWN row was
+    booked at, so a past figure cannot move after the fact. The ombor is the one
+    screen where that is the wrong answer: nearly every kelishuv is struck in
+    dollars, and the question being asked here is "what would this cost me in so'm
+    today, to decide what to sell it for today". Converting each lot at the rate its
+    truck was entered at answers a different question and leaves two lots of the same
+    granula incomparable.
+
+    So it is a presentation figure and nothing else — no row is re-rated, nothing is
+    stored, and the dollar column beside it is still the recorded one. Typed into the
+    box on top of the page, carried in the querystring so the search, the paging and
+    the Excel button all show the same one, and remembered in the session so the page
+    opens where it was left.
+
+    Falls back to the last kurs somebody actually typed anywhere in the app
+    (`latest_exchange_rate`), which is the closest thing to today's the book has."""
+    raw = (request.GET.get("kurs") or "")
+    # The box is a data-money input, so what comes back may be space-grouped and may
+    # use a comma for the decimal — the same shapes `toNumeric` cleans up in the JS.
+    raw = raw.replace("\u00a0", "").replace(" ", "").replace(",", ".").strip()
+    if raw:
+        try:
+            typed = Decimal(raw)
+        except (ArithmeticError, ValueError):
+            typed = None
+        if typed is not None and typed > 0:
+            request.session["ombor_kurs"] = str(typed)
+            return typed
+    stored = request.session.get("ombor_kurs")
+    if stored:
+        try:
+            return Decimal(stored)
+        except (ArithmeticError, ValueError):
+            pass
+    return latest_exchange_rate()
 
 
 def _ombor_groups(request):
     """The ombor rows — one per marka, its lots folded in — shared by the page and its
     Excel button."""
     q = request.GET.get("q", "").strip()
+    # One kurs for every so'm figure on the page, and the same one the Excel button
+    # writes: the querystring rides along with the download, so the file and the
+    # screen cannot disagree about what the stock is worth.
+    kurs = _ombor_kurs(request)
     # Oldest arrival first — the FIFO consumption order sales draw from.
     # Every lot prints a tannarx, and a tannarx reaches into the truck's xarajatlar
     # AND the kelishuv's to'lovlar (`ShipmentLine.landed_cost_per_kg`). Loaded here
@@ -1930,9 +2384,14 @@ def _ombor_groups(request):
         # table opens them, and each one's own page carries the full hand-over.
         g["open_lots"] = [lot for lot in g["lots"] if lot.available_kg > 0]
         g["done_lots"] = [lot for lot in g["lots"] if lot.available_kg <= 0]
-        # The so'm range is taken from the same lots rather than converting the
-        # dollar range, so each end is stated at the kurs its own lot was booked at.
-        costed = [(lot.landed_cost_per_kg, lot.landed_cost_per_kg_uzs) for lot in g["lots"]]
+        # Every lot's so'm tannarx at the ONE kurs the page is drawn at — see
+        # `_ombor_kurs`. Stamped on the lot the way `servable_kg` is below, because
+        # the row that prints it is a shared partial and re-deriving it there would
+        # let the marka row and its lots disagree.
+        for lot in g["lots"]:
+            lot.cost_uzs = (lot.landed_cost_per_kg * kurs).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+        costed = [(lot.landed_cost_per_kg, lot.cost_uzs) for lot in g["lots"]]
         g["cost_min"], g["cost_min_uzs"] = min(costed)
         g["cost_max"], g["cost_max_uzs"] = max(costed)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
@@ -2150,15 +2609,31 @@ def _shipment_form_response(request, form, lines, title, invalid=False):
                          extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
 
 
+def shipment_list_url(birja):
+    """Which yuklar list a load belongs back on. The edit, delete and status views
+    are shared — a yuk never changes pipeline — so they ask the row instead of being
+    registered twice."""
+    return reverse("birja_shipment_list" if birja else "shipment_list")
+
+
 @role_required(User.Role.ADMIN)
-def shipment_create(request):
-    form = ShipmentForm(request.POST or None)
+def shipment_create(request, birja=False):
+    """A new yuk. `birja=True` loads it against a birja kelishuv instead: the same
+    form with the QR and bojxonachi boxes gone, and the kelishuv and holat pickers
+    narrowed to that pipeline — see `ShipmentForm`."""
+    form = ShipmentForm(request.POST or None, birja=birja)
     lines = ShipmentLineFormSet(request.POST or None)
+    title = "Yangi birja yuk" if birja else "Yangi yuk"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
             with transaction.atomic():
                 shipment = form.save(commit=False)
                 shipment.created_by = request.user
+                if birja:
+                    # The model's default route is the Eron one, which is what every
+                    # load was until now. A birja truck starts at the exchange and
+                    # never leaves the country.
+                    shipment.origin = "Birja"
                 if shipment.status.is_arrival:
                     shipment.arrived = timezone.localdate()
                 shipment.save()
@@ -2167,6 +2642,11 @@ def shipment_create(request):
                 # dispatch form rather than waiting for somebody to remember it as
                 # an xarajat later.
                 form.sync_driver_advance(shipment, request.user)
+                # Now that the mahsulot rows exist, the yuk has a kg — which is what
+                # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
+                # already ran this, but on a yuk being created it ran against no
+                # lines at all.
+                sync_birja_transport(shipment)
                 # A truck changes what its marka COSTS (`expected_value`), which is
                 # the ceiling every hamkor to'lov is placed against. Money that
                 # spilled onto the next marka — or sat as the hamkor's avans —
@@ -2177,9 +2657,9 @@ def shipment_create(request):
                 f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
             )
             messages.success(request, "Yuk qo'shildi")
-            return form_success(request, reverse("shipment_list"))
-        return _shipment_form_response(request, form, lines, "Yangi yuk", invalid=True)
-    return _shipment_form_response(request, form, lines, "Yangi yuk")
+            return form_success(request, shipment_list_url(birja))
+        return _shipment_form_response(request, form, lines, title, invalid=True)
+    return _shipment_form_response(request, form, lines, title)
 
 
 #: What a yuk edit is worth naming afterwards. Anything else — a note, a phone
@@ -2225,7 +2705,10 @@ def _shipment_changes(before, after):
 
 @role_required(User.Role.ADMIN)
 def shipment_edit(request, pk):
-    shipment = get_object_or_404(Shipment, pk=pk)
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner"), pk=pk)
+    # Which pipeline this load is on is the row's to say, not the URL's — `ShipmentForm`
+    # reads it off the instance and scopes the kelishuv and holat pickers to match.
     form = ShipmentForm(request.POST or None, instance=shipment)
     lines = ShipmentLineFormSet(request.POST or None, instance=shipment)
     title = "Yukni tahrirlash"
@@ -2255,6 +2738,11 @@ def shipment_edit(request, pk):
                 shipment.save()
                 _save_lines(lines, shipment)
                 form.sync_driver_advance(shipment, request.user)
+                # Now that the mahsulot rows exist, the yuk has a kg — which is what
+                # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
+                # already ran this, but on a yuk being created it ran against no
+                # lines at all.
+                sync_birja_transport(shipment)
                 # Editing a yuk re-prices its marka, so every to'lov on the kelishuv
                 # is placed again — see shipment_create.
                 reconcile_supplier_allocations(shipment.contract)
@@ -2269,15 +2757,24 @@ def shipment_edit(request, pk):
                  else "Yuk tahrirlandi (o'zgarish yo'q)")[:255],
             )
             messages.success(request, "Yuk yangilandi")
-            return form_reload(request, reverse("shipment_list"))
+            return form_reload(request, shipment_list_url(form.birja))
         return _shipment_form_response(request, form, lines, title, invalid=True)
     return _shipment_form_response(request, form, lines, title)
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def shipment_detail(request, pk):
+    """One yuk's own page. Shared by both pipelines — a load never changes sides, so
+    the template asks the row (`shipment.is_birja`) which Eron-road facts to draw.
+
+    A tarjimon is turned away from a birja load the same way the birja LIST turns
+    them away. Not because the page shows them anything dangerous — it shows the
+    same money-free fields either way — but because a role that cannot reach a set
+    of rows through any screen should not reach one of them by typing its number."""
     shipment = get_object_or_404(
         Shipment.objects.select_related("contract__partner", "status"), pk=pk)
+    if shipment.is_birja and not request.user.is_admin_role:
+        raise PermissionDenied
     return render(request, "crm/shipment_detail.html", {"shipment": shipment})
 
 
@@ -2294,8 +2791,13 @@ def shipment_driver_edit(request, pk):
 
     Everything else about a yuk — its kelishuv, its mahsulotlar, its holat, its
     muddat, its bosqichlar, its xarajatlari — is admin-only, and each of those views
-    enforces that itself."""
-    shipment = get_object_or_404(Shipment, pk=pk)
+    enforces that itself.
+
+    Birja loads are not theirs to touch either — see `shipment_detail`."""
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner"), pk=pk)
+    if shipment.is_birja and not request.user.is_admin_role:
+        raise PermissionDenied
     form = ShipmentDriverForm(request.POST or None, instance=shipment)
     title = f"Yuk #{shipment.pk} — haydovchi va konteyner"
     if request.method == "POST":
@@ -2310,7 +2812,7 @@ def shipment_driver_edit(request, pk):
             messages.success(request, "Haydovchi va konteyner yangilandi")
             # Reload in place: this modal opens from the list AND from the detail
             # page, and a redirect to the list would throw away wherever they were.
-            return form_reload(request, reverse("shipment_list"))
+            return form_reload(request, shipment_list_url(shipment.is_birja))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
 
@@ -2498,8 +3000,14 @@ def shipment_set_status(request, pk):
     # Admin-only outright. A tarjimon used to move a yuk between non-arrival statuses;
     # the holat drives the whole board — what counts as in transit, what is overdue,
     # when a bron becomes sellable — which is more than driver detail.
-    shipment = get_object_or_404(Shipment.objects.select_related("status"), pk=pk)
-    status = get_object_or_404(ShipmentStatus, pk=request.POST.get("status"))
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("status", "contract__partner"), pk=pk)
+    # Only a holat from this load's own chain. The tabs on each list already offer
+    # nothing else, so this is the lock behind the courtesy: posting an Eron holat
+    # onto a birja yuk would put it in a bosqich its own page cannot draw a tab for,
+    # leaving the row invisible on every view of the list it belongs to.
+    status = get_object_or_404(ShipmentStatus.for_kind(shipment.is_birja),
+                               pk=request.POST.get("status"))
     old_name = shipment.status.name
     shipment.status = status
     shipment.arrived = (shipment.arrived or timezone.localdate()) if status.is_arrival else None
@@ -2536,6 +3044,33 @@ def shipment_set_status(request, pk):
     messages.success(request, "Holat yangilandi")
     if brons:
         messages.info(request, f"Bu yukda {brons} ta faol bron bor — sotuvga aylantirish mumkin")
+    return redirect(request.POST.get("next") or shipment_list_url(shipment.is_birja))
+
+
+@require_POST
+@role_required(User.Role.ADMIN)
+def shipment_set_customs_agent(request, pk):
+    """Set (or clear) the bojxonachi on a yuk from the list, the way the holat is set.
+
+    Money never enters this. It is the same assignment the yuk form makes — a label
+    saying who will clear this truck — and the reason it is worth a control of its own
+    is that it is filled in load by load down a column, exactly as the holat is. A
+    modal per yuk to change one dropdown was the wrong shape for that.
+
+    An empty value clears the name. Not an error and not a special case: a yuk handed
+    to the wrong bojxonachi has to be able to go back to having none."""
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("customs_agent"), pk=pk)
+    raw = request.POST.get("customs_agent") or ""
+    agent = get_object_or_404(CustomsAgent, pk=raw) if raw else None
+    old_name = shipment.customs_agent.name if shipment.customs_agent_id else "yo'q"
+    shipment.customs_agent = agent
+    shipment.save(update_fields=["customs_agent"])
+    AuditLog.record(request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                    f"Bojxonachi: {old_name} → {agent.name if agent else 'yo`q'}")
+    if is_ajax(request):
+        return JsonResponse({"agent_id": agent.pk if agent else None})
+    messages.success(request, "Bojxonachi yangilandi")
     return redirect(request.POST.get("next") or "shipment_list")
 
 
@@ -2597,7 +3132,11 @@ def shipment_set_qr(request, pk):
 
 @role_required(User.Role.ADMIN)
 def shipment_delete(request, pk):
-    shipment = get_object_or_404(Shipment, pk=pk)
+    shipment = get_object_or_404(
+        Shipment.objects.select_related("contract__partner"), pk=pk)
+    # Read while the row still exists — the delete below takes the kelishuv with it,
+    # and the answer decides which list the operator lands back on.
+    birja = shipment.is_birja
     if request.method == "POST":
         label = f"{shipment.brand_summary} · {shipment.kg} kg"
         contract = shipment.contract
@@ -2612,14 +3151,14 @@ def shipment_delete(request, pk):
             messages.success(request, "Yuk o'chirildi")
         except ProtectedError:
             messages.error(request, "Yukka bog'liq ma'lumot bor — o'chirib bo'lmaydi")
-        return form_reload(request, reverse("shipment_list"))
+        return form_reload(request, shipment_list_url(birja))
     return render_confirm(
         request,
         "Yukni o'chirish",
         f"“{shipment.brand_summary} · {shipment.kg} kg” yuki o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
-        cancel_url_name="shipment_list",
+        cancel_url_name="birja_shipment_list" if birja else "shipment_list",
     )
 
 
@@ -2681,6 +3220,9 @@ def expense_create(request):
 @role_required(User.Role.ADMIN)
 def expense_edit(request, pk):
     expense = get_object_or_404(ShipmentExpense, pk=pk)
+    refusal = _refuse_derived(request, expense)
+    if refusal:
+        return refusal
     form = ShipmentExpenseForm(request.POST or None, instance=expense)
     title = "Xarajatni tahrirlash"
     if request.method == "POST":
@@ -2697,8 +3239,170 @@ def expense_edit(request, pk):
 
 
 @role_required(User.Role.ADMIN)
+def contract_expense_create(request):
+    """The kelishuv's own xarajatlar — what it already carries, and a box to add one.
+
+    Opened from the kelishuvlar list rather than from a detail page, because a
+    kelishuv has no detail page: the list row IS the kelishuv, the way the to'lov and
+    tahrirlash modals on the same row already work.
+
+    The rows are listed above the form for the same reason the yuk's grid opens
+    filled: coming back to add a broker to a kelishuv that already carries one wants
+    to show that, not offer an empty box beside it."""
+    asked = (request.POST.get("contract") if request.method == "POST"
+             else request.GET.get("contract")) or ""
+    contract = (Contract.objects.select_related("partner")
+                .prefetch_related("lines", "expenses")
+                .filter(pk=asked).first() if asked.isdigit() else None)
+    initial = {"contract": asked}
+    if contract:
+        initial["currency"] = contract.currency
+    # The transport pseudo-row's Tahrirlash opens this same modal with its turkum
+    # already chosen, so editing the rate is one click rather than a picker hunt.
+    asked_category = request.GET.get("category")
+    if asked_category in ContractExpense.Category.values:
+        initial["category"] = asked_category
+        if asked_category == ContractExpense.Category.TRANSPORT and contract:
+            initial["rate_per_kg"] = contract.transport_rate_per_kg
+    form = ContractExpenseForm(request.POST or None, initial=initial,
+                               contract=contract)
+    title = "Kelishuv xarajatlari"
+
+    def respond(invalid=False):
+        return form_response(
+            request, form, title, invalid=invalid,
+            modal_template="crm/_contract_expenses_modal.html",
+            extra_context={
+                "contract": contract,
+                "rows": contract.expenses.all() if contract else [],
+                # How much of the transport arrangement has already turned into
+                # money — the half of it the operator cannot see from this screen.
+                "logged_transport": (
+                    ShipmentExpense.objects.filter(
+                        shipment__contract=contract, is_auto_transport=True).count()
+                    if contract else 0)})
+
+    if request.method == "POST":
+        if form.is_valid():
+            if form.is_transport:
+                # No row of its own: this turkum edits the kelishuv's arrangement,
+                # and the money shows up on each yuk as it lands.
+                #
+                # The audit line is read off what save() RETURNS, not off the copy
+                # this view loaded from the URL — that one is a different instance
+                # still carrying the old rate, and a line written from it records
+                # what the rate used to be while looking like a record of the change.
+                edited = form.save()
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Kelishuv", edited.pk,
+                    f"Transport narxi: {edited.transport_rate_per_kg} / 1 kg · "
+                    f"kelishuv {edited.code}")
+                messages.success(request, "Transport narxi saqlandi")
+            else:
+                expense = form.save(commit=False)
+                expense.created_by = request.user
+                expense.save()
+                AuditLog.record(
+                    request.user, AuditLog.Action.CREATE, "Kelishuv xarajati",
+                    expense.pk,
+                    f"Yangi kelishuv xarajati: {expense.get_category_display()} · "
+                    f"{expense.amount}$ · kelishuv {expense.contract.code}")
+                messages.success(request, "Xarajat qo'shildi")
+            return form_reload(request, contract_list_url(
+                contract.is_birja if contract else False))
+        return respond(invalid=True)
+    return respond()
+
+
+@role_required(User.Role.ADMIN)
+def contract_transport_clear(request, pk):
+    """Drop a kelishuv's transport arrangement.
+
+    Not just a field going blank: every landed yuk on the kelishuv carries a xarajat
+    that this rate produced, and clearing it takes all of them out of the kassa. The
+    confirm says how many, because that is the part the operator cannot see from
+    here."""
+    contract = get_object_or_404(Contract.objects.select_related("partner")
+                                 .prefetch_related("shipments"), pk=pk)
+    logged = ShipmentExpense.objects.filter(shipment__contract=contract,
+                                            is_auto_transport=True).count()
+    if request.method == "POST":
+        contract.transport_rate_per_kg = None
+        contract.save(update_fields=["transport_rate_per_kg"])
+        sync_contract_birja_transport(contract)
+        AuditLog.record(request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
+                        f"Transport narxi o'chirildi · kelishuv {contract.code}")
+        messages.success(request, "Transport narxi o'chirildi")
+        return form_reload(request, contract_list_url(contract.is_birja))
+    return render_confirm(
+        request, "Transport narxini o'chirish",
+        (f"Kelishuv {contract.code} transport narxi o'chirilsinmi? "
+         f"Shu narxdan yozilgan {logged} ta yuk xarajati ham o'chadi."),
+        "O'chirish", confirm_class="btn-danger", cancel_url_name="contract_list")
+
+
+@role_required(User.Role.ADMIN)
+def contract_expense_edit(request, pk):
+    expense = get_object_or_404(
+        ContractExpense.objects.select_related("contract__partner"), pk=pk)
+    form = ContractExpenseForm(request.POST or None, instance=expense,
+                               contract=expense.contract)
+    title = "Kelishuv xarajatini tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Kelishuv xarajati", expense.pk,
+                f"Kelishuv xarajati tahrirlandi: {expense.amount}$ · "
+                f"kelishuv {expense.contract.code}")
+            messages.success(request, "Xarajat yangilandi")
+            return form_reload(request,
+                               contract_list_url(expense.contract.is_birja))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def contract_expense_delete(request, pk):
+    expense = get_object_or_404(
+        ContractExpense.objects.select_related("contract__partner"), pk=pk)
+    if request.method == "POST":
+        amount, contract = expense.amount, expense.contract
+        expense.delete()
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Kelishuv xarajati", pk,
+            f"Kelishuv xarajati o'chirildi: {amount}$ · kelishuv {contract.code}")
+        messages.success(request, "Xarajat o'chirildi")
+        return form_reload(request, contract_list_url(contract.is_birja))
+    return render_confirm(
+        request, "Xarajatni o'chirish",
+        f"{expense.get_category_display()} · {expense.amount}$ — o'chirilsinmi?",
+        "O'chirish", confirm_class="btn-danger", cancel_url_name="contract_list")
+
+
+def _refuse_derived(request, expense):
+    """Send the operator to the kelishuv when they try to hand-edit a derived row.
+
+    A birja yuk's transport is worked out from its kelishuv's rate every time the
+    yuk is saved (`sync_birja_transport`). Editing the row here would look like it
+    worked and then be silently put back, so the screens do not offer the buttons —
+    and this is the lock behind that courtesy, for a URL typed or followed from an
+    old tab. Refused rather than 404'd: the row is real and the operator is right
+    that it is wrong; what they need is where to go and change it."""
+    if not expense.is_auto_transport:
+        return None
+    messages.info(request,
+                  "Bu xarajat kelishuvdagi transport narxidan hisoblanadi — "
+                  "o'zgartirish uchun kelishuvni tahrirlang")
+    return redirect("shipment_detail", pk=expense.shipment_id)
+
+
+@role_required(User.Role.ADMIN)
 def expense_delete(request, pk):
     expense = get_object_or_404(ShipmentExpense, pk=pk)
+    refusal = _refuse_derived(request, expense)
+    if refusal:
+        return refusal
     if request.method == "POST":
         amount, shipment_id = expense.amount, expense.shipment_id
         expense.delete()
@@ -2966,10 +3670,19 @@ def sale_list(request):
     sales, q, date_from, date_to = _filter_sales(request)
     page = Paginator(sales, 20).get_page(request.GET.get("page"))
     rows = page.object_list
+    groups = _sale_groups(rows, edited=_edited_today([s.pk for s in rows]))
     return render(request, "crm/sale_list.html",
                   {"page": page, "q": q,
-                   "groups": _sale_groups(
-                       rows, edited=_edited_today([s.pk for s in rows])),
+                   # `groups` is still every sotuv on the page, flat and in order;
+                   # `days` is the same blocks banded under their sana, which is what
+                   # the table draws. Both, because the two answer different
+                   # questions and the flat one is what the page is counted by.
+                   "groups": groups, "days": _sales_by_day(groups),
+                   # What the date band and the vazvrat panel have to span. Money is
+                   # not drawn for a skladchi at all, so the width is not a constant
+                   # — counted here rather than as a template expression every future
+                   # column would have to be added to by hand.
+                   "colspan": 3 + (6 if request.user.is_admin_role else 0),
                    "export_url": reverse("sale_list_export"),
                    "changed": request.GET.get("changed", "").strip(),
                    "new": request.GET.get("new", "").strip(),
@@ -2979,9 +3692,35 @@ def sale_list(request):
                    "daterange": _daterange_bar(request, date_from, date_to)})
 
 
+def _reys_numbers(rows):
+    """Which mashina each Mahsulot row went out on, normalised to 1, 2, 3… in the
+    order the reyslar first appear — or `None` on every row when the sotuv is not a
+    reys sotuv at all.
+
+    A sotuv whose rows never reach a second number is one handover, however many
+    markalar the mijoz took on it, so nothing is numbered: reys 1 of 1 is not a fact
+    about a delivery, and a lone ① beside every ordinary sotuv would be a marker that
+    never means anything.
+
+    The browser's numbers are only used for GROUPING — rows sharing one are the same
+    lorry-load. Renumbering them here is what keeps a saved sotuv reading 1, 2, 3
+    after the operator built the trucks out of order or deleted the middle one."""
+    raw = [row.cleaned_data.get("reys") or 1 for row in rows]
+    order = {}
+    for number in raw:
+        order.setdefault(number, len(order) + 1)
+    if len(order) < 2:
+        return [None] * len(raw)
+    return [order[number] for number in raw]
+
+
 def _sale_form_response(request, form, lines, title, invalid=False):
+    """`lines_reys` turns on the Reys qo'shish button and the ①②③ the rows of one
+    marka wear as they are typed. Sotuv only: a kelishuv or a yuk lists a marka once
+    by nature, and repeating one there is the slip the guard still calls it."""
     return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar",
+                                        "lines_reys": True})
 
 
 @role_required(User.Role.ADMIN)
@@ -3034,9 +3773,19 @@ def sale_create(request):
             # FIFO slices under them — so Sotuvlar can band them back together as the
             # one trip to the counter they were.
             group = uuid4()
+            # Which mashina each row went out on. The rows carry it themselves — a
+            # truck can hold more than one marka, so several rows may share a number
+            # and the sotuv is read off them rather than the other way round.
+            #
+            # Renumbered here rather than trusted: the browser's numbers only have to
+            # GROUP the rows, and normalising them in order of first appearance means
+            # a saved sotuv always reads 1, 2, 3 even if the operator built the reys
+            # out of order or deleted the middle one.
+            rows_in = lines.rows()
+            reys_numbers = _reys_numbers(rows_in)
             slices, sold = [], []
             with transaction.atomic():
-                for line in lines.rows():
+                for line, reys in zip(rows_in, reys_numbers):
                     take_from = line.cleaned_data
                     # The same conversion PriceEntryFormMixin does, at the header's
                     # kurs. Four decimals: rounding a $/kg to cents would move a
@@ -3053,6 +3802,9 @@ def sale_create(request):
                             # marka, in the currency the sotuv was agreed in
                             price=usd, price_uzs=uzs,
                             currency=currency, exchange_rate=rate, group=group,
+                            # Every FIFO slice of the row carries the row's reys: one
+                            # truck that reached across two lots is still one truck.
+                            reys=reys,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=request.user,
                         )
@@ -3064,7 +3816,8 @@ def sale_create(request):
                         # sotuv is something else they bought and the booking stands.
                         if data.get("draw_from_bron"):
                             draw_down_bron(sale)
-                    sold.append(f"{take_from['kg']} kg {take_from['brand']}")
+                    sold.append(f"{take_from['kg']} kg {take_from['brand']}"
+                                + (f" ({reys}-reys)" if reys else ""))
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
                 f"Yangi sotuv (FIFO): {', '.join(sold)} · "
@@ -3072,9 +3825,13 @@ def sale_create(request):
             )
             for sale in slices:  # a pre-existing advance auto-applies, oldest slice first
                 apply_customer_advance(sale)
-            # Says what actually happened: several markalar, or one split across
-            # lots, or the ordinary single row.
-            if len(sold) > 1:
+            # Says what actually happened, in the words the operator used: reyslar
+            # when a marka went out on several mashina, otherwise several markalar,
+            # or one split across lots, or the ordinary single row.
+            reys_count = len({n for n in reys_numbers if n})
+            if reys_count > 1:
+                note = f"Sotuv qo'shildi ({reys_count} reys, {len(slices)} lotdan)"
+            elif len(sold) > 1:
                 note = f"Sotuv qo'shildi ({len(sold)} mahsulot, {len(slices)} lotdan)"
             elif len(slices) > 1:
                 note = f"Sotuv qo'shildi ({len(slices)} lotdan)"
@@ -3321,6 +4078,272 @@ def sale_delete(request, pk):
         request,
         "Sotuvni o'chirish",
         f"“{sale.kg} kg · {sale.customer.name}” sotuvi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="sale_list",
+    )
+
+
+def _group_rows(sales):
+    """A sotuv's FIFO slices read back as the Mahsulot rows they were TYPED as.
+
+    A row the operator typed ("2 790 kg 2102 campaund at 1.5") becomes one Sale per
+    lot it took to fill, so the stored rows are finer than the rows anybody entered.
+    An edit has to put the typed rows back on the screen — three lines saying 2 790,
+    1 250 and 9 750 are not the sotuv the operator remembers making, and correcting
+    a kg on one of them would be correcting FIFO's arithmetic rather than the deal.
+
+    Keyed by (marka, reys), which is exactly what one typed row is: the same marka
+    twice means two mashina, and those stay two rows."""
+    rows, index = [], {}
+    for sale in sales:
+        key = (sale.line.brand, sale.reys)
+        row = index.get(key)
+        if row is None:
+            row = index[key] = {"brand": key[0], "reys": key[1], "kg": Decimal("0"),
+                                "price": sale.price_own, "sales": []}
+            rows.append(row)
+        row["kg"] += sale.kg
+        row["sales"].append(sale)
+    return rows
+
+
+def _group_label(rows):
+    """"2 790 kg 2102 campaund, 210 kg ftor oq" — a sotuv named by what is in it."""
+    return ", ".join(f"{_kg(row['kg'])} kg {row['brand']}"
+                     + (f" ({row['reys']}-reys)" if row["reys"] else "")
+                     for row in rows)
+
+
+def _blocking_return(sales):
+    """The first slice among these that a vazvrat has already come off.
+
+    A vazvrat line points at a SOTUV row and is deleted with it (CASCADE), so
+    rewriting a row that has one would silently take back goods the mijoz really
+    brought back. The edit stops instead and says which marka to sort out first —
+    changing a kg is a correction, losing a vazvrat is not."""
+    for sale in sales:
+        if sale.returns.all():
+            return sale
+    return None
+
+
+@role_required(User.Role.ADMIN)
+def sale_group_edit(request, pk):
+    """Tahrirlash for a sotuv of several mahsulotlar — the whole trip to the counter
+    in the form it was typed in, rather than one lot slice of it.
+
+    The single-row door (`sale_edit`) stays exactly where it was and is what a
+    one-product sotuv still opens; this is its multi-product twin, and a group that
+    has shrunk to one row is handed straight back to it.
+
+    Nothing is deleted and recreated. A row whose kg and narx did not move keeps its
+    Sale rows, their pks, their vazvratlar and their history — which is what lets the
+    ordinary edit (a mijoz typed wrong, a sana a day out) be exactly that. Only a row
+    whose KG changed is re-sliced, because where the kg come from is FIFO's answer
+    and it changes with them."""
+    sale = get_object_or_404(Sale, pk=pk)
+    rows_now = sale.group_sales
+    if len(rows_now) == 1:
+        return sale_edit(request, rows_now[0].pk)
+    current = _group_rows(rows_now)
+    head = rows_now[0]
+    title = "Sotuvni tahrirlash"
+
+    form = SaleGroupEditForm(request.POST or None, instance=head)
+    lines = SaleLineFormSet(
+        request.POST or None, prefix="lines",
+        initial=None if request.method == "POST" else [
+            {"brand": row["brand"], "kg": row["kg"], "price": row["price"],
+             "reys": row["reys"]} for row in current])
+    # The sotuv's own kg are already off the shelf, so the ceiling has to let it
+    # stand on them — otherwise saving a sotuv unchanged is refused for taking
+    # granula it is itself holding.
+    allowance = defaultdict(Decimal)
+    for row in current:
+        allowance[row["brand"]] += row["kg"]
+    lines.allowance = allowance
+
+    if request.method == "POST" and form.is_valid() and lines.is_valid():
+        data = form.cleaned_data
+        currency, rate = data["currency"], data["exchange_rate"]
+        typed = lines.rows()
+        reys_numbers = _reys_numbers(typed)
+        wanted = {}
+        for line, reys in zip(typed, reys_numbers):
+            take = line.cleaned_data
+            wanted[(take["brand"], reys)] = (take["kg"], take["price"], line)
+        was = {(row["brand"], row["reys"]): row for row in current}
+
+        # Every row about to lose its Sale rows — the ones whose kg moved and the
+        # ones struck out altogether. Asked BEFORE anything is written, so a sotuv
+        # with a vazvrat on one marka is refused whole rather than half-edited.
+        doomed = []
+        for key, row in was.items():
+            if key not in wanted or wanted[key][0] != row["kg"]:
+                doomed.append((key, row))
+        for key, row in doomed:
+            blocked = _blocking_return(row["sales"])
+            if blocked is None:
+                continue
+            message = (f"“{row['brand']}” bo'yicha vazvrat bor — avval vazvratni "
+                       f"tahrirlang, keyin bu mahsulotning kg'sini o'zgartiring")
+            if key in wanted:
+                wanted[key][2].add_error("kg", message)
+            else:
+                lines.non_form_errors().append(message)
+        if any(line.errors for line in lines.forms) or lines.non_form_errors():
+            return _sale_form_response(request, form, lines, title, invalid=True)
+
+        moved = head.customer_id != data["customer"].pk
+        previous_customer = head.customer
+        # Only the markalar whose KG moved: a header-only correction (a mijoz typed
+        # wrong, a sana a day out) takes nothing off the shelf and must not set FIFO
+        # loose on every marka the sotuv happens to mention.
+        changed_brands = {brand for (brand, _reys), _row in doomed}
+        changed_brands |= {brand for (brand, _reys) in wanted if (brand, _reys) not in was}
+        # Asked BEFORE the edit lands, exactly as a single-row edit asks it: whether
+        # the chain may move is a fact about the sotuvlar behind this one AS THEY
+        # STAND, and a plan replayed afterwards would describe a chain the edit has
+        # already disturbed. A marka whose later sotuvlar are not on FIFO order is
+        # left alone — those assignments came from somewhere else (a hand-picked lot,
+        # a sotuv typed in days late) and a shift would quietly overwrite them.
+        may_shift = {}
+        for brand in sorted(changed_brands):
+            anchor = min((s for s in rows_now if s.line.brand == brand),
+                         key=lambda s: (s.date, s.pk), default=head)
+            may_shift[brand] = not blockers(replay(brand), anchor)
+        slices, sold = [], []
+        with transaction.atomic():
+            for key, row in doomed:
+                for old in row["sales"]:
+                    # The promise this slice settled is unkept again until the new
+                    # slices draw it down; releasing first is the same order
+                    # `sale_edit` uses, and for the same reason — releasing after
+                    # would give back the NEW kg rather than what was taken.
+                    release_bron(old)
+                    old.delete()
+            for (brand, reys), (kg, price, _line) in wanted.items():
+                usd, uzs = convert_pair(price, currency, rate, "0.0001")
+                row = was.get((brand, reys))
+                if row is not None and row["kg"] == kg:
+                    # Untouched kg: the slices stay exactly where FIFO put them,
+                    # with everything that hangs off them. Only what the header and
+                    # the narx say about them is rewritten.
+                    for kept in row["sales"]:
+                        kept.customer = data["customer"]
+                        kept.price, kept.price_uzs = usd, uzs
+                        kept.currency, kept.exchange_rate = currency, rate
+                        kept.date = data["date"]
+                        kept.debt_deadline = data["debt_deadline"]
+                        kept.note = data["note"]
+                        kept.save()
+                        slices.append(kept)
+                else:
+                    remaining = kg
+                    from_bron = any(s.reservation_id for s in (row or {}).get("sales", []))
+                    for lot in fifo_lots(brand):
+                        if remaining <= 0:
+                            break
+                        take = min(lot.available_kg, remaining)
+                        fresh = Sale.objects.create(
+                            customer=data["customer"], line=lot, kg=take,
+                            price=usd, price_uzs=uzs,
+                            currency=currency, exchange_rate=rate,
+                            group=head.group, reys=reys,
+                            date=data["date"], debt_deadline=data["debt_deadline"],
+                            note=data["note"], created_by=head.created_by,
+                        )
+                        slices.append(fresh)
+                        remaining -= take
+                        # A row that came out of a bron goes on coming out of it:
+                        # whether a sotuv draws on a promise is decided when it is
+                        # entered and must survive a correction to its kg.
+                        if from_bron:
+                            draw_down_bron(fresh)
+                sold.append(f"{_kg(kg)} kg {brand}"
+                            + (f" ({reys}-reys)" if reys else ""))
+
+        if moved:
+            # Slices of the PREVIOUS mijoz's to'lovlar cannot follow the sotuv to
+            # somebody else — the money would read as paid here while still counting
+            # against the mijoz who handed it over.
+            for row in slices:
+                row.allocations.all().delete()
+        for row in slices:
+            trim_sale_allocations(row)
+        reconcile_customer_allocations(data["customer"])
+        if moved:
+            reconcile_customer_allocations(previous_customer)
+        # The kg of these markalar moved, so FIFO's answer for each of them moved
+        # with it. The new slices already came off `fifo_lots`, so a marka that may
+        # not shift needs nothing further — it is the sotuvlar BEHIND it that the
+        # replay would have rewritten, and those are the ones being protected.
+        spread = set()
+        own = {row.pk for row in slices}
+        for brand in sorted(changed_brands):
+            if not may_shift.get(brand):
+                continue
+            spread.update(pk for pk in apply_plan(replay(brand)) if pk not in own)
+
+        AuditLog.record(
+            request.user, AuditLog.Action.UPDATE, "Sotuv", slices[0].pk if slices else pk,
+            f"Sotuv tahrirlandi: {_group_label(current)} → {', '.join(sold)} · "
+            f"{data['customer'].name}"
+            + (f" · {len(spread)} ta sotuvning loti siljidi" if spread else ""),
+        )
+        if spread:
+            messages.success(request, f"Sotuv yangilandi · {len(spread)} ta sotuvning "
+                                      f"loti va tannarxi FIFO bo'yicha qayta hisoblandi")
+        elif changed_brands and not all(may_shift.values()):
+            messages.success(request, "Sotuv yangilandi · keyingi sotuvlar FIFO "
+                                      "tartibida emas, shuning uchun ular tegilmadi")
+        else:
+            messages.success(request, "Sotuv yangilandi")
+        return form_reload(request, reverse("sale_list"))
+
+    invalid = request.method == "POST"
+    return _sale_form_response(request, form, lines, title, invalid=invalid)
+
+
+@role_required(User.Role.ADMIN)
+def sale_group_delete(request, pk):
+    """O'chirish for the whole sotuv — every mahsulot on it, in one go.
+
+    A sotuv of three markalar is one thing the operator entered and one thing they
+    delete; leaving two thirds of it behind because the row on Sotuvlar only knew
+    about one lot is not a smaller deletion, it is a wrong one. All or nothing, so a
+    slice that refuses to go takes the rest of the sotuv with it back."""
+    sale = get_object_or_404(Sale, pk=pk)
+    rows = sale.group_sales
+    if len(rows) == 1:
+        return sale_delete(request, rows[0].pk)
+    current = _group_rows(rows)
+    customer = sale.customer
+    label = f"{_group_label(current)} · {customer.name}"
+    if request.method == "POST":
+        try:
+            with transaction.atomic():
+                for row in rows:
+                    # Each slice gives back the bron kg it was holding, exactly as a
+                    # single-row deletion does.
+                    release_bron(row)
+                    row.delete()
+        except ProtectedError:
+            messages.error(request, "Sotuvga bog'liq ma'lumot bor — o'chirib bo'lmaydi")
+        else:
+            # Their allocations went with them (CASCADE); that money is avans again,
+            # and the mijoz's other open sotuvlar have first claim on it.
+            reconcile_customer_allocations(customer)
+            AuditLog.record(request.user, AuditLog.Action.DELETE, "Sotuv", pk,
+                            f"Sotuv o'chirildi ({len(rows)} lot): {label}")
+            messages.success(request, "Sotuv o'chirildi")
+        return form_reload(request, reverse("sale_list"))
+    return render_confirm(
+        request,
+        "Sotuvni o'chirish",
+        f"“{label}” sotuvi butunlay o'chiriladi ({len(current)} mahsulot). "
+        f"Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
         cancel_url_name="sale_list",
@@ -3625,7 +4648,7 @@ def reservation_list(request):
     # chip — a chip means "this list is narrower than it normally is".
     panel = [
         {"name": "customer", "label": "Mijoz", "value": f["customer_id"],
-         "combobox": True,
+         "combobox": True, "lotin": True,
          "options": [("", "Hammasi")] + [(c.pk, c.name) for c in Customer.objects.all()]},
         # The holat options carry their faceted counts — "what would picking this give
         # me" — which is a question the chip is not asking, hence `chip_options`.
@@ -4718,6 +5741,11 @@ WATERFALL_EXPENSE_GROUPS = [
 WATERFALL_EXPENSE_OTHER = "Boshqa yuk xarajatlari"
 #: The `OtherExpense` rows — ijara, ish haqi, soliq. One bar: they carry no turkum.
 WATERFALL_OTHER_EXPENSE = "Boshqa chiqimlar"
+#: The `ContractExpense` rows — a broker's cut and whatever else was agreed for a
+#: whole kelishuv. Its own bar rather than folded into the yuk xarajatlar: this money
+#: is paid once for an agreement, and reading it inside a per-truck total would put
+#: it in the one place it is NOT spent.
+WATERFALL_CONTRACT_EXPENSE = "Kelishuv xarajatlari"
 
 
 def _typed_decimal(raw):
@@ -4895,6 +5923,10 @@ def _kassa_window(request):
         "customs_pays": _range(CustomsPayment.objects.select_related("agent", "shipment")),
         # The "proche chiqim": money out that belongs to no yuk and no counterparty.
         "other_expenses": _range(OtherExpense.objects.all()),
+        # Kelishuv-level money: a broker's cut, paid once for the agreement. Its
+        # kelishuv rides along because every row prints which one it belongs to.
+        "contract_expenses": _range(ContractExpense.objects.select_related(
+            "contract__partner")),
         # Vazvrat money handed back. Dated on `paid_date` and not on the model's
         # `date` property, which is a promise until the money moves — a promised
         # payout has not left the till and has no business in a chiqim daftar. Only
@@ -4963,7 +5995,7 @@ def _kassa_ledger_rows(window):
     expenses, logist_pays = window["expenses"], window["logist_pays"]
     customs_pays, other_expenses = window["customs_pays"], window["other_expenses"]
     kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
-    refunds = window["refunds"]
+    refunds, contract_expenses = window["refunds"], window["contract_expenses"]
 
     # Kirim ledger: money in — mijoz to'lovlari and ta'sischi kapitali, newest first.
     # Dicts rather than the model objects this list used to hold: two unrelated models
@@ -5119,6 +6151,21 @@ def _kassa_ledger_rows(window):
             "kind": "other", "pk": x.pk, "date": x.date, "obj": x, "group": x.group,
             "crossed": x.crosses_currency,
             "title": x.note,
+            "method_code": x.method, "method": x.get_method_display(),
+            "currency": x.currency, "exchange_rate": x.exchange_rate,
+            "amount_uzs": x.amount_uzs, "amount": x.amount,
+        })
+    # Money agreed for a whole kelishuv — a broker's cut — rather than for a truck.
+    # Titled by the kelishuv it belongs to, since that is the only thing that says
+    # which agreement is being paid for; the foiz rides along on the ones that were
+    # agreed as a percentage, because the sum alone cannot be checked against it.
+    for x in contract_expenses:
+        percent = f" ({x.percent}%)" if x.is_percent else ""
+        outflow_rows.append({
+            "kind": "contract_expense", "pk": x.pk, "date": x.date, "obj": x,
+            "group": x.group, "crossed": x.crosses_currency,
+            "title": (f"{x.get_category_display()}{percent} · "
+                      f"kelishuv {x.contract.code}"),
             "method_code": x.method, "method": x.get_method_display(),
             "currency": x.currency, "exchange_rate": x.exchange_rate,
             "amount_uzs": x.amount_uzs, "amount": x.amount,
@@ -5334,6 +6381,7 @@ def kassa(request):
     cust_pays, sup_pays, expenses = window["cust_pays"], window["sup_pays"], window["expenses"]
     logist_pays, customs_pays = window["logist_pays"], window["customs_pays"]
     other_expenses = window["other_expenses"]
+    contract_expenses = window["contract_expenses"]
     kapital_in, kapital_out = window["kapital_in"], window["kapital_out"]
 
     # Sliced in Python, not with `.filter(method=…)`: these querysets are walked in
@@ -5345,7 +6393,7 @@ def kassa(request):
     period_in, period_kapital_in = list(cust_pays), list(kapital_in)
     period_kapital_out = list(kapital_out)
     period_out = [*sup_pays, *expenses, *logist_pays, *customs_pays, *other_expenses,
-                  *window["refunds"]]
+                  *contract_expenses, *window["refunds"]]
 
     balances = {}
     net_in = net_out = Decimal("0")
@@ -5437,7 +6485,8 @@ def kassa(request):
                  .filter(_cash_date__isnull=False, _cash_date__lt=date_from),
                  LogistPayment.objects.filter(date__lt=date_from),
                  CustomsPayment.objects.filter(date__lt=date_from),
-                 OtherExpense.objects.filter(date__lt=date_from))
+                 OtherExpense.objects.filter(date__lt=date_from),
+                 ContractExpense.objects.filter(date__lt=date_from))
         prior_kapital = Kapital.objects.filter(date__lt=date_from)
         opening = (_in(prior[0]) + _kapital(prior_kapital)
                    - sum((_out(q) for q in prior[1:]), Decimal("0")))
@@ -5454,7 +6503,8 @@ def kassa(request):
     # `net_in` is already net of it — so billing it again here would take the same
     # money out twice and the waterfall would stop landing on the ledger total.
     outgoing = (list(sup_pays) + list(expenses) + list(logist_pays)
-                + list(customs_pays) + list(other_expenses) + list(window["refunds"]))
+                + list(customs_pays) + list(other_expenses)
+                + list(contract_expenses) + list(window["refunds"]))
     fees = sum((r.fee_amount for r in outgoing), Decimal("0"))
     fees_uzs = sum((r.fee_amount_uzs for r in outgoing), Decimal("0"))
 
@@ -5489,6 +6539,9 @@ def kassa(request):
     other_amount = sum((x.amount for x in other_expenses), Decimal("0"))
     other_amount_uzs = sum((x.amount_uzs for x in other_expenses), Decimal("0"))
     steps.append((WATERFALL_OTHER_EXPENSE, -other_amount, -other_amount_uzs))
+    contract_amount = sum((x.amount for x in contract_expenses), Decimal("0"))
+    contract_amount_uzs = sum((x.amount_uzs for x in contract_expenses), Decimal("0"))
+    steps.append((WATERFALL_CONTRACT_EXPENSE, -contract_amount, -contract_amount_uzs))
     steps.append(("Bank foizi", -fees, -fees_uzs))
     # A step worth nothing is a bar with no bar — drop it rather than draw a label
     # against empty space. Bank foizi is usually the one: it is barely used.
@@ -5689,6 +6742,7 @@ def _filter_panel(request, fields):
         panel_fields.append({
             "name": spec["name"], "label": spec["label"], "value": value,
             "options": options, "combobox": spec.get("combobox", False),
+            "lotin": spec.get("lotin", False),
         })
         if value != default and chosen is not None:
             chips.append({"label": spec["label"], "value": chosen,
@@ -5958,17 +7012,32 @@ def reports(request):
 # is not knowable here, a spreadsheet cannot follow the app's toggle, and a figure
 # formatted into a string cannot be summed in Excel.
 
-def _contracts_table(contracts):
+def _contracts_table(contracts, include_money=True):
     """One row per product, so a multi-product kelishuv is readable. The money columns
-    are per kelishuv, so they repeat down its rows."""
+    are per kelishuv, so they repeat down its rows.
+
+    `include_money` drops narx / jami / to'langan / qarz, off for a tarjimon for the
+    same reason the page hides those columns from that role: what a kelishuv costs and
+    what is still owed on it is the hamkor ledger, which a tarjimon sees nowhere in the
+    app. An export the screen will not show is still the screen's data, so the two have
+    to agree — otherwise the Excel button is a way around the rule rather than a copy
+    of what is on it."""
+    price_headers = ["Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)"] if include_money else []
+    owed_headers = ["To'langan ($)", "To'langan (so'm)",
+                    "Qarz ($)", "Qarz (so'm)"] if include_money else []
     headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
-               "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)", "Yuborilgan kg",
-               "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
+               *price_headers, "Yuborilgan kg", *owed_headers]
+
+    def price_cells(ln):
+        return [ln.price, ln.price_uzs, ln.total_value, ln.total_value_uzs] if include_money else []
+
+    def owed_cells(c):
+        return [c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs] if include_money else []
+
     rows = (
         [c.code, c.created, c.partner.name, ln.brand, ln.kg,
-         ln.get_currency_display(), ln.exchange_rate, ln.price, ln.price_uzs,
-         ln.total_value, ln.total_value_uzs, ln.shipped_kg,
-         c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs]
+         ln.get_currency_display(), ln.exchange_rate,
+         *price_cells(ln), ln.shipped_kg, *owed_cells(c)]
         for c in contracts
         for ln in c.lines.all()
     )
@@ -5993,14 +7062,37 @@ def _reservations_table(reservations):
                            "Navbat": "0", "Kurs": "#,##0"}
 
 
-def _shipments_table(shipments):
+def _shipments_table(shipments, include_customs=True):
+    """The yuklar sheet. `include_customs` adds the two bojxona columns.
+
+    Off for a tarjimon, and for the same reason `?customs=1` refuses them on the
+    page: who is clearing a load and whether it has been paid is the bojxona ledger,
+    which that role sees nowhere in the app. An export the screen will not show is
+    still the screen's data, so the two have to agree — otherwise the Excel button is
+    a way around the rule rather than a copy of what is on it."""
+    # Two columns, not one verdict: who is clearing the load, and whether its bojxona
+    # has reached the books. Carried on every view rather than only on Bojxona
+    # to'lanmagan, so a file pulled from Hammasi can be sorted on them.
+    customs_headers = ["Bojxonachi", "Bojxona"] if include_customs else []
     headers = [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
         "Yetib kelgan", "QR kod berilgan", "Transport", "Konteyner",
+        *customs_headers,
     ]
+
+    def customs_cells(s):
+        if not include_customs:
+            return []
+        # The verdict is about the xarajat, not about the name: a load with no
+        # bojxonachi written on it is still a load whose clearing is unpaid, and
+        # blanking the column for it would hide exactly the rows worth sorting to.
+        return [s.customs_agent.name if s.customs_agent_id else "",
+                "To'langan" if s.customs_recorded else "To'lanmagan"]
+
     rows = (
         [s.pk, s.contract.code, s.contract.partner.name, ln.brand, ln.kg, s.status.name,
-         s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container]
+         s.sent, s.eta, s.arrived, s.qr_given, s.transport, s.container,
+         *customs_cells(s)]
         for s in shipments
         for ln in s.lines.all()
     )
@@ -6011,19 +7103,22 @@ def _sales_table(sales):
     # Kg and Jami are NET of vazvratlar, matching the screen the Excel button sits
     # on; what left the shelf on the day and what came back are their own columns, so
     # nothing is hidden by the netting.
-    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Kg", "Sotilgan kg", "Qaytgan kg",
-               "Valyuta", "Kurs", "Tan narx ($)",
+    # Reys sits beside Marka, where the screen puts it. Blank on a marka that went
+    # out on one mashina: the column answers "which truck of this load", and a 1
+    # against every ordinary row would make it look like every sotuv had reyslar.
+    headers = ["Sana", "Mijoz", "Lot ID", "Marka", "Reys", "Kg", "Sotilgan kg",
+               "Qaytgan kg", "Valyuta", "Kurs", "Tan narx ($)",
                "Sotuv narx ($)", "Sotuv narx (so'm)", "Jami ($)", "Jami (so'm)",
                "Foyda ($)", "Foyda (so'm)", "Qoldiq ($)", "Qoldiq (so'm)"]
     rows = (
-        [s.date, s.customer.name, s.line_id, s.line.brand, s.net_kg, s.kg,
-         s.returned_kg, s.get_currency_display(), s.exchange_rate, s.cost_price,
+        [s.date, s.customer.name, s.line_id, s.line.brand, s.reys or "", s.net_kg,
+         s.kg, s.returned_kg, s.get_currency_display(), s.exchange_rate, s.cost_price,
          s.price, s.price_uzs, s.net_total, s.net_total_uzs,
          s.profit, s.profit_uzs, s.remaining, s.remaining_uzs]
         for s in sales
     )
     return headers, rows, {"Kg": KG, "Sotilgan kg": KG, "Qaytgan kg": KG,
-                           "Lot ID": "0", "Kurs": "#,##0"}
+                           "Lot ID": "0", "Reys": "0", "Kurs": "#,##0"}
 
 
 def _supplier_payments_table(payments):
@@ -6118,15 +7213,27 @@ def _debtors_table(customers=None):
     return headers, _rows(), None
 
 
-def _ombor_table(groups):
-    """The ombor as it reads on screen: one row per MARKA, its lots folded in."""
+def _ombor_table(groups, include_costs=True):
+    """The ombor as it reads on screen: one row per MARKA, its lots folded in.
+
+    `include_costs` drops the tan narx columns, off for a skladchi because the page
+    hides tan narx from that role: what a marka landed at is the margin, and a
+    skladchi is shown qoldiq and bron, never what the stock cost. The Excel button
+    has to hold the same line the screen does."""
+    cost_headers = ["Tan narx eng past ($)", "Tan narx eng baland ($)",
+                    "Tan narx eng past (so'm)",
+                    "Tan narx eng baland (so'm)"] if include_costs else []
     headers = ["Marka", "Lotlar", "Hamkorlar", "Kirim kg", "Sotilgan kg", "Qoldiq kg",
-               "Bron kg", "Yetmayapti kg", "Tan narx eng past ($)", "Tan narx eng baland ($)",
-               "Tan narx eng past (so'm)", "Tan narx eng baland (so'm)", "Oxirgi kelgan"]
+               "Bron kg", "Yetmayapti kg", *cost_headers, "Oxirgi kelgan"]
+
+    def cost_cells(g):
+        if not include_costs:
+            return []
+        return [g["cost_min"], g["cost_max"], g["cost_min_uzs"], g["cost_max_uzs"]]
+
     rows = (
         [g["brand"], len(g["lots"]), ", ".join(g["partners"]), g["kirim"], g["sold"],
-         g["on_hand"], g["reserved"], g["short"], g["cost_min"], g["cost_max"],
-         g["cost_min_uzs"], g["cost_max_uzs"], g["arrived_last"]]
+         g["on_hand"], g["reserved"], g["short"], *cost_cells(g), g["arrived_last"]]
         for g in groups
     )
     kg_columns = {name: KG for name in
@@ -6252,10 +7359,15 @@ def export_sales(request):
 # exists to prevent.
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def contract_list_export(request):
-    rows, _f = _filter_contracts(request)
-    headers, table, formats = _contracts_table(rows)
-    return xlsx_response("kelishuvlar.xlsx", headers, table, "Kelishuvlar", formats)
+def contract_list_export(request, birja=False):
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    rows, _f = _filter_contracts(request, birja=birja)
+    headers, table, formats = _contracts_table(
+        rows, include_money=request.user.is_admin_role)
+    name = "birja-kelishuvlar.xlsx" if birja else "kelishuvlar.xlsx"
+    sheet = "Birja kelishuvlar" if birja else "Kelishuvlar"
+    return xlsx_response(name, headers, table, sheet, formats)
 
 
 @role_required(User.Role.ADMIN)
@@ -6266,11 +7378,18 @@ def reservation_list_export(request):
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
-def shipment_list_export(request):
-    shipments, _f = _filter_shipments(request)
+def shipment_list_export(request, birja=False):
+    if birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    shipments, _f = _filter_shipments(request, birja=birja)
     headers, table, formats = _shipments_table(
-        shipments.prefetch_related("lines__contract_line"))
-    return xlsx_response("yuklar.xlsx", headers, table, "Yuklar", formats)
+        shipments.prefetch_related("lines__contract_line"),
+        # A birja yuk crosses no border, so its bojxona columns would be a block of
+        # empty cells in every row of the file.
+        include_customs=request.user.is_admin_role and not birja)
+    name = "birja-yuklar.xlsx" if birja else "yuklar.xlsx"
+    sheet = "Birja yuklar" if birja else "Yuklar"
+    return xlsx_response(name, headers, table, sheet, formats)
 
 
 @role_required(User.Role.ADMIN)
@@ -6308,7 +7427,8 @@ def supplier_payment_list_export(request):
 
 @role_required(User.Role.ADMIN, User.Role.SKLADCHI)
 def ombor_export(request):
-    headers, table, formats = _ombor_table(_ombor_groups(request)[0])
+    headers, table, formats = _ombor_table(
+        _ombor_groups(request)[0], include_costs=request.user.is_admin_role)
     return xlsx_response("ombor.xlsx", headers, table, "Ombor", formats)
 
 
@@ -7179,9 +8299,14 @@ def customs_delete(request, pk):
                             f"Bojxonachi o'chirildi: {agent.name}")
             messages.success(request, "Bojxonachi o'chirildi")
         except ProtectedError:
-            # PROTECT on both sides, same as a logist: somebody with money behind
-            # them is a piece of the ledger, not a contact card to tidy away.
-            messages.error(request, "Bojxonachiga to'lov yoki xarajat biriktirilgan")
+            # PROTECT on every side, same as a logist: somebody with money behind
+            # them is a piece of the ledger, not a contact card to tidy away. A yuk
+            # merely NAMING him is protected too — no money has moved there, but
+            # dropping the name silently would take that load out of the Bojxona
+            # to'lanmagan group, which is the one place its unpaid clearing shows.
+            messages.error(
+                request,
+                "Bojxonachiga to'lov, xarajat yoki yuk biriktirilgan")
         return form_reload(request, reverse("customs_list"))
     return render_confirm(
         request, "Bojxonachini o'chirish", f"“{agent.name}” o'chiriladi.",
@@ -7201,6 +8326,15 @@ def customs_payment_create(request):
     shipment_id = request.GET.get("shipment")
     if shipment_id and shipment_id.isdigit():
         initial["shipment"] = int(shipment_id)
+        # …and with it the bojxonachi the yuk already names, unless the link said
+        # otherwise. This is what the dispatch-time assignment buys: opening + Pul on
+        # a load fills in who it goes to, so the one thing that WAS decided early
+        # does not have to be remembered and retyped now.
+        if "agent" not in initial:
+            assigned = (Shipment.objects.filter(pk=shipment_id)
+                        .values_list("customs_agent_id", flat=True).first())
+            if assigned:
+                initial["agent"] = assigned
     target = CustomsPaymentTargetForm(request.POST or None, initial=initial)
     rows = CustomsPaymentFormSet(request.POST or None,
                                  queryset=CustomsPayment.objects.none())

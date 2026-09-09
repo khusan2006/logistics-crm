@@ -288,6 +288,12 @@ class Partner(models.Model):
     phone = models.CharField("Telefon", max_length=30, blank=True)
     city = models.CharField("Shahar", max_length=100, blank=True)
     note = models.TextField("Izoh", blank=True)
+    # The birja is not a hamkor anybody negotiated with — it is the exchange itself,
+    # standing in as the counterparty so a birja purchase can be an ordinary
+    # kelishuv. One row carries the flag, and it is what every birja screen filters
+    # on; see `birja_partner`. Not editable: a real hamkor must never become the
+    # birja by a tick in a form, which would re-scope every kelishuv under them.
+    is_birja = models.BooleanField("Birja", default=False, editable=False)
     # Kelishuv codes are frozen once issued, so the high-water mark has to outlive the
     # rows themselves — deleting sobir-3 must not hand 3 out again. The counter only
     # ever climbs; the slug tracks the current name so a rename picks up the sequence.
@@ -316,6 +322,30 @@ class Partner(models.Model):
 
     def __str__(self):
         return self.name
+
+
+#: The name the birja counterparty is created under. It is also what mints the
+#: kelishuv kod: slugify("Birja") is "birja", so the first purchase is birja-1.
+BIRJA_PARTNER_NAME = "Birja"
+
+
+def birja_partner():
+    """The one hamkor row every birja kelishuv is struck against, created on first
+    use.
+
+    Deliberately NOT seeded by a migration. `wipe_business_data()` deletes every
+    Partner, so a migration-created row disappears the first time the operator
+    reloads starting data and never comes back — and the next birja kelishuv would
+    then be minted under a second one, restarting the numbering at birja-1 beside
+    codes that already exist.
+
+    Found by the flag rather than by the name: renaming it (to "Birja savdo", say)
+    must not fork the number line, which is the same rule `Partner.code_slug`
+    follows for a hamkor who changes their name."""
+    partner = Partner.objects.filter(is_birja=True).order_by("pk").first()
+    if partner is None:
+        partner = Partner.objects.create(name=BIRJA_PARTNER_NAME, is_birja=True)
+    return partner
 
 
 class HeldFloat:
@@ -657,6 +687,22 @@ class Contract(models.Model):
     code_slug = models.CharField(max_length=120, db_index=True, editable=False)
     code_number = models.PositiveIntegerField(editable=False)
     created = models.DateField("Kelishuv sanasi", default=timezone.localdate)
+    # What the haydovchi is paid a kilo on the birja road. The arrangement there is
+    # not a price for the run but a price per kilo of what he actually brings in,
+    # settled when he brings it — so it belongs to the AGREEMENT, once, rather than
+    # being retyped on every truck that moves under it.
+    #
+    # In the kelishuv's own currency, like every other figure on it. Empty means the
+    # kelishuv has no such arrangement, which is what every Eron one says and what a
+    # birja one says until somebody fills it in — and nothing is logged then.
+    #
+    # See `sync_birja_transport`, which is the whole of what this field does: it
+    # turns into a xarajat on each of the kelishuv's yuklar as they land.
+    transport_rate_per_kg = models.DecimalField(
+        "Transport · 1 kg uchun", max_digits=14, decimal_places=4, null=True,
+        blank=True,
+        help_text="Yuk omborga yetib kelganda shu narxda transport xarajati "
+                  "o'zi yoziladi. Bo'sh — bunday kelishuv yo'q.")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, blank=True, related_name="contracts",
@@ -679,6 +725,15 @@ class Contract(models.Model):
         """True when the kelishuv was struck in so'm. Same name the money rows carry,
         so a screen can ask the question of either without knowing which it holds."""
         return self.currency == Currency.UZS
+
+    @property
+    def is_birja(self):
+        """Bought on the exchange here rather than agreed with a hamkor in Eron.
+
+        Read off the hamkor and not stored twice: the counterparty IS the fact, and
+        a second flag on the kelishuv could disagree with it. Every list that asks
+        this selects the partner, so it costs no query."""
+        return self.partner.is_birja
 
     def _own(self, usd_value, uzs_value):
         """Whichever half of a stored pair is the kelishuv's OWN money — see
@@ -763,8 +818,13 @@ class Contract(models.Model):
     def brand_summary(self):
         """Every product, named in full — "2102 repak, ftor oq". Abbreviating to
         "2102 repak +1" hid exactly what the operator needs when picking a
-        kelishuv from a dropdown."""
-        return ", ".join(ln.brand for ln in self.lines.all())
+        kelishuv from a dropdown.
+
+        Each marka once, in the order it first appears. A kelishuv may hold the
+        same marka more than once — a birja purchase takes it in lots at whatever
+        the exchange was asking that hour — and "и 1561, и 1561, и 1561" names one
+        granula three times without saying anything the first mention did not."""
+        return ", ".join(dict.fromkeys(ln.brand for ln in self.lines.all()))
 
     @property
     def paid_total(self):
@@ -799,6 +859,40 @@ class Contract(models.Model):
         return sum((p.commission_amount for p in self.supplier_payments.all()), Decimal("0"))
 
     @property
+    def expenses_total(self):
+        """The kelishuv's own xarajatlar in USD — broker and whatever else was agreed
+        at kelishuv level rather than paid on one truck.
+
+        Summed in Python like every other total here, so a prefetched list costs no
+        query: `landed_cost_per_kg` reaches this once per lot, and the ombor walks it
+        over every row on the page."""
+        if not hasattr(self, "expenses"):
+            return Decimal("0")
+        return sum((e.amount for e in self.expenses.all()), Decimal("0"))
+
+    @property
+    def expenses_total_uzs(self):
+        if not hasattr(self, "expenses"):
+            return Decimal("0")
+        return sum((e.amount_uzs for e in self.expenses.all()), Decimal("0"))
+
+    @property
+    def expenses_per_kg(self):
+        """Kelishuv xarajatlar spread over the WHOLE agreed kg, so every load carries
+        the same share — which is what "divided among the yuklar" means for a cost
+        that was never about one truck. A broker is paid for the agreement, not for
+        the third lorry, so kg is the only honest way to split it.
+
+        Deliberately the same rule as `commission_per_kg` next door, and deliberately
+        NOT pushed down as a xarajat row on each yuk: the money leaves the kassa once,
+        at kelishuv level, and a copy of it on every truck would be counted twice.
+        A yuk's share is `shipment.kg * this`, which is what its page prints."""
+        kg = self.kg
+        if not kg:
+            return Decimal("0")
+        return (self.expenses_total / kg).quantize(Decimal("0.0001"))
+
+    @property
     def commission_per_kg(self):
         """The vositachi cut spread over the kelishuv's WHOLE agreed kg, so every
         load carries the same commission/kg. Live: paying more (or editing a
@@ -807,6 +901,23 @@ class Contract(models.Model):
         if not kg:
             return Decimal("0")
         return (self.commission_accrued / kg).quantize(Decimal("0.0001"))
+
+    @property
+    def cost_per_kg(self):
+        """Everything the KELISHUV puts on a kg — the vositachi cut and the
+        kelishuv's own xarajatlar — on top of the mol and the truck it rode on.
+
+        Named because tannarx is no longer the only reader. A yuk's screens print
+        this beside the truck's own xarajat/kg: showing only the truck's share made
+        that figure read as the whole add-on, and a tan narx of 1,2736 under a
+        1,2400 narx and a 0,0150 xarajat looked like arithmetic that did not work
+        out. The missing part was never on the page.
+
+        The two halves are summed as they are rather than re-derived, so the figure
+        printed is exactly the one `ShipmentLine.landed_cost_per_kg` adds in — each
+        is already rounded to 0,0001 there, and rounding the sum a second time could
+        put the explanation a hundredth of a cent away from the number it explains."""
+        return self.commission_per_kg + self.expenses_per_kg
 
     @property
     def shipped_value(self):
@@ -1111,17 +1222,40 @@ class ContractLine(MoneyEntry):
     def payable_left_own(self):
         return own_side(self.contract, self.payable_left, self.payable_left_uzs)
 
+    @property
+    def agreed_price(self):
+        """The narx this product was struck at, in the kelishuv's own currency.
+
+        Same rule `own_side` follows for every qarz: a so'm kelishuv's agreed figure
+        is the so'm one, and the dollar twin beside it is only a derivation."""
+        return self.price_uzs if self.is_som else self.price
+
     def __str__(self):
-        return f"{self.brand} · {self.kg} kg"
+        """Named with its narx, because the marka alone no longer identifies a row:
+        one kelishuv may hold "и 1561" three times, at three prices."""
+        return f"{self.brand} · {self.kg} kg · {self.agreed_price}"
 
 
 class ShipmentStatus(models.Model):
     """Admin-editable ordered status chain. Exactly one row is the arrival status —
     reaching it is what turns a shipment into a warehouse lot, so it is protected:
     saving another row as arrival demotes the rest, and the arrival row can't be
-    deleted (guarded in the view)."""
+    deleted (guarded in the view).
 
-    name = models.CharField("Nomi", max_length=100, unique=True)
+    There are two chains, not one: a yuk off the Eron road passes a chegara and a
+    bojxona, a yuk bought on the birja does neither. `scope` says which chain a
+    holat belongs to — and the arrival row belongs to BOTH, since landing in the
+    ombor is the one step the two pipelines share."""
+
+    class Scope(models.TextChoices):
+        HAMKOR = "hamkor", "Hamkor yuklari"
+        BIRJA = "birja", "Birja yuklari"
+        BOTH = "umumiy", "Ikkalasi ham"
+
+    # Not unique on its own any more — see the constraint below.
+    name = models.CharField("Nomi", max_length=100)
+    scope = models.CharField("Qaysi yuklar uchun", max_length=10,
+                             choices=Scope.choices, default=Scope.HAMKOR)
     order = models.PositiveSmallIntegerField("Tartib", default=0)
     is_arrival = models.BooleanField("Omborga kelish holati", default=False)
 
@@ -1129,8 +1263,23 @@ class ShipmentStatus(models.Model):
         ordering = ["order", "id"]
         verbose_name = "Yuk holati"
         verbose_name_plural = "Yuk holatlari"
+        # Unique per chain rather than app-wide. The two pipelines run the same
+        # road in places — a birja load is "Yo'lda" too — and the operator has not
+        # named the birja steps yet, so a rename that collides with an Eron holat
+        # must not be refused for a clash the two chains can never see each other
+        # across.
+        constraints = [models.UniqueConstraint(fields=["name", "scope"],
+                                               name="unique_status_name_per_scope")]
 
     def save(self, *args, **kwargs):
+        # The arrival row is shared by definition. Both chains have to END on it —
+        # it is what turns a yuk into an ombor loti — so promoting a hamkor holat to
+        # arrival must not take the step away from the birja pipeline, which would
+        # leave a birja load with no way of ever landing on the shelf.
+        if self.is_arrival and self.scope != self.Scope.BOTH:
+            self.scope = self.Scope.BOTH
+            if (fields := kwargs.get("update_fields")) is not None:
+                kwargs["update_fields"] = {*fields, "scope"}
         super().save(*args, **kwargs)
         if self.is_arrival:
             ShipmentStatus.objects.exclude(pk=self.pk).update(is_arrival=False)
@@ -1138,6 +1287,13 @@ class ShipmentStatus(models.Model):
     @classmethod
     def arrival(cls):
         return cls.objects.filter(is_arrival=True).first()
+
+    @classmethod
+    def for_kind(cls, birja=False):
+        """The chain one kind of yuk moves along — its own holatlar plus the shared
+        ones, in pipeline order."""
+        own = cls.Scope.BIRJA if birja else cls.Scope.HAMKOR
+        return cls.objects.filter(scope__in=[own, cls.Scope.BOTH])
 
     def __str__(self):
         return self.name
@@ -1493,6 +1649,24 @@ class Shipment(models.Model):
     logist = models.ForeignKey("Logist", on_delete=models.PROTECT, null=True,
                                blank=True, related_name="shipments",
                                verbose_name="Logist")
+    # Who will clear this load at bojxona — named when the truck is dispatched,
+    # long before anybody knows what clearing costs or has sent a som for it.
+    #
+    # Deliberately NOT money. Every other way of naming a bojxonachi on a yuk moves
+    # cash: a CustomsPayment takes it out of the kassa, a ShipmentExpense prices the
+    # load. Both were the wrong shape for the fact the operator actually holds at
+    # dispatch — "Bahrom aka will handle this one" — so naming him used to mean
+    # inventing a figure and watching the kassa drop by it.
+    #
+    # It is also what makes "bojxonasi to'lanmagan" answerable at all. A load with no
+    # bojxona xarajat on it is otherwise indistinguishable from one that never needed
+    # clearing, and every yuk in the books from before this field would read as
+    # unpaid. Naming the agent is the load saying it OWES a clearing; see
+    # `customs_pending`.
+    customs_agent = models.ForeignKey("CustomsAgent", on_delete=models.PROTECT,
+                                      null=True, blank=True,
+                                      related_name="assigned_shipments",
+                                      verbose_name="Bojxonachi")
     # Who is actually driving it — often known before the plate, and the number the
     # logist calls when a load goes quiet.
     driver_name = models.CharField("Haydovchi", max_length=120, blank=True)
@@ -1514,6 +1688,22 @@ class Shipment(models.Model):
         verbose_name = "Yuk"
         verbose_name_plural = "Yuklar"
 
+    def save(self, *args, **kwargs):
+        """Store the yuk, then bring its derived transport xarajat back in line.
+
+        Here rather than in the views because there are four places a yuk's arrival
+        is written — the holat button, the create form, the edit form and a plain
+        shell assignment — and the xarajat has to follow all of them, including the
+        one somebody adds next. `save()` is the door every one of them goes through.
+
+        The views call `sync_birja_transport` a second time after their mahsulot
+        rows are saved. That is not belt-and-braces: a yuk being created has no
+        lines at the moment it is first saved, so its kg — which is what the rate is
+        multiplied by — is not knowable until they exist. The sync rewrites nothing
+        when nothing has changed, so the second call is free on every other path."""
+        super().save(*args, **kwargs)
+        sync_birja_transport(self)
+
     @property
     def order_in_contract(self):
         """Which truck of its kelishuv this is — the 2 in "2-yuk".
@@ -1534,6 +1724,12 @@ class Shipment(models.Model):
         nothing about whose truck it was — which is the only thing that helps when
         the question is why a sotuv sits on this lot rather than that one."""
         return f"{self.contract.code} · {self.order_in_contract}-yuk"
+
+    @property
+    def is_birja(self):
+        """A load bought on the birja here, not one off the Eron road. Decided by
+        its kelishuv's counterparty — see `Contract.is_birja`."""
+        return self.contract.is_birja
 
     @property
     def has_qr(self):
@@ -1677,6 +1873,51 @@ class Shipment(models.Model):
         return bool(self.customs_diff_by_currency())
 
     @property
+    def customs_cost(self):
+        """The bojxona xarajat on this load, whoever paid it — the bojxonachi out of
+        his float, a logist, or the kassa at the border.
+
+        Read off `expenses`, which every screen that asks this already prefetches.
+        Its ABSENCE is the fact worth having: it is what says clearing this truck has
+        not been priced yet."""
+        return sum((e.amount for e in self.expenses.all()
+                    if e.category == ShipmentExpense.Category.CUSTOMS), Decimal("0"))
+
+    @property
+    def customs_recorded(self):
+        """Whether a bojxona xarajat exists on this load at all.
+
+        Not `customs_cost > 0`: a clearing genuinely entered as zero is a decision
+        somebody made and recorded, and re-listing that truck as unpaid every day
+        would leave the operator no way to ever close it."""
+        return any(e.category == ShipmentExpense.Category.CUSTOMS
+                   for e in self.expenses.all())
+
+    @property
+    def customs_pending(self):
+        """Bojxonasi to'lanmagan: the load is IN THE OMBOR and no clearing cost has
+        reached the books for it.
+
+        Both halves matter, and neither is the bojxonachi. A truck still on the road
+        has not been cleared yet — its bojxona is not unpaid, it is not yet due — so
+        including it would bury the handful that are genuinely outstanding under
+        every load in the pipeline. And a load that HAS landed owes its clearing
+        whether or not anybody remembered to write down who would handle it, so the
+        assignment is a label on the row and never a condition of being on it.
+
+        What is left is the exact case this exists for: stock on the shelf, being
+        sold, with the bojxona behind it still unpaid.
+
+        A birja yuk is not in it at all. It was bought inside the country and
+        crossed no border, so there is no clearing to owe — and since it will never
+        carry a bojxona xarajat, "not recorded yet" would be permanent: every birja
+        lot in the ombor would stand in the chase list forever. Its SQL twin
+        `customs_pending_loads` drops them the same way."""
+        if self.is_birja:
+            return False
+        return self.arrived is not None and not self.customs_recorded
+
+    @property
     def is_lot(self):
         return self.arrived is not None
 
@@ -1690,8 +1931,10 @@ class Shipment(models.Model):
 
     @property
     def brand_summary(self):
-        """Every product on the truck, named in full."""
-        return ", ".join(ln.brand for ln in self.lines.all())
+        """Every product on the truck, named in full — each marka once, the same
+        rule `Contract.brand_summary` follows and for the same reason: a truck may
+        carry two lots of one marka bought at two prices."""
+        return ", ".join(dict.fromkeys(ln.brand for ln in self.lines.all()))
 
     def __str__(self):
         return f"Yuk #{self.pk} · {self.brand_summary} · {self.kg} kg"
@@ -1710,9 +1953,15 @@ class ShipmentLine(MoneyEntry):
                                       related_name="shipment_lines",
                                       verbose_name="Mahsulot")
     kg = models.DecimalField("Yuborilgan kg", max_digits=12, decimal_places=3)
+    # Empty is the normal shape and the only one any screen can produce: tannarx is
+    # agreed on the kelishuv and read from there, live, so a truck re-prices with the
+    # agreement instead of freezing at the figure it was entered beside. What is left
+    # in here are the loads that really did go at a price of their own — imported, or
+    # entered before the yuk form's narx box was locked — and those are read as they
+    # stand. See ShipmentLineForm and unit_price below.
     price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
                                 null=True, blank=True,
-                                help_text="Bo'sh qoldirilsa kelishuv narxi olinadi")
+                                help_text="Bo'sh — tannarx kelishuvdan olinadi")
     price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
                                     decimal_places=2, null=True, blank=True)
     position = models.PositiveIntegerField(default=0, editable=False)
@@ -1795,9 +2044,17 @@ class ShipmentLine(MoneyEntry):
         the currency it was agreed in (see `Contract._own`), but a kg has one cost and
         the money behind it arrives in both at once — mol in dollars, transport in
         so'm. Each part is folded in at its own entry-day kurs, never today's, so the
-        figure still cannot drift. Pinned by tests/test_cost_blends_currencies.py."""
+        figure still cannot drift. Pinned by tests/test_cost_blends_currencies.py.
+
+        This is also the one funnel every foyda in the app reads — the FIFO cost of a
+        sotuv, the ombor's stock valuation, the hisobotlar — so a new kind of cost
+        reaches all of them by being added to this sum. A cost the KELISHUV carries
+        goes into `Contract.cost_per_kg` instead of a fourth term here: the yuk
+        screens print that half on its own, and a term added beside it would be in
+        the tannarx without ever being named on the page."""
+        contract = self.contract_line.contract
         return (self.unit_price + self.shipment.expense_per_kg
-                + self.contract_line.contract.commission_per_kg).quantize(Decimal("0.0001"))
+                + contract.cost_per_kg).quantize(Decimal("0.0001"))
 
     @property
     def landed_cost_per_kg_uzs(self):
@@ -2334,6 +2591,10 @@ STOCK_COST_PREFETCH = (
     # agreed kg (`Contract.commission_per_kg`).
     "contract_line__contract__supplier_payments",
     "contract_line__contract__lines",
+    # And the kelishuv's OWN xarajatlar — a broker's cut — spread the same way
+    # (`Contract.expenses_per_kg`). Without this the ombor fires one query per lot
+    # for a figure the page has already loaded for its neighbours.
+    "contract_line__contract__expenses",
 )
 
 #: The hamkor behind a lot, reached BOTH ways, for screens that name them.
@@ -2502,6 +2763,39 @@ def bron_brands():
     return sorted(brands)
 
 
+def last_sale_prices_by_customer():
+    """{customer_id: {brand: (price_usd, price_uzs)}} — the narx each marka last
+    went out at, per mijoz, which is what the sotuv form opens with.
+
+    Every mijoz. The last narx is simply what this mijoz paid last time, and an
+    operator who is quoting a new one types over it — so there is nothing to decide
+    per mijoz and nothing to switch on. A mijoz who has never bought a marka has no
+    entry for it and their box opens empty, as before.
+
+    Latest wins, by sana and then by id: two sotuvlar of one marka on the same day
+    are settled by which was entered second, which is the one the operator would
+    read off the Sotuvlar list as "what we sold it for last time". Nothing is
+    snapshotted — the table is read fresh at every render, so a narx typed over on
+    one sotuv is the narx the next one opens with.
+
+    Both currencies are carried. Which of them the form fills is the SOTUV's own
+    valyuta, decided in the browser when the row is filled — a sotuv agreed in so'm
+    must not open with a dollar figure standing in a so'm box.
+
+    Values rather than Sale objects: this now walks every sotuv in the app on every
+    sotuv form, and the marka is one join away, so there is no reason to build a
+    model instance per row only to read four columns off it."""
+    prices = {}
+    # Oldest first, so a later sotuv of the same marka simply writes over it — one
+    # pass, and no per-row comparison of dates that the ordering already settles.
+    for customer_id, brand, usd_price, uzs_price in (
+            Sale.objects.order_by("date", "pk")
+            .values_list("customer_id", "line__contract_line__brand",
+                         "price", "price_uzs")):
+        prices.setdefault(customer_id, {})[brand] = (usd_price, uzs_price)
+    return prices
+
+
 def fifo_lots(brand):
     """Arrived lots of one brand that still have kg available, oldest arrival
     first (then id) — the FIFO consumption order for the ombor."""
@@ -2636,6 +2930,24 @@ class Sale(MoneyEntry):
     # existed and on a sale made from one chosen lot, which is one row by nature.
     group = models.UUIDField("Sotuv guruhi", null=True, blank=True,
                              editable=False, db_index=True)
+    # WHICH truck of the sotuv the row went out on. One order is often loaded onto
+    # several mashina one after another and the mijoz takes them as one deal, so a
+    # sotuv can be a sequence of reyslar rather than a single handover.
+    #
+    # A reys is a TRUCK, not a product. One can carry several markalar, so several
+    # Sale rows may share a number; reys 1 may haul one granula and reys 2 another,
+    # or the same one again. Nothing is inferred from the marka — numbering by it
+    # would have renamed reys 2 the moment its granula was changed.
+    #
+    # Null unless the sotuv actually reached a SECOND truck: three markalar handed
+    # over on one lorry are one delivery, and a lone "1" beside every ordinary sotuv
+    # would be a number that never means anything. `_reys_numbers` is where that is
+    # decided, and where the browser's grouping is renumbered to 1, 2, 3.
+    #
+    # Carried on every FIFO slice of the row, so a reys that reached across two lots
+    # still reads as the one truck it was.
+    reys = models.PositiveSmallIntegerField("Reys", null=True, blank=True,
+                                            editable=False)
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg sotuv narxi (so'm)", max_digits=18,
@@ -4254,6 +4566,21 @@ class ShipmentExpense(CashEntry):
     amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
     amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
                                      default=0)
+    # The kelishuv rate this row was priced at, on the ones that were priced rather
+    # than typed. `amount` is still the total and is what every figure about money
+    # reads — tannarx, kassa, the arrival deferral — but a total on its own cannot
+    # be checked against the arrangement: 10 000 000 so'm says nothing about whether
+    # the rate was the 500 that was agreed. This is what the detail page prints
+    # beside it.
+    #
+    # In the ROW'S OWN currency, like the typed side of `amount`/`amount_uzs`, and
+    # deliberately not a converted pair: a per-kg cost in the other money is already
+    # `amount / kg`. Kept out of `money_fields` for that reason — no twin to fill.
+    #
+    # NULL on everything anybody entered by hand, which is every row in the books
+    # and every turkum outside this one arrangement.
+    rate_per_kg = models.DecimalField("1 kg uchun", max_digits=14, decimal_places=4,
+                                      null=True, blank=True)
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
                               default=PayMethod.CASH)
     note = models.CharField("Izoh", max_length=255, blank=True)
@@ -4274,6 +4601,12 @@ class ShipmentExpense(CashEntry):
     # than inferred from `logist` alone, because a logist may pay a yuk's bojxona
     # too — and this is the one row the yuk form owns and rewrites on edit.
     is_driver_advance = models.BooleanField("Haydovchi avansi", default=False,
+                                            editable=False)
+    # Written by `sync_birja_transport` from the kelishuv's rate, not by anybody.
+    # Flagged for the same reason the avans is: the screens that let a xarajat be
+    # edited have to leave this one alone, because the next sync would put it back
+    # and the correction would vanish with no sign it had ever been made.
+    is_auto_transport = models.BooleanField("Kelishuvdan", default=False,
                                             editable=False)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="shipment_expenses",
@@ -4304,6 +4637,13 @@ class ShipmentExpense(CashEntry):
         if self.logist_id and self.customs_agent_id:
             raise ValidationError(
                 "Xarajatni logist yoki bojxonachi to'laydi — ikkalasi emas")
+
+    @property
+    def priced_per_kg(self):
+        """True when this row records the rate it was worked out from — which is the
+        derived birja transport and nothing else so far. False for everything anybody
+        typed."""
+        return self.rate_per_kg is not None
 
     @property
     def from_kassa(self):
@@ -4498,6 +4838,212 @@ def latest_exchange_rate():
         if row and (newest_at is None or row["created_at"] > newest_at):
             newest_at, newest_rate = row["created_at"], row["exchange_rate"]
     return newest_rate or LEGACY_RATE
+
+
+def sync_birja_transport(shipment):
+    """Make a birja yuk's transport xarajat say what its kelishuv says.
+
+    On the exchange road transport is not a figure anybody types. The kelishuv names
+    a price per kilo, the haydovchi is paid on what he actually brings in, and he is
+    paid when he brings it — so all three facts the xarajat needs are already being
+    maintained elsewhere, and asking an operator to multiply them together on the day
+    a truck lands is asking them to keep a fourth copy in step by hand.
+
+    So the row is derived: it appears when the yuk lands, for the kelishuv's rate
+    times the yuk's kg, dated the day it landed. Move the arrival date and the
+    xarajat moves with it; take the yuk back off arrival and the xarajat goes, the
+    way a haydovchi avansi goes when its logist is removed.
+
+    Fully live, including on loads that have already landed — the owner's decision.
+    A rate corrected on a kelishuv re-prices every yuk under it. That is the opposite
+    of what a hand-entered CashEntry does, and it is right here precisely because
+    nobody typed this one: it has no figure of its own to protect, and a kelishuv
+    whose rate was wrong was wrong on every truck that ever moved under it.
+
+    The kurs is the exception, and is kept once set. Re-rating a landed row at
+    today's kurs would restate the so'm value of cash that was handed over weeks ago
+    — triggered by an edit somewhere else entirely — which is the same trap
+    `ShipmentForm.sync_driver_advance` keeps out of the avans.
+
+    Returns the row as it now stands, or None when there should not be one.
+    """
+    if not shipment.pk or not shipment.contract_id:
+        return None
+    contract = shipment.contract
+    existing = shipment.expenses.filter(is_auto_transport=True).first()
+    rate = contract.transport_rate_per_kg if contract.is_birja else None
+    arrived = _as_day(shipment.arrived)
+    kg = shipment.kg
+    # No arrangement, nothing on the truck, or it has not landed: there is no
+    # xarajat to state. A row left from before any of those changed is removed
+    # rather than stranded — it would otherwise sit in the kassa as money owed on a
+    # load that is back on the road.
+    if not rate or not kg or arrived is None:
+        if existing:
+            existing.delete()
+        return None
+    kurs = existing.exchange_rate if existing else latest_exchange_rate()
+    total = (rate * kg).quantize(Decimal("0.01"))
+    usd_value, uzs_value = convert_pair(total, contract.currency, kurs)
+    fields = {"date": arrived, "amount": usd_value, "amount_uzs": uzs_value,
+              "currency": contract.currency, "exchange_rate": kurs,
+              "rate_per_kg": rate}
+    if existing is None:
+        return ShipmentExpense.objects.create(
+            shipment=shipment, category=ShipmentExpense.Category.TRANSPORT,
+            method=PayMethod.CASH, is_auto_transport=True,
+            note="Kelishuvdagi transport narxi", **fields)
+    # Only when something actually moved. This runs on every yuk save, and rewriting
+    # an unchanged row would touch `created_at` ordering and the audit trail on every
+    # holat click for a figure nobody changed.
+    if all(getattr(existing, name) == value for name, value in fields.items()):
+        return existing
+    for name, value in fields.items():
+        setattr(existing, name, value)
+    existing.save(update_fields=list(fields))
+    return existing
+
+
+def sync_contract_birja_transport(contract):
+    """Re-price every landed yuk on a kelishuv — for when the RATE is what changed.
+
+    `sync_birja_transport` is reached whenever a yuk is saved, which covers the
+    other two facts it depends on. A rate edited on the kelishuv touches no yuk at
+    all, so the kelishuv form calls this instead; without it the correction would
+    only reach a truck the next time somebody happened to open it."""
+    return [sync_birja_transport(shipment)
+            for shipment in contract.shipments.select_related("contract__partner")
+            .prefetch_related("lines", "expenses")]
+
+
+class ContractExpense(CashEntry):
+    """A cost that belongs to the whole kelishuv rather than to any one truck.
+
+    The broker is the reason this exists: he is paid a percentage of the agreement,
+    once, for the agreement — not for the third lorry that moves under it. Until now
+    every xarajat in the app had to hang off a yuk, so a kelishuv-level cost was
+    either left out of the books or pinned to whichever truck happened to be open,
+    which quietly inflated that one load's tannarx and every foyda taken off it.
+
+    Spread, not pushed down. The money leaves the kassa ONCE, here, and each yuk
+    carries its share through `Contract.expenses_per_kg` → `landed_cost_per_kg`.
+    Writing a copy onto every yuk as a ShipmentExpense would put the same payment in
+    the kassa N+1 times; the share a yuk carries is arithmetic off this row, and the
+    yuk's page prints it as such rather than storing it.
+
+    Deliberately NOT the vositachi cut, which stays exactly where it is on the hamkor
+    to'lovlar (`SupplierPayment.commission_percent`). That one is a slice of each
+    payment as it goes out and is already spread the same way; this is a second,
+    separate agreement-level cost, and the two are summed into tannarx side by side.
+    """
+
+    class Category(models.TextChoices):
+        BROKER = "broker", "Broker"
+        # An ARRANGEMENT rather than a payment, and the one value no row is ever
+        # stored with. It exists so the kelishuv's Xarajatlar modal can offer every
+        # kelishuv-level cost in one picker: choosing it writes
+        # `Contract.transport_rate_per_kg` and creates nothing here (see
+        # ContractExpenseForm.save). The money it arranges appears per yuk, on
+        # arrival, as a ShipmentExpense — see `sync_birja_transport`.
+        TRANSPORT = "transport", "Transport (1 kg uchun)"
+        OTHER = "other", "Boshqa"
+
+    contract = models.ForeignKey(Contract, on_delete=models.CASCADE,
+                                 related_name="expenses", verbose_name="Kelishuv")
+    date = models.DateField("Sana", default=timezone.localdate)
+    category = models.CharField("Turkum", max_length=10, choices=Category.choices,
+                                default=Category.BROKER)
+    # Set when the figure was agreed as a percentage rather than as a sum — which is
+    # how a broker is always agreed. `amount` is still the money and is what the
+    # kassa and the tannarx read; this says where it came from, and is what
+    # `sync_contract_expenses` multiplies out again when the kelishuv's own value
+    # moves under it.
+    #
+    # The base is the kelishuv's FULL agreed value, not what has been paid so far.
+    # That is the difference between this and the vositachi cut, and it is the whole
+    # reason both exist: a broker's fee is settled by the agreement being struck.
+    percent = models.DecimalField("Foiz (%)", max_digits=5, decimal_places=2,
+                                  null=True, blank=True)
+    amount = models.DecimalField("Summa (USD)", max_digits=14, decimal_places=2)
+    amount_uzs = models.DecimalField("Summa (so'm)", max_digits=18, decimal_places=2,
+                                     default=0)
+    method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
+                              default=PayMethod.CASH)
+    note = models.CharField("Izoh", max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="contract_expenses",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Kelishuv xarajati"
+        verbose_name_plural = "Kelishuv xarajatlari"
+
+    @property
+    def is_percent(self):
+        """True when this row was agreed as a percentage — a broker's fee."""
+        return self.percent is not None
+
+    @property
+    def base_typed(self):
+        """What the percentage is taken of, in the kelishuv's own money: everything
+        the agreement covers, at the narx it was agreed at."""
+        return self.contract._own(self.contract.total_value,
+                                  self.contract.total_value_uzs)
+
+    @property
+    def total_out(self):
+        """What the kassa loses: the xarajat plus any bank foiz.
+
+        No deferral of the kind ShipmentExpense carries — there is no arrival to wait
+        for. A kelishuv cost is settled at kelishuv level, on the day it says."""
+        return self.amount + (self.fee_amount if self.fee_on_company else Decimal("0"))
+
+    @property
+    def total_out_uzs(self):
+        fee = self.in_som(self.fee_amount) if self.fee_on_company else Decimal("0")
+        return self.amount_uzs + fee
+
+    @property
+    def crosses_currency(self):
+        """True when the xarajat is not in the kelishuv's money — worth printing
+        beside the row, the same as on a yuk's xarajat."""
+        return self.currency != self.contract.currency
+
+    def __str__(self):
+        return f"{self.get_category_display()}: {self.amount}$ ({self.contract.code})"
+
+
+def sync_contract_expenses(contract):
+    """Re-multiply a kelishuv's percentage xarajatlar against its current value.
+
+    A broker's fee is a share of the agreement, so it moves when the agreement does:
+    a marka added, a kg corrected, a narx renegotiated. The percentage is what was
+    agreed and the sum is only ever its arithmetic, so re-deriving is what keeps the
+    row honest — the same call the owner made for birja transport, and for the same
+    reason: nobody typed this figure, so it has none of its own to protect.
+
+    Rows entered as a plain sum are left alone. Somebody typed those, and a kelishuv
+    growing by one marka is no reason to move a number a person put there.
+
+    The kurs is kept once booked, so re-deriving never restates the so'm side of
+    money already handed over — see `sync_birja_transport`, which keeps the same
+    line."""
+    changed = []
+    for expense in contract.expenses.all():
+        if not expense.is_percent:
+            continue
+        expense.contract = contract          # so `base_typed` reads the lines once
+        typed = (expense.base_typed * expense.percent / 100).quantize(Decimal("0.01"))
+        usd_value, uzs_value = convert_pair(typed, expense.currency,
+                                            expense.exchange_rate)
+        if (expense.amount, expense.amount_uzs) == (usd_value, uzs_value):
+            continue
+        expense.amount, expense.amount_uzs = usd_value, uzs_value
+        expense.save(update_fields=["amount", "amount_uzs"])
+        changed.append(expense)
+    return changed
 
 
 class ShipmentDelay(models.Model):

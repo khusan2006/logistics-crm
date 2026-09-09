@@ -54,9 +54,12 @@ SupplierPayment → Contract → Customer → Partner → AuditLog
 
 `Otabek Yo'ldoshev` — username `otabek`, `role=admin`, `is_staff=True`,
 `is_superuser=True`. Created via `get_or_create` on the username so re-runs don't
-duplicate. On creation, a temporary password `otabek12345` is set and **printed
-loudly** with a recommendation to change it (especially on prod). All records
-below are attributed to this user via `created_by`.
+duplicate. On creation the password is taken from the `SEED_OWNER_PASSWORD`
+environment variable, or — when that is unset — randomly generated and **printed
+once** with a recommendation to change it. (Revised by the 2026-08-27 security
+review: the fixed password this spec originally named was committed to the repo,
+which handed every past employee a superuser login.) All records below are
+attributed to this user via `created_by`.
 
 ### 3. Load the dataset
 

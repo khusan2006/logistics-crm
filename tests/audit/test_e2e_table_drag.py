@@ -16,6 +16,8 @@ from accounts.models import User  # noqa: E402
 from crm.models import (Contract, ContractLine, Customer, Sale,  # noqa: E402
                         Shipment, ShipmentLine, ShipmentStatus, Partner)
 
+from conftest import e2e_context  # noqa: E402
+
 pw = pytest.importorskip("playwright.sync_api")
 
 PASSWORD = "e2e-pass-123"
@@ -52,7 +54,7 @@ def world(transactional_db):
 
 def _open(browser, live_server, width=560):
     """A narrow window, so the sotuvlar table is genuinely wider than its box."""
-    ctx = browser.new_context(viewport={"width": width, "height": 900})
+    ctx = e2e_context(browser, viewport={"width": width, "height": 900})
     page = ctx.new_page()
     page.goto(f"{live_server.url}/login/")
     page.fill("[name=username]", "e2eboss")

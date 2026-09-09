@@ -3,19 +3,21 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.urls import reverse_lazy
 from django.utils import timezone
 
 from .models import (
-    LEGACY_RATE, Contract, ContractLine, Currency, Customer, CustomerPayment,
-    CustomsAgent, CustomsPayment, Kapital, KapitalKind, Konvertatsiya, Logist,
-    LogistPayment, OtherExpense, Partner,
+    LEGACY_RATE, Contract, ContractExpense, ContractLine, Currency, Customer,
+    sync_contract_birja_transport,
+    CustomerPayment, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
+    Konvertatsiya, Logist, LogistPayment, OtherExpense, Partner,
     FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
     Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
-    customer_balance_by_currency, latest_exchange_rate, _by_currency,
+    customer_balance_by_currency, last_sale_prices_by_customer,
+    latest_exchange_rate, _by_currency,
 )
 from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
@@ -319,9 +321,10 @@ class PriceEntryFormMixin(MoneyEntryFormMixin):
     positive_error = "Narx musbat bo'lishi kerak"
 
 
-class CustomerBronSelect(forms.Select):
-    """A mijoz <select> whose options carry the markalar that mijoz still has an
-    open bron for, so the form's JS can ask the question only when there is one.
+class CustomerFactsSelect(forms.Select):
+    """A mijoz <select> whose options carry what the sotuv form's JS needs to know
+    about that mijoz: the markalar they still have an open bron for, and what each
+    marka last went out at.
 
     Same idea as ContractChoiceSelect: the answer travels on the option, because
     which mijoz is buying is not known until they pick one and a round trip per
@@ -329,14 +332,33 @@ class CustomerBronSelect(forms.Select):
 
     #: {customer_id: [brand, ...]}, set by the form.
     bron_brands = {}
+    #: {customer_id: {brand: (usd, uzs)}}, set by the form. Empty for a mijoz who
+    #: has not bought from us yet.
+    last_prices = {}
+
+    def _for(self, table, value):
+        """One mijoz's row out of a {customer_id: …} table.
+
+        The pk arrives as an int on some paths and as a ModelChoiceIteratorValue
+        wrapping a str on others, so it is unwrapped and tried both ways rather
+        than trusted to be either."""
+        pk = getattr(value, "value", value)
+        row = table.get(pk if isinstance(pk, int) else None)
+        if row is None and str(pk).isdigit():
+            row = table.get(int(pk))
+        return row
 
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
-        pk = getattr(value, "value", value)
-        brands = self.bron_brands.get(pk if isinstance(pk, int) else None)
-        if brands is None and str(pk).isdigit():
-            brands = self.bron_brands.get(int(pk))
+        brands = self._for(self.bron_brands, value)
         option["attrs"]["data-bron-brands"] = json.dumps(sorted(brands or []))
+        # Only on a mijoz who HAS one, so a mijoz who has never bought does not
+        # carry an empty object for the browser to read nothing out of.
+        prices = self._for(self.last_prices, value)
+        if prices:
+            option["attrs"]["data-last-prices"] = json.dumps(
+                {brand: {"usd": str(usd_price), "uzs": str(uzs_price)}
+                 for brand, (usd_price, uzs_price) in sorted(prices.items())})
         return option
 
 
@@ -376,9 +398,13 @@ class BronDrawFormMixin:
             if bron.remaining_kg > 0:
                 brons.setdefault(bron.customer_id, set()).add(bron.brand)
         picker = self.fields["customer"]
-        widget = CustomerBronSelect(attrs=dict(picker.widget.attrs))
+        widget = CustomerFactsSelect(attrs=dict(picker.widget.attrs))
         widget.choices = picker.widget.choices     # keeps the field's queryset
         widget.bron_brands = brons
+        # What this mijoz last paid for each marka, so the narx box opens with the
+        # figure the operator would otherwise look up — see
+        # `last_sale_prices_by_customer`. One query for the whole picker.
+        widget.last_prices = last_sale_prices_by_customer()
         picker.widget = widget
         # Which marka is being sold: a select on the by-brand form, a fixed one on
         # the per-lot form, where the lot already decided it.
@@ -565,7 +591,13 @@ class ContractForm(forms.ModelForm):
     """The kelishuv header, including the one currency the whole agreement is struck
     and settled in. No kurs is asked for: an agreement in one currency is owed and
     paid in that same currency, and the rate the goods are later costed at is
-    inherited rather than typed (see `latest_exchange_rate`)."""
+    inherited rather than typed (see `latest_exchange_rate`).
+
+    `birja=True` is the same header for a purchase made on the exchange here. The
+    hamkor picker goes away entirely rather than being pre-filled and locked: there
+    is exactly one counterparty a birja kelishuv can have, and a disabled select
+    offering it reads as a choice somebody might have got wrong. The view supplies
+    it — see `crm.models.birja_partner`."""
 
     field_order = ["partner", "currency", "created", "note"]
 
@@ -577,8 +609,25 @@ class ContractForm(forms.ModelForm):
             "note": forms.Textarea(attrs={"rows": 3}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, birja=False, **kwargs):
         super().__init__(*args, **kwargs)
+        self.birja = birja
+        # The transport rate used to be asked for here. It moved to the kelishuv's
+        # Xarajatlar modal, where every other kelishuv-level cost is entered — one
+        # screen for "what does this agreement cost us", rather than a per-kg box on
+        # the header form and a broker two clicks away. The column still lives on
+        # Contract; only where it is typed changed. See ContractExpenseForm.
+        if birja:
+            del self.fields["partner"]
+            # Goods bought on the birja here are priced and settled in so'm. Still
+            # a choice, not a lock: a lot quoted in dollars is the operator's to
+            # record, and freezing the currency would make that unrecordable.
+            if not self.instance.pk:
+                self.fields["currency"].initial = Currency.UZS
+        else:
+            # The birja row is not a hamkor anybody strikes a deal with, so it is
+            # not on offer here — its kelishuvlar are opened from the Birja page.
+            self.fields["partner"].queryset = Partner.objects.filter(is_birja=False)
         if not self.instance.pk:  # new contract → default the date to today
             self.fields["created"].initial = timezone.localdate
         # Re-striking a live kelishuv in the other currency would re-read every
@@ -768,25 +817,68 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         return cleaned
 
 
+def _line_identity(cleaned, with_price):
+    """What makes one kelishuv mahsulot row different from another.
+
+    Always the marka — case- and space-insensitive, because "и 1561" and " И 1561"
+    are the same granula typed by two hands. On a birja kelishuv the agreed narx
+    joins it, which is what lets one marka be taken in several lots there; see
+    `BaseContractLineFormSet`.
+
+    Read in the kelishuv's own currency rather than as the stored pair. Every row
+    here is in that one currency (the formset hands it down), but an existing row
+    keeps the kurs it was booked at — so two so'm rows agreed at the same 16 500
+    can hold different dollar twins, and comparing those would call one typo two
+    lots."""
+    brand = (cleaned.get("brand") or "").strip().casefold()
+    if not with_price:
+        return brand, None
+    price = (cleaned.get("price_uzs") if cleaned.get("currency") == Currency.UZS
+             else cleaned.get("price"))
+    return brand, price
+
+
 class BaseContractLineFormSet(forms.BaseInlineFormSet):
     """A kelishuv is its products, so at least one row must survive, and the same
-    brand must not appear twice — two rows of "2102 repak" would split one product's
-    qolgan kg across two counters."""
+    marka must not appear twice — two rows of "2102 repak" would split one
+    product's qolgan kg across two counters.
+
+    On a BIRJA kelishuv that split is the point. The exchange sells one granula
+    through the day at whatever it is asking, so a single purchase is routinely
+    "и 1561" three times over: 30 000 kg at 16 600, 30 000 more at 16 500, 7 000
+    at 16 400. Each is its own lot — a mashina is booked against the row it was
+    priced out of, and the ombor already blends one marka's lots at different
+    landed costs (`brand_stock_costed`). Keying on the marka alone left the
+    operator splitting one purchase across three kelishuvlar.
+
+    So there the narx joins the key, and only the same marka at the SAME narx is
+    refused: nothing distinguishes those two rows, so it is the operator's finger,
+    not a second lot. A hamkor kelishuv is unchanged — it is one agreement
+    negotiated at one price per marka, and a marka repeated there is a slip.
+
+    Which side this is cannot be read off `self.instance`: a kelishuv being
+    CREATED has no hamkor on it yet (the birja one is supplied after the form
+    validates, see `crm.views.contract_create`), so the views hand it down."""
+
+    def __init__(self, *args, birja=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.birja = birja
 
     def clean(self):
         super().clean()
         if any(self.errors):
             return
-        brands, kept = [], 0
+        seen, kept = [], 0
         for form in self.forms:
             if not form.cleaned_data or form.cleaned_data.get("DELETE"):
                 continue
             kept += 1
-            brand = (form.cleaned_data.get("brand") or "").strip().casefold()
-            if brand in brands:
-                form.add_error("brand", "Bu mahsulot ro'yxatda bor")
+            key = _line_identity(form.cleaned_data, with_price=self.birja)
+            if key in seen:
+                form.add_error("brand", "Bu mahsulot shu narxda ro'yxatda bor"
+                               if self.birja else "Bu mahsulot ro'yxatda bor")
             else:
-                brands.append(brand)
+                seen.append(key)
         if not kept:
             raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
 
@@ -810,15 +902,38 @@ class ContractChoiceSelect(forms.Select):
 
 
 class ShipmentStatusForm(forms.ModelForm):
+    """A holat and the chain it belongs to. `scope` is a real choice on this form
+    because there are now two pipelines and the operator owns both — the birja one
+    ships as placeholders precisely so it can be renamed and reshaped here."""
+
     class Meta:
         model = ShipmentStatus
-        fields = ["name", "is_arrival"]
+        fields = ["name", "scope", "is_arrival"]
+        help_texts = {
+            "scope": "Bu holat qaysi yuklarda ko'rinadi. «Ikkalasi ham» — "
+                     "har ikkala yo'nalishda.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The arrival row is the one step both chains share, and moving it to one
+        # side would leave the other with no way of landing a yuk in the ombor.
+        if self.instance.pk and self.instance.is_arrival:
+            self.fields["scope"].disabled = True
+            self.fields["scope"].help_text = (
+                "Omborga kelish holati har ikkala yo'nalish uchun umumiy")
 
 
 def _clean_number(value):
     """1000.000 → "1000", 1000.500 → "1000.5" — for data- attributes the JS reads."""
     text = f"{value}"
     return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _agreed_price(line):
+    """A kelishuv product's narx in the currency it was struck in — see
+    `ContractLine.agreed_price`, which the model's own `__str__` reads through."""
+    return line.agreed_price
 
 
 class ContractLineChoiceSelect(forms.Select):
@@ -833,7 +948,10 @@ class ContractLineChoiceSelect(forms.Select):
         if instance is not None:
             option["attrs"]["data-contract"] = str(instance.contract_id)
             option["attrs"]["data-remaining"] = _clean_number(instance.remaining_kg)
-            option["attrs"]["data-price"] = _clean_number(instance.price)
+            # The narx in the currency it was AGREED in — the yuk form paints it
+            # into a read-only box, and a so'm kelishuv's dollar twin painted there
+            # would read as $/kg on a figure nobody ever quoted in dollars.
+            option["attrs"]["data-price"] = _clean_number(_agreed_price(instance))
         return option
 
 
@@ -842,8 +960,8 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         model = Shipment
         # No origin/destination: every run is Eron → O'zbekiston (model defaults).
         fields = ["contract", "status", "sent", "eta", "arrived", "qr_date", "logist",
-                  "responsible", "driver_name", "driver_phone", "transport",
-                  "container", "note"]
+                  "customs_agent", "responsible", "driver_name", "driver_phone",
+                  "transport", "container", "note"]
         widgets = {
             "contract": forms.Select(attrs={"data-contract-source": ""}),
             "sent": date_widget(),
@@ -875,14 +993,19 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
     # away from the logist picker. The generic template renders `form` in order, so
     # the order is set here rather than by hand-writing a template.
     field_order = ["contract", "status", "sent", "eta", "arrived", "qr_date",
-                   "logist", "driver_advance",
+                   "logist", "driver_advance", "customs_agent",
                    "responsible", "driver_name", "driver_phone",
                    "transport", "container", "note"]
 
     # Boxed together under one legend. This modal ALSO carries a Valyuta and a kurs
     # on every Mahsulot row, so two unboxed currency labels would leave the operator
     # guessing which amount each belongs to. The box says: these four are one thing.
-    field_groups = [("Logist va haydovchi avansi", ["logist", "driver_advance"])]
+    field_groups = [("Logist va haydovchi avansi", ["logist", "driver_advance"]),
+                    # Its own box, one field wide, so the legend can say the thing
+                    # the picker cannot: naming him costs nothing. Beside the avans —
+                    # which DOES leave a balance — an unboxed second person-picker
+                    # reads as a second amount waiting to be typed.
+                    ("Bojxona", ["customs_agent"])]
 
     # The advance is handed over as the truck leaves, so it belongs to the dispatch
     # form rather than to a later xarajat entry. Three fields because it is money:
@@ -939,20 +1062,50 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             shipment=shipment, is_driver_advance=True, method=PayMethod.CASH,
             note="Haydovchiga avans", created_by=user, **fields)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, birja=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # Which pipeline this yuk moves along. Editing reads it off the row —
+        # a load never changes sides, and asking the caller to remember would let
+        # the wrong holatlar onto the form.
+        if birja is None:
+            birja = self.instance.contract.is_birja if self.instance.contract_id else False
+        self.birja = birja
         # Required on the form, still nullable on the model: a yuk with no
         # departure date fell out of the Oylik hisobot "jo'natilgan" count, but
         # rows imported before this rule must stay editable.
         self.fields["sent"].required = True
         # A kelishuv with every kg already on the road has nothing left to load, so
         # it drops off the new-yuk list — but stays when editing its own yuk.
+        #
+        # Narrowed to one side first: a birja yuk can only be loaded against a birja
+        # kelishuv, and offering the Eron ones would let a truck off the exchange be
+        # booked onto a hamkor's agreement — and take its holat chain with it.
         base = (Contract.objects.select_related("partner")
+                .filter(partner__is_birja=birja)
                 .prefetch_related("lines__shipment_lines"))
         self.fields["contract"].queryset = _keep_if(
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
+        # Only the holatlar of this yuk's own chain — plus the shared arrival one.
+        self.fields["status"].queryset = ShipmentStatus.for_kind(birja)
         self.fields["logist"].empty_label = "Logistsiz"
+        if birja:
+            # Both are Eron-road facts. A QR kod is what gets a driver off the
+            # border queue faster, and a bojxonachi clears a load that crossed one;
+            # goods bought on the birja here do neither, so the boxes would be two
+            # more things to leave empty on every single yuk.
+            del self.fields["qr_date"]
+            del self.fields["customs_agent"]
+        else:
+            # Named at dispatch, paid whenever it is paid. The help text is the whole
+            # point of the field and says so outright: an operator who has watched the
+            # kassa drop every previous time a bojxonachi was named on a yuk will not
+            # otherwise believe this one is free.
+            self.fields["customs_agent"].empty_label = "Hali tanlanmagan"
+            self.fields["customs_agent"].help_text = (
+                "Bu yukni kim rasmiylashtiradi. Faqat belgilash — pul ko'chmaydi, "
+                "kassadan hech narsa yechilmaydi. Bojxona xarajati kiritilmaguncha yuk "
+                "«Bojxona to'lanmagan» ro'yxatida turadi.")
         # Yetib kelgan sana is offered only once the yuk HAS arrived — a date beside
         # a load still on the road is an invitation to type one, and a yuk carrying an
         # arrival date while its holat says otherwise would sit in the ombor
@@ -1028,7 +1181,15 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
 
     Like the kelishuv row, it neither asks for a valyuta nor a kurs: a truck is
     priced in the currency of the kelishuv it is drawn from, and that is the currency
-    its goods land in `shipped_value_own`."""
+    its goods land in `shipped_value_own`.
+
+    It does not ask for a NARX either. Tannarx is agreed once, on the kelishuv, and
+    a yuk only reads it: the box below is shown so the operator can see what the
+    load is costed at, but it is disabled and whatever it holds is thrown away on
+    clean. `price` therefore stays NULL, which is precisely what makes
+    `ShipmentLine.unit_price` follow the kelishuv — edit the agreed narx and every
+    truck drawn from it re-prices at once, instead of staying frozen at the figure
+    the form happened to copy down on the day it was created."""
 
     #: blank narx means "use the kelishuv's" — see ShipmentLine.unit_price
     allow_blank = True
@@ -1041,6 +1202,9 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Read here and nowhere later: _post_clean is about to write None over both,
+        # and by then the row would look like it never had a narx of its own.
+        self._own_pair = (self.instance.price, self.instance.price_uzs)
         # Likewise per product: a fully-shipped line is not offered as a lot, but
         # the line already on this yuk stays selectable while editing it.
         base = (ContractLine.objects.select_related("contract")
@@ -1056,6 +1220,47 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
             lambda ln: f"{ln.contract.code} · {ln.brand} · "
                        f"{_clean_number(ln.remaining_kg)} kg qolgan · "
                        f"{rate(ln.price, ln.price_uzs, ln.currency)}")
+        self._lock_price()
+
+    def _lock_price(self):
+        """Turn the narx box into a window onto the kelishuv.
+
+        `disabled` is Django's own field flag, not just an HTML attribute: the posted
+        value is ignored and `initial` is used instead, so an operator (or a crafted
+        POST) cannot write a narx onto a truck. The box is filled from the kelishuv
+        product — by the server for a row that already has one, by base.html's
+        `prefillFromLine` the moment one is picked — and `clean_price` drops whatever
+        it shows before it can reach the row."""
+        price = self.fields["price"]
+        price.disabled = True
+        line = self._chosen_line()
+        if line is None:
+            price.label = "1 kg narxi (kelishuvdan)"
+        elif self._own_pair[0] is not None:
+            # A legacy row really did go at a narx of its own, so that is what it is
+            # costed at and what the screen has to show. Read-only all the same: it
+            # is a fact about a load that has already shipped.
+            price.label = f"1 kg narxi ({currency_suffix(line.currency)})"
+            self.initial["price"] = (self._own_pair[1] if line.is_som
+                                     else self._own_pair[0])
+        else:
+            price.label = f"1 kg narxi ({currency_suffix(line.currency)}, kelishuvdan)"
+            self.initial["price"] = _agreed_price(line)
+
+    def _chosen_line(self):
+        """The kelishuv product this row hangs off: the saved one, or — on a form
+        handed back after a validation error — the one that was posted.
+
+        The second half is what keeps a rejected form readable. A row that has never
+        been saved has no `contract_line` on its instance, and `prefillFromLine` only
+        fires on a change the operator has already made, so without this the whole
+        screen comes back with empty narx boxes beside the error they have to fix."""
+        if self.instance.contract_line_id:
+            return self.instance.contract_line
+        posted = self.data.get(self.add_prefix("contract_line")) if self.is_bound else None
+        if posted and str(posted).isdigit():
+            return self.fields["contract_line"].queryset.filter(pk=posted).first()
+        return None
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
@@ -1064,10 +1269,29 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         return kg
 
     def clean_price(self):
-        price = self.cleaned_data.get("price")
-        if price is not None and price <= 0:
-            raise forms.ValidationError("Narx musbat bo'lishi kerak")
-        return price
+        """Always nothing. The box only ever displayed a narx it was handed, and
+        storing that figure here would freeze the truck at today's agreement — the
+        single bug this whole form exists to avoid. NULL means "ask the kelishuv",
+        and the mixin nulls the so'm twin alongside it (see `allow_blank`)."""
+        return None
+
+    def _post_clean(self):
+        """...unless the row already had one, which it then keeps.
+
+        Legacy rows — imported, or entered before this box was locked — record loads
+        that really did go at a price of their own, and that is a fact about the past.
+        Handing one back to the kelishuv because somebody opened the yuk to fix a
+        container number would move that lot's tannarx, and the foyda of everything
+        already sold off it, on a save that had nothing to do with either. Nothing can
+        ACQUIRE a narx of its own any more, which is what the rule was about.
+
+        Put back as the stored PAIR rather than re-derived: `clean_price` has to null
+        the narx before the mixin sees it — left in place the row's own figure is read
+        as something the operator just typed and converted a second time, at a kurs
+        that has since moved — so the exact two columns go back afterwards."""
+        super()._post_clean()
+        if self._own_pair[0] is not None:
+            self.instance.price, self.instance.price_uzs = self._own_pair
 
     def clean(self):
         # Seeded before the mixin converts, same as the kelishuv row — except the
@@ -1329,8 +1553,13 @@ class SupplierPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         self.fields["contract_line"].queryset = (
             ContractLine.objects.filter(contract__in=self.fields["contract"].queryset)
             .select_related("contract").order_by("contract_id", "position", "id"))
+        # With the narx on it, the same way the yuk form's product list carries one.
+        # A kelishuv may hold one marka several times over — the birja sells it in
+        # lots at whatever it is asking that hour — and "и 1561 · 30 000 kg" twice
+        # over gives the operator no way to say which lot the money is for.
         self.fields["contract_line"].label_from_instance = (
-            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg")
+            lambda ln: f"{ln.brand} · {_clean_number(ln.kg)} kg · "
+                       f"{rate(ln.price, ln.price_uzs, ln.currency)}")
         # A real choice again, and named as one. It was demoted to a bare prompt
         # while `clean` refused it — but a to'lov that names no marka is now the
         # ZAKLAD, and `allocate_supplier_payment` splits it across the kelishuv by
@@ -1466,14 +1695,21 @@ def _customer_picker_widget():
     them too when two mijoz share a name.
 
     Progressive enhancement: the native select stays in the DOM and still submits,
-    which is what lets CustomerBronSelect keep stamping its options and the
+    which is what lets CustomerFactsSelect keep stamping its options and the
     quick-add keep appending to it, both untouched.
 
     A function rather than one shared widget: a widget carries per-form state —
-    its choices, and the CustomerBronSelect that BronDrawFormMixin swaps in — so
+    its choices, and the CustomerFactsSelect that BronDrawFormMixin swaps in — so
     three forms sharing one object would tread on each other."""
     return forms.Select(attrs={
         "data-combobox": "",
+        # The names in here are the operator's own text, so the transliterator is
+        # kept off the whole list — an <option> holds one text node and cannot have
+        # the ism marked up inside it, which is what `lotin` does everywhere else.
+        # The cost is that the "qarz"/"avans" tail on the balance picker stays in
+        # lotin too; the name being the one the operator typed is worth more, since
+        # it is the string they are matching against and typing to filter by.
+        "data-lotin": "",
         # What the box says while it is empty. The blank row it stands in for
         # carries no label at all now — see _customer_phone_field.
         "data-placeholder": "Mijozni tanlang",
@@ -1483,7 +1719,8 @@ def _customer_picker_widget():
 
 
 class SaleLineForm(forms.Form):
-    """One marka on a sotuv.
+    """One marka on a sotuv — and, when the sotuv is delivered by several mashina,
+    one marka on ONE of them.
 
     Deliberately NOT a ModelForm: a row is not a Sale. The view splits each row FIFO
     across the lots that actually hold that marka, so one row becomes as many Sale
@@ -1494,6 +1731,16 @@ class SaleLineForm(forms.Form):
     brand = forms.ChoiceField(label="Marka (ombordan)")
     kg = forms.DecimalField(label="Sotilgan kg", max_digits=12, decimal_places=3)
     price = forms.DecimalField(label="1 kg sotuv narxi", max_digits=14, decimal_places=4)
+    # WHICH mashina of the sotuv this product went out on. A truck can carry more
+    # than one marka, so the reys is a property of the ROW rather than of the sotuv:
+    # rows sharing a number are one lorry-load, and "+ Mahsulot qo'shish" inside a
+    # reys is what puts a second granula on it.
+    #
+    # Hidden and driven by the two buttons — the operator says which they meant by
+    # pressing the one they meant, not by typing a truck number. Blank on an
+    # ordinary sotuv, and the view reads a sotuv whose numbers never reach 2 as
+    # exactly that: one handover, however many markalar it carried.
+    reys = forms.IntegerField(required=False, min_value=1, widget=forms.HiddenInput)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1503,6 +1750,21 @@ class SaleLineForm(forms.Form):
         self.fields["brand"].widget.attrs["data-bron-brand"] = ""
         _group_thousands(self.fields["kg"])
         _group_thousands(self.fields["price"])
+
+    def has_changed(self):
+        """A spare row with empty kg and narx boxes is not a row anybody typed.
+
+        Django decides that off `has_changed()`, and the marka <select> defeats it:
+        an untouched select posts the first marka in the ombor, so a blank spare row
+        looks filled in and is then refused for the two boxes the operator never
+        meant to touch. The figures are what say whether a row was typed — which is
+        what lets the edit form carry a spare row under the sotuv's own mahsulotlar,
+        and “+ Mahsulot qo'shish” leave an unused one behind."""
+        if not self.is_bound:
+            return super().has_changed()
+        if any(self.data.get(self.add_prefix(name)) for name in ("kg", "price")):
+            return super().has_changed()
+        return False
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
@@ -1518,8 +1780,21 @@ class SaleLineForm(forms.Form):
 
 
 class BaseSaleLineFormSet(forms.BaseFormSet):
-    """Guards the three ways a sotuv's marka rows can be wrong: empty, carrying the
-    same marka twice, or asking for more than is on the shelf."""
+    """Guards the two ways a sotuv's marka rows can be wrong: empty, or asking for
+    more than is on the shelf.
+
+    Repeating a marka used to be the third, and is now a feature: one order is often
+    loaded onto several mashina one after another, so the same marka appearing twice
+    means two REYS of that load. What the repeat changed is the ceiling — the rows of
+    one marka are checked as a SUM against the shelf, which is the thing the old
+    refusal was really protecting (two rows each passing on their own, then taking
+    twice what is there)."""
+
+    #: {marka: kg} this submission may re-take because it already holds them.
+    #: Empty when a sotuv is being CREATED — nothing is held yet. On an edit the
+    #: sotuv's own kg are already off the shelf, so without this a form resubmitted
+    #: unchanged would be refused for taking granula it is itself standing on.
+    allowance = {}
 
     def rows(self):
         """The rows that mean something — filled in and not struck out."""
@@ -1535,25 +1810,33 @@ class BaseSaleLineFormSet(forms.BaseFormSet):
         if not rows:
             raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
 
-        # One row per marka. Two rows of the same granula would each be checked
-        # against the whole shelf and pass, then take twice what is there — and the
-        # operator meant one line anyway.
+        # Grouped by marka, keeping the order they were typed: the rows of one marka
+        # are its reyslar, and what leaves the ombor is their sum.
         wanted = {}
         for form in rows:
-            brand = form.cleaned_data["brand"]
-            if brand in wanted:
-                form.add_error("brand", "Bu marka ro'yxatda bor")
-                continue
-            wanted[brand] = (form, form.cleaned_data.get("kg") or Decimal("0"))
+            wanted.setdefault(form.cleaned_data["brand"], []).append(form)
 
-        for brand, (form, kg) in wanted.items():
+        for brand, forms_ in wanted.items():
+            kg = sum((f.cleaned_data.get("kg") or Decimal("0") for f in forms_),
+                     Decimal("0"))
             # The shelf is the only ceiling. A bron is a promise between the operator
             # and a mijoz, and the operator is the one who decides whether to keep it
             # today — granula refused to a buyer standing at the counter is a sale
             # lost to a rule that was never the mijoz's.
-            available = brand_on_hand_kg(brand)
-            if kg > available:
-                form.add_error(
+            available = brand_on_hand_kg(brand) + self.allowance.get(brand, Decimal("0"))
+            if kg <= available:
+                continue
+            # On the LAST reys of that marka, which is the one that broke the ceiling
+            # and the one the operator was typing when it did. The message names the
+            # sum, or the row's own kg would look like it fits and the refusal would
+            # read as a bug.
+            if len(forms_) > 1:
+                forms_[-1].add_error(
+                    "kg", f"{len(forms_)} reys jami {_clean_number(kg)} kg — ombor "
+                          f"qoldig'idan oshmasligi kerak "
+                          f"({_clean_number(available)} kg)")
+            else:
+                forms_[-1].add_error(
                     "kg", f"Ombor qoldig'idan oshmasligi kerak "
                           f"({_clean_number(available)} kg)")
 
@@ -1562,7 +1845,7 @@ SaleLineFormSet = forms.formset_factory(
     SaleLineForm, formset=BaseSaleLineFormSet, extra=1, can_delete=True)
 
 
-class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
+class SaleHeaderForm(InheritedRateMixin, forms.ModelForm):
     """The header of a sotuv: who is buying, in what currency, on what terms.
 
     WHAT is being sold lives in `SaleLineFormSet` beside it — a sotuv may carry
@@ -1595,6 +1878,21 @@ class SaleCreateForm(BronDrawFormMixin, InheritedRateMixin, forms.ModelForm):
         # future date by definition.
         no_future_date(self.fields["date"])
         _customer_phone_field(self.fields["customer"])
+
+
+class SaleCreateForm(BronDrawFormMixin, SaleHeaderForm):
+    """The header as it is TYPED: the same fields, plus the Brondan ushlansin
+    question, which only a new sotuv asks. An edit never re-asks it — whether a
+    sotuv came out of a bron is decided when it is entered and survives every
+    correction, exactly as `sale_edit` already treats it."""
+
+
+class SaleGroupEditForm(SaleHeaderForm):
+    """The header of an EXISTING multi-mahsulot sotuv.
+
+    Bare `SaleHeaderForm`: no bron question for the reason above, and no lot/kg/narx
+    of its own — those are the Mahsulot rows beside it, which on an edit are the
+    sotuv's own rows read back out of its FIFO slices."""
 
 
 class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
@@ -1700,10 +1998,19 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     class Meta:
         model = Reservation
         fields = ["customer", "brand", "kg", "currency", "price", "exchange_rate", "note"]
-        widgets = {"note": forms.Textarea(attrs={"rows": 2})}
+        widgets = {
+            "note": forms.Textarea(attrs={"rows": 2}),
+            # The same mijoz picker the sotuv forms carry, for the same reason: the
+            # list runs to hundreds of names in the operator's own spelling, and a
+            # native select can only be scrolled. A bron is the same kind of promise
+            # to the same kind of mijoz — including one who has bought nothing yet,
+            # which is why this keeps the quick-add the payment pickers leave off.
+            "customer": _customer_picker_widget(),
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        _customer_phone_field(self.fields["customer"])
         stock = {row["brand"]: row for row in brand_stock_costed()}
         choices = []
         for brand in bron_brands():
@@ -2032,6 +2339,8 @@ def _customer_payer_field(field):
     field.queryset = Customer.objects.prefetch_related("sales__returns", "customer_payments")
     field.label_from_instance = customer_option_label
     field.widget.attrs.setdefault("data-combobox", "")
+    # Same reason as the sotuv picker: a mijoz's ism is theirs, not the app's Uzbek.
+    field.widget.attrs.setdefault("data-lotin", "")
     field.widget.attrs.setdefault("data-placeholder", "Mijozni tanlang")
     # "" and not None, for the reason spelled out in `_customer_phone_field`: None
     # DELETES the empty row and books the form against whoever sorts first. Blank
@@ -2797,10 +3106,12 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         one of the two would rewrite that one while silently leaving the other, so
         the box stays empty and additive and those rows are edited from the jadval.
 
-        The haydovchi avansi is never one of them whatever else the turkum holds: the
-        yuk form owns that row and rewrites it on every save (sync_driver_advance),
-        so a figure typed over it here would be undone the next time the yuk is
-        edited."""
+        Two rows are never one of them whatever else the turkum holds, because
+        neither is this form's to rewrite: the haydovchi avansi, which the yuk form
+        owns (sync_driver_advance), and a birja yuk's transport, which is derived
+        from its kelishuv's rate (sync_birja_transport). A figure typed over either
+        would be put back the next time the yuk was saved, with nothing on screen to
+        say the correction had been thrown away."""
         if shipment is None or not getattr(shipment, "pk", None):
             return {}, {}
         found = {}
@@ -2808,7 +3119,8 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
             found.setdefault(row.category, []).append(row)
         recorded, others = {}, {}
         for category, rows in found.items():
-            managed = [row for row in rows if not row.is_driver_advance]
+            managed = [row for row in rows
+                       if not row.is_driver_advance and not row.is_auto_transport]
             if len(managed) == 1:
                 recorded[category] = managed[0]
             rest = [row for row in rows if row is not recorded.get(category)]
@@ -3016,10 +3328,11 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         rows were entered at different kursi would otherwise have every one of them
         re-rated by a submit that touched nothing."""
         shipment = self.cleaned_data["shipment"]
-        # Its own yuk, and never the haydovchi avansi: a hand-built payload naming
-        # somebody else's row must not reach it through here.
-        rewritable = {row.pk: row
-                      for row in shipment.expenses.exclude(is_driver_advance=True)}
+        # Its own yuk, and never a row this form does not own — the haydovchi avansi
+        # or a derived birja transport. A hand-built payload naming one of those must
+        # not reach it through here.
+        rewritable = {row.pk: row for row in shipment.expenses.exclude(
+            Q(is_driver_advance=True) | Q(is_auto_transport=True))}
         rate = self.cleaned_data["exchange_rate"]
         note = self.cleaned_data.get("note", "")
         typed_by_category = dict(self.entries)
@@ -3145,6 +3458,168 @@ class ShipmentExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         if commit:
             obj.save()
         return obj
+
+
+class ContractExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm):
+    """A cost that belongs to the kelishuv rather than to one of its trucks.
+
+    Three shapes in one form, decided by the turkum. A broker is agreed as a
+    PERCENTAGE of the whole agreement, so that box asks for the foiz and works the
+    sum out. Transport on the birja road is a RATE PER KG. Everything else is a sum
+    somebody was quoted. Every box is on the form and the picker hides the ones that
+    do not apply — and `clean` reads the SUBMITTED turkum and refuses the boxes it
+    did not want, so a figure can never be read back as the wrong kind of number.
+
+    A broker's fee is booked in the KELISHUV's own money whatever the valyuta picker
+    says, because the base it is a percentage of is the kelishuv's value. Forcing it
+    is the only way the two can be talking about the same figure.
+
+    **Transport saves no row of its own.** It is an arrangement, not a payment: it
+    writes `Contract.transport_rate_per_kg` and the money appears later, per yuk, as
+    each truck lands (`sync_birja_transport`). A ModelForm whose save() sometimes
+    writes the PARENT and returns None is unusual enough to say out loud — it is
+    here so the operator has one screen for "what does this kelishuv cost us"
+    instead of a per-kg box on the header form and a broker two clicks away."""
+
+    rate_per_kg = forms.DecimalField(
+        label="1 kg uchun", max_digits=14, decimal_places=4, required=False,
+        min_value=Decimal("0"),
+        help_text="Yuk omborga yetib kelganda shu narxda xarajat o'zi yoziladi",
+        widget=forms.NumberInput(attrs={"step": "0.0001", "min": "0"}))
+
+    class Meta:
+        model = ContractExpense
+        fields = ["contract", "date", "category", "percent", "currency", "amount",
+                  "exchange_rate", "method", "fee_percent", "note"]
+        widgets = {"date": date_widget(), "contract": forms.HiddenInput()}
+        help_texts = {
+            "percent": "Kelishuvning to'liq qiymatidan, kelishuv valyutasida olinadi",
+            "note": "Ixtiyoriy"}
+
+    field_order = ["date", "category", "percent", "amount", "currency",
+                   "exchange_rate", "method", "fee_percent", "note"]
+
+    def __init__(self, *args, contract=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.contract = contract or getattr(self.instance, "contract", None)
+        # Transport is the exchange road's arrangement: on the Eron side a logist
+        # quotes a price for the run and hands the driver an avans out of it, which
+        # the yuk form already asks for. Offering a per-kg box there would be a
+        # second, contradictory answer to one question, so the turkum is not on the
+        # picker at all.
+        if not (self.contract and self.contract.is_birja):
+            self.fields["category"].choices = [
+                (value, label) for value, label in self.fields["category"].choices
+                if value != ContractExpense.Category.TRANSPORT]
+            del self.fields["rate_per_kg"]
+        else:
+            _group_thousands(self.fields["rate_per_kg"])
+            self.fields["rate_per_kg"].widget.attrs["data-for-category"] = "transport"
+        # No box is required at field level: exactly one applies, and which one is
+        # not known until the turkum is read in clean(). Requiring them here would
+        # make every submission fail.
+        self.fields["amount"].required = False
+        self.fields["percent"].required = False
+        self.fields["percent"].widget.attrs.update({"step": "0.01", "min": "0",
+                                                    "max": "100"})
+        # Hooks for the toggle in base.html: the picker names the turkum, each box
+        # says which turkum it belongs to.
+        self.fields["category"].widget.attrs["data-expense-category"] = ""
+        self.fields["percent"].widget.attrs["data-for-category"] = "broker"
+        self.fields["amount"].widget.attrs["data-not-category"] = "broker transport"
+        # The valyuta goes with the sum box. A broker's fee is booked in the
+        # kelishuv's money whatever this says (see clean), so leaving the picker on
+        # screen offers a choice that is quietly overruled — the same thing the
+        # hidden sum box exists to avoid.
+        self.fields["currency"].widget.attrs["data-not-category"] = "broker transport"
+        # And the kurs goes with any money at all. A transport RATE books nothing
+        # here; the kurs it is eventually converted at is the one in force when the
+        # truck lands, which sync_birja_transport reads for itself.
+        self.fields["exchange_rate"].widget.attrs["data-not-category"] = "transport"
+
+    def clean_percent(self):
+        return _clean_percent(self.cleaned_data.get("percent"))
+
+    @property
+    def is_transport(self):
+        """True when this submission is the transport ARRANGEMENT rather than a
+        xarajat row — the one turkum that writes the kelishuv and saves nothing
+        here. The view branches on it, because such a save has no row to stamp with
+        a created_by."""
+        return (self.cleaned_data.get("category")
+                == ContractExpense.Category.TRANSPORT)
+
+    def clean(self):
+        cleaned = super().clean()
+        contract = cleaned.get("contract")
+        if cleaned.get("category") == ContractExpense.Category.TRANSPORT:
+            rate = cleaned.get("rate_per_kg")
+            if not rate:
+                self.add_error("rate_per_kg", "1 kg narxini kiriting")
+            elif contract is None or not contract.kg:
+                self.add_error("rate_per_kg",
+                               "Kelishuvda mahsulot yo'q — avval kg kiriting")
+            return cleaned
+        if cleaned.get("category") != ContractExpense.Category.BROKER:
+            # A sum somebody was quoted. The mixin has already converted it; all that
+            # is left is to check there IS one, and to clear any foiz so the row
+            # cannot claim it was worked out a way it was not.
+            cleaned["percent"] = None
+            if cleaned.get("amount") is None:
+                self.add_error("amount", "Summani kiriting")
+            return cleaned
+        percent, rate = cleaned.get("percent"), cleaned.get("exchange_rate")
+        if percent is None:
+            self.add_error("percent", "Broker foizini kiriting")
+            return cleaned
+        if percent <= 0:
+            self.add_error("percent", "Musbat son kiriting")
+            return cleaned
+        if not rate or rate <= 0:
+            self.add_error("exchange_rate", "Dollar kursini kiriting")
+            return cleaned
+        if contract is None or not contract.kg:
+            self.add_error("percent",
+                           "Kelishuvda mahsulot yo'q — avval kg va narx kiriting")
+            return cleaned
+        currency = contract.currency
+        base = contract._own(contract.total_value, contract.total_value_uzs)
+        typed = (base * percent / 100).quantize(Decimal("0.01"))
+        cleaned["currency"] = currency
+        cleaned["amount"], cleaned[self.uzs_field] = convert_pair(typed, currency, rate)
+        return cleaned
+
+    def _post_clean(self):
+        """No instance is built for the transport arrangement — there is no row.
+
+        ModelForm would otherwise construct a ContractExpense and validate it, and
+        that one has no summa, because a rate is not a sum. Skipped rather than
+        given a placeholder amount, which would be a figure in the books that nobody
+        agreed to and that no screen could explain."""
+        if self.is_transport:
+            return
+        super()._post_clean()
+
+    def save(self, commit=True):
+        """A xarajat row — or, for transport, the kelishuv itself.
+
+        The arrangement is stored where it has always been stored
+        (`Contract.transport_rate_per_kg`); only the screen it is typed on changed.
+        Saving it re-syncs the kelishuv's landed yuklar at once, so correcting a
+        rate reaches trucks nobody is going to open.
+
+        Returns the KELISHUV in that case, not None. The caller needs the instance
+        this actually wrote: the one the view loaded from the URL is a different
+        object with the old rate still on it, and an audit line read off that copy
+        records whatever the rate USED to be — which is worse than no line at all,
+        because it looks like a record of the change."""
+        if not self.is_transport:
+            return super().save(commit)
+        contract = self.cleaned_data["contract"]
+        contract.transport_rate_per_kg = self.cleaned_data["rate_per_kg"]
+        contract.save(update_fields=["transport_rate_per_kg"])
+        sync_contract_birja_transport(contract)
+        return contract
 
 
 class LogistForm(forms.ModelForm):

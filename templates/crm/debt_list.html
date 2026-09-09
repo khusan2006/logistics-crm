@@ -48,7 +48,7 @@ who to pay. Outside the davr filter, like the same block on Vazvrat.
       {% for row in owed %}
       <tr>
         <td class="sticky-col">
-          <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a>
+          <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name|lotin }}</a>
         </td>
         <td>
           {% for currency, amount in row.amounts %}
@@ -79,7 +79,7 @@ who to pay. Outside the davr filter, like the same block on Vazvrat.
   {% for row in page %}
   <tr>
     <td class="sticky-col">
-      <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name }}</a>
+      <a href="{% url 'debt_customer' row.customer.pk %}">{{ row.customer.name|lotin }}</a>
     </td>
     <td class="late">
       {% for currency, amount in row.positions %}

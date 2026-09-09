@@ -17,6 +17,8 @@ from accounts.models import User  # noqa: E402
 from crm.models import (Contract, ContractLine, Customer, Reservation,  # noqa: E402
                         Partner, Shipment, ShipmentLine, ShipmentStatus)
 
+from conftest import e2e_context  # noqa: E402
+
 pw = pytest.importorskip("playwright.sync_api")
 
 PASSWORD = "e2e-pass-123"
@@ -32,7 +34,7 @@ def browser():
 
 @pytest.fixture
 def page(browser):
-    ctx = browser.new_context(viewport={"width": 1280, "height": 950})
+    ctx = e2e_context(browser, viewport={"width": 1280, "height": 950})
     pg = ctx.new_page()
     yield pg
     ctx.close()

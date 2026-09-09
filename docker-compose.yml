@@ -1,0 +1,61 @@
+# The local development database.
+#
+# Development used to run on a file-based SQLite (config/settings_dev.py), which
+# meant the app you tested on and the app that ships were two different databases:
+# Postgres is what prod runs, and SQLite quietly disagrees with it about
+# transactions, concurrent writes and how a few of the ORM's date and decimal
+# lookups behave. This is that difference removed — same engine locally as in prod.
+#
+#   docker compose up -d          # start it (first run creates the database)
+#   docker compose ps             # is it healthy yet
+#   docker compose logs -f db     # what Postgres is saying
+#   docker compose stop           # stop, keeping the data
+#   docker compose down -v        # stop AND throw the data away
+#
+# Credentials come from .env — the same POSTGRES_* names Django reads in
+# config/settings.py, and the same ones the official image expects — so there is
+# one place to change them and no chance of the two halves disagreeing. Compose
+# loads .env from this directory on its own.
+#
+# NOT the prodcopy container: config/settings_prodcopy.py drives a separate,
+# throwaway `granulalog-rehearsal` on port 55432 holding a restored pg_dump. This
+# one is your own working data and is meant to be kept.
+
+services:
+  db:
+    # 18, because prod (Railway) is 18.6 — a dump taken there restores here
+    # without the version complaint pg_restore raises when it is older.
+    image: postgres:18-alpine
+    container_name: granulalog-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-granulalog}
+      POSTGRES_USER: ${POSTGRES_USER:-granulalog}
+      # No default: an empty password would make the container trust every
+      # connection, and .env is where the real one already lives.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      # 5432 inside the container always; the HOST port follows POSTGRES_PORT so
+      # Django and Compose cannot end up pointing at different places. It is not
+      # 5432 here because other projects on this machine already hold that one.
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      # /var/lib/postgresql, NOT .../data: the image changed this at 18. It now
+      # keeps the cluster in a major-version subdirectory below this path, so a
+      # future pg_upgrade --link has both versions inside one mount. Mounting the
+      # old .../data path against an 18 image makes it refuse to start.
+      - granulalog_pgdata:/var/lib/postgresql
+    healthcheck:
+      # `docker compose up -d --wait` blocks on this, so a migrate that follows
+      # cannot race the first-run initialisation (which restarts the server once
+      # it has created the database, and would otherwise refuse the connection).
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-granulalog} -d ${POSTGRES_DB:-granulalog}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  # Named rather than a bind mount under the repo: Postgres wants ownership of
+  # this directory, and a macOS bind mount cannot give it that cleanly.
+  granulalog_pgdata:

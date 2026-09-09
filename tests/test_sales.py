@@ -1,11 +1,12 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.utils import timezone
 
-from conftest import line_data
+from conftest import line_data, return_rows
 from crm.models import (
     AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus, SupplierPayment,
+    last_sale_prices_by_customer,
 )
 
 
@@ -526,10 +527,11 @@ class TestMultipleProductsInOneSotuv:
         assert resp.status_code == 200
         assert not Sale.objects.exists()
 
-    def test_the_same_marka_twice_is_refused(self, admin_client, db):
-        """Two rows of one granula would each be checked against the whole shelf and
-        pass, then take twice what is there."""
-        customer = self._two_markas()
+    def test_the_same_marka_twice_is_checked_as_a_sum(self, admin_client, db):
+        """Repeating a marka is a REYS now, not a slip — but the shelf is still the
+        ceiling, and it is the two rows TOGETHER that have to fit. Each was checked
+        on its own once, so both passed and then took twice what was there."""
+        customer = self._two_markas()             # 500 kg LLDPE on the shelf
         resp = self._post(admin_client, customer,
                           {"brand": "LLDPE", "kg": "300", "price": "1.50"},
                           {"brand": "LLDPE", "kg": "300", "price": "1.50"})
@@ -566,6 +568,211 @@ class TestMultipleProductsInOneSotuv:
                           {"brand": "", "kg": "", "price": ""})
         assert resp.status_code == 302
         assert Sale.objects.count() == 1
+
+
+class TestSotuvlarBandsTheDays:
+    """Sana ustuni o'rniga — kun sarlavhasi.
+
+    The column repeated one date down twenty rows to say something that changes three
+    times on a page, and it sat in the widest slot on the table. As a band the date is
+    said once, over the sotuvlar of that day."""
+
+    def _sale_on(self, client, day, name):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-01")
+        customer = Customer.objects.create(name=name)
+        client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": day, "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "10", "price": "1.50"})})
+        return customer
+
+    def test_the_sana_column_is_gone(self, admin_client, db):
+        self._sale_on(admin_client, date.today(), "Bugungi")
+        html = admin_client.get("/sales/").content.decode()
+        assert '<th class="sticky-col">Sana</th>' not in html
+        assert '<th class="sticky-col">Mijoz</th>' in html
+
+    def test_a_band_per_day_newest_first(self, admin_client, db):
+        today = date.today()
+        self._sale_on(admin_client, today - timedelta(days=2), "Uch kun")
+        self._sale_on(admin_client, today, "Bugungi")
+        self._sale_on(admin_client, today - timedelta(days=1), "Kechagi")
+        days = admin_client.get("/sales/").context["days"]
+        assert [d["day"] for d in days] == [
+            today, today - timedelta(days=1), today - timedelta(days=2)]
+        assert [d["label"] for d in days] == ["Bugun", "Kecha", ""]
+        assert [len(d["blocks"]) for d in days] == [1, 1, 1]
+
+    def test_the_sotuvlar_of_one_day_share_one_band(self, admin_client, db):
+        today = date.today()
+        self._sale_on(admin_client, today, "Birinchi")
+        self._sale_on(admin_client, today, "Ikkinchi")
+        days = admin_client.get("/sales/").context["days"]
+        assert len(days) == 1 and len(days[0]["blocks"]) == 2
+
+    def test_the_band_is_drawn_and_names_the_day(self, admin_client, db):
+        self._sale_on(admin_client, date.today() - timedelta(days=3), "Eski")
+        html = admin_client.get("/sales/").content.decode()
+        assert '<tr class="day-row' in html
+        # An older day carries no word, so the band prints the date itself.
+        # f"{day}-" rather than strftime("%-d-"): the no-padding dash is a glibc
+        # extension, and on Windows the same call raises ValueError instead.
+        assert f"{(date.today() - timedelta(days=3)).day}-" in html
+
+    def test_the_flat_blocks_are_still_there_for_what_counts_them(
+            self, admin_client, db):
+        """`days` is how the table is drawn; `groups` is still every sotuv on the
+        page, which is what the pager and the chips are counted from."""
+        self._sale_on(admin_client, date.today(), "Bugungi")
+        resp = admin_client.get("/sales/")
+        assert len(resp.context["groups"]) == 1
+        assert resp.context["groups"][0]["first"].customer.name == "Bugungi"
+
+
+class TestReys:
+    """Bitta buyurtma bir nechta mashinada ketadi — bitta sotuv, bir nechta reys.
+
+    A reys is a TRUCK, and a truck can carry more than one marka. So the number sits
+    on the ROW: rows sharing one are a single lorry-load, which is what the
+    "+ Mahsulot" inside a reys adds to. Nothing is read off the granula — numbering
+    by marka renamed reys 2 the moment its load was changed to something else."""
+
+    def _shelf(self):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        return Customer.objects.create(name="Uch reys")
+
+    def _post(self, client, customer, *rows, **extra):
+        data = {"customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+                "date": "2026-07-24", "debt_deadline": "", "note": "",
+                **line_data(*rows)}
+        data.update(extra)
+        return client.post("/sales/new/", data)
+
+    def _lldpe(self, kg, reys=None):
+        row = {"brand": "LLDPE", "kg": kg, "price": "1.50"}
+        return {**row, "reys": reys} if reys else row
+
+    def _hdpe(self, kg, reys=None):
+        row = {"brand": "HDPE", "kg": kg, "price": "3.00"}
+        return {**row, "reys": reys} if reys else row
+
+    def test_three_trucks_of_one_load_are_one_sotuv(self, admin_client, db):
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("100", 1), self._lldpe("120", 2),
+                          self._lldpe("80", 3))
+        assert resp.status_code == 302
+        sales = list(Sale.objects.order_by("pk"))
+        assert [s.reys for s in sales] == [1, 2, 3]
+        assert [s.kg for s in sales] == [Decimal("100.000"), Decimal("120.000"),
+                                         Decimal("80.000")]
+        # One deal: one group, one qarz.
+        assert len({s.group for s in sales}) == 1
+        customer.refresh_from_db()
+        assert customer.balance == Decimal("450.00")
+
+    def test_one_reys_can_carry_several_markalar(self, admin_client, db):
+        """The nesting that "+ Mahsulot qo'shish" inside a reys is for: two granula
+        on the first lorry, one on the second."""
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("100", 1), self._hdpe("50", 1),
+                          self._lldpe("120", 2))
+        assert resp.status_code == 302
+        assert [(s.line.brand, s.reys) for s in Sale.objects.order_by("pk")] == [
+            ("LLDPE", 1), ("HDPE", 1), ("LLDPE", 2)]
+
+    def test_every_reys_can_carry_a_different_marka(self, admin_client, db):
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("100", 1), self._hdpe("50", 2),
+                          self._lldpe("120", 3))
+        assert resp.status_code == 302
+        assert [(s.line.brand, s.reys) for s in Sale.objects.order_by("pk")] == [
+            ("LLDPE", 1), ("HDPE", 2), ("LLDPE", 3)]
+
+    def test_markalar_on_one_truck_are_not_reyslar(self, admin_client, db):
+        """Three granula handed over on one lorry is one delivery. Numbering it 1 of
+        1 would claim a second half that never existed."""
+        customer = self._shelf()
+        self._post(admin_client, customer,
+                   self._lldpe("100", 1), self._hdpe("50", 1))
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [None, None]
+
+    def test_an_ordinary_sotuv_names_no_reys_at_all(self, admin_client, db):
+        customer = self._shelf()
+        self._post(admin_client, customer, self._lldpe("100"), self._hdpe("50"))
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [None, None]
+
+    def test_the_numbers_are_normalised_to_the_order_they_appear(self, admin_client, db):
+        """The browser's numbers only have to GROUP the rows. Building the trucks out
+        of order, or deleting the middle one, must still save as 1, 2, 3."""
+        customer = self._shelf()
+        self._post(admin_client, customer,
+                   self._lldpe("100", 5), self._hdpe("50", 2), self._lldpe("120", 5))
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [1, 2, 1]
+
+    def test_the_shelf_is_the_ceiling_for_the_reyslar_together(self, admin_client, db):
+        """Two trucks of one granula come off one pile, so it is their SUM that has
+        to fit — each was checked alone once, and both passed."""
+        customer = self._shelf()                    # 500 kg LLDPE
+        resp = self._post(admin_client, customer,
+                          self._lldpe("300", 1), self._lldpe("300", 2))
+        assert resp.status_code == 200
+        assert not Sale.objects.exists()
+        # The refusal names the sum: the last row's own 300 kg fits 500 on its own,
+        # so a message about that row alone would read as a bug.
+        assert "600" in resp.content.decode()
+
+    def test_reyslar_that_fit_together_go_through(self, admin_client, db):
+        customer = self._shelf()
+        resp = self._post(admin_client, customer,
+                          self._lldpe("300", 1), self._lldpe("200", 2))
+        assert resp.status_code == 302
+        assert [s.reys for s in Sale.objects.order_by("pk")] == [1, 2]
+
+    def test_a_reys_that_reaches_across_two_lots_is_still_one_truck(
+            self, admin_client, db):
+        """FIFO can split one row into several Sale rows. Those are lot slices, not
+        trucks, so they all carry the same reys."""
+        _lot_at("PP", "100", "1.00", "2026-07-01")
+        _lot_at("PP", "100", "1.10", "2026-07-02")
+        customer = Customer.objects.create(name="Ikki lot")
+        resp = self._post(admin_client, customer,
+                          {"brand": "PP", "kg": "150", "price": "2.00", "reys": 1},
+                          {"brand": "PP", "kg": "40", "price": "2.00", "reys": 2})
+        assert resp.status_code == 302
+        # 150 kg took the whole first lot and 50 of the second — two rows, one reys.
+        assert [(s.kg, s.reys) for s in Sale.objects.order_by("pk")] == [
+            (Decimal("100.000"), 1), (Decimal("50.000"), 1), (Decimal("40.000"), 2)]
+
+    def test_the_list_prints_the_number_in_a_circle(self, admin_client, db):
+        customer = self._shelf()
+        self._post(admin_client, customer,
+                   self._lldpe("100", 1), self._hdpe("50", 2))
+        html = admin_client.get("/sales/").content.decode()
+        assert '<span class="reys-no" title="1-reys">1</span>' in html
+        assert '<span class="reys-no" title="2-reys">2</span>' in html
+
+    def test_an_ordinary_sotuv_wears_no_circle(self, admin_client, db):
+        customer = self._shelf()
+        self._post(admin_client, customer, self._lldpe("100"))
+        # The rendered badge, not the class name — the modal JS that draws the same
+        # circle while typing ships on every page and names it too.
+        assert '<span class="reys-no"' not in admin_client.get("/sales/").content.decode()
+
+    def test_the_form_offers_both_buttons_and_a_reys_field_per_row(
+            self, admin_client, db):
+        html = admin_client.get("/sales/new/").content.decode()
+        assert "+ Mahsulot qo'shish" in html and "+ Reys qo'shish" in html
+        assert 'data-line-reys="Reyslar"' in html
+        assert 'name="lines-0-reys"' in html          # the row carries its truck
+
+    def test_a_kelishuv_form_does_not(self, admin_client, db):
+        """A kelishuv lists a marka once by nature — it has no trucks to number."""
+        html = admin_client.get("/contracts/new/").content.decode()
+        assert "+ Reys qo'shish" not in html
 
 
 class TestSotuvlarShowsWhatWasSoldTogether:
@@ -627,7 +834,9 @@ class TestSotuvlarShowsWhatWasSoldTogether:
         self._post(admin_client, customer, {"brand": "LLDPE", "kg": "300", "price": "2.00"})
         assert Sale.objects.count() == 2
         html = admin_client.get("/sales/").content.decode()
-        assert html.count("<tr") == 2                 # the header row and the sotuv
+        # One sotuv row for both slices — counted by class, so the column header and
+        # the sana band over the day are not mistaken for rows of their own.
+        assert html.count('class="sale-row"') == 1
         assert "1.2 $/kg" in html and "1.3 $/kg" in html   # both lots' tannarx
 
     def test_the_detail_page_names_the_other_rows(self, admin_client, db):
@@ -748,7 +957,9 @@ class TestTheOneRowView:
         self._sotuv(admin_client)
         assert Sale.objects.count() == 2
         html = admin_client.get("/sales/").content.decode()
-        assert html.count("<tr") == 2                 # the header row and the sotuv
+        # One sotuv row, whatever it carried. Counted by class rather than by "<tr",
+        # which also catches the column header and the sana band over the day.
+        assert html.count('class="sale-row"') == 1
         assert "LLDPE" in html and "HDPE" in html
 
     def test_jami_is_the_whole_sotuv(self, admin_client, db):
@@ -897,3 +1108,291 @@ def test_pressing_one_lens_turns_the_other_off(admin_client, db):
     html = admin_client.get("/sales/?changed=today").content.decode()
     assert "new=today" in html          # the green link is offered…
     assert "changed=today&amp;new=today" not in html and "new=today&amp;changed=today" not in html
+
+
+class TestLastPricePrefill:
+    """The narx this mijoz last paid for this marka.
+
+    The operator was looking up last month's sotuv and typing the figure back in
+    from memory. The mijoz's <option> carries what each marka last went out at, so
+    the box opens with it and they confirm — or type over it — instead.
+
+    Every mijoz: the last narx is just what they paid last time, and a new quote is
+    typed over the old one."""
+
+    def _sell(self, admin_client, lot, customer, price, on):
+        resp = admin_client.post(f"/sales/new/?lot={lot.pk}", {
+            "customer": customer.pk, "kg": "100", "currency": "usd",
+            "exchange_rate": "12000", "price": price,
+            "date": on, "debt_deadline": "", "note": "",
+        })
+        assert resp.status_code == 302
+
+    def test_the_latest_sotuv_of_each_marka_is_what_is_offered(self, admin_client, db):
+        lot = _lot(kg="10000", brand="LLDPE")
+        other = _lot(kg="10000", brand="HDPE")
+        customer = _customer()
+
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-25")
+        self._sell(admin_client, other, customer, "1.10", "2026-07-20")
+
+        prices = last_sale_prices_by_customer()
+        assert prices[customer.pk]["LLDPE"][0] == Decimal("1.6500")
+        assert prices[customer.pk]["HDPE"][0] == Decimal("1.1000")
+
+    def test_two_sotuv_on_one_day_are_settled_by_which_was_entered_second(
+            self, admin_client, db):
+        """The one the operator would read off Sotuvlar as "what we sold it for
+        last time" — the sana alone cannot tell them apart."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+        self._sell(admin_client, lot, customer, "1.55", "2026-07-18")
+
+        assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.5500")
+
+    def test_a_narx_typed_over_is_the_one_the_next_sotuv_opens_with(
+            self, admin_client, db):
+        """Nothing is snapshotted: the table is read off the saved sotuvlar at every
+        render, so the operator changes the standing narx by selling at the new one
+        — or by correcting the last sotuv, which is the same thing to this table."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-25")
+        assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.6500")
+
+        latest = Sale.objects.filter(customer=customer).order_by("date", "pk").last()
+        resp = admin_client.post(f"/sales/{latest.pk}/edit/", {
+            "customer": customer.pk, "line": lot.pk, "kg": "100",
+            "currency": "usd", "exchange_rate": "12000", "price": "1.72",
+            "date": "2026-07-25", "debt_deadline": "", "note": "",
+        })
+        assert resp.status_code == 302
+        assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.7200")
+
+    def test_a_marka_this_mijoz_has_never_bought_is_left_empty(self, admin_client, db):
+        """No narx on record is not the same as a narx of zero — the box opens blank
+        and the operator types what was agreed."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        _lot(kg="10000", brand="HDPE")
+        customer = _customer("Alisher Mebel")
+        newcomer = _customer("Bekzod")
+        self._sell(admin_client, lot, customer, "1.40", "2026-07-18")
+
+        prices = last_sale_prices_by_customer()
+        assert "HDPE" not in prices[customer.pk]
+        assert newcomer.pk not in prices
+
+    def test_both_currencies_travel_so_a_som_sotuv_opens_in_som(
+            self, admin_client, db):
+        """Which side the browser fills is the SOTUV's own valyuta, so a so'm sotuv
+        must never open with a dollar figure standing in a so'm box."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
+
+        usd_price, uzs_price = last_sale_prices_by_customer()[customer.pk]["LLDPE"]
+        assert usd_price == Decimal("1.6500")
+        assert uzs_price == Decimal("19800.00")
+
+    def test_the_sotuv_form_stamps_every_mijoz_who_has_bought_before(
+            self, admin_client, db):
+        lot = _lot(kg="10000", brand="LLDPE")
+        regular = _customer("Alisher Mebel")
+        occasional = _customer("Bekzod")
+        _customer("Dilshod")                    # has never bought anything
+        self._sell(admin_client, lot, regular, "1.65", "2026-07-18")
+        self._sell(admin_client, lot, occasional, "1.90", "2026-07-19")
+
+        html = admin_client.get("/sales/new/").content.decode()
+        # `data-last-prices="` and not the bare name: base.html's own JS reads the
+        # attribute by name on every page, so the name alone matches everywhere.
+        assert html.count('data-last-prices="') == 2
+        assert "1.6500" in html and "19800.00" in html
+        assert "1.9000" in html
+        # the mijoz with no sotuvlar carries no empty object for the JS to read
+
+    def test_the_edit_form_does_not_offer_it(self, admin_client, db):
+        """Editing an existing sotuv is not the place: the narx in the box is the
+        one that WAS agreed on that sotuv, and repainting it from a later one would
+        rewrite history on Saqlash."""
+        lot = _lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
+        sale = Sale.objects.get(line=lot)
+
+        html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
+        assert 'data-last-prices="' not in html
+
+
+class TestEditingAWholeSotuv:
+    """A sotuv of several mahsulotlar is edited and deleted as ONE thing — the trip
+    to the counter it was entered as, in the same form it was typed in.
+
+    Sotuvlar used to hand these rows an eye: open the sotuv's page, correct one lot
+    at a time. That is the right shape for the STORED rows (a marka split across two
+    lots is two of them) and the wrong shape for the deal, which is what an operator
+    corrects — they change the mijoz, or the kg of a marka, not FIFO's arithmetic."""
+
+    def _post(self, client, customer, *rows, **extra):
+        data = {"customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+                "date": "2026-07-24", "debt_deadline": "", "note": "",
+                **line_data(*rows)}
+        data.update(extra)
+        return client.post("/sales/new/", data)
+
+    def _two_marka_sotuv(self, client):
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        _lot_at("HDPE", "400", "2.00", "2026-07-11")
+        customer = Customer.objects.create(name="Ikki marka")
+        self._post(client, customer,
+                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                   {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        return customer, list(Sale.objects.order_by("pk"))
+
+    def _edit(self, client, sale, *rows, initial=0, **extra):
+        data = {"customer": sale.customer_id, "currency": "usd",
+                "exchange_rate": "12000", "date": "2026-07-24",
+                "debt_deadline": "", "note": "", **line_data(*rows, initial=initial)}
+        data.update(extra)
+        return client.post(f"/sales/{sale.pk}/group/edit/", data)
+
+    def test_the_form_opens_with_every_mahsulot_filled_in(self, admin_client, db):
+        """The same modal a new sotuv is typed in, holding what was typed."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        html = admin_client.get(f"/sales/{rows[0].pk}/group/edit/").content.decode()
+        assert 'name="lines-0-brand"' in html and 'name="lines-1-brand"' in html
+        import re as _re
+        kgs = _re.findall(r'name="lines-\d-kg"[^>]*value="([^"]*)"', html)
+        prices = _re.findall(r'name="lines-\d-price"[^>]*value="([^"]*)"', html)
+        # Decimals as the single-row edit form already prefills them.
+        assert kgs == ["100.000", "50.000"], (kgs, prices)
+        assert prices == ["1.5000", "3.0000"], (kgs, prices)
+
+    def test_saving_it_unchanged_changes_nothing(self, admin_client, db):
+        """The sotuv's own kg are already off the shelf; the ceiling has to let it
+        stand on them, or an untouched Saqlash is refused."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        before = [(s.pk, s.kg, s.price) for s in rows]
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 302
+        assert [(s.pk, s.kg, s.price) for s in Sale.objects.order_by("pk")] == before
+
+    def test_the_header_moves_every_mahsulot_at_once(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        other = Customer.objects.create(name="Boshqa mijoz")
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          customer=other.pk, note="tuzatildi")
+        assert resp.status_code == 302
+        moved = list(Sale.objects.order_by("pk"))
+        assert {s.customer_id for s in moved} == {other.pk}
+        assert {s.note for s in moved} == {"tuzatildi"}
+        # An untouched kg keeps its rows — and everything hanging off them.
+        assert [s.pk for s in moved] == [s.pk for s in rows]
+
+    def test_changing_one_marka_leaves_the_other_alone(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        hdpe = [s for s in rows if s.line.brand == "HDPE"]
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "250", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 302
+        after = list(Sale.objects.order_by("pk"))
+        assert sum(s.kg for s in after if s.line.brand == "LLDPE") == Decimal("250")
+        assert [s.pk for s in after if s.line.brand == "HDPE"] == [s.pk for s in hdpe]
+        assert len({s.group for s in after}) == 1
+
+    def test_a_mahsulot_can_be_struck_out(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        assert resp.status_code == 302
+        assert {s.line.brand for s in Sale.objects.all()} == {"LLDPE"}
+
+    def test_a_mahsulot_can_be_added(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        _lot_at("PP", "300", "1.10", "2026-07-12")
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          {"brand": "PP", "kg": "70", "price": "2.00"})
+        assert resp.status_code == 302
+        after = Sale.objects.all()
+        assert {s.line.brand for s in after} == {"LLDPE", "HDPE", "PP"}
+        assert len({s.group for s in after}) == 1
+
+    def test_a_marka_with_a_vazvrat_is_not_re_sliced_behind_the_operator(
+            self, admin_client, db):
+        """A vazvrat line is deleted with the sotuv row it came off, so a kg change
+        that rewrites those rows would take back goods the mijoz really returned.
+        The edit stops and says which marka to sort out first."""
+        customer, rows = self._two_marka_sotuv(admin_client)
+        lldpe = next(s for s in rows if s.line.brand == "LLDPE")
+        admin_client.post("/returns/new/", return_rows(
+            (lldpe.pk, "10"), customer=customer, date="2026-07-25"))
+        assert lldpe.returns.count() == 1
+
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "250", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 200
+        assert "vazvrat" in resp.content.decode()
+        assert lldpe.returns.count() == 1
+        assert Sale.objects.get(pk=lldpe.pk).kg == Decimal("100")
+
+    def test_deleting_it_takes_every_mahsulot(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        resp = admin_client.post(f"/sales/{rows[0].pk}/group/delete/")
+        assert resp.status_code == 302
+        assert not Sale.objects.exists()
+
+    def test_a_one_mahsulot_sotuv_still_uses_its_own_door(self, admin_client, db):
+        """A group that holds one row is the ordinary sotuv, and gets the ordinary
+        form — one door for it rather than two that must be kept in step."""
+        _lot_at("LLDPE", "500", "1.00", "2026-07-10")
+        customer = Customer.objects.create(name="Bitta marka")
+        self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
+        sale = Sale.objects.get()
+        html = admin_client.get(f"/sales/{sale.pk}/group/edit/").content.decode()
+        assert 'name="lines-0-brand"' not in html and 'name="kg"' in html
+
+    def test_a_header_only_edit_leaves_other_sotuvlar_where_they_are(
+            self, admin_client, db):
+        """Nothing came off the shelf, so FIFO has nothing to re-answer. Replaying
+        the marka anyway would rewrite the lots of every OTHER sotuv of it that is
+        not on FIFO order — the hand-picked and the typed-in-late."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        other = Customer.objects.create(name="Boshqa sotuv")
+        self._post(admin_client, other, {"brand": "LLDPE", "kg": "40", "price": "1.50"})
+        outsider = Sale.objects.exclude(pk__in=[s.pk for s in rows]).get()
+        before = [(sl.line_id, sl.kg) for sl in outsider.lots.order_by("pk")]
+
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          note="faqat izoh")
+        assert resp.status_code == 302
+        outsider.refresh_from_db()
+        assert [(sl.line_id, sl.kg) for sl in outsider.lots.order_by("pk")] == before
+
+    def test_the_spare_row_under_the_mahsulotlar_is_not_a_row(self, admin_client, db):
+        """What the browser actually posts: the sotuv's rows plus the empty one the
+        form always carries — whose marka <select> posts the first marka in the
+        ombor, filled in by nobody. It must not be read as a third mahsulot with two
+        empty boxes, which is what refused every save from the real modal."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                          {"brand": "LLDPE", "kg": "", "price": "", "reys": ""},
+                          initial=2)
+        assert resp.status_code == 302
+        assert Sale.objects.count() == len(rows)

@@ -133,3 +133,82 @@ def test_marka_row_sotish_preselects_that_marka(admin_client, db):
     # rather than the header.
     lines = admin_client.get("/sales/new/", {"brand": "2102 kampaund"}).context["lines"]
     assert lines.forms[0].initial["brand"] == "2102 kampaund"
+
+
+class TestBugungiKurs:
+    """The ombor's so'm tannarx is an ESTIMATE at one kurs typed on the page.
+
+    Everywhere else a so'm figure is stated at the kurs its own row was booked at,
+    so a past figure cannot move after the fact. Here that is the wrong answer:
+    nearly every kelishuv is struck in dollars, and the question the ombor is opened
+    with is "what would this cost me in so'm today, to decide what to sell it for
+    today". Lots booked at different kursi are otherwise not comparable to each
+    other at all."""
+
+    def test_every_lot_is_converted_at_the_kurs_that_was_typed(self, admin_client, db):
+        cheap = _lot(brand="LLDPE", kg="1000", price="1.00")
+        dear = _lot(brand="LLDPE", kg="1000", price="2.00", partner="Basir")
+        # Booked at the columns' own default, which is NOT what the page is asked for
+        assert cheap.exchange_rate != Decimal("13100")
+
+        group = admin_client.get("/ombor/", {"kurs": "13100"}).context["page"].object_list[0]
+        assert group["cost_min_uzs"] == Decimal("13100.00")
+        assert group["cost_max_uzs"] == Decimal("26200.00")
+        assert {lot.cost_uzs for lot in group["lots"]} == {
+            Decimal("13100.00"), Decimal("26200.00")}
+        assert dear.pk in {lot.pk for lot in group["lots"]}
+
+    def test_the_dollar_column_beside_it_is_untouched(self, admin_client, db):
+        """The kurs is presentation only: the recorded figure is the dollar one and
+        no row is re-rated by typing in the box."""
+        lot = _lot(brand="LLDPE", kg="1000", price="1.40")
+        group = admin_client.get("/ombor/", {"kurs": "13100"}).context["page"].object_list[0]
+        assert group["cost_min"] == Decimal("1.4000")
+        lot.refresh_from_db()
+        assert lot.exchange_rate == Decimal("12000")   # nothing was written
+
+    def test_a_kurs_typed_as_the_operator_types_money_is_understood(
+            self, admin_client, db):
+        """The box is a data-money input: what comes back is space-grouped, and this
+        keyboard's decimal key is a comma."""
+        _lot(brand="LLDPE", kg="1000", price="1.00")
+        resp = admin_client.get("/ombor/", {"kurs": "13 100,5"})
+        assert resp.context["kurs"] == Decimal("13100.5")
+
+    def test_rubbish_in_the_box_falls_back_instead_of_erroring(self, admin_client, db):
+        _lot(brand="LLDPE", kg="1000", price="1.00")
+        for bad in ("", "abc", "0", "-5"):
+            resp = admin_client.get("/ombor/", {"kurs": bad})
+            assert resp.status_code == 200
+            assert resp.context["kurs"] > 0
+
+    def test_the_page_opens_where_it_was_left(self, admin_client, db):
+        """Remembered in the session, so the operator does not retype today's kurs
+        on every visit — and the Excel button, which carries the querystring, shows
+        the same figures the screen does either way."""
+        _lot(brand="LLDPE", kg="1000", price="1.00")
+        admin_client.get("/ombor/", {"kurs": "13100"})
+        assert admin_client.get("/ombor/").context["kurs"] == Decimal("13100")
+
+    def test_the_excel_is_written_at_the_same_kurs(self, admin_client, db):
+        """The querystring rides along with the download, so the file and the screen
+        cannot disagree about what the stock is worth."""
+        from io import BytesIO
+
+        import openpyxl
+
+        _lot(brand="LLDPE", kg="1000", price="1.00")
+        resp = admin_client.get("/ombor/export.xlsx", {"kurs": "13100"})
+        assert resp.status_code == 200
+        sheet = openpyxl.load_workbook(BytesIO(resp.content)).worksheets[0]
+        headers = [c.value for c in sheet[1]]
+        row = [c.value for c in sheet[2]]
+        assert row[headers.index("Tan narx eng past (so\'m)")] == 13100
+
+    def test_a_skladchi_is_not_offered_the_box(self, client, django_user_model, db):
+        """Tan narx is not a skladchi's, so neither is the kurs that draws it."""
+        _lot(brand="LLDPE", kg="1000", price="1.00")
+        user = django_user_model.objects.create_user(
+            username="sklad", password="x", role=django_user_model.Role.SKLADCHI)
+        client.force_login(user)
+        assert 'name="kurs"' not in client.get("/ombor/").content.decode()

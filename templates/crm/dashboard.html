@@ -236,6 +236,13 @@ says so rather than sitting quietly in a list.
         {% for line in row.lines %}
         <div class="cprog-marka">
           <span class="cprog-marka-name">{{ line.brand }}</span>
+          {% comment %}
+          The narx, only on a marka this kelishuv holds more than once — see
+          `_chart_line`, which sets `show_price`. Three bars all headed "и 1561"
+          say nothing about which lot is short of a mashina; the price is what
+          the operator bought them apart by.
+          {% endcomment %}
+          {% if line.show_price %}<span class="cprog-marka-price">{% rate line.price line.price_uzs line.currency %}</span>{% endif %}
         </div>
         <div class="cprog-bar">
           <span class="cprog-key">Yuk</span>

@@ -26,6 +26,32 @@ urlpatterns = [
     path("customers/<int:pk>/delete/", crm_views.customer_delete, name="customer_delete"),
     path("contracts/", crm_views.contract_list, name="contract_list"),
     path("contracts/new/", crm_views.contract_create, name="contract_create"),
+    # Birja — granula bought on the exchange here rather than agreed with a hamkor
+    # in Eron. The SAME views, registered a second time with the flag set: a birja
+    # kelishuv is a Contract and a birja yuk is a Shipment, which is what lets the
+    # ombor, the sotuvlar and the kassa stay one set of books. Edit, delete and the
+    # per-yuk actions are NOT re-registered — a row never changes sides, so those
+    # read the kind off the row itself.
+    path("birja/kelishuvlar/", crm_views.contract_list, {"birja": True},
+         name="birja_contract_list"),
+    path("birja/kelishuvlar/new/", crm_views.contract_create, {"birja": True},
+         name="birja_contract_create"),
+    path("birja/kelishuvlar/export.xlsx", crm_views.contract_list_export,
+         {"birja": True}, name="birja_contract_list_export"),
+    path("birja/yuklar/", crm_views.shipment_list, {"birja": True},
+         name="birja_shipment_list"),
+    path("birja/yuklar/new/", crm_views.shipment_create, {"birja": True},
+         name="birja_shipment_create"),
+    path("birja/yuklar/export.xlsx", crm_views.shipment_list_export,
+         {"birja": True}, name="birja_shipment_list_export"),
+    path("contract-expenses/new/", crm_views.contract_expense_create,
+         name="contract_expense_create"),
+    path("contract-expenses/<int:pk>/edit/", crm_views.contract_expense_edit,
+         name="contract_expense_edit"),
+    path("contract-expenses/<int:pk>/delete/", crm_views.contract_expense_delete,
+         name="contract_expense_delete"),
+    path("contracts/<int:pk>/transport/clear/", crm_views.contract_transport_clear,
+         name="contract_transport_clear"),
     path("contracts/<int:pk>/edit/", crm_views.contract_edit, name="contract_edit"),
     path("contracts/<int:pk>/delete/", crm_views.contract_delete, name="contract_delete"),
     path("supplier-payments/", crm_views.supplier_payment_list, name="supplier_payment_list"),
@@ -75,6 +101,8 @@ urlpatterns = [
     path("shipments/<int:pk>/edit/", crm_views.shipment_edit, name="shipment_edit"),
     path("shipments/<int:pk>/status/", crm_views.shipment_set_status, name="shipment_set_status"),
     path("shipments/<int:pk>/qr/", crm_views.shipment_set_qr, name="shipment_set_qr"),
+    path("shipments/<int:pk>/customs-agent/", crm_views.shipment_set_customs_agent,
+         name="shipment_set_customs_agent"),
     path("shipments/<int:pk>/delete/", crm_views.shipment_delete, name="shipment_delete"),
     path("shipments/<int:pk>/extend/", crm_views.shipment_extend, name="shipment_extend"),
     path("delays/<int:pk>/edit/", crm_views.shipment_delay_edit,
@@ -101,6 +129,12 @@ urlpatterns = [
     path("sales/<int:pk>/shift-preview/", crm_views.sale_shift_preview,
          name="sale_shift_preview"),
     path("sales/<int:pk>/delete/", crm_views.sale_delete, name="sale_delete"),
+    # A sotuv of several mahsulotlar is edited and deleted WHOLE — the pk is any of
+    # its rows (Sotuvlar hands over the first), and the view reads the rest off the
+    # group it was entered under.
+    path("sales/<int:pk>/group/edit/", crm_views.sale_group_edit, name="sale_group_edit"),
+    path("sales/<int:pk>/group/delete/", crm_views.sale_group_delete,
+         name="sale_group_delete"),
     path("sales/<int:pk>/", crm_views.sale_detail, name="sale_detail"),
     path("reservations/", crm_views.reservation_list, name="reservation_list"),
     path("reservations/new/", crm_views.reservation_create, name="reservation_create"),

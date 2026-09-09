@@ -25,6 +25,13 @@ prod.dump.bak-*
 
 # Per-process test databases (TEST_DB_SUFFIX) from parallel audit runs.
 test_db*.sqlite3
+# SQLite's rollback/WAL sidecars. The patterns above end at `.sqlite3`, so a
+# `test_db.sqlite3-journal` slipped through and got committed — and a stale
+# journal in the tree makes SQLite refuse to open the database it belongs to
+# ("attempt to write a readonly database"), which broke test runs at random.
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Local snapshot of the kassa work-in-progress, kept for reference only.
 .kassa-wip/

@@ -1,0 +1,142 @@
+{% comment %}
+The kelishuv's xarajatlar: a broker's cut, a birja transport rate, and anything
+else agreed for the AGREEMENT rather than for one truck.
+
+Three parts, in the order the question is actually asked — which kelishuv is this,
+what does it already cost, and what am I adding. The rows are listed rather than
+hidden behind a second click for the reason the yuk's grid opens filled: coming
+back to add a broker to a kelishuv that already carries one has to SHOW that, or
+the same fee is entered twice.
+{% endcomment %}
+{% load crm_extras %}
+<div class="modal-head">
+  <h2>{{ title }}</h2>
+  <button type="button" class="modal-x" data-modal-close aria-label="Yopish">&times;</button>
+</div>
+
+{% comment %}
+Labelled tiles, not one dot-separated line. Qiymati is the figure a broker's foiz
+is a percentage OF, so it is read here rather than skimmed — and `money`, not
+`money_both`: a kelishuv has a currency of its own, and the twin figure is a block
+that drops to a line of its own mid-sentence and reads as a stray number.
+{% endcomment %}
+<div class="cexp-body">
+{% if contract %}
+<div class="cexp-facts">
+  <div class="cexp-fact">
+    <div class="label">Kelishuv</div>
+    <div class="value">{{ contract.code }}</div>
+    <div class="sub">{{ contract.brand_summary }}</div>
+  </div>
+  <div class="cexp-fact">
+    <div class="label">Kelishilgan kg</div>
+    <div class="value">{{ contract.kg|floatformat:"-3" }}</div>
+  </div>
+  <div class="cexp-fact">
+    <div class="label">Qiymati</div>
+    <div class="value">{% money contract.total_value contract.total_value_uzs contract.currency %}</div>
+  </div>
+</div>
+{% endif %}
+
+{% if rows or contract.transport_rate_per_kg %}
+{% comment %}
+Three columns, not six. This is a dialog, and the app's usual Sana/Turkum/Summa/
+Usul/Izoh/actions table only fits by scrolling sideways — which puts Tahrirlash off
+the edge, where nobody finds it. The secondary facts stack under the two that
+matter: sana and izoh under the turkum, usul under the summa.
+{% endcomment %}
+<div class="table-wrap">
+  <table>
+    <tr><th>Turkum</th><th>Summa</th><th></th></tr>
+    {% comment %}
+    Transport sits in the same table because to the operator it is the same
+    question — what does this kelishuv cost us. It is not one of the rows though:
+    it stores no sum and moves no money HERE. What it does instead is written in
+    the Summa column, and the count says how much of that has already happened.
+    {% endcomment %}
+    {% if contract.transport_rate_per_kg %}
+    <tr>
+      <td>
+        Transport
+        <div class="muted" style="font-size: 12px;">
+          {% rate_typed contract.transport_rate_per_kg contract.currency %}
+        </div>
+      </td>
+      <td class="muted">
+        Har bir yuk omborga kelganda yoziladi
+        {% if logged_transport %}
+        <div style="font-size: 12px;">{{ logged_transport }} ta yukka yozilgan</div>
+        {% endif %}
+      </td>
+      {% comment %}
+      Icons, not labelled buttons. Two words apiece pushed this table wider than the
+      dialog, and a horizontally scrolling table puts Tahrirlash off the edge where
+      nobody looks for it — the same pair of icons the kelishuv row itself carries.
+      {% endcomment %}
+      <td class="row-actions">
+        <a class="icon-action" href="{% url 'contract_expense_create' %}?contract={{ contract.pk }}&category=transport" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+        <a class="icon-action danger" href="{% url 'contract_transport_clear' contract.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+      </td>
+    </tr>
+    {% endif %}
+    {% for e in rows %}
+    <tr>
+      <td>
+        {{ e.get_category_display }}
+        {% comment %}
+        A broker row prints the foiz it was agreed at: the sum alone cannot be
+        checked against the arrangement, and it is the foiz — not the sum — that is
+        re-multiplied when the kelishuv's own value moves.
+        {% endcomment %}
+        {% if e.is_percent %}<div class="muted" style="font-size: 12px;">{{ e.percent|floatformat:"-2" }}% · to'liq qiymatdan</div>{% endif %}
+        <div class="muted" style="font-size: 12px;">{{ e.date }}{% if e.note %} · {{ e.note }}{% endif %}</div>
+      </td>
+      <td>
+        {% money e.amount e.amount_uzs e.currency %}
+        <div class="muted" style="font-size: 12px;">{% money_other e.amount e.amount_uzs e.currency %} · {{ e.get_method_display }}</div>
+      </td>
+      <td class="row-actions">
+        <a class="icon-action" href="{% url 'contract_expense_edit' e.pk %}" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
+        <a class="icon-action danger" href="{% url 'contract_expense_delete' e.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% comment %}
+The money rows only. A transport rate is not in this total and must not look as if
+it were: its money is booked per yuk on arrival, so counting it here would state it
+twice — once as a kelishuv cost and again on every truck.
+{% endcomment %}
+{% if rows %}
+<p class="cexp-total">
+  Jami: {% money_both contract.expenses_total contract.expenses_total_uzs %} ·
+  har bir yukning 1 kg tannarxiga {{ contract.expenses_per_kg|floatformat:"-4" }} $ qo'shiladi
+</p>
+{% endif %}
+{% else %}
+{% comment %}
+Transport is named only where it is offered. On the Eron road the picker below has
+no such turkum — a logist quotes the run and the yuk form asks for the avans — so
+naming it here would send the operator looking for a box that is not there.
+{% endcomment %}
+<div class="cexp-empty">
+  <strong>Hali xarajat kiritilmagan</strong>
+  Broker foizi{% if contract.is_birja %}, transport narxi{% endif %} yoki boshqa
+  kelishuv xarajatini quyida qo'shing — har biri yuklarning tannarxiga kg bo'yicha
+  taqsimlanadi.
+</div>
+{% endif %}
+
+<p class="cexp-section">Yangi xarajat</p>
+</div>
+
+<form method="post" action="{{ request.path }}" class="stacked cexp-form">
+  {% csrf_token %}
+  {% include "crm/_form_fields.html" %}
+  <div class="modal-actions">
+    <button type="submit" class="btn">Saqlash</button>
+    <button type="button" class="btn btn-ghost" data-modal-close>Bekor qilish</button>
+  </div>
+</form>

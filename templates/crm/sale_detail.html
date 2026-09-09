@@ -13,11 +13,11 @@
   <div class="stat-grid">
     <div class="stat">
       <div class="muted">Mijoz</div>
-      <div>{{ sale.customer.name }}</div>
+      <div>{{ sale.customer.name|lotin }}</div>
     </div>
     <div class="stat">
       <div class="muted">Lot</div>
-      <div>#{{ sale.line.shipment_id }} · {{ sale.line.brand }}</div>
+      <div>#{{ sale.line.shipment_id }} · {{ sale.line.brand }}{% if sale.reys %}<span class="reys-no" title="{{ sale.reys }}-reys">{{ sale.reys }}</span>{% endif %}</div>
     </div>
     {% if sale.reservation_id %}
     <div class="stat">
@@ -79,7 +79,7 @@ found by scrolling Sotuvlar.
       {% for s in group %}
       <tr{% if s.pk == sale.pk %} class="sale-group-current"{% endif %}>
         <td>{% if s.pk == sale.pk %}#{{ s.pk }} <span class="muted">(shu sotuv)</span>{% else %}<a href="{% url 'sale_detail' s.pk %}">#{{ s.pk }}</a>{% endif %}</td>
-        <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}</td>
+        <td>#{{ s.line.shipment_id }} · {{ s.line.brand }}{% if s.reys %}<span class="reys-no" title="{{ s.reys }}-reys">{{ s.reys }}</span>{% endif %}</td>
         <td>{{ s.kg|floatformat:"-3" }}</td>
         <td>{% rate s.price s.price_uzs s.currency %}</td>
         <td>{% money s.total s.total_uzs s.currency %}</td>
@@ -123,7 +123,7 @@ form would drift into a second answer.
   same header row the yuk panel uses.
   {% endcomment %}
   <div class="load-panel-head" style="margin-bottom: 14px;">
-    <h3 style="margin: 0;">Vazvrat — {{ sale.customer.name }}</h3>
+    <h3 style="margin: 0;">Vazvrat — {{ sale.customer.name|lotin }}</h3>
     <a class="btn" href="{% url 'return_create' %}?sale={{ sale.pk }}" data-modal>+ Vazvrat</a>
   </div>
 

@@ -46,7 +46,7 @@ from crm.models import (
     ShipmentStatus,
     SupplierPayment,
 )
-from crm.seeding import OWNER_PASSWORD, OWNER_USERNAME, ensure_owner, wipe_business_data
+from crm.seeding import OWNER_USERNAME, ensure_owner, wipe_business_data
 
 DEFAULT_FILE = Path(settings.BASE_DIR) / "crm" / "seed_data" / "prototype.json"
 
@@ -163,7 +163,7 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             wipe_business_data()
-            owner = ensure_owner()
+            owner, owner_password = ensure_owner()
             counts, used_keys = self._load(data, owner)
 
         self.stdout.write(self.style.SUCCESS(
@@ -171,9 +171,11 @@ class Command(BaseCommand):
             "{payments} to'lov, {shipments} yuk, {expenses} xarajat.".format(**counts)
         ))
         self._report_skipped(data, used_keys)
-        self.stdout.write(self.style.WARNING(
-            f"Egasi: {OWNER_USERNAME} / {OWNER_PASSWORD} — prodda parolni o'zgartiring."
-        ))
+        if owner_password:
+            self.stdout.write(self.style.WARNING(
+                f"Egasi yaratildi: {OWNER_USERNAME} / {owner_password}\n"
+                "Bu parol faqat shu yerda ko'rsatiladi — kirgach darhol o'zgartiring."
+            ))
 
     def _section(self, data, name, used_keys):
         """Rows for a logical section, whichever generation's key holds them."""
@@ -257,7 +259,11 @@ class Command(BaseCommand):
             )
             payments += 1
 
-        status_by_name = {_norm(s.name): s for s in ShipmentStatus.objects.all()}
+        # The Eron chain only: a prototype export predates the birja entirely, and
+        # holat names are unique per chain rather than app-wide now — an unscoped
+        # lookup would silently collapse two rows onto one key.
+        status_by_name = {_norm(s.name): s
+                          for s in ShipmentStatus.for_kind(birja=False)}
         shipments = expenses = 0
         for row in self._section(data, "shipments", used_keys):
             link = _first(row, "contractId", "agreementId")
