@@ -1,4 +1,5 @@
 import html
+import re
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
@@ -591,6 +592,19 @@ class TestBronlarReadsLikeKelishuvlar:
         assert page.paginator.num_pages == 2
         assert len(page.object_list) == 20
         assert all(len(g["items"]) == 2 for g in page.object_list)
+
+    def test_the_columns_stand_in_kelishuvlar_order(self, admin_client, db):
+        """Marka, then what was agreed, at what narx, for how much, and what of it is
+        still outstanding — the order Kelishuvlar reads in, so the two lists do not ask
+        the reader to change gear between them. Qolgan kg sits AFTER Jami, not between
+        Kg and Narx."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="1000", price="2.00")
+        page = _plain(admin_client.get("/reservations/").content.decode())
+        header = page[page.index("<table"):page.index("</tr>")]
+        assert re.findall(r">([^<>]+)</th>", header) == [
+            "Mijoz", "Sana", "Marka", "Navbat", "Bron qilingan kg", "Narx", "Jami",
+            "Qolgan kg", "Holat"]
 
     def test_qolgan_is_a_badge_that_says_whether_anything_is_left(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")

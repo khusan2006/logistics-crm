@@ -42,10 +42,10 @@ search never drops the way the list was already narrowed.
     <th>Sana</th>
     <th>Marka</th>
     <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi">Navbat</th>
-    <th>Kg</th>
-    <th title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan</th>
+    <th>Bron qilingan kg</th>
     <th>Narx</th>
     <th title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Jami</th>
+    <th title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan kg</th>
     <th>Holat</th>
     <th></th>
   </tr>
@@ -80,20 +80,6 @@ search never drops the way the list was already narrowed.
       {% endfor %}
     </td>
     <td>{% for r in g.items %}<div class="cell-line">{{ r.kg|floatformat:"-3" }}</div>{% endfor %}</td>
-    {% comment %}
-    Qolgan as a badge, the way Kelishuvlar draws its own Qolgan kg: sariq while the
-    mijoz is still owed granula, yashil once the promise is served out. The figure
-    was plain text, which said the same thing but made the reader compare it against
-    Kg to find out whether anything was left.
-    {% endcomment %}
-    <td>
-      {% for r in g.items %}
-      <div class="cell-line">
-        <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
-        {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
-      </div>
-      {% endfor %}
-    </td>
     <td>{% for r in g.items %}<div class="cell-line">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</td>
     {% comment %}
     Jami is per bron rather than per group, and printed in the currency that bron was
@@ -103,6 +89,23 @@ search never drops the way the list was already narrowed.
     before the price is.
     {% endcomment %}
     <td>{% for r in g.items %}<div class="cell-line">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
+    {% comment %}
+    Qolgan as a badge, the way Kelishuvlar draws its own Qolgan kg: sariq while the
+    mijoz is still owed granula, yashil once the promise is served out. The figure
+    was plain text, which said the same thing but made the reader compare it against
+    Bron qilingan kg to find out whether anything was left. It sits where the
+    kelishuv's own Qolgan kg sits — after Jami — so the two lists are read the
+    same way round: what was agreed, at what narx, for how much, and what of it
+    is still outstanding.
+    {% endcomment %}
+    <td>
+      {% for r in g.items %}
+      <div class="cell-line">
+        <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
+        {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
+      </div>
+      {% endfor %}
+    </td>
     <td>
       {% for r in g.items %}
       <div class="cell-line">
