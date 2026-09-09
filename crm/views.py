@@ -3509,12 +3509,13 @@ RESERVATION_SORTS = [
 RESERVATION_SORT_DEFAULT = "queue"
 
 
-@role_required(User.Role.ADMIN)
-def reservation_list(request):
-    """Bronlar, kelishuvlar-style: search plus mijoz / holat / lot filters and a
-    sort, with the holat counts faceted so each option shows what picking it
-    yields. Everything past the mijoz filter reads computed properties, so the
-    rows become a list once and are narrowed in Python from there."""
+def _filter_reservations(request):
+    """The bronlar list's own filters — search, mijoz, davr, holat, berish, sort — in
+    one place, so the page and its Excel button cannot drift apart.
+
+    Only the search, the mijoz and the davr are questions SQL can answer. Everything
+    past them reads computed properties (the queue position, what is on the shelf), so
+    the rows become a list once and are narrowed in Python from there."""
     q = request.GET.get("q", "").strip()
     customer_id = request.GET.get("customer", "").strip()
     # "ready" = open with some of its marka on the shelf; "waiting" = open with an
@@ -3534,6 +3535,14 @@ def reservation_list(request):
             | Q(note__icontains=q))
     if customer_id.isdigit():
         reservations = reservations.filter(customer_id=int(customer_id))
+    # When the bron was struck. `created_at` is a timestamp rather than a date, so the
+    # window is read against its DATE — otherwise a bron booked at 14:00 falls outside
+    # a davr that ends on its own day.
+    date_from, date_to = _date_window(request)
+    if date_from:
+        reservations = reservations.filter(created_at__date__gte=date_from)
+    if date_to:
+        reservations = reservations.filter(created_at__date__lte=date_to)
 
     rows = list(reservations)
     # What is on the shelf for that marka right now, plus the position in the
@@ -3570,14 +3579,78 @@ def reservation_list(request):
 
     _, _, sort_key, sort_reverse = next(e for e in RESERVATION_SORTS if e[0] == sort)
     rows.sort(key=sort_key, reverse=sort_reverse)
+    return rows, {"q": q, "customer_id": customer_id, "lot": lot, "status": status,
+                  "sort": sort, "status_tabs": status_tabs,
+                  "date_from": date_from, "date_to": date_to}
 
-    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+
+def _reservation_groups(rows):
+    """Bronlar in the shape Kelishuvlar draws: one row per mijoz and sana, with that
+    day's markalar stacked line by line inside it.
+
+    A bron has no parent record the way a kelishuv has its lines, so the group is the
+    BOOKING — everything one mijoz put down on one day. That is the unit the operator
+    made, and splitting it over three table rows repeated the name and the sana twice
+    for nothing.
+
+    Order still follows Saralash: a group takes the place of its best-placed bron, so
+    the sort decides where it lands and grouping only pulls that mijoz's other markalar
+    of the same day up beside it. `rows` must already be sorted."""
+    groups, index = [], {}
+    for row in rows:
+        key = (row.customer_id, timezone.localtime(row.created_at).date())
+        group = index.get(key)
+        if group is None:
+            group = {"customer": row.customer, "date": key[1], "items": []}
+            index[key] = group
+            groups.append(group)
+        group["items"].append(row)
+    return groups
+
+
+@role_required(User.Role.ADMIN)
+def reservation_list(request):
+    """Bronlar, kelishuvlar-style: one search box, a Filtrlar panel carrying mijoz /
+    holat / berish / saralash, a davr bar and an Excel button — the same row every
+    other ro'yxat answers "what is this list showing" with. They rode in the search
+    row as four selects, which on a narrow screen wrapped into a wall above the table.
+
+    The page is paginated by GROUP rather than by bron, so a mijoz's markalar of one
+    day are never split across a page boundary. `rows` is that same page flattened
+    back to bronlar, for anything that wants them one by one."""
+    rows, f = _filter_reservations(request)
+    groups = _reservation_groups(rows)
+    page = Paginator(groups, 20).get_page(request.GET.get("page"))
+    # Holat defaults to Faol and Saralash to Navbat, so standing on either draws no
+    # chip — a chip means "this list is narrower than it normally is".
+    panel = [
+        {"name": "customer", "label": "Mijoz", "value": f["customer_id"],
+         "combobox": True,
+         "options": [("", "Hammasi")] + [(c.pk, c.name) for c in Customer.objects.all()]},
+        # The holat options carry their faceted counts — "what would picking this give
+        # me" — which is a question the chip is not asking, hence `chip_options`.
+        {"name": "status", "label": "Holat", "value": f["status"], "default": "active",
+         "options": [(t["key"], f"{t['label']} ({t['count']})") for t in f["status_tabs"]],
+         "chip_options": [(t["key"], t["label"]) for t in f["status_tabs"]]},
+        {"name": "lot", "label": "Berish", "value": f["lot"],
+         "options": [("", "Hammasi"), ("ready", "Berish mumkin"),
+                     ("waiting", "Navbatda kutmoqda")]},
+        {"name": "sort", "label": "Saralash", "value": f["sort"],
+         "default": RESERVATION_SORT_DEFAULT,
+         "options": [(key, label) for key, label, *_ in RESERVATION_SORTS]},
+    ]
     return render(request, "crm/reservation_list.html", {
-        "page": page, "q": q, "customer_id": customer_id, "status": status,
-        "lot": lot, "status_tabs": status_tabs, "sort": sort,
+        "export_url": reverse("reservation_list_export"),
+        "filters": _filter_panel(request, panel),
+        "page": page, "groups": page.object_list,
+        "rows": [r for g in page.object_list for r in g["items"]],
+        "q": f["q"], "customer_id": f["customer_id"], "status": f["status"],
+        "lot": f["lot"], "status_tabs": f["status_tabs"], "sort": f["sort"],
         "sort_options": [(key, label) for key, label, *_ in RESERVATION_SORTS],
         "customers": Customer.objects.all(),
-        "has_filters": bool(customer_id or lot or status != "active"),
+        "date_from": f["date_from"], "date_to": f["date_to"],
+        "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
+        "has_filters": bool(f["customer_id"] or f["lot"] or f["status"] != "active"),
     })
 
 
@@ -5902,6 +5975,24 @@ def _contracts_table(contracts):
     return headers, rows, {"Kg": KG, "Yuborilgan kg": KG, "Kurs": "#,##0"}
 
 
+def _reservations_table(reservations):
+    """One row per bron. Kg and Qolgan are the two figures the screen leads with, and
+    Jami is kg × narx in both columns — the file carries both currencies because a
+    workbook is read away from the page that knew which one the bron was struck in."""
+    headers = ["Sana", "Mijoz", "Marka", "Navbat", "Kg", "Berilgan kg", "Qolgan kg",
+               "Valyuta", "Kurs", "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
+               "Holat", "Izoh"]
+    rows = (
+        [timezone.localtime(r.created_at).date(), r.customer.name, r.brand,
+         r.queue_pos, r.kg, r.fulfilled_kg, r.remaining_kg,
+         r.get_currency_display(), r.exchange_rate, r.price, r.price_uzs,
+         r.total, r.total_uzs, r.get_status_display(), r.note]
+        for r in reservations
+    )
+    return headers, rows, {"Kg": KG, "Berilgan kg": KG, "Qolgan kg": KG,
+                           "Navbat": "0", "Kurs": "#,##0"}
+
+
 def _shipments_table(shipments):
     headers = [
         "Yuk ID", "Kelishuv", "Hamkor", "Marka", "Kg", "Holat", "Jo'natilgan", "Reja kelish",
@@ -6165,6 +6256,13 @@ def contract_list_export(request):
     rows, _f = _filter_contracts(request)
     headers, table, formats = _contracts_table(rows)
     return xlsx_response("kelishuvlar.xlsx", headers, table, "Kelishuvlar", formats)
+
+
+@role_required(User.Role.ADMIN)
+def reservation_list_export(request):
+    rows, _f = _filter_reservations(request)
+    headers, table, formats = _reservations_table(rows)
+    return xlsx_response("bronlar.xlsx", headers, table, "Bronlar", formats)
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)

@@ -660,7 +660,7 @@ def test_the_list_page_reserved_kg_matches_what_the_ombor_reports(admin_client, 
     assert brand_on_hand_kg("LLDPE") == Decimal("7000.000")  # 10000 − 3000 sold
     assert brand_reserved_kg("LLDPE") == Decimal("2000.000")  # still promised
     rows = {r.customer.name: r
-            for r in admin_client.get("/reservations/").context["page"]}
+            for r in admin_client.get("/reservations/").context["rows"]}
     assert rows["Ikki"].queue_pos == 1
     assert rows["Ikki"].servable_kg == Decimal("2000.000")
 

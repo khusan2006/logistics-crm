@@ -145,6 +145,8 @@ urlpatterns = [
     # hisobotlar ones with different params: each goes through its OWN page's filter
     # helper, so the file holds exactly the rows that were on the screen.
     path("contracts/export.xlsx", crm_views.contract_list_export, name="contract_list_export"),
+    path("reservations/export.xlsx", crm_views.reservation_list_export,
+         name="reservation_list_export"),
     path("shipments/export.xlsx", crm_views.shipment_list_export, name="shipment_list_export"),
     path("sales/export.xlsx", crm_views.sale_list_export, name="sale_list_export"),
     path("customer-payments/export.xlsx", crm_views.customer_payment_list_export,

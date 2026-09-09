@@ -6,62 +6,58 @@
 {% block content %}
 
 {% comment %}
-Same one-form toolbar as Kelishuvlar: every filter is a select that auto-submits,
-so they combine instead of fighting. Holat carries faceted counts — each option
-shows how many rows picking it would leave.
+The same one row as Kelishuvlar: the search box on the left, and on the right the
+‹ davr › bar, the Filtrlash button and Excel (crm/_daterange.html pulls in all
+three). Mijoz / Holat / Berish / Saralash used to ride in this row as four selects,
+which on a narrow screen wrapped into a wall above the table and left no room for
+the search box they were meant to refine; they live in the Filtrlar panel now
+(crm/_filter_panel.html) and the active ones say so as chips.
+
+The form carries the davr and every panel filter as hidden fields, so typing a
+search never drops the way the list was already narrowed.
 {% endcomment %}
-<form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
-  <div class="toolbar-search{% if q %} is-active{% endif %}">
-    <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    <input type="search" name="q" value="{{ q }}" placeholder="Mijoz, marka yoki kelishuv bo'yicha qidirish…" autocomplete="off" aria-label="Bron qidirish">
-    {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
-  </div>
-  <label>Mijoz
-    <select name="customer" data-combobox>
-      <option value="">Hammasi</option>
-      {% for c in customers %}
-      <option value="{{ c.pk }}"{% if customer_id == c.pk|stringformat:"s" %} selected{% endif %}>{{ c.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Holat
-    <select name="status">
-      {% for t in status_tabs %}
-      <option value="{{ t.key }}"{% if status == t.key %} selected{% endif %}>{{ t.label }} ({{ t.count }})</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Berish
-    <select name="lot">
-      <option value=""{% if not lot %} selected{% endif %}>Hammasi</option>
-      <option value="ready"{% if lot == "ready" %} selected{% endif %}>Berish mumkin</option>
-      <option value="waiting"{% if lot == "waiting" %} selected{% endif %}>Navbatda kutmoqda</option>
-    </select>
-  </label>
-  <label>Saralash
-    <select name="sort">
-      {% for key, label in sort_options %}
-      <option value="{{ key }}"{% if sort == key %} selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-</form>
+<div class="listbar">
+  <form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
+    {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
+    {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
+    <div class="toolbar-search{% if q %} is-active{% endif %}">
+      <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" name="q" value="{{ q }}" placeholder="Mijoz, marka yoki kelishuv bo'yicha qidirish…" autocomplete="off" aria-label="Bron qidirish">
+      {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
+    </div>
+    {% if customer_id %}<input type="hidden" name="customer" value="{{ customer_id }}">{% endif %}
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {% if lot %}<input type="hidden" name="lot" value="{{ lot }}">{% endif %}
+    {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    <noscript><button type="submit" class="btn btn-sm">Qidirish</button></noscript>
+  </form>
+  {% include "crm/_daterange.html" %}
+</div>
 
 {% if page.object_list %}
 <div class="table-wrap">
-<table>
+<table class="bron-table">
   <tr>
     <th class="sticky-col">Mijoz</th>
     <th>Sana</th>
     <th>Marka</th>
     <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi">Navbat</th>
     <th>Kg</th>
-    <th title="Hali berilmagan qismi">Qolgan</th>
+    <th title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan</th>
     <th>Narx</th>
+    <th title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Jami</th>
     <th>Holat</th>
     <th></th>
   </tr>
-  {% for r in page %}
+  {% comment %}
+  One row per mijoz and sana, its markalar stacked line by line inside the columns —
+  the Kelishuvlar shape (`_reservation_groups` builds the groups). A bron has no
+  parent record the way a kelishuv has its lines, so the group is the BOOKING: what
+  one mijoz put down on one day. Mijoz and Sana are the group's own, and centre
+  themselves against the stack; everything from Marka rightwards is per bron and
+  stays aligned row-for-row, the actions included.
+  {% endcomment %}
+  {% for g in groups %}
   <tr>
     {% comment %}
     The name opens the mijoz's own page, where Mijoz tarixi lists their bronlar
@@ -70,39 +66,65 @@ shows how many rows picking it would leave.
     the pencil in the actions.
     {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'debt_customer' r.customer_id %}">{{ r.customer.name }}</a>
+      <a href="{% url 'debt_customer' g.customer.pk %}">{{ g.customer.name }}</a>
     </td>
-    <td>{{ r.created_at|date:"d.m.Y" }}</td>
-    <td>{{ r.brand }}</td>
+    <td>{{ g.date|date:"d.m.Y" }}</td>
+    <td>{% for r in g.items %}<div class="cell-line">{{ r.brand }}</div>{% endfor %}</td>
     <td>
-      {% if r.queue_pos %}
-        <span class="qpos{% if r.queue_pos == 1 %} qpos--first{% endif %}">{{ r.queue_pos }}</span>
-      {% else %}<span class="muted">—</span>{% endif %}
+      {% for r in g.items %}
+      <div class="cell-line">
+        {% if r.queue_pos %}
+          <span class="qpos{% if r.queue_pos == 1 %} qpos--first{% endif %}">{{ r.queue_pos }}</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </div>
+      {% endfor %}
     </td>
-    <td>{{ r.kg|floatformat:"-3" }}</td>
+    <td>{% for r in g.items %}<div class="cell-line">{{ r.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    {% comment %}
+    Qolgan as a badge, the way Kelishuvlar draws its own Qolgan kg: sariq while the
+    mijoz is still owed granula, yashil once the promise is served out. The figure
+    was plain text, which said the same thing but made the reader compare it against
+    Kg to find out whether anything was left.
+    {% endcomment %}
     <td>
-      {% if r.fulfilled_kg %}
-        <strong>{{ r.remaining_kg|floatformat:"-3" }}</strong>
-        <div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>
-      {% else %}{{ r.remaining_kg|floatformat:"-3" }}{% endif %}
+      {% for r in g.items %}
+      <div class="cell-line">
+        <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
+        {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
+      </div>
+      {% endfor %}
     </td>
-    <td>{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+    <td>{% for r in g.items %}<div class="cell-line">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</td>
+    {% comment %}
+    Jami is per bron rather than per group, and printed in the currency that bron was
+    struck in — a mijoz may book one marka in so'm and the next in dollars on the same
+    day, and one summa over the two would need a kurs neither was agreed at. It is
+    None while the narx is still open, which is a real state: a bron may be struck
+    before the price is.
+    {% endcomment %}
+    <td>{% for r in g.items %}<div class="cell-line">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
     <td>
-      {% if r.status == "active" %}
-        {% if r.servable_kg > 0 %}
-          <span class="badge badge-ok">Berish mumkin</span>
-          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name }} bron qilgan{% endif %}</div>
-        {% else %}
-          <span class="badge badge-warning">Mol kutilmoqda</span>
-          <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>
-        {% endif %}
-      {% elif r.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
-      {% elif r.status == "closed" %}
-        <span class="badge badge-ok">Tugatildi</span>
-        {% if r.remaining_kg %}<div class="muted load-sub">{{ r.remaining_kg|floatformat:"-3" }} kg qaytarildi</div>{% endif %}
-      {% else %}<span class="muted">Bekor qilindi</span>{% endif %}
+      {% for r in g.items %}
+      <div class="cell-line">
+        {% if r.status == "active" %}
+          {% if r.servable_kg > 0 %}
+            <span class="badge badge-ok">Berish mumkin</span>
+            <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name }} bron qilgan{% endif %}</div>
+          {% else %}
+            <span class="badge badge-warning">Mol kutilmoqda</span>
+            <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>
+          {% endif %}
+        {% elif r.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
+        {% elif r.status == "closed" %}
+          <span class="badge badge-ok">Tugatildi</span>
+          {% if r.remaining_kg %}<div class="muted load-sub">{{ r.remaining_kg|floatformat:"-3" }} kg qaytarildi</div>{% endif %}
+        {% else %}<span class="muted">Bekor qilindi</span>{% endif %}
+      </div>
+      {% endfor %}
     </td>
     <td class="row-actions">
+      {% for r in g.items %}
+      <div class="cell-line">
       {% if r.is_open %}
         {% comment %}
         Handing the granula over is a sotuv, so it goes through the sotuv form —
@@ -138,6 +160,8 @@ shows how many rows picking it would leave.
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         </a>
       {% endif %}
+      </div>
+      {% endfor %}
     </td>
   </tr>
   {% endfor %}

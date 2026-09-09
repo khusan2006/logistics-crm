@@ -2919,6 +2919,30 @@ form.stacked .lineset-field[hidden] { display: none; }
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
 
+/* Bronlar — one row per mijoz and sana, that day's markalar stacked line by line.
+   Reading the row means reading ACROSS it: this marka, its place in the queue, its
+   kg, what is left of it, its narx, its jami, its holat, its buttons. So every line
+   is given the same height rather than each column growing to its own content —
+   two of these cells carry a second, smaller line under the figure ("30 000 kg
+   berilgan", "omborda 0 kg"), and without a shared height those cells alone grow
+   and the columns beside them drift a line out of step. */
+.bron-table .cell-line {
+  /* 43px is what a line with a sub-line measures — a badge, then 12px of muted
+     text under it. Anything less and only THOSE cells grow, which is the drift
+     this rule exists to stop. */
+  min-height: 43px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+}
+.bron-table .cell-line + .cell-line { margin-top: 0; }
+/* The icons of ONE bron stay side by side; the stacking is between the brons.
+   `.row-actions > * + *` would otherwise push each line 6px right of the last. */
+.bron-table .row-actions .cell-line { flex-direction: row; align-items: center; }
+.bron-table .row-actions .cell-line + .cell-line { margin-left: 0; }
+.bron-table .row-actions .cell-line > * + * { margin-left: 6px; }
+
 /* ── One to'lov paid several ways, in the kassa daftar ──────────────────────
    The line is ONE payment; the usul and the summa are stacked inside it, one per
    way the money moved. The tag is what stops the two figures reading as a mistake:

@@ -28,6 +28,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # Every list's button, and the file it downloads.
 LIST_EXPORTS = {
     "/contracts/export.xlsx": "kelishuvlar.xlsx",
+    "/reservations/export.xlsx": "bronlar.xlsx",
     "/shipments/export.xlsx": "yuklar.xlsx",
     "/sales/export.xlsx": "sotuvlar.xlsx",
     "/customer-payments/export.xlsx": "mijoz-tolovlari.xlsx",
@@ -160,7 +161,7 @@ def test_a_translator_gets_only_the_two_lists_they_can_read(translator_client, d
     assert translator_client.get("/shipments/export.xlsx").status_code == 200
     for url in ("/sales/export.xlsx", "/customer-payments/export.xlsx",
                 "/supplier-payments/export.xlsx", "/kassa/export.xlsx",
-                "/audit/export.xlsx"):
+                "/reservations/export.xlsx", "/audit/export.xlsx"):
         assert translator_client.get(url).status_code == 403, url
 
 

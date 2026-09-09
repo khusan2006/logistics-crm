@@ -1,6 +1,11 @@
+import html
+from datetime import timedelta
 from decimal import Decimal
+from io import BytesIO
 
+import openpyxl
 from conftest import line_data
+from django.utils import timezone
 from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
 )
@@ -8,6 +13,13 @@ from crm.models import (
 
 def _customer(name="Alisher Mebel"):
     return Customer.objects.create(name=name, phone="1", address="Toshkent")
+
+
+def _plain(page_html):
+    """The rendered page as a reader sees it: the NBSP thousands separators read
+    as ordinary spaces and the entities unescaped, so an assertion can look for
+    "1 000" and "so'm" rather than for \\xa0 and `so&#x27;m`."""
+    return html.unescape(page_html).replace("\u00a0", " ")
 
 
 def _arrived_lot(kg="10000", brand="LLDPE", contract_price="1.00"):
@@ -144,7 +156,7 @@ class TestBookingOrderIsOnlyVisual:
         _arrived_lot_for("Ikkinchi", kg="10000", brand="HDPE")
         _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
         _reserve(admin_client, "HDPE", _customer("Ikki"), kg="1000", price="2.00")
-        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["page"]}
+        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["rows"]}
         assert rows["Bir"].queue_pos == 1
         assert rows["Ikki"].queue_pos == 1       # first of its own marka
 
@@ -152,7 +164,7 @@ class TestBookingOrderIsOnlyVisual:
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer("Birinchi"), kg="1000")
         _reserve(admin_client, "LLDPE", _customer("Ikkinchi"), kg="1000")
-        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["page"]}
+        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["rows"]}
         assert rows["Birinchi"].queue_pos == 1
         assert rows["Ikkinchi"].queue_pos == 2
         assert rows["Ikkinchi"].ahead_of.customer.name == "Birinchi"
@@ -165,7 +177,7 @@ class TestBookingOrderIsOnlyVisual:
         _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="1000", price="2.00")
         a, _b = Reservation.objects.order_by("created_at", "pk")
         admin_client.post(f"/reservations/{a.pk}/cancel/", {})
-        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["page"]}
+        rows = {r.customer.name: r for r in admin_client.get("/reservations/").context["rows"]}
         assert rows["Ikki"].queue_pos == 1
         assert rows["Ikki"].ahead_of is None
 
@@ -500,8 +512,8 @@ class TestReservationList:
         _in_transit_lot(kg="5000", brand="HDPE")
         _reserve(admin_client, "LLDPE", _customer("Tayyor"), kg="1000")
         _reserve(admin_client, "HDPE", _customer("Kutmoqda"), kg="1000")
-        ready = admin_client.get("/reservations/?lot=ready").context["page"]
-        waiting = admin_client.get("/reservations/?lot=waiting").context["page"]
+        ready = admin_client.get("/reservations/?lot=ready").context["rows"]
+        waiting = admin_client.get("/reservations/?lot=waiting").context["rows"]
         assert [r.customer.name for r in ready] == ["Tayyor"]
         assert [r.customer.name for r in waiting] == ["Kutmoqda"]
 
@@ -512,7 +524,7 @@ class TestReservationList:
         _reserve(admin_client, "HDPE", _customer("Bobur Plast"), kg="1000")
         for query, expected in [("Alisher", 1), ("HDPE", 1), ("zzz", 0)]:
             ctx = admin_client.get("/reservations/", {"q": query}).context
-            assert len(ctx["page"].object_list) == expected, query
+            assert len(ctx["rows"]) == expected, query
 
     def test_status_counts_are_faceted(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -524,6 +536,136 @@ class TestReservationList:
                 for t in admin_client.get("/reservations/").context["status_tabs"]}
         assert tabs == {"active": 1, "converted": 0, "closed": 0,
                         "cancelled": 1, "": 2}
+
+
+class TestBronlarReadsLikeKelishuvlar:
+    """The list wears the Kelishuvlar shape: one row per booking with its markalar
+    stacked inside it, Qolgan as a badge that says whether anything is left, a Jami
+    column, and the toolbar every other ro'yxat has — davr, Filtrlash, Excel."""
+
+    def test_one_mijoz_on_one_kun_is_one_row(self, admin_client, db):
+        """Two markalar booked together are one booking, not two table rows."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _in_transit_lot(kg="5000", brand="HDPE")
+        mijoz = _customer("Mak Plast")
+        _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
+        _reserve(admin_client, "HDPE", mijoz, kg="2000", price="2.00")
+        groups = admin_client.get("/reservations/").context["groups"]
+        assert len(groups) == 1
+        assert groups[0]["customer"] == mijoz
+        assert sorted(r.brand for r in groups[0]["items"]) == ["HDPE", "LLDPE"]
+
+    def test_another_mijoz_is_another_row(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
+        _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="1000", price="2.00")
+        groups = admin_client.get("/reservations/").context["groups"]
+        assert [g["customer"].name for g in groups] == ["Bir", "Ikki"]
+        assert [len(g["items"]) for g in groups] == [1, 1]
+
+    def test_a_different_kun_is_a_different_row(self, admin_client, db):
+        """The group is the BOOKING — what was put down on one day — so the same
+        mijoz coming back next week starts a row of their own."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _in_transit_lot(kg="5000", brand="HDPE")
+        mijoz = _customer("Mak Plast")
+        _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
+        _reserve(admin_client, "HDPE", mijoz, kg="1000", price="2.00")
+        old = Reservation.objects.order_by("pk").first()
+        Reservation.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(days=7))
+        groups = admin_client.get("/reservations/").context["groups"]
+        assert [len(g["items"]) for g in groups] == [1, 1]
+        assert len({g["date"] for g in groups}) == 2
+
+    def test_the_page_never_splits_a_booking_across_two_pages(self, admin_client, db):
+        """Paginated by GROUP: 20 bookings to a page, not 20 bronlar — half a mijoz's
+        day at the foot of one page and half at the head of the next is the thing
+        grouping exists to prevent."""
+        for n in range(21):
+            mijoz = _customer(f"Mijoz {n:02d}")
+            for brand in ("LLDPE", "HDPE"):
+                Reservation.objects.create(customer=mijoz, brand=brand,
+                                           kg=Decimal("10"), price=Decimal("2"))
+        page = admin_client.get("/reservations/?sort=customer").context["page"]
+        assert page.paginator.num_pages == 2
+        assert len(page.object_list) == 20
+        assert all(len(g["items"]) == 2 for g in page.object_list)
+
+    def test_qolgan_is_a_badge_that_says_whether_anything_is_left(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="1000", price="2.00")
+        html = _plain(admin_client.get("/reservations/").content.decode())
+        assert 'class="badge badge-warning">1 000</span>' in html
+
+    def test_a_served_out_bron_goes_green(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="1000", price="2.00")
+        _convert(admin_client, Reservation.objects.get())
+        html = _plain(admin_client.get("/reservations/?status=converted").content.decode())
+        assert 'class="badge badge-ok">0</span>' in html
+
+    def test_jami_is_kg_times_narx_in_the_bron_s_own_currency(self, admin_client, db):
+        """A so'm bron reads in so'm. The dollar twin is stored, but printing it here
+        would be a conversion nobody agreed to — the rule the rest of the app follows."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="17000",
+                 currency="uzs")
+        assert Reservation.objects.get().total_uzs == Decimal("85000000.00")
+        html = _plain(admin_client.get("/reservations/").content.decode())
+        assert "85 000 000 so'm" in html
+        assert "$7 083" not in html
+
+    def test_jami_is_kelishilmagan_until_a_narx_is_agreed(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="5000")
+        assert Reservation.objects.get().total is None
+        assert "kelishilmagan" in admin_client.get("/reservations/").content.decode()
+
+    def test_the_four_selects_live_in_the_filtrlar_panel(self, admin_client, db):
+        filters = admin_client.get("/reservations/").context["filters"]
+        assert [f["name"] for f in filters["fields"]] == [
+            "customer", "status", "lot", "sort"]
+        # Faol and Navbat are where the page opens, so standing on them is not a
+        # filter and draws no chip.
+        assert filters["count"] == 0
+
+    def test_a_narrowed_list_says_so_as_a_chip(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("Mak Plast"), kg="1000")
+        filters = admin_client.get("/reservations/?lot=ready").context["filters"]
+        assert filters["count"] == 1
+        assert filters["chips"][0]["label"] == "Berish"
+        assert filters["chips"][0]["value"] == "Berish mumkin"
+
+    def test_the_davr_narrows_the_list(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer("Eski"), kg="1000")
+        _reserve(admin_client, "LLDPE", _customer("Yangi"), kg="1000")
+        old = Reservation.objects.get(customer__name="Eski")
+        Reservation.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(days=40))
+        bugun = timezone.localdate().isoformat()
+        rows = admin_client.get("/reservations/", {"from": bugun}).context["rows"]
+        assert [r.customer.name for r in rows] == ["Yangi"]
+        # Hammasi puts the older bron back.
+        assert len(admin_client.get("/reservations/").context["rows"]) == 2
+
+    def test_the_excel_button_downloads_what_the_screen_shows(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _in_transit_lot(kg="5000", brand="HDPE")
+        _reserve(admin_client, "LLDPE", _customer("Tayyor"), kg="1000", price="2.00")
+        _reserve(admin_client, "HDPE", _customer("Kutmoqda"), kg="1000", price="2.00")
+        assert "/reservations/export.xlsx" in admin_client.get(
+            "/reservations/").content.decode()
+
+        resp = admin_client.get("/reservations/export.xlsx", {"lot": "ready"})
+        ws = openpyxl.load_workbook(BytesIO(resp.content)).worksheets[0]
+        headers = [c.value for c in ws[1]]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][headers.index("Mijoz")] == "Tayyor"
+        assert rows[0][headers.index("Qolgan kg")] == 1000
 
 
 class TestReservationTotal:
@@ -758,7 +900,7 @@ class TestClosingABron:
         _reserve(admin_client, "LLDPE", _customer("B"), kg="3000")
         admin_client.post(
             f"/reservations/{Reservation.objects.order_by('pk').first().pk}/close/", {})
-        rows = admin_client.get("/reservations/?status=closed").context["page"].object_list
+        rows = admin_client.get("/reservations/?status=closed").context["rows"]
         assert [r.customer.name for r in rows] == ["A"]
 
 
