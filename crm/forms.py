@@ -6,6 +6,7 @@ from django import forms
 from django.db.models import Prefetch, Q
 from django.urls import reverse_lazy
 from django.utils import timezone
+from django.utils.functional import cached_property
 
 from .models import (
     LEGACY_RATE, Contract, ContractExpense, ContractLine, Currency, Customer,
@@ -1775,16 +1776,16 @@ class SaleLineForm(forms.Form):
     # exactly that: one handover, however many markalar it carried.
     reys = forms.IntegerField(required=False, min_value=1, widget=forms.HiddenInput)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, stock_choices=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["brand"].choices = self._brand_choices()
+        self.fields["brand"].choices = self._brand_choices(stock_choices)
         # Read by the Brondan ushlansin JS, which now asks whether ANY row's marka is
         # one this mijoz holds a bron for.
         self.fields["brand"].widget.attrs["data-bron-brand"] = ""
         _group_thousands(self.fields["kg"])
         _group_thousands(self.fields["price"])
 
-    def _brand_choices(self):
+    def _brand_choices(self, stock_choices=None):
         """What is on the shelf — plus the marka this row is already carrying.
 
         A sotuv very often takes the LAST kg of its own marka, which drops that
@@ -1798,7 +1799,9 @@ class SaleLineForm(forms.Form):
         the formset's ceiling is still `brand_on_hand_kg` + `allowance`, and
         allowance only covers the kg this sotuv already holds — so the row can be
         re-saved as it stands, and still cannot grow."""
-        choices = _stock_brand_choices()
+        # Priced once for the whole formset when the formset hands it over; a form
+        # standing on its own still prices the shelf itself.
+        choices = list(stock_choices) if stock_choices is not None else _stock_brand_choices()
         carried = self._carried_brand()
         if carried and carried not in {brand for brand, _label in choices}:
             choices = sorted([*choices, (carried, f"{carried} · omborda qolmadi")],
@@ -1863,6 +1866,22 @@ class BaseSaleLineFormSet(forms.BaseFormSet):
     #: sotuv's own kg are already off the shelf, so without this a form resubmitted
     #: unchanged would be refused for taking granula it is itself standing on.
     allowance = {}
+
+    @cached_property
+    def stock_choices(self):
+        """The ombor, priced once for the whole formset.
+
+        Every row offers the same list — it IS the ombor — but the list is not free:
+        pricing it walks each lot's slices, sotuvlar, vazvratlar and the kelishuv's
+        expenses. Built per row, a three-mahsulot Tahrirlash form priced the whole
+        warehouse five times over (once per row, once for the spare, once for the
+        `+ Mahsulot qo'shish` template) and took six seconds to open."""
+        return _stock_brand_choices()
+
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        kwargs["stock_choices"] = self.stock_choices
+        return kwargs
 
     def rows(self):
         """The rows that mean something — filled in and not struck out."""

@@ -90,3 +90,53 @@ def test_the_budget_holds_as_the_table_grows(admin_client, django_assert_max_num
         assert admin_client.get("/sales/").status_code == 200
     with django_assert_max_num_queries(75):
         assert admin_client.get(DOSKA).status_code == 200
+
+
+def _group_sale(admin_client, customer, markalar):
+    """A sotuv of several mahsulotlar, entered the way the operator enters one."""
+    rows = {}
+    for i, (brand, kg) in enumerate(markalar):
+        rows[f"lines-{i}-brand"] = brand
+        rows[f"lines-{i}-kg"] = kg
+        rows[f"lines-{i}-price"] = "2.00"
+    resp = admin_client.post("/sales/new/", {
+        "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+        "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "lines-TOTAL_FORMS": str(len(markalar)), "lines-INITIAL_FORMS": "0",
+        "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000", **rows})
+    assert resp.status_code == 302, resp.status_code
+    # The sotuv the FORM just wrote: `_world` has already put ungrouped sotuvlar on
+    # these markalar, and picking one of those would open the single-row Tahrirlash
+    # instead — a cheap page, and a budget that never sees the form it is guarding.
+    sale = Sale.objects.exclude(group=None).order_by("pk").last()
+    assert len(sale.group_sales) == len(markalar)
+    return sale
+
+
+def test_the_multi_mahsulot_edit_form_does_not_price_the_ombor_per_row(
+        admin_client, django_assert_max_num_queries):
+    """Reported as "Tahrirlash bosam qotib qoladi".
+
+    Every Marka box offers the whole ombor, and pricing that list walks each lot's
+    slices, sotuvlar and vazvratlar. Built once per row — and a formset builds one
+    per mahsulot, one spare and one `+ Mahsulot qo'shish` template — the form priced
+    the warehouse five times over and took six seconds to open on 63 lots."""
+    customer = _world()
+    sale = _group_sale(admin_client, customer, [("marka-0", "100"), ("marka-1", "100")])
+    with django_assert_max_num_queries(25):
+        assert admin_client.get(f"/sales/{sale.pk}/group/edit/").status_code == 200
+
+
+def test_that_form_does_not_get_slower_as_the_ombor_fills(
+        admin_client, django_assert_max_num_queries):
+    """The guard that matters: the same form on twice the ombor and twice the
+    mahsulotlar. A per-row or per-lot cost would show here even if the flat budget
+    above still passed."""
+    customer = _world(lots=12, sales_per_lot=2)
+    sale = _group_sale(admin_client, customer,
+                       [("marka-0", "100"), ("marka-1", "100"), ("marka-2", "100")])
+    # The SAME ceiling as the six-lot case above, deliberately: this page's cost must
+    # not follow the ombor at all. A budget that grew with the fixture would have let
+    # the original defect through — it was 57 queries on six lots and 327 on 24.
+    with django_assert_max_num_queries(25):
+        assert admin_client.get(f"/sales/{sale.pk}/group/edit/").status_code == 200

@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import date as _date
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 
@@ -2691,10 +2692,18 @@ def transit_value_by_currency():
 
 
 def arrived_lots():
-    """Every lot in the ombor: the product lines of arrived trucks."""
+    """Every lot in the ombor: the product lines of arrived trucks.
+
+    The prefetch is the lot's KG rather than a nicety: `available_kg` is what the
+    ombor is actually asked for, and it reads `sold_kg` and `returned_kg`, which
+    walk sale_lots → sale → returns. Without it each lot fetched its own slices,
+    each slice its own sotuv, and each sotuv its own vazvratlar — so pricing one
+    screenful of markalar cost hundreds of round trips, and the multi-mahsulot
+    Tahrirlash form (which prices them once per row) sat there for six seconds."""
     return (ShipmentLine.objects
             .filter(shipment__arrived__isnull=False)
-            .select_related("contract_line", "shipment", "shipment__contract"))
+            .select_related("contract_line", "shipment", "shipment__contract")
+            .prefetch_related("sale_lots__sale__returns"))
 
 
 def bron_queue(brand=None):
@@ -2880,16 +2889,27 @@ def brand_stock_costed():
     brand's lots can carry different landed costs and come from different
     kelishuvlar, so the cost is kg-weighted and the codes are the full set."""
     on_hand, cost, codes = {}, {}, {}
-    for lot in arrived_lots():
+    # The same list `stock_value` and the ombor screen load: this prices every lot,
+    # and a tannarx reaches into the truck's xarajatlar and the kelishuv's hamkor
+    # to'lovlari. Without it the pricing asked those per lot — which is what made the
+    # Marka picker (and so the multi-mahsulot Tahrirlash form) slower with every
+    # kelishuv the ombor took in.
+    for lot in arrived_lots().prefetch_related(*STOCK_COST_PREFETCH):
         a = lot.available_kg
         if a > 0:
             b = lot.brand
             on_hand[b] = on_hand.get(b, Decimal("0")) + a
             cost[b] = cost.get(b, Decimal("0")) + a * lot.landed_cost_per_kg
             codes.setdefault(b, set()).add(lot.contract_line.contract.code)
+    # Every open bron in ONE trip, grouped here. Asked per marka — which is what
+    # `brand_reserved_kg` does — this was a query per row of the ombor, and it is the
+    # last thing that still made pricing the shelf cost more as the shelf filled.
+    reserved_by_brand = defaultdict(Decimal)
+    for bron in bron_queue():
+        reserved_by_brand[bron.brand] += bron.remaining_kg
     rows = []
     for b in sorted(on_hand):
-        reserved = brand_reserved_kg(b)
+        reserved = reserved_by_brand[b]
         rows.append({
             "brand": b,
             "on_hand": on_hand[b],
