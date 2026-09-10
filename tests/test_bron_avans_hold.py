@@ -2,7 +2,7 @@
 
 Reported from the floor: Komoliddin sintafon had $40 866.81 sitting as avans and a
 46 180 kg bron of 2102 репак at $1.42 — $65 575.60 of granula already promised to
-him — and nothing on any screen connected the two. The avans read as free money.
+that mijoz — and nothing on any screen connected the two. The avans read as free money.
 
 What a bron does here is SPEAK FOR the avans, not spend it: nothing has been handed
 over, so nothing is owed and the mijoz's balans does not move. The kg become a qarz

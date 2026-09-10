@@ -2463,7 +2463,7 @@ def bron_advance_holds(reservations):
     and nothing is spent: the mijoz's avans is the same figure before and after. What
     a bron does is SPEAK FOR it, and the screen has to say so — otherwise an operator
     reads Komoliddin as having 40 866.81 spare while 65 575.60 of granula is already
-    promised to him, and promises the same money to somebody else.
+    promised to that mijoz, and promises the same money to somebody else.
 
     The kg become a qarz when they are handed over, not before. That path already
     works and is not this one: a sotuv runs through `apply_customer_advance`, which
