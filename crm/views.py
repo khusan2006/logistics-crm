@@ -57,6 +57,7 @@ from .models import (
     ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
     SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
+    bron_advance_holds,
     ContractExpense,
     birja_partner,
     sync_contract_expenses,
@@ -4631,6 +4632,18 @@ def _reservation_groups(rows):
     return groups
 
 
+def _with_bron_holds(reservations):
+    """Each bron carrying what it speaks for out of its mijoz's avans, for the
+    templates. Nothing is written — see `bron_advance_holds` for why a bron holds
+    money without either spending it or making anybody a qarzdor."""
+    holds = bron_advance_holds(reservations)
+    for bron in reservations:
+        hold = holds.get(bron.pk) or {}
+        bron.avans_held = hold.get("held")
+        bron.avans_short = hold.get("short")
+    return reservations
+
+
 @role_required(User.Role.ADMIN)
 def reservation_list(request):
     """Bronlar, kelishuvlar-style: one search box, a Filtrlar panel carrying mijoz /
@@ -4643,6 +4656,7 @@ def reservation_list(request):
     back to bronlar, for anything that wants them one by one."""
     rows, f = _filter_reservations(request)
     groups = _reservation_groups(rows)
+    _with_bron_holds(rows)
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     # Holat defaults to Faol and Saralash to Navbat, so standing on either draws no
     # chip — a chip means "this list is narrower than it normally is".
@@ -5708,9 +5722,16 @@ def debt_customer(request, pk):
     customer = get_object_or_404(Customer, pk=pk)
     sales = [s for s in customer.sales.select_related("line__contract_line")
              .prefetch_related("allocations").all() if s.remaining_own > 0]
+    # What this mijoz has promised out but not yet taken. It sits beside the balans
+    # because the two are read together: an avans with an open bron against it is not
+    # spare money, and the balans line alone cannot say so.
+    brons = _with_bron_holds([
+        bron for bron in customer.reservations.filter(
+            status=Reservation.Status.ACTIVE).select_related("customer")
+        .order_by("created_at", "pk") if bron.remaining_kg > 0])
     history, f = _filter_customer_history(request, customer)
     return render(request, "crm/debt_customer.html", {
-        "customer": customer, "sales": sales,
+        "customer": customer, "sales": sales, "brons": brons,
         "history": history,
         # Whether the mijoz has ANY tarix, so an empty table can tell the two cases
         # apart: nothing ever happened, or the davr and the filter left nothing.

@@ -2455,6 +2455,78 @@ def customer_advance_by_currency():
         for payment in CustomerPayment.objects.prefetch_related("allocations"))
 
 
+def bron_advance_holds(reservations):
+    """{bron pk: {held, short, currency}} — how much of the mijoz's avans each open
+    bron speaks for, and what it is still short of its agreed value.
+
+    A bron does NOT take the money. Nothing has been handed over, so nothing is owed
+    and nothing is spent: the mijoz's avans is the same figure before and after. What
+    a bron does is SPEAK FOR it, and the screen has to say so — otherwise an operator
+    reads Komoliddin as having 40 866.81 spare while 65 575.60 of granula is already
+    promised to him, and promises the same money to somebody else.
+
+    The kg become a qarz when they are handed over, not before. That path already
+    works and is not this one: a sotuv runs through `apply_customer_advance`, which
+    spends the mijoz's avans on it and leaves the shortfall as an ordinary qarz.
+
+    Nor is this a lock. `CustomerPayment.reservation` exists to tie a to'lov to one
+    bron, and `apply_customer_advance` would spend such a to'lov first — but no
+    screen sets it, so today no avans is earmarked anywhere. What is shown here is
+    derived and live: a sotuv made to the same mijoz before the bron is served takes
+    the avans, and the bron's held figure drops with it.
+
+    Held oldest bron first — the queue order `bron_queue` shows, so the mijoz who
+    asked first is the one their own avans covers. Never across currencies: a dollar
+    avans covers a dollar bron and a so'm bron waits for so'm, because converting
+    would put a kurs on money nobody agreed one at.
+
+    A bron whose narx is not agreed yet holds nothing and is short nothing — what it
+    is worth is not known, and a figure invented here would read as an agreed one.
+
+    Computed over each mijoz's WHOLE open queue rather than the rows handed in, so
+    filtering the list cannot change what a bron is holding."""
+    customers = {r.customer_id: r.customer for r in reservations}
+    if not customers:
+        return {}
+    wanted = {r.pk for r in reservations}
+    holds = {}
+    queues = Reservation.objects.filter(
+        customer_id__in=customers, status=Reservation.Status.ACTIVE
+    ).select_related("customer").order_by("created_at", "pk")
+    by_customer = defaultdict(list)
+    for bron in queues:
+        by_customer[bron.customer_id].append(bron)
+
+    payments = defaultdict(list)
+    # Both halves of what a to'lov has already spent: `unspent_payment_pair` reads
+    # the slices on sotuvlar AND the cash handed back over the counter, and leaving
+    # the second out cost a query per to'lov — 28 of them for one mijoz.
+    for payment in CustomerPayment.objects.filter(
+            customer_id__in=customers).prefetch_related("allocations",
+                                                        "refund_allocations"):
+        payments[payment.customer_id].append(payment)
+
+    for customer_id, queue in by_customer.items():
+        pool = dict(_by_currency(
+            (payment.currency, unspent_payment_amount(payment))
+            for payment in payments[customer_id]))
+        for bron in queue:
+            price = bron.price_own
+            if price is None or bron.remaining_kg <= 0:
+                if bron.pk in wanted:
+                    holds[bron.pk] = {"held": None, "short": None,
+                                      "currency": bron.currency}
+                continue
+            value = (bron.remaining_kg * price).quantize(Decimal("0.01"))
+            free = pool.get(bron.currency, Decimal("0"))
+            held = min(free, value)
+            pool[bron.currency] = free - held
+            if bron.pk in wanted:
+                holds[bron.pk] = {"held": held, "short": value - held,
+                                  "currency": bron.currency}
+    return holds
+
+
 def customer_receivable_by_currency():
     """([(currency, qarz)], how many mijoz) — what customers still owe, per currency.
 

@@ -597,14 +597,18 @@ class TestBronlarReadsLikeKelishuvlar:
         """Marka, then what was agreed, at what narx, for how much, and what of it is
         still outstanding — the order Kelishuvlar reads in, so the two lists do not ask
         the reader to change gear between them. Qolgan kg sits AFTER Jami, not between
-        Kg and Narx."""
+        Kg and Narx.
+
+        The avans pair comes after Qolgan kg rather than between it and Jami: it is the
+        money side of what is still outstanding (read off the kg still owed), so it
+        continues the sentence instead of interrupting it."""
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="1000", price="2.00")
         page = _plain(admin_client.get("/reservations/").content.decode())
         header = page[page.index("<table"):page.index("</tr>")]
         assert re.findall(r">([^<>]+)</th>", header) == [
             "Mijoz", "Sana", "Marka", "Navbat", "Bron qilingan kg", "Narx", "Jami",
-            "Qolgan kg", "Holat"]
+            "Qolgan kg", "Avansdan band", "Yetishmayapti", "Holat"]
 
     def test_qolgan_is_a_badge_that_says_whether_anything_is_left(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")

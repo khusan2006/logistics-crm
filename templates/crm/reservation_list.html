@@ -46,6 +46,8 @@ search never drops the way the list was already narrowed.
     <th>Narx</th>
     <th title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Jami</th>
     <th title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan kg</th>
+    <th title="Shu bron uchun mijozning avansidan band qilingan summa — pul hali sarflanmagan, mijoz qarzdor emas">Avansdan band</th>
+    <th title="Tovar bugun to'liq berilsa mijoz qancha qarzdor bo'lardi">Yetishmayapti</th>
     <th>Holat</th>
     <th></th>
   </tr>
@@ -106,6 +108,19 @@ search never drops the way the list was already narrowed.
       </div>
       {% endfor %}
     </td>
+    {% comment %}
+    The money side of Qolgan kg, so it stands right after it — Jami and Qolgan kg
+    keep the Kelishuvlar order side by side, and these two answer the question that
+    order ends on: of what is still outstanding, how much has the mijoz already put
+    down. Avansdan band is what the bron speaks for out of the avans, Yetishmayapti
+    what it would still be short if the granula went out today; both are read off
+    the kg still owed, not the kg booked. A bron takes NO money and makes nobody a
+    qarzdor — nothing has been handed over — so neither figure moves the balans.
+    Held oldest bron first, and only ever within one currency: see
+    `bron_advance_holds`.
+    {% endcomment %}
+    <td>{% for r in g.items %}<div class="cell-line">{% if r.avans_held %}<span class="avans">{% money_in r.avans_held r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line">{% if r.avans_short %}<span class="late">{% money_in r.avans_short r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
     <td>
       {% for r in g.items %}
       <div class="cell-line">

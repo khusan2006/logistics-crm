@@ -12,6 +12,40 @@
   {% empty %}Balans: 0{% endfor %}
 </p>
 
+{% comment %}
+Ochiq bronlar, balansning tagida. A bron takes no money and makes nobody a qarzdor
+— nothing has been handed over — but an avans with an open bron against it is not
+spare money, and the balans line above cannot say that on its own. Band is what this
+bron speaks for out of the avans, Yetishmayapti what the mijoz would still owe if
+they took the whole bron today. Each in the currency the bron was struck in: a so'm
+bron is not covered by a dollar avans, and putting a kurs between them would invent
+a rate nobody agreed.
+{% endcomment %}
+{% if brons %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th class="sticky-col">Ochiq bron</th>
+    <th>Qolgan kg</th>
+    <th>Narx</th>
+    <th title="Bron qilingan kg × kelishilgan narx">Jami</th>
+    <th title="Shu bron uchun mijozning avansidan band qilingan summa — pul hali sarflanmagan">Avansdan band</th>
+    <th title="Tovar bugun to'liq berilsa mijoz qancha qarzdor bo'lardi">Yetishmayapti</th>
+  </tr>
+  {% for b in brons %}
+  <tr>
+    <td class="sticky-col">{{ b.brand }}</td>
+    <td>{{ b.remaining_kg|floatformat:"-3" }}</td>
+    <td>{% if b.price %}{% rate b.price b.price_uzs b.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+    <td>{% if b.total %}{% money b.total b.total_uzs b.currency %}{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td>{% if b.avans_held %}<span class="avans">{% money_in b.avans_held b.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td>{% if b.avans_short %}<span class="late">{% money_in b.avans_short b.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endif %}
+
 {% if sales %}
 <div class="table-wrap">
 <table>
