@@ -290,7 +290,7 @@ def test_trucks_are_asked_per_product_and_the_kelishuv_totals_them(admin_client,
 
     contract = Contract.objects.get()
     assert [(ln.brand, ln.planned_trucks) for ln in contract.lines.all()] == [
-        ("7000 campaund", 6), ("209 campaund", 4)]
+        ("7000 кампаунд", 6), ("209 кампаунд", 4)]   # typed in lotin, stored in kiril
     assert contract.planned_trucks == 10
 
 
@@ -306,7 +306,7 @@ def test_a_product_with_no_truck_target_does_not_zero_the_kelishuv(admin_client,
 
     contract = Contract.objects.get()
     assert contract.planned_trucks == 3
-    assert contract.lines.get(brand="Rejasiz").planned_trucks is None
+    assert contract.lines.get(brand="Режасиз").planned_trucks is None   # "Rejasiz", in kiril
 
 
 def test_a_truck_carrying_both_markalar_counts_under_each(admin_client, db):

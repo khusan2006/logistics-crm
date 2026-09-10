@@ -22,7 +22,7 @@ from .models import (
 )
 from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
-from .yozuv import reads_the_same, to_kiril
+from .yozuv import marka_kaliti, marka_nomi
 from .templatetags.crm_extras import rate, som, usd
 
 
@@ -758,7 +758,7 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         model = ContractLine
         fields = ["brand", "kg", "price", "planned_trucks"]
         widgets = {
-            "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 repak"}),
+            "brand": forms.TextInput(attrs={"placeholder": "Masalan: 2102 репак"}),
             "kg": forms.NumberInput(attrs={"placeholder": "0"}),
             # data-currency-label marks the box as one whose unit follows the
             # header's Valyuta. The label below is the one the page is SERVED with —
@@ -774,31 +774,45 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
         }
 
     def clean_brand(self):
-        """Refuse a marka that would be indistinguishable from one already on the
-        books.
+        """The marka already on the books, however it was typed — or a new one, stored
+        the way the ombor reads it.
 
         This is the one box in the app where a marka is TYPED — everywhere else it is
-        picked from a list — so it is the only place the collision can be born. It was
-        born here on 2026-09-04: `и 1561` was entered beside an existing `i 1561`, the
-        screen transliterates lotin to kiril and drew both as `и 1561`, and the two
-        went on as separate products. A 150 000 kg bron then stood untouched while its
-        holder bought 36 000 kg of the same granula, because every join the app makes
-        on a marka is an exact string match (see the merge_brand command).
+        picked from a list — so it is the only place a second name for one product can
+        be born. It was born here on 2026-09-04: `и 1561` beside an existing `i 1561`,
+        and since every join the app makes on a marka is an exact string match, the two
+        went on as separate products. A 150 000 kg bron stood untouched while its holder
+        bought 36 000 kg of the same granula (see the merge_brand command).
 
-        The SAME name is fine and normal — a second kelishuv for a product already
-        bought. Only a name that reads identically while differing is refused, and the
-        message names the one it collides with so the operator can just use it."""
-        brand = (self.cleaned_data.get("brand") or "").strip()
-        if not brand:
-            return brand
-        known = ContractLine.objects.values_list("brand", flat=True).distinct()
-        twin = next((name for name in known if reads_the_same(brand, name)), None)
-        if twin:
+        The guard used to REFUSE a name that drew identically to one on file and tell
+        the operator to retype it. It caught only perfect lookalikes: `7000 repak` was
+        refused, while `7000 Repak`, `7000 REPAK`, `7000 РЕПАК` and `7000  репак` went
+        straight through as brand-new markalar — the very split it existed to stop, one
+        shift key away. Now any spelling that differs only by alphabet, case or spacing
+        simply IS the marka on file (`marka_kaliti`), and a genuinely new name is stored
+        in kiril with its codes intact (`marka_nomi`).
+
+        Refused only when the name fits two markalar already split on the books: picking
+        one would be a guess, and that pair wants merge_brand."""
+        raw = (self.cleaned_data.get("brand") or "").strip()
+        if not raw:
+            return raw
+        known = set(ContractLine.objects.values_list("brand", flat=True).distinct())
+        # Exactly as on file wins outright, so a kelishuv under a name that already has
+        # a split twin can still be corrected without being asked to choose between them.
+        if raw in known:
+            return raw
+        key = marka_kaliti(raw)
+        same = sorted(name for name in known if marka_kaliti(name) == key)
+        if len(same) > 1:
+            names = ", ".join(f"“{name}”" for name in same)
             raise forms.ValidationError(
-                f"“{twin}” markasi allaqachon bor va ekranda bundan farq qilmaydi — "
-                f"ikkalasi ham “{to_kiril(brand)}” bo'lib ko'rinadi. O'sha nomni "
-                f"yozing, yoki farqi ko'rinadigan boshqa nom tanlang.")
-        return brand
+                f"Bu nom bazadagi {len(same)} ta markaga to'g'ri keladi: {names}. "
+                f"Aynan birini o'zidek yozing — agar ular bitta granula bo'lsa, "
+                f"markalarni birlashtirish kerak.")
+        if same:
+            return same[0]
+        return marka_nomi(raw)
 
     def __init__(self, *args, currency=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -849,17 +863,17 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
 def _line_identity(cleaned, with_price):
     """What makes one kelishuv mahsulot row different from another.
 
-    Always the marka — case- and space-insensitive, because "и 1561" and " И 1561"
-    are the same granula typed by two hands. On a birja kelishuv the agreed narx
-    joins it, which is what lets one marka be taken in several lots there; see
-    `BaseContractLineFormSet`.
+    Always the marka — read through `marka_kaliti`, because "и 1561", " И 1561" and
+    "i 1561" are the same granula typed by two hands, and so are "LLDPE" and "lldpe".
+    On a birja kelishuv the agreed narx joins it, which is what lets one marka be
+    taken in several lots there; see `BaseContractLineFormSet`.
 
     Read in the kelishuv's own currency rather than as the stored pair. Every row
     here is in that one currency (the formset hands it down), but an existing row
     keeps the kurs it was booked at — so two so'm rows agreed at the same 16 500
     can hold different dollar twins, and comparing those would call one typo two
     lots."""
-    brand = (cleaned.get("brand") or "").strip().casefold()
+    brand = marka_kaliti(cleaned.get("brand"))
     if not with_price:
         return brand, None
     price = (cleaned.get("price_uzs") if cleaned.get("currency") == Currency.UZS

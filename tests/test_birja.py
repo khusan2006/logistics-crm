@@ -219,7 +219,8 @@ def test_a_marka_taken_in_lots_is_named_once_in_the_summary(admin_client, db):
                     {"brand": "и 1561", "kg": "7000", "price": "16400"},
                     {"brand": "ftor oq", "kg": "1000", "price": "15000"})})
     contract = Contract.objects.get()
-    assert contract.brand_summary == "и 1561, ftor oq"
+    # "ftor oq" was typed in lotin and is stored the way the ombor reads it.
+    assert contract.brand_summary == "и 1561, фтор оқ"
 
 
 def test_a_truck_is_booked_against_the_lot_it_was_priced_out_of(admin_client, db):

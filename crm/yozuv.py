@@ -129,3 +129,45 @@ def reads_the_same(one, other):
     runs: latin `i` becomes `и`, while a cyrillic и was already there."""
     one, other = (one or "").strip(), (other or "").strip()
     return one != other and to_kiril(one) == to_kiril(other)
+
+
+# ── Marka nomlari ─────────────────────────────────────────────────────────────────
+#
+# Server-only, and deliberately outside the parity with yozuv.js: the browser never
+# rewrites a marka (its pickers carry data-lotin), so there is nothing for it to agree
+# with. These answer the question ContractLineForm asks the moment a marka is typed —
+# is this a name already on the books, written another way?
+
+#: Words `to_kiril` refuses (a `c` outside "ch") that markalar are nonetheless made
+#: of. Spelled out by hand for the reason migration 0070 gives: `c` is к in campaund
+#: and с in repac, no rule can read that, and `2102 репас` is kept apart from
+#: `2102 репак` on purpose.
+MARKA_SOZLARI = {"campaund": "кампаунд", "repac": "репас"}
+
+
+def _marka_sozi(word, fold):
+    """One whitespace-separated token of a marka.
+
+    A token carrying a digit is a grade or a code — 1561, 7000F, 209AA — and is kept
+    letter for letter: `to_kiril` would turn the lone F of 7000F into Ф. The words
+    around it are Uzbek, and go to kiril."""
+    if any(ch.isdigit() for ch in word):
+        return word.casefold() if fold else word
+    base = MARKA_SOZLARI.get(word.casefold(), word.casefold() if fold else word)
+    kiril = to_kiril(base)
+    return kiril.casefold() if fold else kiril
+
+
+def marka_nomi(typed):
+    """How a NEW marka is stored: one space between tokens, words in kiril, codes as
+    typed. `9000  repak` → `9000 репак`; `LLDPE` and `7000F` stay what they are."""
+    return " ".join(_marka_sozi(word, fold=False) for word in (typed or "").split())
+
+
+def marka_kaliti(name):
+    """What every spelling of one marka has in common: `7000 repak`, `7000 Repak`,
+    `7000 REPAK` and `7000  репак` all give `7000 репак`.
+
+    Case is folded BEFORE transliterating, not after: in capitals `REPAK` reads as a
+    code and `to_kiril` would leave it in lotin, where it could never meet `репак`."""
+    return " ".join(_marka_sozi(word, fold=True) for word in (name or "").split())
