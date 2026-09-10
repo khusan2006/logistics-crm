@@ -1777,12 +1777,47 @@ class SaleLineForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["brand"].choices = _stock_brand_choices()
+        self.fields["brand"].choices = self._brand_choices()
         # Read by the Brondan ushlansin JS, which now asks whether ANY row's marka is
         # one this mijoz holds a bron for.
         self.fields["brand"].widget.attrs["data-bron-brand"] = ""
         _group_thousands(self.fields["kg"])
         _group_thousands(self.fields["price"])
+
+    def _brand_choices(self):
+        """What is on the shelf — plus the marka this row is already carrying.
+
+        A sotuv very often takes the LAST kg of its own marka, which drops that
+        marka straight out of the stock list. Opening such a sotuv to correct its
+        narx then left the <select> with no option to select, so the browser showed
+        whichever marka sorts first: a 15 000 kg sotuv of "2102 кампаунд" read as
+        "2102 репак", and saving the correction would have moved it onto a granula
+        nobody sold.
+
+        Kept with an honest label rather than a borrowed kg, and it widens nothing:
+        the formset's ceiling is still `brand_on_hand_kg` + `allowance`, and
+        allowance only covers the kg this sotuv already holds — so the row can be
+        re-saved as it stands, and still cannot grow."""
+        choices = _stock_brand_choices()
+        carried = self._carried_brand()
+        if carried and carried not in {brand for brand, _label in choices}:
+            choices = sorted([*choices, (carried, f"{carried} · omborda qolmadi")],
+                             key=lambda choice: choice[0])
+        return choices
+
+    def _carried_brand(self):
+        """The marka this row already holds, if any.
+
+        On an unbound edit `initial` is read off the sotuv itself, so it is trusted.
+        A bound form's marka is whatever was POSTED — the browser talking — so that
+        one is only honoured if it names a real marka; an unknown string belongs in
+        "pick a valid marka" rather than in a quietly widened list."""
+        if not self.is_bound:
+            return (self.initial.get("brand") or "").strip() or None
+        brand = (self.data.get(self.add_prefix("brand")) or "").strip()
+        if brand and ContractLine.objects.filter(brand=brand).exists():
+            return brand
+        return None
 
     def has_changed(self):
         """A spare row with empty kg and narx boxes is not a row anybody typed.
