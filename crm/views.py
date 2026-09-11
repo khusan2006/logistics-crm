@@ -31,6 +31,7 @@ from .forms import (
     CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm,
+    ReservationSalesForm,
     ReturnBatchForm, ReturnSettlementEditForm, ReturnSettlementPayForm,
     parse_return_rows, returns_without,
     CustomsAgentForm, CustomsPaymentForm,
@@ -4001,13 +4002,16 @@ def sale_edit(request, pk):
             # must survive an edit. Re-drawing unconditionally would quietly convert a
             # sotuv booked alongside a bron into one taken from it, the first time
             # anybody corrected a kg.
+            served_id = sale.reservation_id
             was_from_bron = release_bron(sale) > 0
             sale = form.save()
             if sale.reservation_id:
                 sale.reservation = None
                 sale.save(update_fields=["reservation"])
             if was_from_bron:
-                draw_down_bron(sale)
+                # Back into the bron it came out of, even one opened after the sotuv
+                # was entered — see `served_id` on `draw_down_bron`.
+                draw_down_bron(sale, served_id=served_id)
             moved = sale.customer_id != previous_customer_id
             if moved:
                 # The allocations are slices of the PREVIOUS mijoz's to'lovlar. They
@@ -4242,7 +4246,10 @@ def sale_group_edit(request, pk):
                         slices.append(kept)
                 else:
                     remaining = kg
-                    from_bron = any(s.reservation_id for s in (row or {}).get("sales", []))
+                    # The bron the old slices were drawn from, so the new ones go back
+                    # into it rather than into whichever of the mijoz's brons is oldest.
+                    served_id = next((s.reservation_id for s in (row or {}).get("sales", [])
+                                      if s.reservation_id), None)
                     for lot in fifo_lots(brand):
                         if remaining <= 0:
                             break
@@ -4260,8 +4267,8 @@ def sale_group_edit(request, pk):
                         # A row that came out of a bron goes on coming out of it:
                         # whether a sotuv draws on a promise is decided when it is
                         # entered and must survive a correction to its kg.
-                        if from_bron:
-                            draw_down_bron(fresh)
+                        if served_id is not None:
+                            draw_down_bron(fresh, served_id=served_id)
                 sold.append(f"{_kg(kg)} kg {brand}"
                             + (f" ({reys}-reys)" if reys else ""))
 
@@ -4644,6 +4651,24 @@ def _with_bron_holds(reservations):
     return reservations
 
 
+def _with_countable_sales(reservations):
+    """Each open bron marked with whether its mijoz has a sotuv of its marka that no
+    bron has counted — the rows Bronlar offers to count one into. The batch twin of
+    `bron_countable_sales`: one query for the whole list instead of one per bron."""
+    open_ones = [bron for bron in reservations if bron.is_open]
+    pairs = set()
+    if open_ones:
+        pairs = set(Sale.objects
+                    .filter(reservation__isnull=True,
+                            customer_id__in={bron.customer_id for bron in open_ones},
+                            line__contract_line__brand__in={bron.brand for bron in open_ones})
+                    .values_list("customer_id", "line__contract_line__brand")
+                    .distinct())
+    for bron in reservations:
+        bron.countable_sales = bron.is_open and (bron.customer_id, bron.brand) in pairs
+    return reservations
+
+
 @role_required(User.Role.ADMIN)
 def reservation_list(request):
     """Bronlar, kelishuvlar-style: one search box, a Filtrlar panel carrying mijoz /
@@ -4657,6 +4682,7 @@ def reservation_list(request):
     rows, f = _filter_reservations(request)
     groups = _reservation_groups(rows)
     _with_bron_holds(rows)
+    _with_countable_sales(rows)
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
     # Holat defaults to Faol and Saralash to Navbat, so standing on either draws no
     # chip — a chip means "this list is narrower than it normally is".
@@ -4821,6 +4847,40 @@ def reservation_close(request, pk):
         "Ha, tugatish",
         cancel_url_name="reservation_list",
     )
+
+
+@role_required(User.Role.ADMIN)
+def reservation_count_sales(request, pk):
+    """Count sotuvlar the mijoz already took into their bron, by hand.
+
+    The sotuv form draws a bron down only when the bron is already there, and
+    `draw_down_bron` will not hand a sotuv to a bron opened after it — so a sotuv
+    typed in first and its bron second left the bron at its full kg. Which sotuvlar
+    the promise covered is not something to guess, so the operator ticks them."""
+    reservation = get_object_or_404(Reservation.objects.select_related("customer"),
+                                    pk=pk)
+    if not reservation.is_open:
+        messages.error(request, "Faqat faol bronga sotuv hisoblash mumkin")
+        return form_reload(request, reverse("reservation_list"))
+    form = ReservationSalesForm(request.POST or None, reservation=reservation)
+    title = "Oldingi sotuvni bronga hisoblash"
+    if request.method == "POST":
+        if form.is_valid():
+            # Oldest first, the order the mijoz was served in.
+            sales = sorted(form.cleaned_data["sales"],
+                           key=lambda sale: (sale.created_at, sale.pk))
+            with transaction.atomic():
+                drawn = sum((draw_down_bron(sale, served_id=reservation.pk)
+                             for sale in sales), Decimal("0"))
+            numbers = ", ".join(f"#{sale.pk}" for sale in sales)
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Bron", reservation.pk,
+                (f"Bronga sotuv hisoblandi: {numbers} · {_kg(drawn)} kg · "
+                 f"{reservation.customer.name}")[:255])
+            messages.success(request, f"{_kg(drawn)} kg bronga hisoblandi")
+            return form_reload(request, reverse("reservation_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
 
 
 def _returnable_sales(customer, editing=None, typed=None):

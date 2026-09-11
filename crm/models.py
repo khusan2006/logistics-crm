@@ -2885,7 +2885,22 @@ def fifo_lots(brand):
     return [lot for lot in lots if lot.available_kg > 0]
 
 
-def draw_down_bron(sale):
+def bron_countable_sales(bron):
+    """The mijoz's sotuvlar of this bron's marka that no bron has counted yet, newest
+    first — what Bronlar offers to count into it by hand.
+
+    The sotuv form can only draw on a bron that is already there, so a sotuv typed in
+    first and its bron second leaves the bron at its full kg. Which of these sotuvlar
+    the promise actually covered is the operator's to say, so nothing is picked for
+    them."""
+    return (Sale.objects
+            .filter(customer_id=bron.customer_id, reservation__isnull=True,
+                    line__contract_line__brand=bron.brand)
+            .select_related("line__contract_line")
+            .order_by("-date", "-pk"))
+
+
+def draw_down_bron(sale, served_id=None):
     """Take a sotuv out of its OWN mijoz's bron for that marka. Returns the kg drawn.
 
     A bron is a promise of kg of one marka to one mijoz. When that mijoz is served,
@@ -2907,16 +2922,27 @@ def draw_down_bron(sale):
     a sotuv being saved now is younger than every bron on the board. It matters when
     past sales are replayed — `merge_brand` does exactly that after two names for one
     marka are joined — where without it a fresh bron would be eaten by sales that
-    predate it."""
+    predate it.
+
+    `served_id` is a bron somebody has already said this sotuv went against — the one
+    it was tied to before an edit, or one ticked on Bronlar. It goes first, and the
+    entry-time rule is waived for it: that rule stops a replay from handing a sotuv to
+    a promise nobody tied it to, and here somebody did. Without the waiver a sotuv
+    counted into a bron opened after it fell back out at its first edit."""
     if sale.reservation_id:
         return Decimal("0")
     remaining, drawn = sale.kg, Decimal("0")
-    for bron in bron_queue(sale.line.brand):
+    queue = bron_queue(sale.line.brand)
+    if served_id is not None:
+        # A stable sort, so every other bron keeps its place behind it.
+        queue.sort(key=lambda bron: bron.pk != served_id)
+    for bron in queue:
         if remaining <= 0:
             break
         if bron.customer_id != sale.customer_id:
             continue
-        if sale.created_at and bron.created_at > sale.created_at:
+        if (bron.pk != served_id and sale.created_at
+                and bron.created_at > sale.created_at):
             continue
         take = min(bron.remaining_kg, remaining)
         bron.fulfilled_kg += take

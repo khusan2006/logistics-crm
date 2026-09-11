@@ -16,7 +16,8 @@ from .models import (
     FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
     Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
-    arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands, convert_pair,
+    arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands,
+    bron_countable_sales, convert_pair,
     customer_balance_by_currency, last_sale_prices_by_customer,
     latest_exchange_rate, _by_currency,
 )
@@ -2142,6 +2143,51 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
                 f"Allaqachon {_clean_number(self.instance.fulfilled_kg)} kg berilgan — "
                 "bundan kam qilib bo'lmaydi")
         return kg
+
+
+class CountableSaleField(forms.ModelMultipleChoiceField):
+    """One tick per sotuv, labelled the way the operator finds it on Sotuvlar: the
+    sana, the kg and the narx it was agreed at."""
+
+    def label_from_instance(self, sale):
+        if sale.currency == Currency.UZS:
+            narx = f"{_clean_number(sale.price_uzs)} so'm"
+        else:
+            narx = f"{_clean_number(sale.price)} $"
+        return (f"{sale.date:%d.%m.%Y} · {_clean_number(sale.kg)} kg · {narx} · "
+                f"sotuv #{sale.pk}")
+
+
+class ReservationSalesForm(forms.Form):
+    """Which of the mijoz's earlier sotuvlar this bron covered — see
+    `bron_countable_sales` for what is on offer and why nothing comes pre-ticked.
+
+    Refused when the ticked kg outgrow what the bron still owes. A sotuv only partly
+    drawn from a bron is one `release_bron` cannot give back exactly — it returns the
+    whole sotuv's kg — so the bron's kg has to be raised first instead."""
+
+    sales = CountableSaleField(
+        label="Sotuvlar", queryset=Sale.objects.none(),
+        widget=forms.CheckboxSelectMultiple,
+        error_messages={"required": "Kamida bitta sotuvni belgilang"})
+
+    def __init__(self, *args, reservation, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reservation = reservation
+        field = self.fields["sales"]
+        field.queryset = bron_countable_sales(reservation)
+        field.help_text = (f"{reservation.customer.name} · {reservation.brand} · bronda "
+                           f"{_clean_number(reservation.remaining_kg)} kg qolgan")
+
+    def clean_sales(self):
+        sales = self.cleaned_data["sales"]
+        total = sum((sale.kg for sale in sales), Decimal("0"))
+        left = self.reservation.remaining_kg
+        if total > left:
+            raise forms.ValidationError(
+                f"Belgilangan sotuvlar {_clean_number(total)} kg — bronda esa "
+                f"{_clean_number(left)} kg qolgan. Avval bron kg'sini oshiring")
+        return sales
 
 
 def own_side_pair(currency, pair):

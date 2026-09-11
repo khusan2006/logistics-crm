@@ -866,7 +866,114 @@ class TestBronDrawIsAsked:
         assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")
 
 
-# ── Bronni tugatish ──────────────────────────────────────────────────────────
+# ── Oldin yozilgan sotuvni bronga hisoblash ──────────────────────────────────
+
+class TestCountingAnEarlierSotuvIntoABron:
+    """A sotuv typed in before its bron was opened was never drawn from it: the sotuv
+    form only draws on a bron that already exists. Bronlar lets the operator tick
+    which of the mijoz's sotuvlar that bron covered."""
+
+    def _sale_then_bron(self, admin_client, sale_kg="1500", bron_kg="25000"):
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _sell(admin_client, "LLDPE", customer, kg=sale_kg)
+        # A quarter of an hour before the bron, the way it happened. Without the gap
+        # the two can share a timestamp and the entry-time rule never bites.
+        Sale.objects.update(created_at=timezone.now() - timedelta(minutes=15))
+        _reserve(admin_client, "LLDPE", customer, kg=bron_kg)
+        return lot, customer, Sale.objects.get(), Reservation.objects.get()
+
+    def _count(self, admin_client, bron, *sales):
+        return admin_client.post(f"/reservations/{bron.pk}/count-sales/",
+                                 {"sales": [sale.pk for sale in sales]})
+
+    def test_a_sotuv_entered_first_is_not_drawn_from_the_bron(self, admin_client, db):
+        _lot, _customer_, sale, bron = self._sale_then_bron(admin_client)
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert sale.reservation_id is None
+
+    def test_the_ticked_sotuv_comes_off_the_bron(self, admin_client, db):
+        from crm.models import AuditLog
+
+        _lot, _customer_, sale, bron = self._sale_then_bron(admin_client)
+        assert self._count(admin_client, bron, sale).status_code == 302
+
+        bron.refresh_from_db()
+        sale.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("1500.000")
+        assert bron.remaining_kg == Decimal("23500.000")
+        assert bron.status == Reservation.Status.ACTIVE
+        assert sale.reservation_id == bron.pk
+        assert AuditLog.objects.filter(target_type="Bron", target_id=bron.pk,
+                                       action=AuditLog.Action.UPDATE).exists()
+
+    def test_only_the_mijozs_uncounted_sotuvlar_of_that_marka_are_offered(
+            self, admin_client, db):
+        from crm.models import bron_countable_sales
+
+        _lot, customer, sale, bron = self._sale_then_bron(admin_client)
+        _arrived_lot_for("Boshqa hamkor", kg="10000", brand="HDPE")
+        _sell(admin_client, "HDPE", customer, kg="700")                   # other marka
+        _sell(admin_client, "LLDPE", _customer("Boshqa mijoz"), kg="900")  # other mijoz
+        _sell(admin_client, "LLDPE", customer, kg="400")        # drawn when entered
+        assert Sale.objects.get(kg=Decimal("400")).reservation_id == bron.pk
+
+        assert list(bron_countable_sales(bron)) == [sale]
+        # and a sotuv that is not on offer cannot be posted in either
+        self._count(admin_client, bron, Sale.objects.get(kg=Decimal("900")))
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("400.000")
+
+    def test_more_than_the_bron_has_left_is_refused(self, admin_client, db):
+        _lot, _customer_, sale, bron = self._sale_then_bron(
+            admin_client, sale_kg="3000", bron_kg="2000")
+        resp = self._count(admin_client, bron, sale)
+        assert resp.status_code == 200
+        assert "bronda esa" in _plain(resp.content.decode())
+
+        bron.refresh_from_db()
+        sale.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert sale.reservation_id is None
+
+    def test_a_closed_bron_takes_nothing(self, admin_client, db):
+        _lot, _customer_, sale, bron = self._sale_then_bron(admin_client)
+        admin_client.post(f"/reservations/{bron.pk}/close/", {})
+        self._count(admin_client, bron, sale)
+
+        bron.refresh_from_db()
+        sale.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert sale.reservation_id is None
+
+    def test_editing_the_counted_sotuv_keeps_it_on_that_bron(self, admin_client, db):
+        """The sotuv is still older than the bron. An edit gives its kg back and draws
+        again, and the entry-time rule used to skip this bron on the way back in —
+        so the first corrected kg quietly undid the count."""
+        lot, customer, sale, bron = self._sale_then_bron(admin_client)
+        self._count(admin_client, bron, sale)
+
+        admin_client.post(f"/sales/{sale.pk}/edit/", {
+            "customer": customer.pk, "line": lot.pk, "kg": "2000",
+            "currency": "usd", "price": "1.50", "date": "2026-07-20",
+            "debt_deadline": "", "note": ""})
+        sale.refresh_from_db()
+        bron.refresh_from_db()
+        assert sale.kg == Decimal("2000.000")
+        assert sale.reservation_id == bron.pk
+        assert bron.fulfilled_kg == Decimal("2000.000")
+
+    def test_the_row_offers_it_only_while_there_is_something_to_count(
+            self, admin_client, db):
+        _lot, _customer_, sale, bron = self._sale_then_bron(admin_client)
+        link = f"/reservations/{bron.pk}/count-sales/"
+        assert link in admin_client.get("/reservations/").content.decode()
+
+        self._count(admin_client, bron, sale)
+        assert link not in admin_client.get("/reservations/").content.decode()
+
+
+# ── Bronni tugatish──────────────────────────────────────────────────────────
 
 class TestClosingABron:
     """The mijoz took what they took and wants no more. Not the same act as

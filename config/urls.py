@@ -142,6 +142,8 @@ urlpatterns = [
     path("reservations/<int:pk>/delete/", crm_views.reservation_delete, name="reservation_delete"),
     path("reservations/<int:pk>/cancel/", crm_views.reservation_cancel, name="reservation_cancel"),
     path("reservations/<int:pk>/close/", crm_views.reservation_close, name="reservation_close"),
+    path("reservations/<int:pk>/count-sales/", crm_views.reservation_count_sales,
+         name="reservation_count_sales"),
     path("returns/", crm_views.return_list, name="return_list"),
     path("returns/new/", crm_views.return_create, name="return_create"),
     # The rows for one mijoz, fetched by the modal when the mijoz select changes.
