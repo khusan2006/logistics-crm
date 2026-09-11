@@ -3075,6 +3075,14 @@ class Sale(MoneyEntry):
     # still reads as the one truck it was.
     reys = models.PositiveSmallIntegerField("Reys", null=True, blank=True,
                                             editable=False)
+    # Where the operator dragged this sotuv inside its DAY on Sotuvlar. Null until a
+    # day is reordered, and null sorts first, so a sotuv entered afterwards still
+    # lands on top of its day the way it always did. Every row of a group carries the
+    # same number — the list folds a group by adjacency, and a split number would
+    # tear it into two rows. A new sana clears it: an index from another day means
+    # nothing among this one's.
+    position = models.PositiveIntegerField("Kun ichidagi tartib", null=True, blank=True,
+                                           editable=False)
     kg = models.DecimalField("Sotilgan kg", max_digits=12, decimal_places=3)
     price = models.DecimalField("1 kg sotuv narxi (USD)", max_digits=14, decimal_places=4)
     price_uzs = models.DecimalField("1 kg sotuv narxi (so'm)", max_digits=18,

@@ -124,6 +124,7 @@ urlpatterns = [
     # carry a slash, which `str` would refuse to match.
     path("ombor/marka/<path:brand>/", crm_views.brand_detail, name="brand_detail"),
     path("sales/", crm_views.sale_list, name="sale_list"),
+    path("sales/day-order/", crm_views.sale_day_order, name="sale_day_order"),
     path("sales/new/", crm_views.sale_create, name="sale_create"),
     path("sales/<int:pk>/edit/", crm_views.sale_edit, name="sale_edit"),
     path("sales/<int:pk>/shift-preview/", crm_views.sale_shift_preview,

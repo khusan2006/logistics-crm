@@ -478,6 +478,23 @@
       zdlg.addEventListener('click', function (e) { if (e.target === zdlg) { zdlg.close(); } });
     }
 
+    // The caret goes into the form's first box, so a modal opened from the keyboard
+    // can be typed into straight away. `[autofocus]` wins where a form names one.
+    // Radios, checkboxes and buttons are passed over — they are not typed into.
+    // Through `focusField`, so a touch screen still gets no keyboard thrown up.
+    var SKIP_TYPES = ['hidden', 'radio', 'checkbox', 'submit', 'button', 'reset', 'file'];
+    function focusFirstField() {
+      var fields = [body.querySelector('[autofocus]')].concat(
+        Array.prototype.slice.call(body.querySelectorAll('input, select, textarea')));
+      for (var i = 0; i < fields.length; i++) {
+        var el = fields[i];
+        if (!el || el.disabled || el.readOnly || SKIP_TYPES.indexOf(el.type) !== -1
+            || !el.getClientRects().length) { continue; }
+        window.focusField(el);
+        return;
+      }
+    }
+
     function openModal(url) {
       fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
         .then(function (r) { return r.text(); })
@@ -486,6 +503,9 @@
           if (!dlg.open) { dlg.showModal(); }
           bindForm(body.querySelector('form'));
           document.dispatchEvent(new CustomEvent('modal:loaded', { detail: body }));
+          // A tick later: the comboboxes swap their <select> for a text box inside
+          // `modal:loaded`, and showModal() has just parked focus on the × button.
+          setTimeout(focusFirstField, 0);
         });
     }
 
@@ -531,6 +551,50 @@
       if (e.target === dlg && pressStartedOnBackdrop) { dlg.close(); }
     });
     dlg.addEventListener('close', function () { body.innerHTML = ''; });
+  })();
+
+  // Keyboard shortcuts for the actions in the bottom-right corner. An opener carries
+  // `data-hotkey` — "n" on a page with one action, "1", "2"… where there are several —
+  // and pressing that key clicks it, which opens its modal. The key is shown on the
+  // button (hidden on touch, where there is no keyboard to press it on).
+  //
+  // Matched on `e.code`, the physical key, not `e.key`: with a Cyrillic layout on, N
+  // types "т" and a letter match would silently never fire. Ignored while typing in a
+  // box, with a modifier held (⌘N stays the browser's), or with a dialog already open.
+  (function () {
+    function codes(key) {
+      return /^[0-9]$/.test(key) ? ['Digit' + key, 'Numpad' + key] : ['Key' + key.toUpperCase()];
+    }
+
+    function hint() {
+      document.querySelectorAll('[data-hotkey]').forEach(function (el) {
+        if (el.querySelector('.hotkey-hint')) { return; }
+        var key = el.dataset.hotkey.toUpperCase();
+        var kbd = document.createElement('kbd');
+        kbd.className = 'hotkey-hint';
+        kbd.setAttribute('aria-hidden', 'true');
+        kbd.textContent = key;
+        el.appendChild(kbd);
+        el.setAttribute('aria-keyshortcuts', key);
+      });
+    }
+    if (document.readyState !== 'loading') { hint(); }
+    else { document.addEventListener('DOMContentLoaded', hint); }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) { return; }
+      var t = e.target;
+      if (t && t.closest && t.closest('input, textarea, select, [contenteditable]')) { return; }
+      if (document.querySelector('dialog[open]')) { return; }
+      var openers = document.querySelectorAll('[data-hotkey]');
+      for (var i = 0; i < openers.length; i++) {
+        if (codes(openers[i].dataset.hotkey).indexOf(e.code) !== -1) {
+          e.preventDefault();
+          openers[i].click();
+          return;
+        }
+      }
+    });
   })();
 
   // Quick-add customer from inside the sale form (no leaving the form)
@@ -2820,8 +2884,9 @@
       if (e.button !== 0 || !e.target.closest) { return; }
       var wrap = e.target.closest('.table-wrap.is-draggable');
       if (!wrap) { return; }
-      // Selecting text in a field beats dragging the table under it.
-      if (e.target.closest('input, textarea, select, [contenteditable]')) { return; }
+      // Selecting text in a field beats dragging the table under it, and a row's
+      // reorder grip moves the ROW, not the table.
+      if (e.target.closest('input, textarea, select, [contenteditable], .row-grip')) { return; }
       active = { wrap: wrap, x: e.clientX, left: wrap.scrollLeft, moved: false };
     });
 

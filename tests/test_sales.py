@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 from django.utils import timezone
 
@@ -1396,3 +1397,163 @@ class TestEditingAWholeSotuv:
                           initial=2)
         assert resp.status_code == 302
         assert Sale.objects.count() == len(rows)
+
+    def test_re_sliced_rows_keep_the_dragged_place(self, admin_client, db):
+        """A kg change re-slices a marka into fresh Sale rows. They must carry the
+        group's place, or the list would fold the sotuv into two rows."""
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        Sale.objects.filter(pk__in=[s.pk for s in rows]).update(position=3)
+        resp = self._edit(admin_client, rows[0],
+                          {"brand": "LLDPE", "kg": "120", "price": "1.50"},
+                          {"brand": "HDPE", "kg": "50", "price": "3.00"})
+        assert resp.status_code == 302
+        assert set(Sale.objects.values_list("position", flat=True)) == {3}
+
+    def test_a_new_sana_drops_the_dragged_place(self, admin_client, db):
+        _customer_unused, rows = self._two_marka_sotuv(admin_client)
+        Sale.objects.filter(pk__in=[s.pk for s in rows]).update(position=3)
+        self._edit(admin_client, rows[0],
+                   {"brand": "LLDPE", "kg": "100", "price": "1.50"},
+                   {"brand": "HDPE", "kg": "50", "price": "3.00"},
+                   date="2026-07-25")
+        assert set(Sale.objects.values_list("position", flat=True)) == {None}
+
+
+class TestPagedByDay:
+    """Sotuvlar pages by DAY: five sotuv kunlari a page, and a day is never cut in two
+    at the bottom of a page."""
+
+    def _sale(self, lot, day, name="Mijoz", kg="1"):
+        customer = Customer.objects.create(name=name)
+        return Sale.objects.create(customer=customer, line=lot, kg=Decimal(kg),
+                                   price=Decimal("1.50"), date=day)
+
+    def test_five_days_on_a_page(self, admin_client, db):
+        lot = _lot()
+        today = date.today()
+        for back in range(7):
+            self._sale(lot, today - timedelta(days=back))
+        first = admin_client.get("/sales/").context
+        assert [d["day"] for d in first["days"]] == [
+            today - timedelta(days=back) for back in range(5)]
+        second = admin_client.get("/sales/?page=2").context
+        assert [d["day"] for d in second["days"]] == [
+            today - timedelta(days=5), today - timedelta(days=6)]
+
+    def test_a_busy_day_stays_whole(self, admin_client, db):
+        lot = _lot()
+        today = date.today()
+        for n in range(30):
+            self._sale(lot, today, name=f"Bugun {n}")
+        self._sale(lot, today - timedelta(days=1), name="Kecha")
+        days = admin_client.get("/sales/").context["days"]
+        assert len(days[0]["blocks"]) == 30
+        assert days[1]["blocks"][0]["first"].customer.name == "Kecha"
+
+
+class TestDragInsideADay:
+    """An admin drags a sotuv up or down inside its own day; the order is saved and
+    the list, and its Excel, read it back."""
+
+    def _sale(self, lot, name, day=None, group=None):
+        customer = Customer.objects.create(name=name)
+        return Sale.objects.create(customer=customer, line=lot, kg=Decimal("1"),
+                                   price=Decimal("1.50"), date=day or date.today(),
+                                   group=group)
+
+    def _names(self, client, url="/sales/"):
+        days = client.get(url).context["days"]
+        return [g["first"].customer.name for g in days[0]["blocks"]]
+
+    def _order(self, client, *sales, day=None):
+        return client.post("/sales/day-order/", {
+            "day": (day or date.today()).isoformat(),
+            "order": ",".join(str(s.pk) for s in sales)})
+
+    def test_the_dragged_order_is_what_the_list_shows(self, admin_client, db):
+        lot = _lot()
+        a, b, c = (self._sale(lot, n) for n in ("A", "B", "C"))
+        assert self._names(admin_client) == ["C", "B", "A"]   # newest first
+        assert self._order(admin_client, a, c, b).status_code == 200
+        assert self._names(admin_client) == ["A", "C", "B"]
+
+    def test_a_sotuv_entered_later_lands_on_top(self, admin_client, db):
+        lot = _lot()
+        a, b = self._sale(lot, "A"), self._sale(lot, "B")
+        self._order(admin_client, a, b)
+        self._sale(lot, "Yangi")
+        assert self._names(admin_client) == ["Yangi", "A", "B"]
+
+    def test_every_row_of_a_group_moves_together(self, admin_client, db):
+        lot = _lot()
+        group = uuid4()
+        g1 = self._sale(lot, "Guruh", group=group)
+        g2 = Sale.objects.create(customer=g1.customer, line=lot, kg=Decimal("2"),
+                                 price=Decimal("1.50"), date=date.today(), group=group)
+        solo = self._sale(lot, "Yolg'iz")
+        self._order(admin_client, solo, g1)
+        g1.refresh_from_db(), g2.refresh_from_db(), solo.refresh_from_db()
+        assert g1.position == g2.position == 1 and solo.position == 0
+        assert self._names(admin_client) == ["Yolg'iz", "Guruh"]
+
+    def test_a_filtered_drag_keeps_the_hidden_rows_in_place(self, admin_client, db):
+        """With a search on, only some of the day is on screen. The dragged rows swap
+        the slots THEY held; the row nobody saw stays where it was."""
+        lot = _lot()
+        a = self._sale(lot, "Topiladi A")
+        b = self._sale(lot, "Boshqa")
+        c = self._sale(lot, "Topiladi C")
+        assert self._names(admin_client, "/sales/?q=Topiladi") == ["Topiladi C", "Topiladi A"]
+        self._order(admin_client, a, c)
+        assert self._names(admin_client) == ["Topiladi A", "Boshqa", "Topiladi C"]
+        assert b.pk  # untouched middle row
+
+    def test_a_sotuv_of_another_day_is_refused(self, admin_client, db):
+        lot = _lot()
+        today = self._sale(lot, "Bugun")
+        old = self._sale(lot, "Kecha", day=date.today() - timedelta(days=1))
+        assert self._order(admin_client, today, old).status_code == 400
+        assert not Sale.objects.exclude(position=None).exists()
+
+    def test_garbage_is_refused(self, admin_client, db):
+        resp = admin_client.post("/sales/day-order/", {"day": "kecha", "order": "1"})
+        assert resp.status_code == 400
+
+    def test_a_skladchi_cannot_reorder(self, skladchi_client, db):
+        lot = _lot()
+        a = self._sale(lot, "A")
+        assert self._order(skladchi_client, a).status_code in (302, 403)
+        a.refresh_from_db()
+        assert a.position is None
+
+    def test_a_skladchi_gets_no_grip(self, skladchi_client, db):
+        self._sale(_lot(), "A")
+        html = skladchi_client.get("/sales/").content.decode()
+        assert 'class="row-grip"' not in html and "data-reorder-url=" not in html
+
+    def test_a_new_sana_clears_the_place(self, admin_client, db):
+        lot = _lot()
+        a, b = self._sale(lot, "A"), self._sale(lot, "B")
+        self._order(admin_client, a, b)
+        admin_client.post(f"/sales/{a.pk}/edit/", {
+            "customer": a.customer_id, "line": lot.pk, "kg": "1",
+            "currency": "usd", "exchange_rate": "12000", "price": "1.50",
+            "date": (date.today() - timedelta(days=2)).isoformat(),
+            "debt_deadline": "", "note": ""})
+        a.refresh_from_db()
+        assert a.date == date.today() - timedelta(days=2)
+        assert a.position is None
+
+    def test_the_excel_follows_the_dragged_order(self, admin_client, db):
+        from crm.views import _filter_sales
+        from django.test import RequestFactory
+        lot = _lot()
+        a, b = self._sale(lot, "A"), self._sale(lot, "B")
+        self._order(admin_client, a, b)
+        sales, *_rest = _filter_sales(RequestFactory().get("/sales/export.xlsx"))
+        assert [s.customer.name for s in sales] == ["A", "B"]
+
+
+def test_the_fab_carries_its_hotkey(admin_client, db):
+    html = admin_client.get("/sales/").content.decode()
+    assert 'data-modal data-hotkey="n">' in html

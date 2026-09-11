@@ -15,18 +15,18 @@ child sits at the BOTTOM, exactly where the primary button was before.
 {% endcomment %}
 <button type="button" class="fab fab--menu" data-fab-toggle aria-expanded="false"
         aria-label="Amallar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"/></svg></button>
-<a class="fab" href="{% url 'customer_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>Kirim (mijozdan)</a>
-<a class="fab fab--muted" href="{% url 'supplier_payment_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Chiqim (hamkorga)</a>
+<a class="fab" href="{% url 'customer_payment_create' %}" data-modal data-hotkey="1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>Kirim (mijozdan)</a>
+<a class="fab fab--muted" href="{% url 'supplier_payment_create' %}" data-modal data-hotkey="2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>Chiqim (hamkorga)</a>
 {% comment %}
 The second chiqim button: money out that answers to no hamkor and no yuk — ijara, ish
 haqi, soliq. Its own button rather than a turkum inside the hamkor form, because that
 form is built around a kelishuv to settle and a qarz not to overpay, and this row has
 neither. See crm.models.OtherExpense.
 {% endcomment %}
-<a class="fab fab--muted" href="{% url 'other_expense_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/><path d="M5 3h14"/></svg>Chiqim (boshqa)</a>
-<a class="fab fab--muted" href="{% url 'kapital_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Kapital</a>
+<a class="fab fab--muted" href="{% url 'other_expense_create' %}" data-modal data-hotkey="3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/><path d="M5 3h14"/></svg>Chiqim (boshqa)</a>
+<a class="fab fab--muted" href="{% url 'kapital_create' %}" data-modal data-hotkey="4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Kapital</a>
 {# Two arrows swapping places: the money is not going anywhere, it is changing shape. #}
-<a class="fab fab--muted" href="{% url 'konvertatsiya_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>Konvertatsiya</a>
+<a class="fab fab--muted" href="{% url 'konvertatsiya_create' %}" data-modal data-hotkey="5"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>Konvertatsiya</a>
 {% endblock %}
 {% block content %}
 

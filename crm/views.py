@@ -3661,7 +3661,15 @@ def _filter_sales(request):
         sales = sales.filter(_changed_today_q()).distinct()
     elif new == "today":
         sales = sales.filter(_new_today_q()).distinct()
+    # Inside a day, the order the operator dragged the sotuvlar into; a sotuv never
+    # dragged (null) stays on top, newest first, as the list always read.
+    sales = sales.order_by("-date", F("position").asc(nulls_first=True), "-created_at")
     return sales, q, date_from, date_to
+
+
+# How many sotuv KUNLARI one page of Sotuvlar holds. Paged by day rather than by row,
+# so a day is never cut in half at the bottom of a page and continued on the next.
+SALE_DAYS_PER_PAGE = 5
 
 
 @role_required(User.Role.ADMIN, User.Role.SKLADCHI)
@@ -3673,12 +3681,16 @@ def sale_list(request):
     foyda and qarz columns are drawn only for an admin, and so is every action. The
     sotuv's own page stays admin-only, so their mijoz cell is not a link.
 
-    Paging still counts rows, so a sotuv straddling the boundary shows the lots that
-    fall on each page. Its figures are the ones on that page too — a total that
-    counted rows the page is not showing would be the worse of the two lies."""
+    Paging counts DAYS (`SALE_DAYS_PER_PAGE`): paging by row cut a day wherever its
+    20th row fell, and the rest of that day reappeared under a second copy of its
+    band on the next page. A whole day on one page is also what lets its sotuvlar be
+    dragged into order — there is no half of it somewhere else."""
     sales, q, date_from, date_to = _filter_sales(request)
-    page = Paginator(sales, 20).get_page(request.GET.get("page"))
-    rows = page.object_list
+    # Its own order_by, not the list's: ordering by created_at as well would put that
+    # column into the DISTINCT and hand back one date per row.
+    sale_days = sales.order_by("-date").values_list("date", flat=True).distinct()
+    page = Paginator(list(sale_days), SALE_DAYS_PER_PAGE).get_page(request.GET.get("page"))
+    rows = list(sales.filter(date__in=page.object_list))
     groups = _sale_groups(rows, edited=_edited_today([s.pk for s in rows]))
     return render(request, "crm/sale_list.html",
                   {"page": page, "q": q,
@@ -3699,6 +3711,41 @@ def sale_list(request):
                    "new_count": new_today_count(),
                    "date_from": date_from, "date_to": date_to,
                    "daterange": _daterange_bar(request, date_from, date_to)})
+
+
+@role_required(User.Role.ADMIN)
+@require_POST
+def sale_day_order(request):
+    """Save the order the operator dragged one day's sotuvlar into on Sotuvlar.
+
+    `order` is the first pk of each sotuv as the rows now stand, and they must all be
+    of `day` — a sotuv only moves inside its own day. With a search or a lens on, the
+    page shows only some of the day, so the dragged rows are put back into the slots
+    THEY held and the rest of the day keeps its place. Then the whole day is numbered
+    afresh, every row of a group on one number."""
+    try:
+        day = _date.fromisoformat(request.POST.get("day", ""))
+        dragged = [int(pk) for pk in request.POST.get("order", "").split(",") if pk]
+    except ValueError:
+        return JsonResponse({"error": "Noto'g'ri tartib"}, status=400)
+
+    day_rows = (Sale.objects.filter(date=day)
+                .order_by(F("position").asc(nulls_first=True), "-created_at")
+                .values_list("pk", "group"))
+    key_of = {pk: group or pk for pk, group in day_rows}
+    moved = [key_of.get(pk) for pk in dragged]
+    if not moved or None in moved or len(set(moved)) != len(moved):
+        return JsonResponse({"error": "Sotuvlar shu kunga tegishli emas"}, status=400)
+
+    blocks = list(dict.fromkeys(key_of[pk] for pk, _group in day_rows))
+    moved_set, placed = set(moved), iter(moved)
+    order = [next(placed) if key in moved_set else key for key in blocks]
+    with transaction.atomic():
+        for index, key in enumerate(order):
+            rows = Sale.objects.filter(date=day)
+            rows = rows.filter(pk=key) if isinstance(key, int) else rows.filter(group=key)
+            rows.update(position=index)
+    return JsonResponse({"ok": True})
 
 
 def _reys_numbers(rows):
@@ -3990,6 +4037,8 @@ def sale_shift_preview(request, pk):
 def sale_edit(request, pk):
     sale = get_object_or_404(Sale, pk=pk)
     previous_customer_id = sale.customer_id
+    # Read before validation, which writes the posted sana onto the instance.
+    previous_date = sale.date
     form = SaleForm(request.POST or None, instance=sale)
     title = "Sotuvni tahrirlash"
     shift_url = reverse("sale_shift_preview", args=[sale.pk])
@@ -4012,6 +4061,10 @@ def sale_edit(request, pk):
             served_id = sale.reservation_id
             was_from_bron = release_bron(sale) > 0
             sale = form.save()
+            if sale.date != previous_date and sale.position is not None:
+                # Its place was a place in the OLD day; in the new one it starts on top.
+                sale.position = None
+                sale.save(update_fields=["position"])
             if sale.reservation_id:
                 sale.reservation = None
                 sale.save(update_fields=["reservation"])
@@ -4160,6 +4213,8 @@ def sale_group_edit(request, pk):
         return sale_edit(request, rows_now[0].pk)
     current = _group_rows(rows_now)
     head = rows_now[0]
+    # Read before validation, which writes the posted sana onto `head`.
+    previous_date = head.date
     title = "Sotuvni tahrirlash"
 
     form = SaleGroupEditForm(request.POST or None, instance=head)
@@ -4226,6 +4281,9 @@ def sale_group_edit(request, pk):
                          key=lambda s: (s.date, s.pk), default=head)
             may_shift[brand] = not blockers(replay(brand), anchor)
         slices, sold = [], []
+        # One number on every row, re-sliced ones included: the list folds a group by
+        # adjacency. A new sana drops it — the sotuv starts on top of its new day.
+        position = head.position if data["date"] == previous_date else None
         with transaction.atomic():
             for key, row in doomed:
                 for old in row["sales"]:
@@ -4247,6 +4305,7 @@ def sale_group_edit(request, pk):
                         kept.price, kept.price_uzs = usd, uzs
                         kept.currency, kept.exchange_rate = currency, rate
                         kept.date = data["date"]
+                        kept.position = position
                         kept.debt_deadline = data["debt_deadline"]
                         kept.note = data["note"]
                         kept.save()
@@ -4265,7 +4324,7 @@ def sale_group_edit(request, pk):
                             customer=data["customer"], line=lot, kg=take,
                             price=usd, price_uzs=uzs,
                             currency=currency, exchange_rate=rate,
-                            group=head.group, reys=reys,
+                            group=head.group, reys=reys, position=position,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=head.created_by,
                         )
@@ -7483,7 +7542,9 @@ def shipment_list_export(request, birja=False):
 @role_required(User.Role.ADMIN)
 def sale_list_export(request):
     sales, _q, _from, _to = _filter_sales(request)
-    headers, table, formats = _sales_table(sales.order_by("-date", "-created_at"))
+    # `_filter_sales` already orders it the way the list draws it, dragged order
+    # included — re-sorting here made the file disagree with the screen.
+    headers, table, formats = _sales_table(sales)
     return xlsx_response("sotuvlar.xlsx", headers, table, "Sotuvlar", formats)
 
 

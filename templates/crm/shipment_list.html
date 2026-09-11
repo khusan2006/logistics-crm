@@ -16,7 +16,7 @@ the old outer `{% if %}` was inert and a tarjimon saw "Yuk qo'shish" — a butto
 403s on click. shipment_create has always been admin-only; this is what makes the
 screen say so.
 {% endcomment %}
-{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url create_url %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Birja yuki qo'shish{% else %}Yuk qo'shish{% endif %}</a>{% endif %}{% endblock %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url create_url %}" data-modal data-hotkey="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Birja yuki qo'shish{% else %}Yuk qo'shish{% endif %}</a>{% endif %}{% endblock %}
 {% block content %}
 
 {% comment %}

@@ -82,8 +82,10 @@ def test_sotuvlar_narrow_to_the_window(admin_client, db):
                                  price=Decimal("1"), date=date(2026, 8, 10))
 
     listed = admin_client.get("/sales/", {"from": "2026-07-01", "to": "2026-07-31"})
-    assert [s.pk for s in listed.context["page"].object_list] == [july.pk]
-    assert august.pk not in [s.pk for s in listed.context["page"].object_list]
+    # Sotuvlar pages by DAY, so the page holds dates; the sotuvlar are in `groups`.
+    listed_pks = [g["first"].pk for g in listed.context["groups"]]
+    assert listed_pks == [july.pk]
+    assert august.pk not in listed_pks
 
 
 def test_kelishuvlar_narrow_by_kelishuv_sanasi(admin_client, db):

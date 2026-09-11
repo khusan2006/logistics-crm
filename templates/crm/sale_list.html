@@ -2,7 +2,7 @@
 {% load crm_extras %}
 {% block title %}Sotuvlar · GranulaLog{% endblock %}
 {% block topbar_title %}Sotuvlar{% endblock %}
-{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'sale_create' %}" data-modal><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi sotuv</a>{% endif %}{% endblock %}
+{% block fab %}{% if user.is_admin_role %}<a class="fab" href="{% url 'sale_create' %}" data-modal data-hotkey="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi sotuv</a>{% endif %}{% endblock %}
 {% block content %}
 
 {# The sotuv sanasi window — the shared ‹ davr › bar, same control as everywhere else. #}
@@ -47,7 +47,12 @@
 </div>
 
 {% if page.object_list %}
-<div class="table-wrap">
+{% comment %}
+An admin can drag a sotuv up or down inside its own day by the grip beside the mijoz.
+The day is always whole on the page (it is paged by day), so there is never a half of
+it elsewhere to be moved against.
+{% endcomment %}
+<div class="table-wrap"{% if user.is_admin_role %} data-sale-reorder data-reorder-url="{% url 'sale_day_order' %}" data-csrf="{{ csrf_token }}"{% endif %}>
 <table>
   <tr>
     {% comment %}
@@ -83,7 +88,7 @@
   {% for d in days %}
   {% include "crm/_day_row.html" with day=d.day label=d.label key=d.key colspan=colspan count=d.blocks|length count_noun="sotuv" note="" %}
   {% for g in d.blocks %}
-  <tr class="sale-row"{% if g.returns %} data-sale="{{ g.first.pk }}"{% endif %}>
+  <tr class="sale-row" data-day="{{ d.key }}" data-order-key="{{ g.first.pk }}"{% if g.returns %} data-sale="{{ g.first.pk }}"{% endif %}>
     {% comment %}
     The caret appears only on a sotuv that HAS vazvratlar — an expander that opens an
     empty panel teaches the operator to stop pressing it. Same control as the one on
@@ -102,6 +107,12 @@
       the sticky slot rather than the date: it has always been "the handle on the
       left of the row", and the whole cell stays the hit area.
       {% endcomment %}
+      {% if user.is_admin_role %}
+      <button type="button" class="row-grip" aria-label="Tartibini o'zgartirish"
+              title="Kun ichida sudrab joyini o'zgartiring (yoki ↑ / ↓)">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+      </button>
+      {% endif %}
       {% if g.returns %}
       <button type="button" class="leg-expand" data-sale="{{ g.first.pk }}"
               title="Vazvratlar">&#9656;</button>
@@ -229,7 +240,7 @@
   while reading the LIST.
   {% endcomment %}
   {% if g.returns %}
-  <tr class="sale-detail" data-sale="{{ g.first.pk }}" hidden>
+  <tr class="sale-detail" data-sale="{{ g.first.pk }}" data-day="{{ d.key }}" hidden>
     <td colspan="{{ colspan }}">
       <div class="legs-inline">
         <div class="load-panel-head">
@@ -278,7 +289,7 @@
   {% endfor %}
 </table>
 </div>
-{% include "crm/_pagination.html" with label="sotuv" %}
+{% include "crm/_pagination.html" with label="kun" %}
 {% else %}
 <p class="muted">Sotuvlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}.</p>
 {% endif %}
@@ -333,8 +344,116 @@
   document.querySelectorAll('.sale-toggle').forEach(function (cell) {
     cell.addEventListener('click', function (e) {
       if (e.target.closest('a')) { return; }   // a link in the cell keeps its own job
+      if (e.target.closest('.row-grip')) { return; }   // the grip moves the row
       toggle(cell.getAttribute('data-sale'));
     });
+  });
+})();
+
+// Drag a sotuv up or down inside its own day, by the grip in the mijoz cell. The row
+// moves in the DOM as the pointer crosses a neighbour's middle — a table row cannot
+// float the way the doska's cards do — and its vazvrat panel travels with it. Rows
+// of another day are never candidates, so a sotuv cannot leave its sana.
+//
+// Pointer events so a thumb works too; the grip reserves the gesture with
+// touch-action: none. ↑ / ↓ on the focused grip do the same from the keyboard.
+(function () {
+  var wrap = document.querySelector('[data-sale-reorder]');
+  if (!wrap) { return; }
+  var drag = null;
+
+  function dayRows(day) {
+    return Array.prototype.slice.call(
+      wrap.querySelectorAll('.sale-row[data-day="' + day + '"]'));
+  }
+
+  function order(day) {
+    return dayRows(day).map(function (row) { return row.dataset.orderKey; }).join(',');
+  }
+
+  // A sotuv row and the vazvrat panel under it, which must never be parted.
+  function unit(row) {
+    var next = row.nextElementSibling;
+    return next && next.classList.contains('sale-detail') ? [row, next] : [row];
+  }
+
+  // Put `row` (with its panel) in front of `ref`; null means after the day's last row.
+  function place(row, ref, rows) {
+    if (!ref) {
+      var lastUnit = unit(rows[rows.length - 1]);
+      ref = lastUnit[lastUnit.length - 1].nextElementSibling;
+    }
+    unit(row).forEach(function (el) { row.parentNode.insertBefore(el, ref); });
+  }
+
+  function save(day, was) {
+    var now = order(day);
+    if (now === was) { return; }
+    fetch(wrap.dataset.reorderUrl, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest',
+                 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ day: day, order: now,
+                                  csrfmiddlewaretoken: wrap.dataset.csrf }),
+    }).then(function (r) {
+      // Refused (a sotuv that is no longer of this day, say): show the order that
+      // is actually saved rather than one that only exists on this screen.
+      if (!r.ok) { window.location.reload(); }
+    });
+  }
+
+  wrap.addEventListener('pointerdown', function (e) {
+    var grip = e.target.closest ? e.target.closest('.row-grip') : null;
+    if (!grip || drag || (e.pointerType === 'mouse' && e.button !== 0)) { return; }
+    var row = grip.closest('.sale-row');
+    e.preventDefault();
+    try { grip.setPointerCapture(e.pointerId); } catch (err) { /* pointer already up */ }
+    drag = { row: row, day: row.dataset.day, was: order(row.dataset.day) };
+    row.classList.add('is-dragging');
+    wrap.classList.add('is-reordering');
+  });
+
+  wrap.addEventListener('pointermove', function (e) {
+    if (!drag) { return; }
+    var rows = dayRows(drag.day);
+    var others = rows.filter(function (row) { return row !== drag.row; });
+    // How many of the other rows the pointer is below the middle of — the slot the
+    // dragged row belongs in.
+    var slot = others.filter(function (row) {
+      var box = row.getBoundingClientRect();
+      return e.clientY > box.top + box.height / 2;
+    }).length;
+    if (slot === rows.indexOf(drag.row)) { return; }
+    place(drag.row, others[slot] || null, others);
+  });
+
+  function drop() {
+    if (!drag) { return; }
+    drag.row.classList.remove('is-dragging');
+    wrap.classList.remove('is-reordering');
+    save(drag.day, drag.was);
+    drag = null;
+  }
+  wrap.addEventListener('pointerup', drop);
+  wrap.addEventListener('pointercancel', drop);
+
+  wrap.addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') { return; }
+    var grip = e.target.closest ? e.target.closest('.row-grip') : null;
+    if (!grip) { return; }
+    e.preventDefault();          // or the page scrolls out from under the row
+    var row = grip.closest('.sale-row');
+    var day = row.dataset.day;
+    var rows = dayRows(day);
+    var at = rows.indexOf(row);
+    var was = order(day);
+    if (e.key === 'ArrowUp' && at > 0) {
+      place(row, rows[at - 1], rows);
+    } else if (e.key === 'ArrowDown' && at < rows.length - 1) {
+      place(row, rows[at + 2] || null, rows);
+    }
+    grip.focus();                // moving the node in the DOM drops focus
+    save(day, was);
   });
 })();
 </script>

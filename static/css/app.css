@@ -1311,6 +1311,18 @@ tbody tr:hover td.sticky-col { background: var(--surface-hover); }
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(77, 124, 254, 0.55);
 }
 .fab svg { width: 20px; height: 20px; }
+/* The keyboard shortcut of an action, drawn onto it by base.html from `data-hotkey`.
+   Not on a touch screen: there is no key there to press. */
+.hotkey-hint {
+  margin-left: 2px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.2);
+  color: inherit;
+  font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.fab--muted .hotkey-hint { background: var(--surface-hover); border: 1px solid var(--border); }
+@media (hover: none) { .hotkey-hint { display: none; } }
 
 /* Secondary / navigation actions: lower-priority than the accent primary. */
 .fab--muted {
@@ -2917,6 +2929,35 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-toggle { cursor: pointer; }
 .load-toggle:hover .leg-expand { background: var(--surface-hover); }
 .load-row.is-expanded td, .stock-row.is-expanded td, .sale-row.is-expanded td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+/* Sotuvlar: the grip a sotuv is dragged by inside its day. Same look as the doska's
+   .cprog-grip — shown on the row's hover, always there on touch. */
+.row-grip {
+  display: inline-grid;
+  place-items: center;
+  vertical-align: middle;
+  width: 18px;
+  height: 24px;
+  margin: 0 2px 0 -8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+  /* Without this a touch drag scrolls the page instead of moving the row. */
+  touch-action: none;
+}
+.row-grip svg { width: 14px; height: 14px; }
+tr:hover .row-grip, .row-grip:focus-visible { opacity: 1; }
+.row-grip:hover { color: var(--text); background: var(--surface-hover); }
+.row-grip:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+@media (hover: none) { .row-grip { opacity: 1; width: 26px; } }
+.is-reordering { cursor: grabbing; user-select: none; }
+.sale-row.is-dragging td,
+tbody tr.sale-row.is-dragging td.sticky-col { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.sale-row.is-dragging .row-grip { opacity: 1; color: var(--accent); cursor: grabbing; }
 /* Only the ombor table gets the accent bar on its left edge. A yuk's edge belongs
    to kechikkan + QR kod, and the pseudo-element bar draws over an inset shadow —
    so the same rule here would be a dead one. The open row is marked by its tinted
