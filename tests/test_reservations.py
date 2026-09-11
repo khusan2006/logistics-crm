@@ -1048,3 +1048,91 @@ def test_the_bron_row_links_the_name_to_that_mijoz_page(admin_client, db):
     # transliterator leaves alone (see test_yozuv) — so the link wraps the span.
     assert (f'href="/debts/{customer.pk}/"><span data-lotin>{customer.name}</span></a>'
             in html)
+
+
+# ── Berilgan kg: exactly what was taken ──────────────────────────────────────────
+
+class TestTheBronGivesBackWhatWasTaken:
+    """The bug reported on 2026-09-11: 115 t of i 1561 handed to Mak Plast, 111 t
+    berilgan on Bronlar.
+
+    A sotuv bigger than the room left on a bron only takes that room — the rest is
+    an ordinary sale. `Sale.reservation` records WHICH bron, never HOW MUCH, so
+    giving the kg back guessed at the sotuv's whole kg and took kg that an EARLIER
+    sotuv had put on the bron. Every edit or delete of a capped sotuv shaved the
+    bron a little further below what the mijoz had actually been given.
+
+    `BronDraw` writes the figure down when the draw happens, so there is nothing
+    left to guess."""
+
+    def _served(self, admin_client, bron_kg, first_kg, second_kg):
+        """A bron drawn to its last kg by two sotuvlar, the second one capped."""
+        lot = _arrived_lot(kg="40000")
+        customer = _customer()
+        _reserve(admin_client, lot.brand, customer, kg=bron_kg)
+        _sell(admin_client, lot.brand, customer, kg=first_kg)
+        _sell(admin_client, lot.brand, customer, kg=second_kg)
+        return lot, customer, Reservation.objects.get()
+
+    def test_a_capped_sotuv_only_takes_the_room_that_was_left(self, admin_client, db):
+        _lot, _customer_, bron = self._served(admin_client, "5000", "4000", "3000")
+        assert bron.fulfilled_kg == Decimal("5000.000")
+        capped = Sale.objects.get(kg=Decimal("3000.000"))
+        assert capped.bron_draws.get().kg == Decimal("1000.000")
+
+    def test_deleting_the_capped_sotuv_gives_back_only_its_own_kg(
+            self, admin_client, db):
+        """4 000 kg is still on the books and still on this mijoz, so the bron must
+        go on saying 4 000 kg berilgan. It used to say 2 000."""
+        _lot, _customer_, bron = self._served(admin_client, "5000", "4000", "3000")
+        capped = Sale.objects.get(kg=Decimal("3000.000"))
+
+        admin_client.post(f"/sales/{capped.pk}/delete/", {})
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("4000.000")
+        assert bron.status == Reservation.Status.ACTIVE
+
+    def test_correcting_the_capped_sotuvs_kg_leaves_the_rest_standing(
+            self, admin_client, db):
+        """4 000 + 500 went out, so 4 500 kg berilgan. The release used to hand back
+        the full 3 000 and the re-draw only put 500 of it back — 2 500 short."""
+        lot, customer, bron = self._served(admin_client, "5000", "4000", "3000")
+        capped = Sale.objects.get(kg=Decimal("3000.000"))
+
+        admin_client.post(f"/sales/{capped.pk}/edit/", {
+            "customer": customer.pk, "line": capped.line_id, "kg": "500",
+            "currency": "usd", "price": "1.50", "exchange_rate": "12000",
+            "date": "2026-07-20", "debt_deadline": "", "note": ""})
+
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("4500.000")
+        assert Sale.objects.get(pk=capped.pk).bron_draws.get().kg == Decimal("500.000")
+
+    def test_a_sotuv_across_two_bronlar_gives_both_of_them_back(self, admin_client, db):
+        """A sotuv fills the mijoz's oldest bron and spills into the next. The link
+        can only name the first, so the second used to keep kg from a sotuv that had
+        been deleted — it read as served forever."""
+        lot = _arrived_lot(kg="40000")
+        customer = _customer()
+        _reserve(admin_client, lot.brand, customer, kg="1000")
+        _reserve(admin_client, lot.brand, customer, kg="4000")
+        _sell(admin_client, lot.brand, customer, kg="5000")
+
+        first, second = Reservation.objects.order_by("created_at", "pk")
+        assert [b.fulfilled_kg for b in (first, second)] == [Decimal("1000.000"),
+                                                             Decimal("4000.000")]
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/delete/", {})
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert [b.fulfilled_kg for b in (first, second)] == [Decimal("0.000"),
+                                                             Decimal("0.000")]
+        assert [b.status for b in (first, second)] == [Reservation.Status.ACTIVE] * 2
+
+    def test_the_draw_row_goes_when_the_sotuv_does(self, admin_client, db):
+        from crm.models import BronDraw
+
+        _lot, _customer_, _bron = self._served(admin_client, "5000", "4000", "3000")
+        assert BronDraw.objects.count() == 2
+        admin_client.post(f"/sales/{Sale.objects.get(kg=Decimal('3000.000')).pk}/delete/", {})
+        assert BronDraw.objects.count() == 1
