@@ -255,6 +255,27 @@ def test_customer_list_has_payment_action(admin_client, db):
     assert f"/customer-payments/new/?customer={customer.pk}" in html
 
 
+def test_bron_row_has_payment_action(admin_client, db):
+    """Bronlar opens the same to'lov modal, already on the bron's mijoz and in the
+    valyuta that bron was agreed in."""
+    from crm.models import Reservation
+
+    customer = _customer()
+    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("1000"),
+                               currency="uzs", status=Reservation.Status.ACTIVE)
+    html = admin_client.get("/reservations/").content.decode()
+    assert f"/customer-payments/new/?customer={customer.pk}&amp;currency=uzs" in html
+
+
+def test_create_starts_the_row_in_the_asked_currency(admin_client, db):
+    customer = _customer()
+    resp = admin_client.get(f"/customer-payments/new/?customer={customer.pk}&currency=uzs")
+    assert resp.context["lines"].forms[0].initial.get("currency") == "uzs"
+    # a value that is not a valyuta is ignored, not handed to the select
+    resp = admin_client.get(f"/customer-payments/new/?customer={customer.pk}&currency=eur")
+    assert resp.context["lines"].forms[0].initial.get("currency") != "eur"
+
+
 def test_customer_options_show_remaining_debt(admin_client, db):
     """The to'lov modal names each mijoz's ostatka, so the operator does not have to
     read it off the Qarzlar screen first."""

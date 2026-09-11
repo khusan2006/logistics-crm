@@ -1468,8 +1468,13 @@ def customer_payment_create(request):
     # Read straight off POST rather than from cleaned_data: the rows have to be
     # BUILT knowing which qarz is being collected, because that is what decides
     # whether each one has to ask for a kurs, and the header is not clean yet.
+    # Bronlar opens this with the bron's own valyuta, so the blank row starts in the
+    # money that bron was agreed in instead of in dollars. Anything that is not a
+    # valyuta is ignored rather than handed to the select.
+    currency = request.GET.get("currency")
     rows = CustomerPaymentFormSet(
         request.POST or None, queryset=CustomerPayment.objects.none(),
+        initial=[{"currency": currency}] if currency in Currency.values else None,
         form_kwargs={"target_currency": (request.POST.get("debt_currency") or "").strip()})
 
     def respond(invalid=False):
