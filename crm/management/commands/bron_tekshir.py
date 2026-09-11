@@ -26,8 +26,9 @@ of a short list, and this prints every item on that list side by side:
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import connection
 
-from crm.models import Reservation, Return, Sale
+from crm.models import BronDraw, Reservation, Return, Sale
 from crm.yozuv import marka_kaliti
 
 
@@ -55,6 +56,12 @@ class Command(BaseCommand):
                             help="yopilgan va bekor qilingan bronlarni ham ko'rsatish")
 
     def handle(self, *args, **options):
+        # The draw ledger is migration 0072. This report exists to be pointed at a
+        # database that has NOT had it yet — that is the database the question is
+        # being asked about — so where the table is missing the per-sotuv split is
+        # reconstructed from the links instead, and the report says it is doing so.
+        self.ledger = (BronDraw._meta.db_table
+                       in connection.introspection.table_names())
         brons = Reservation.objects.select_related("customer").order_by("created_at",
                                                                         "pk")
         if options["bron"]:
@@ -86,31 +93,56 @@ class Command(BaseCommand):
         write(f"  BERILGAN       {_kg(bron.fulfilled_kg)} kg")
         write(f"  qolgan         {_kg(bron.remaining_kg)} kg")
 
-        drawn = self._draws(bron)
-        counted = self._uncounted(bron)
+        drawn, sold = self._draws(bron)
+        uncounted = self._uncounted(bron)
         self._lookalikes(bron)
         self._returns(bron)
-        self._verdict(bron, drawn, counted)
+        self._verdict(bron, drawn, sold, uncounted)
 
     def _draws(self, bron):
-        """The sotuvlar that make up berilgan, and how much of each one it took."""
-        draws = list(bron.draws.select_related("sale__line__contract_line")
-                     .order_by("sale__date", "sale__pk"))
+        """The sotuvlar that make up berilgan, and how much of each one it took.
+
+        Returns (hisoblangan kg, sotuvlar jami kg): what the bron is holding on
+        their behalf, and what those same sotuvlar actually carried. The two part
+        company as soon as one of them was capped by the bron's leftover room."""
         self.stdout.write("\n  BRONGA HISOBLANGAN SOTUVLAR")
-        if not draws:
+        rows = self._draw_rows(bron)
+        if not rows:
             self.stdout.write("    (yo'q)")
-            return Decimal("0")
-        total = Decimal("0")
-        for draw in draws:
-            sale = draw.sale
-            capped = "" if draw.kg == sale.kg else (
+            return Decimal("0"), Decimal("0")
+        drawn = sold = Decimal("0")
+        for sale, kg in rows:
+            capped = "" if kg == sale.kg else (
                 f"   ← sotuv {_kg(sale.kg)} kg edi, bronda shuncha joy qolgandi")
             self.stdout.write(
-                f"    sotuv #{sale.pk:<6} {sale.date:%Y-%m-%d}  "
-                f"{_kg(draw.kg)} kg{capped}")
-            total += draw.kg
-        self.stdout.write(f"    jami {_kg(total)} kg")
-        return total
+                f"    sotuv #{sale.pk:<6} {sale.date:%Y-%m-%d}  {_kg(kg)} kg{capped}")
+            drawn += kg
+            sold += sale.kg
+        self.stdout.write(f"    jami {_kg(drawn)} kg hisoblangan "
+                          f"({_kg(sold)} kg sotilgan)")
+        return drawn, sold
+
+    def _draw_rows(self, bron):
+        """[(sotuv, hisoblangan kg)] — off the ledger where there is one.
+
+        Without it (a database still on the old migrations) the split is
+        reconstructed: the linked sotuvlar oldest first, each taking what is left of
+        the bron's CURRENT berilgan. That is the same order the draws happened in, so
+        it names the right sotuvlar; only a bron whose figure has already drifted can
+        make the last line short, and the XULOSA says so when it does."""
+        if self.ledger:
+            return [(draw.sale, draw.kg) for draw in
+                    bron.draws.select_related("sale").order_by("sale__date", "sale__pk")]
+        self.stdout.write(self.style.WARNING(
+            "    (bu bazada BronDraw jadvali yo'q — taqsimot bog'lanishlardan "
+            "tiklandi, 0072 migratsiyasidan keyin aniq bo'ladi)"))
+        rows, budget = [], bron.fulfilled_kg
+        for sale in (Sale.objects.filter(reservation_id=bron.pk)
+                     .order_by("date", "pk")):
+            take = min(sale.kg, budget) if budget > 0 else Decimal("0")
+            rows.append((sale, take))
+            budget -= take
+        return rows
 
     def _uncounted(self, bron):
         """This mijoz's sotuvlar of this marka that no bron ever counted, with the
@@ -185,17 +217,32 @@ class Command(BaseCommand):
             f"    jami {_kg(total)} kg — bu kg bronga QAYTARILMAYDI, berilgan "
             f"figurasi ichida turaveradi")
 
-    def _verdict(self, bron, drawn, uncounted):
+    def _verdict(self, bron, drawn, sold, uncounted):
         write = self.stdout.write
         write("\n  XULOSA")
-        if drawn != bron.fulfilled_kg:
+        explained = False
+        if self.ledger and drawn != bron.fulfilled_kg:
+            # Only the ledger can prove this one: the reconstruction is FITTED to
+            # `fulfilled_kg`, so without it the two always agree and say nothing.
+            explained = True
             write(self.style.ERROR(
                 f"    berilgan {_kg(bron.fulfilled_kg)} kg, hisoblangan sotuvlar "
                 f"esa {_kg(drawn)} kg — {_kg(abs(bron.fulfilled_kg - drawn))} kg "
                 f"farq. Bu raqamning o'zi noto'g'ri."))
+        if sold > drawn:
+            # The bron was smaller than what the mijoz took. Nothing is lost and
+            # nothing is wrong — but "sotildi" and "berilgan" then differ by design,
+            # and that alone accounts for a 115 t / 111 t kind of gap.
+            explained = True
+            write(self.style.WARNING(
+                f"    bronga hisoblangan sotuvlar {_kg(sold)} kg edi, bron esa "
+                f"{_kg(bron.kg)} kg — {_kg(sold - drawn)} kg bronga sig'magan. "
+                f"U sotuv bor va mijozga berilgan, faqat bron unga va'da "
+                f"bermagan, shuning uchun “berilgan”da ko'rinmaydi."))
         if uncounted:
+            explained = True
             write(self.style.WARNING(
                 f"    {_kg(uncounted)} kg sotuv bu bronga hisoblanmagan — mijoz "
-                f"olgan, bron ko'rmagan. Eng ehtimolli sabab shu."))
-        if drawn == bron.fulfilled_kg and not uncounted:
+                f"olgan, bron ko'rmagan."))
+        if not explained:
             write("    berilgan figurasi hisoblangan sotuvlarga to'liq mos.")
