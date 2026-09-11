@@ -1420,7 +1420,7 @@ class TestEditingAWholeSotuv:
 
 
 class TestPagedByDay:
-    """Sotuvlar pages by DAY: five sotuv kunlari a page, and a day is never cut in two
+    """Sotuvlar pages by DAY: ten sotuv kunlari a page, and a day is never cut in two
     at the bottom of a page."""
 
     def _sale(self, lot, day, name="Mijoz", kg="1"):
@@ -1428,17 +1428,17 @@ class TestPagedByDay:
         return Sale.objects.create(customer=customer, line=lot, kg=Decimal(kg),
                                    price=Decimal("1.50"), date=day)
 
-    def test_five_days_on_a_page(self, admin_client, db):
+    def test_ten_days_on_a_page(self, admin_client, db):
         lot = _lot()
         today = date.today()
-        for back in range(7):
+        for back in range(12):
             self._sale(lot, today - timedelta(days=back))
         first = admin_client.get("/sales/").context
         assert [d["day"] for d in first["days"]] == [
-            today - timedelta(days=back) for back in range(5)]
+            today - timedelta(days=back) for back in range(10)]
         second = admin_client.get("/sales/?page=2").context
         assert [d["day"] for d in second["days"]] == [
-            today - timedelta(days=5), today - timedelta(days=6)]
+            today - timedelta(days=10), today - timedelta(days=11)]
 
     def test_a_busy_day_stays_whole(self, admin_client, db):
         lot = _lot()

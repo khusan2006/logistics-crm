@@ -3669,7 +3669,7 @@ def _filter_sales(request):
 
 # How many sotuv KUNLARI one page of Sotuvlar holds. Paged by day rather than by row,
 # so a day is never cut in half at the bottom of a page and continued on the next.
-SALE_DAYS_PER_PAGE = 5
+SALE_DAYS_PER_PAGE = 10
 
 
 @role_required(User.Role.ADMIN, User.Role.SKLADCHI)
