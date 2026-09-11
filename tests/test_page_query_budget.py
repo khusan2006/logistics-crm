@@ -88,6 +88,49 @@ def test_the_budget_holds_as_the_table_grows(admin_client, django_assert_max_num
         assert admin_client.get("/ombor/").status_code == 200
     with django_assert_max_num_queries(25):
         assert admin_client.get("/sales/").status_code == 200
+
+
+def _payers(customers=4, sales_each=3):
+    """Mijozlar who have bought and paid, so every <option> in the to'lov modal's
+    mijoz picker has a balans to walk: the sotuvlar, the to'lov slices on them and
+    the to'lovlar those slices came from."""
+    from crm.models import CustomerPayment, allocate_customer_payment
+
+    contract = make_contract(brand="marka", kg="100000", price="1.00")
+    make_shipment(contract=contract, kg="100000", arrived="2026-07-01")
+    line = ShipmentLine.objects.filter(contract_line__contract=contract).first()
+    for i in range(customers):
+        customer = Customer.objects.create(name=f"Mijoz {i}", phone="+998901234567")
+        for _ in range(sales_each):
+            Sale.objects.create(customer=customer, line=line, date="2026-07-10",
+                                kg=Decimal("100"), price=Decimal("2.00"),
+                                price_uzs=Decimal("24000"),
+                                exchange_rate=Decimal("12000"))
+        payment = CustomerPayment.objects.create(
+            customer=customer, date="2026-07-11", amount=Decimal("300.00"),
+            amount_uzs=Decimal("3600000.00"), currency="usd", method="cash")
+        allocate_customer_payment(payment)
+    return customer
+
+
+def test_the_payment_modal_does_not_query_per_sotuv(admin_client,
+                                                    django_assert_max_num_queries):
+    """Every mijoz in the picker prints a balans and the Taqsimlash table a qoldiq
+    per sotuv, and both walk the to'lov slices on each sotuv and on each to'lov.
+    Bronlar opens this modal from every row; on the prod copy it took 766 queries
+    for one mijoz."""
+    customer = _payers()
+    url = f"/customer-payments/new/?customer={customer.pk}&currency=usd"
+    with django_assert_max_num_queries(25):
+        assert admin_client.get(url).status_code == 200
+
+
+def test_the_payment_modal_budget_holds_as_the_mijozlar_grow(
+        admin_client, django_assert_max_num_queries):
+    customer = _payers(customers=8, sales_each=6)
+    url = f"/customer-payments/new/?customer={customer.pk}&currency=usd"
+    with django_assert_max_num_queries(25):
+        assert admin_client.get(url).status_code == 200
     with django_assert_max_num_queries(75):
         assert admin_client.get(DOSKA).status_code == 200
 

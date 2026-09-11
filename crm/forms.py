@@ -2475,7 +2475,10 @@ def _customer_payer_field(field):
     """Point a mijoz select at the balance-annotated options, and make it searchable.
 
     balance walks sotuvlar (minus qaytarishlar) and past to'lovlar in Python, so the
-    rows every option needs are fetched once rather than per mijoz.
+    rows every option needs are fetched once rather than per mijoz. That includes the
+    to'lov slices on both sides — what each sotuv has been paid, and what each to'lov
+    has already spent or handed back. Without them the picker asked for those per
+    sotuv and per to'lov: 604 queries on the prod copy before a mijoz was even picked.
 
     `data-combobox` for the same reason the sotuv picker carries it: the list runs to
     hundreds of names and a native select can only be SCROLLED, so every screen that
@@ -2486,7 +2489,9 @@ def _customer_payer_field(field):
     No quick-add here, unlike the sotuv picker: a mijoz who has never bought anything
     has nothing to pay for and nothing to bring back, so a "yangi mijoz" button on
     these three forms would only ever create a dead row."""
-    field.queryset = Customer.objects.prefetch_related("sales__returns", "customer_payments")
+    field.queryset = Customer.objects.prefetch_related(
+        "sales__returns", "sales__allocations",
+        "customer_payments__allocations", "customer_payments__refund_allocations")
     field.label_from_instance = customer_option_label
     field.widget.attrs.setdefault("data-combobox", "")
     # Same reason as the sotuv picker: a mijoz's ism is theirs, not the app's Uzbek.

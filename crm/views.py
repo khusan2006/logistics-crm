@@ -1482,8 +1482,10 @@ def customer_payment_create(request):
         # string: the modal posts to a bare path, so ?customer= is gone by then.
         customer = _bound_customer(target, request)
         # Measured in each sotuv's own currency: a so'm sotuv settled in so'm is done,
-        # whatever its dollar twin still reads.
-        alloc_sales = [s for s in customer.sales.all()
+        # whatever its dollar twin still reads. Returns and slices come with the
+        # sotuvlar, because the qoldiq is asked here and again by the table, and each
+        # asking read both afresh — four queries a sotuv.
+        alloc_sales = [s for s in customer.sales.prefetch_related("returns", "allocations")
                        if s.remaining_own > 0] if customer else None
         return form_response(request, target, "Yangi to'lov", invalid=invalid,
                              extra_context={"lines": rows, "lines_legend": "To'lovlar",
