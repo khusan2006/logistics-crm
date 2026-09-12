@@ -790,6 +790,44 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         assert bron.fulfilled_kg == Decimal("0.000")
         assert bron.status == Reservation.Status.ACTIVE   # the promise is unkept again
 
+    def _edit_kg(self, client, sale, kg):
+        return client.post(f"/sales/{sale.pk}/edit/", {
+            "customer": sale.customer_id, "line": sale.line_id, "kg": kg,
+            "currency": "usd", "price": "1.50", "date": "2026-07-20",
+            "debt_deadline": "", "note": ""})
+
+    def test_raising_the_kg_draws_the_difference(self, admin_client, db):
+        """Bron #5 in the real book: a 3 000 kg sotuv corrected to 7 000 left the bron
+        4 000 kg short. Validation had already put 7 000 on the instance, so the edit
+        gave back 7 000 instead of the 3 000 taken, then drew 7 000 — a net of nothing.
+
+        An earlier sotuv on the same bron matters: alone, the over-release is capped
+        at what the bron holds and the bug hides."""
+        lot = _arrived_lot(kg="30000")
+        customer = _customer()
+        bron = self._bron(customer, kg="20000")
+        self._sell(admin_client, customer, lot.brand, "5000")
+        self._sell(admin_client, customer, lot.brand, "3000")
+        sale = Sale.objects.get(kg=Decimal("3000"))
+        assert sale.reservation_id == bron.pk
+
+        self._edit_kg(admin_client, sale, "7000")
+        sale.refresh_from_db()
+        bron.refresh_from_db()
+        assert sale.kg == Decimal("7000.000")
+        assert bron.fulfilled_kg == Decimal("12000.000")
+
+    def test_lowering_the_kg_gives_the_difference_back(self, admin_client, db):
+        lot = _arrived_lot(kg="20000")
+        customer = _customer()
+        bron = self._bron(customer, kg="10000")
+        self._sell(admin_client, customer, lot.brand, "7000")
+
+        self._edit_kg(admin_client, Sale.objects.get(), "3000")
+        bron.refresh_from_db()
+        assert Sale.objects.get().kg == Decimal("3000.000")
+        assert bron.fulfilled_kg == Decimal("3000.000")
+
 
 # ── Brondan ushlansinmi ──────────────────────────────────────────────────────
 

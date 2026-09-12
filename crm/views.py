@@ -4059,7 +4059,9 @@ def sale_edit(request, pk):
             # sotuv booked alongside a bron into one taken from it, the first time
             # anybody corrected a kg.
             served_id = sale.reservation_id
-            was_from_bron = release_bron(sale) > 0
+            # `previous_kg`, not `sale.kg`: validation has already put the posted kg
+            # on the instance.
+            was_from_bron = release_bron(sale, kg=previous_kg) > 0
             sale = form.save()
             if sale.date != previous_date and sale.position is not None:
                 # Its place was a place in the OLD day; in the new one it starts on top.

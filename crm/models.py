@@ -2959,16 +2959,21 @@ def draw_down_bron(sale, served_id=None):
     return drawn
 
 
-def release_bron(sale):
+def release_bron(sale, kg=None):
     """Give a sotuv's kg back to the bron it was drawn from — for an edit or a
     delete. Returns the kg released.
+
+    `kg` is what the sotuv took, when the instance no longer says so: a bound form
+    writes the posted kg onto the instance at `is_valid()`, before the edit is
+    saved. Releasing that NEW kg and drawing it again moved the bron by nothing —
+    bron #5 missed 4 000 kg when a 3 000 kg sotuv was corrected to 7 000.
 
     A bron closed by the sotuv reopens: the promise is unkept again, and a bron
     that stayed CONVERTED would go on reading as served while the mijoz waits."""
     bron = sale.reservation
     if bron is None:
         return Decimal("0")
-    give = min(sale.kg, bron.fulfilled_kg)
+    give = min(sale.kg if kg is None else kg, bron.fulfilled_kg)
     if give <= 0:
         return Decimal("0")
     bron.fulfilled_kg -= give
