@@ -610,6 +610,16 @@ class TestKamQoldiq:
         contract.refresh_from_db()
         assert not contract.closed_short
 
+    def test_a_stale_button_reloads_the_page_rather_than_filling_the_modal(
+            self, admin_client, db):
+        """The row was drawn while 25 kg was left; a truck was deleted since. The
+        modal must be told to reload, not handed the whole list page."""
+        contract = _contract(kg="1000")
+        _ship(contract, kg="500")
+        resp = admin_client.get(f"/contracts/{contract.pk}/close-short/",
+                                HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        assert resp.status_code == 204
+
     def test_it_can_be_moved_back(self, admin_client, db):
         small = self._small()
         admin_client.post(f"/contracts/{small.pk}/close-short/")

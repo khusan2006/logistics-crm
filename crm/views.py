@@ -1198,8 +1198,9 @@ def contract_close_short(request, pk):
             f"{contract.code}: faqat {floatformat(SHORT_CLOSE_LIMIT_KG, '-3')} kg dan kam "
             f"qoldig'i bor kelishuvni Kam qoldiqqa ko'chirish mumkin "
             f"(qolgan: {floatformat(contract.short_kg, '-3')} kg)")
-        return form_reload(request, list_url) if request.method == "POST" \
-            else redirect(list_url)
+        # form_reload on the modal's GET too: it answers the modal with a reload, so
+        # the message shows on the page instead of the whole list inside the modal.
+        return form_reload(request, list_url)
     kg = floatformat(contract.short_kg, "-3")
     if request.method == "POST":
         contract.closed_short = True
