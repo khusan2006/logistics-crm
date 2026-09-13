@@ -3226,9 +3226,10 @@
   //
   // Pointer events rather than the HTML5 drag-and-drop API: DnD does not fire for
   // touch at all, so the same handler covers a mouse and a thumb.
-  (function () {
-    var list = document.querySelector('[data-cprog-reorder]');
-    if (!list) { return; }
+  //
+  // One handler per card: the hamkor and the birja cards each reorder only their
+  // own rows, and each posts only its own order — the view keeps the rest.
+  Array.prototype.forEach.call(document.querySelectorAll('[data-cprog-reorder]'), function (list) {
     var SLIDE = 180;                   // ms; the rows moving out of the way
     var LIFT = 4;                      // px of travel before a press is a drag
     var drag = null;                   // the row in the air
@@ -3416,7 +3417,7 @@
       grip.focus();             // moving the node in the DOM drops focus
       save(was);
     });
-  })();
+  });
 </script>
 
 <script>

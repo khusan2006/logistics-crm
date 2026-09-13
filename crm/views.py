@@ -203,6 +203,149 @@ def _chart_line(contract, ln, repeated=False):
     }
 
 
+#: How many kelishuvlar one Kelishuvlar bajarilishi card shows.
+CHART_LIMIT = 8
+
+
+def _progress_cards(request, contracts, shipments, statuses, birja):
+    """The three progress cards of the doska — Kelishuvlar bajarilishi, Yuk holatlari
+    and Yuboriladigan mashinalar — for one side of the business: the Eron hamkorlari
+    (`birja=False`) or the birja (`birja=True`).
+
+    The birja is a single hamkor row, so grouping its trucks by hamkor would print
+    "Birja" over every line. Its cards group by the kelishuv kod instead — birja-3,
+    birja-4 — which is how a birja purchase is actually followed."""
+    contracts = [c for c in contracts if c.is_birja == birja]
+    shipments = [s for s in shipments if s.contract.is_birja == birja]
+
+    def owner(contract):
+        return contract.code if birja else contract.partner.name
+
+    # Each holat with how many trucks each hamkor has sitting in it. Listing the
+    # loads themselves repeated the same kelishuv kod once per truck; the question
+    # being asked is "whose trucks are on the road", which is a count per hamkor.
+    #
+    # Each hamkor then opens into WHAT is in those trucks — a marka and a count —
+    # because "sobir 6 ta" says a great deal less than "sobir 6 ta: 2102 4 ta,
+    # 7000 2 ta". A truck carrying two markalar is counted under both, so the marka
+    # figures can add up past the hamkor's own: they answer what is moving, not how
+    # the trucks divide.
+    by_status = {}
+    for shipment in shipments:
+        row = by_status.setdefault(shipment.status_id, {"total": 0, "partners": {}})
+        row["total"] += 1
+        partner = row["partners"].setdefault(owner(shipment.contract),
+                                             {"count": 0, "brands": {}})
+        partner["count"] += 1
+        for brand in {line.brand for line in shipment.lines.all()}:
+            partner["brands"][brand] = partner["brands"].get(brand, 0) + 1
+    status_rows = [
+        {"status": st, "total": by_status[st.pk]["total"],
+         # busiest hamkor first, ties by name; the markalar under each read the same
+         "partners": [
+             {"name": name, "count": p["count"],
+              "brands": sorted(p["brands"].items(), key=lambda kv: (-kv[1], kv[0]))}
+             for name, p in sorted(by_status[st.pk]["partners"].items(),
+                                   key=lambda kv: (-kv[1]["count"], kv[0]))]}
+        for st in statuses if st.pk in by_status
+    ]
+
+    # What each hamkor still owes in trucks, summed across their kelishuvlar —
+    # read the same way as Yuk holatlari: a hamkor and a count. Only kelishuvlar
+    # that set a plan and have not met it yet count toward it.
+    owed = {}
+    for contract in contracts:
+        sent, planned = contract.truck_progress
+        if planned and planned > sent:
+            name = owner(contract)
+            owed[name] = owed.get(name, 0) + (planned - sent)
+    truck_plan_rows = sorted(owed.items(), key=lambda kv: (-kv[1], kv[0]))
+
+    # The progress chart is about business still in flight, so a Yopilgan kelishuv
+    # drops off it: showing every kelishuv filled the card with finished
+    # 120 000 / 120 000 bars and buried the one that was actually mid-delivery.
+    #
+    # Three figures per row, because a kelishuv is only done when all three are:
+    # mashina (the headline — 2/4 trucks gone), yuk (kg delivered) and to'lov (paid
+    # against what the kelishuv will really cost). The to'lov side is read in the
+    # kelishuv's own currency — see Contract.is_settled for why the converted twin
+    # would never agree with it.
+    chart_contracts = []
+    for contract in contracts:
+        if contract.is_settled:
+            continue
+        sent, planned = contract.truck_progress
+        # A kelishuv covering two markalar gets a Yuk bar EACH. Summed into one
+        # bar they hide each other: 96 000 of 240 000 kg reads as a kelishuv
+        # a third of the way through when it can just as easily be one marka
+        # finished and the other untouched — and it is the untouched one that
+        # needs a truck. Only worth the extra lines when there is more than one;
+        # a single-marka kelishuv would just be the same bar twice.
+        lines = list(contract.lines.all())
+        brand_counts = Counter(ln.brand for ln in lines)
+
+        chart_contracts.append({
+            "contract": contract,
+            "sent": sent, "planned": planned,
+            # Each marka carries its own mashina figure too, now that the target is
+            # set per product — without it the count the operator typed against
+            # this row would have nowhere on the page to be read back. And its own
+            # to'lov, now that a to'lov names the product it bought: a kelishuv
+            # can be square on one marka and untouched on the other, which one
+            # gold bar across both could not say.
+            "lines": [_chart_line(contract, ln, repeated=brand_counts[ln.brand] > 1)
+                      for ln in lines] if len(lines) > 1 else [],
+            # What was paid before a to'lov could name a marka. Shown as its own
+            # row rather than folded into one of them: nobody has said which it
+            # bought, and the per-marka bars would otherwise read as $0 paid on a
+            # kelishuv that has had six figures against it.
+            "unassigned_paid": contract.unassigned_paid_own if len(lines) > 1 else 0,
+            # `planned` is None on a kelishuv that never set a target, so it has no
+            # trucks-left to sort on and lands at the bottom with a count and no total.
+            "trucks_left": planned - sent if planned else 0,
+            "shipped_kg": contract.shipped_kg, "kg": contract.kg,
+            "kg_pct": _bar_pct(contract.shipped_kg, contract.kg),
+            "paid": contract.paid_total_own, "due": contract.expected_value_own,
+            "pay_pct": _bar_pct(contract.paid_total_own, contract.expected_value_own),
+            "trucks_count": _truck_count(sent, planned, sent),
+            # What the money has bought, in the unit the hamkor is owed in:
+            # "$96 400 of $288 000" is a share of a figure nobody thinks in, while
+            # "3,3 of 5 mashina paid for" is the question actually being asked.
+            # Read twice — inside the gold bar, and by the note under the pair.
+            "paid_count": _truck_count(
+                _paid_in_trucks(contract.paid_total_own,
+                                contract.expected_value_own, planned or sent),
+                planned, sent),
+        })
+    contracts_total = len(chart_contracts)
+    # Most trucks still to send first — the same reading as Yuboriladigan mashinalar.
+    chart_contracts.sort(key=lambda r: (r["trucks_left"], r["sent"]), reverse=True)
+    # Then whatever the user dragged this card into. A second, stable pass rather
+    # than one combined key: a kelishuv nobody has dragged has no position of its
+    # own, and this way it keeps the automatic rank above and simply falls in
+    # behind the ones that do. So the card survives a new kelishuv appearing or a
+    # dragged one settling without the manual order having to be rebuilt.
+    #
+    # One saved order serves both cards: each card only ever sorts its own
+    # kelishuvlar by it, so a birja drag moving birja pk's to the front of the list
+    # leaves the hamkorlar's relative order exactly as it was.
+    manual_rank = {pk: i for i, pk in enumerate(request.user.dashboard_contract_order)}
+    chart_contracts.sort(
+        key=lambda r: manual_rank.get(r["contract"].pk, len(manual_rank)))
+    chart_contracts = chart_contracts[:CHART_LIMIT]
+
+    return {
+        # Whether this side has any business on the book at all — the birja row is
+        # left off a doska that has never bought on the birja.
+        "any": bool(contracts or shipments),
+        # Where a row opens: a birja kelishuv is not on Kelishuvlar at all.
+        "list_url": contract_list_url(birja),
+        "contracts": chart_contracts, "contracts_shown": len(chart_contracts),
+        "contracts_total": contracts_total, "status_rows": status_rows,
+        "truck_plan_rows": truck_plan_rows,
+    }
+
+
 def dashboard(request):
     if not request.user.is_admin_role:
         # Everyone lands on the first page their role can actually open. A skladchi
@@ -261,115 +404,14 @@ def dashboard(request):
     debt_split = payable_by_currency(contracts)
     overdue = [s for s in shipments.filter(arrived__isnull=True, eta__isnull=False)
                if s.is_overdue]
-    # Each holat with how many trucks each hamkor has sitting in it. Listing the
-    # loads themselves repeated the same kelishuv kod once per truck; the question
-    # being asked is "whose trucks are on the road", which is a count per hamkor.
-    #
-    # Each hamkor then opens into WHAT is in those trucks — a marka and a count —
-    # because "sobir 6 ta" says a great deal less than "sobir 6 ta: 2102 4 ta,
-    # 7000 2 ta". A truck carrying two markalar is counted under both, so the marka
-    # figures can add up past the hamkor's own: they answer what is moving, not how
-    # the trucks divide.
-    by_status = {}
-    for shipment in shipments:
-        row = by_status.setdefault(shipment.status_id, {"total": 0, "partners": {}})
-        row["total"] += 1
-        name = shipment.contract.partner.name
-        partner = row["partners"].setdefault(name, {"count": 0, "brands": {}})
-        partner["count"] += 1
-        for brand in {line.brand for line in shipment.lines.all()}:
-            partner["brands"][brand] = partner["brands"].get(brand, 0) + 1
-    status_rows = [
-        {"status": st, "total": by_status[st.pk]["total"],
-         # busiest hamkor first, ties by name; the markalar under each read the same
-         "partners": [
-             {"name": name, "count": p["count"],
-              "brands": sorted(p["brands"].items(), key=lambda kv: (-kv[1], kv[0]))}
-             for name, p in sorted(by_status[st.pk]["partners"].items(),
-                                   key=lambda kv: (-kv[1]["count"], kv[0]))]}
-        for st in ShipmentStatus.objects.all() if st.pk in by_status
-    ]
-
-    # What each hamkor still owes in trucks, summed across their kelishuvlar —
-    # read the same way as Yuk holatlari: a hamkor and a count. Only kelishuvlar
-    # that set a plan and have not met it yet count toward it.
-    owed = {}
-    for contract in contracts:
-        sent, planned = contract.truck_progress
-        if planned and planned > sent:
-            name = contract.partner.name
-            owed[name] = owed.get(name, 0) + (planned - sent)
-    truck_plan_rows = sorted(owed.items(), key=lambda kv: (-kv[1], kv[0]))
-
-    # The progress chart is about business still in flight, so a Yopilgan kelishuv
-    # drops off it: showing every kelishuv filled the card with finished
-    # 120 000 / 120 000 bars and buried the one that was actually mid-delivery.
-    #
-    # Three figures per row, because a kelishuv is only done when all three are:
-    # mashina (the headline — 2/4 trucks gone), yuk (kg delivered) and to'lov (paid
-    # against what the kelishuv will really cost). The to'lov side is read in the
-    # kelishuv's own currency — see Contract.is_settled for why the converted twin
-    # would never agree with it.
-    CHART_LIMIT = 8
-    chart_contracts = []
-    for contract in contracts:
-        if contract.is_settled:
-            continue
-        sent, planned = contract.truck_progress
-        # A kelishuv covering two markalar gets a Yuk bar EACH. Summed into one
-        # bar they hide each other: 96 000 of 240 000 kg reads as a kelishuv
-        # a third of the way through when it can just as easily be one marka
-        # finished and the other untouched — and it is the untouched one that
-        # needs a truck. Only worth the extra lines when there is more than one;
-        # a single-marka kelishuv would just be the same bar twice.
-        lines = list(contract.lines.all())
-        brand_counts = Counter(ln.brand for ln in lines)
-
-        chart_contracts.append({
-            "contract": contract,
-            "sent": sent, "planned": planned,
-            # Each marka carries its own mashina figure too, now that the target is
-            # set per product — without it the count the operator typed against
-            # this row would have nowhere on the page to be read back. And its own
-            # to'lov, now that a to'lov names the product it bought: a kelishuv
-            # can be square on one marka and untouched on the other, which one
-            # gold bar across both could not say.
-            "lines": [_chart_line(contract, ln, repeated=brand_counts[ln.brand] > 1)
-                      for ln in lines] if len(lines) > 1 else [],
-            # What was paid before a to'lov could name a marka. Shown as its own
-            # row rather than folded into one of them: nobody has said which it
-            # bought, and the per-marka bars would otherwise read as $0 paid on a
-            # kelishuv that has had six figures against it.
-            "unassigned_paid": contract.unassigned_paid_own if len(lines) > 1 else 0,
-            # `planned` is None on a kelishuv that never set a target, so it has no
-            # trucks-left to sort on and lands at the bottom with a count and no total.
-            "trucks_left": planned - sent if planned else 0,
-            "shipped_kg": contract.shipped_kg, "kg": contract.kg,
-            "kg_pct": _bar_pct(contract.shipped_kg, contract.kg),
-            "paid": contract.paid_total_own, "due": contract.expected_value_own,
-            "pay_pct": _bar_pct(contract.paid_total_own, contract.expected_value_own),
-            "trucks_count": _truck_count(sent, planned, sent),
-            # What the money has bought, in the unit the hamkor is owed in:
-            # "$96 400 of $288 000" is a share of a figure nobody thinks in, while
-            # "3,3 of 5 mashina paid for" is the question actually being asked.
-            # Read twice — inside the gold bar, and by the note under the pair.
-            "paid_count": _truck_count(
-                _paid_in_trucks(contract.paid_total_own,
-                                contract.expected_value_own, planned or sent),
-                planned, sent),
-        })
-    contracts_total = len(chart_contracts)
-    # Most trucks still to send first — the same reading as Yuboriladigan mashinalar.
-    chart_contracts.sort(key=lambda r: (r["trucks_left"], r["sent"]), reverse=True)
-    # Then whatever the user dragged this card into. A second, stable pass rather
-    # than one combined key: a kelishuv nobody has dragged has no position of its
-    # own, and this way it keeps the automatic rank above and simply falls in
-    # behind the ones that do. So the card survives a new kelishuv appearing or a
-    # dragged one settling without the manual order having to be rebuilt.
-    manual_rank = {pk: i for i, pk in enumerate(request.user.dashboard_contract_order)}
-    chart_contracts.sort(
-        key=lambda r: manual_rank.get(r["contract"].pk, len(manual_rank)))
-    chart_contracts = chart_contracts[:CHART_LIMIT]
+    # The three progress cards are drawn twice — once for the Eron hamkorlari, once
+    # for the birja — because the two are run as different businesses: a birja lot
+    # moves on its own holat chain and is chased by kelishuv, not by who sold it.
+    # Mixed into one card the birja's many small lots crowded the hamkorlar out of
+    # the eight rows, and "Birja 15 ta" beside "sobir 3 ta" compared nothing.
+    statuses = list(ShipmentStatus.objects.all())
+    hamkor_cards = _progress_cards(request, contracts, shipments, statuses, birja=False)
+    birja_cards = _progress_cards(request, contracts, shipments, statuses, birja=True)
 
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
@@ -399,9 +441,7 @@ def dashboard(request):
         "paid_split": paid_split, "debt_split": debt_split, "overdue": overdue,
         "customer_debt_split": customer_debt_split,
         "sales_profit_total_uzs": sales_profit_total_uzs,
-        "contracts": chart_contracts, "contracts_shown": len(chart_contracts),
-        "contracts_total": contracts_total, "status_rows": status_rows,
-        "truck_plan_rows": truck_plan_rows,
+        "hamkor": hamkor_cards, "birja": birja_cards,
         "stock_kg": stock_kg,
         "sales_profit_total": sales_profit_total,
         "monthly": _monthly_rows(),

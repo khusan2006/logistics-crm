@@ -169,7 +169,7 @@ def test_a_yuk_with_no_product_lines_distorts_nothing(admin_client):
     assert ctx["shipped_kg"] == 0 and ctx["arrived_kg"] == 0
     assert ctx["stock_kg"] == Decimal("0")
     # It is still one truck in Yuk holatlari and one arrival in the oylik hisobot.
-    assert sum(row["total"] for row in ctx["status_rows"]) == 1
+    assert sum(row["total"] for row in ctx["hamkor"]["status_rows"]) == 1
     july = _months(admin_client)[date(2026, 7, 1)]
     assert (july["arrived"], july["kg"], july["value"]) == (1, Decimal("0"), Decimal("0"))
 
@@ -638,7 +638,7 @@ def test_a_kelishuv_with_no_movement_and_a_zero_paid_row_still_renders(admin_cli
     assert _side(ctx["debt_split"]) == Decimal("1000.00")
     assert ctx["stock_kg"] == Decimal("0")
     assert ctx["monthly"] == []                    # nothing sent, nothing sold
-    assert ctx["truck_plan_rows"] == []
+    assert ctx["hamkor"]["truck_plan_rows"] == []
 
 
 def test_a_legacy_rateless_row_is_counted_in_dollars_and_missing_in_som(admin_client):
@@ -729,7 +729,7 @@ def test_yuk_holatlari_counts_trucks_per_hamkor_busiest_first(admin_client):
         for _ in range(trucks):
             make_shipment(contract=contract, kg="100", sent=date(2026, 7, 1))
 
-    rows = _dash(admin_client).context["status_rows"]
+    rows = _dash(admin_client).context["hamkor"]["status_rows"]
     assert len(rows) == 1                                   # all four in one holat
     assert rows[0]["total"] == 4
     assert [(p["name"], p["count"]) for p in rows[0]["partners"]] == [
@@ -755,7 +755,7 @@ def test_yuklar_qarzi_counts_only_kelishuvlar_that_are_behind_their_plan(admin_c
     make_contract(partner=unplanned, kg="9000", price="1.00")               # no plan
     make_contract(partner=tied, kg="9000", price="1.00", planned_trucks=3)  # 3 left
 
-    rows = _dash(admin_client).context["truck_plan_rows"]
+    rows = _dash(admin_client).context["hamkor"]["truck_plan_rows"]
     assert rows == [("Alfa", 3), ("Zomin", 3)]      # tie broken by name, not by pk
 
 
@@ -771,9 +771,9 @@ def test_the_progress_chart_ranks_by_mashina_still_owed_and_caps_at_eight(admin_
             bucket.append(contract)
 
     ctx = _dash(admin_client).context
-    assert ctx["contracts_total"] == len(behind) + len(close) == 8
-    assert ctx["contracts_shown"] == 8                       # CHART_LIMIT
-    shown = list(ctx["contracts"])
+    assert ctx["hamkor"]["contracts_total"] == len(behind) + len(close) == 8
+    assert ctx["hamkor"]["contracts_shown"] == 8                       # CHART_LIMIT
+    shown = list(ctx["hamkor"]["contracts"])
     # the four owing 4 mashina come first; within a tie the kelishuvlar keep the
     # list's own order (newest first), which is what the sort is stable for
     assert {r["contract"].pk for r in shown[:4]} == {c.pk for c in behind}
@@ -782,8 +782,8 @@ def test_the_progress_chart_ranks_by_mashina_still_owed_and_caps_at_eight(admin_
     # a ninth kelishuv, further behind than any of them, pushes the last one off
     make_contract(kg="9000", price="1.00", planned_trucks=9)
     ctx = _dash(admin_client).context
-    assert (ctx["contracts_total"], ctx["contracts_shown"]) == (9, 8)
-    assert ctx["contracts"][0]["trucks_left"] == 9
+    assert (ctx["hamkor"]["contracts_total"], ctx["hamkor"]["contracts_shown"]) == (9, 8)
+    assert ctx["hamkor"]["contracts"][0]["trucks_left"] == 9
 
 
 def test_the_progress_chart_drops_a_kelishuv_once_it_is_yopilgan(admin_client):
@@ -801,7 +801,7 @@ def test_the_progress_chart_drops_a_kelishuv_once_it_is_yopilgan(admin_client):
     owes_goods = _contract("400", "1000")
     owes_money = _contract("1000", "400")
 
-    shown = {r["contract"].pk for r in _dash(admin_client).context["contracts"]}
+    shown = {r["contract"].pk for r in _dash(admin_client).context["hamkor"]["contracts"]}
     assert shown == {owes_goods.pk, owes_money.pk}
     assert settled.pk not in shown
 
@@ -816,7 +816,7 @@ def test_the_progress_chart_reads_the_tolov_bar_in_the_kelishuvs_own_currency(ad
                                    amount=Decimal("250"), amount_uzs=Decimal("3000000"),
                                    currency=Currency.UZS)
 
-    row = _dash(admin_client).context["contracts"][0]
+    row = _dash(admin_client).context["hamkor"]["contracts"][0]
     assert (row["paid"], row["due"]) == (Decimal("3000000"), Decimal("12000000"))
     assert row["pay_pct"] == 25
     assert row["kg_pct"] == 50                               # yuk axis is unaffected

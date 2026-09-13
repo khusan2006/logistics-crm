@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
+from django.urls import reverse
 from django.utils import timezone
 
 from conftest import make_contract, make_lot, make_shipment
@@ -103,7 +104,7 @@ def test_yuk_holatlari_counts_trucks_per_hamkor(admin_client, db):
     make_shipment(contract=b, kg="100", status=loading)
 
     resp = admin_client.get("/")
-    row = {r["status"].name: r for r in resp.context["status_rows"]}[loading.name]
+    row = {r["status"].name: r for r in resp.context["hamkor"]["status_rows"]}[loading.name]
     assert row["total"] == 5
     # eng ko'pi yuqorida, tenglashsa nom bo'yicha
     assert [(p["name"], p["count"]) for p in row["partners"]] == [("Pars", 4), ("Arya", 1)]
@@ -122,7 +123,7 @@ def test_yuk_holatlari_opens_each_hamkor_into_markalar(admin_client, db):
     make_shipment(contract=b, kg="100", status=loading)
 
     resp = admin_client.get("/")
-    row = {r["status"].name: r for r in resp.context["status_rows"]}[loading.name]
+    row = {r["status"].name: r for r in resp.context["hamkor"]["status_rows"]}[loading.name]
     partner = row["partners"][0]
     assert partner["count"] == 4
     assert partner["brands"] == [("2102", 3), ("7000", 1)]   # ko'pi yuqorida
@@ -140,7 +141,7 @@ def test_yuk_holatlari_counts_a_two_marka_yuk_under_both(admin_client, db):
     shipment = make_shipment(contract=contract, kg="100", status=loading)
     ShipmentLine.objects.create(shipment=shipment, contract_line=other, kg=Decimal("100"))
 
-    row = admin_client.get("/").context["status_rows"][0]
+    row = admin_client.get("/").context["hamkor"]["status_rows"][0]
     partner = row["partners"][0]
     assert partner["count"] == 1
     assert partner["brands"] == [("2102", 1), ("7000", 1)]
@@ -150,7 +151,7 @@ def test_yuk_holatlari_skips_statuses_with_no_yuk(admin_client, db):
     c = make_contract(kg="9000")
     used = ShipmentStatus.objects.first()
     make_shipment(contract=c, kg="100", status=used)
-    names = [r["status"].name for r in admin_client.get("/").context["status_rows"]]
+    names = [r["status"].name for r in admin_client.get("/").context["hamkor"]["status_rows"]]
     assert names == [used.name]
 
 
@@ -168,7 +169,7 @@ def test_truck_plan_totals_per_hamkor(admin_client, db):
     make_shipment(contract=a, kg="100")                 # 3 dan 1 tasi ketdi
 
     resp = admin_client.get("/")
-    assert resp.context["truck_plan_rows"] == [("Pars", 4), ("Arya", 1)]
+    assert resp.context["hamkor"]["truck_plan_rows"] == [("Pars", 4), ("Arya", 1)]
     assert "4 ta" in resp.content.decode()
 
 
@@ -178,7 +179,7 @@ def test_truck_plan_skips_kelishuvlar_that_are_done_or_unplanned(admin_client, d
     make_shipment(contract=done, kg="100")          # rejasi bajarildi
     make_contract(kg="9000")                        # rejasi yo'q
 
-    assert admin_client.get("/").context["truck_plan_rows"] == []
+    assert admin_client.get("/").context["hamkor"]["truck_plan_rows"] == []
 
 
 def test_progress_chart_drops_yopilgan_kelishuvlar(admin_client, db):
@@ -192,7 +193,7 @@ def test_progress_chart_drops_yopilgan_kelishuvlar(admin_client, db):
     unpaid = make_contract(brand="To'lanmagan", kg="1000", price="1.00", planned_trucks=1)
     make_shipment(contract=unpaid, kg="1000")              # yuki tugadi, puli yo'q
 
-    shown = admin_client.get("/").context["contracts"]
+    shown = admin_client.get("/").context["hamkor"]["contracts"]
     assert [r["contract"].pk for r in shown] == [unpaid.pk]
 
 
@@ -203,7 +204,7 @@ def test_progress_chart_leads_with_the_kelishuv_owing_the_most_mashina(admin_cli
     make_shipment(contract=close, kg="100")
     unplanned = make_contract(brand="Rejasiz", kg="9000", price="1.00")
 
-    shown = admin_client.get("/").context["contracts"]
+    shown = admin_client.get("/").context["hamkor"]["contracts"]
     assert [r["contract"].pk for r in shown] == [behind.pk, close.pk, unplanned.pk]
     assert [r["trucks_left"] for r in shown] == [4, 1, 0]
     assert (shown[0]["sent"], shown[0]["planned"]) == (1, 5)
@@ -219,7 +220,7 @@ def test_progress_chart_measures_yuk_and_tolov_apart(admin_client, db):
     SupplierPayment.objects.create(contract=contract, amount=Decimal("100"),
                                    date="2026-07-05")
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     assert (row["shipped_kg"], row["kg"]) == (Decimal("250.000"), Decimal("1000.000"))
     assert row["kg_pct"] == 25
     assert (row["paid"], row["due"]) == (Decimal("100"), Decimal("1000"))
@@ -238,7 +239,7 @@ def test_a_two_marka_kelishuv_gets_a_yuk_bar_each(admin_client, db):
     make_shipment(contract=contract, kg="24000",
                   contract_line=contract.lines.get(brand="209 campaund"))
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     assert [(ln["brand"], ln["pct"]) for ln in row["lines"]] == [
         ("7000 campaund", 0), ("209 campaund", 20)]
     # The combined figure is what would have been shown instead — and it says 10%
@@ -260,7 +261,7 @@ def test_a_two_marka_kelishuv_splits_the_tolov_too(admin_client, db):
     SupplierPayment.objects.create(contract=contract, contract_line=second,
                                    amount=Decimal("1000"), date="2026-07-05")
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     assert [(ln["brand"], ln["paid"], ln["due"], ln["pay_pct"]) for ln in row["lines"]] == [
         ("7000 campaund", Decimal("0"), Decimal("1000.00"), 0),
         ("209 campaund", Decimal("1000"), Decimal("1000.00"), 100)]
@@ -364,7 +365,7 @@ def test_a_tolov_naming_no_marka_is_spread_across_the_products(admin_client, db)
     SupplierPayment.objects.create(contract=contract, amount=Decimal("600"),
                                    date="2026-07-05")          # names no marka
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     # No truck plan on either product, so there is nothing to weigh by: the money
     # runs the kelishuv in its own order and stops when it is spent.
     assert [ln["paid"] for ln in row["lines"]] == [Decimal("600"), Decimal("0")]
@@ -385,7 +386,7 @@ def test_what_no_product_can_take_is_still_shown_as_unassigned(admin_client, db)
     SupplierPayment.objects.create(contract=contract, amount=Decimal("2500"),
                                    date="2026-07-05")          # 500 past the lot
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     assert [ln["paid"] for ln in row["lines"]] == [Decimal("1000"), Decimal("1000")]
     assert row["unassigned_paid"] == Decimal("500")
     assert "taqsimlanmagan" in admin_client.get("/").content.decode().lower()
@@ -410,7 +411,7 @@ def test_the_same_money_reads_the_same_whether_a_truck_has_left_or_not(admin_cli
         SupplierPayment.objects.create(contract=contract, contract_line=line,
                                        amount=Decimal("100"), date="2026-07-06")
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     labels = {ln["brand"]: ln["paid_count"] for ln in row["lines"]}
     assert labels["7000"] == labels["209"], labels
     # And the label IS the bar's own fill: $100 of $1 000 is a tenth of 5 trucks.
@@ -424,7 +425,7 @@ def test_a_one_marka_kelishuv_keeps_the_single_yuk_bar(admin_client, db):
     contract = make_contract(brand="2102 repak", kg="1000", price="1.00")
     make_shipment(contract=contract, kg="250")
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     assert row["lines"] == [] and row["kg_pct"] == 25
     assert "2102 repak" in admin_client.get("/").content.decode()
 
@@ -526,7 +527,7 @@ def test_progress_chart_bar_never_runs_past_its_track(admin_client, db):
     SupplierPayment.objects.create(contract=contract, amount=Decimal("1500"),
                                    date="2026-07-05")
 
-    row = admin_client.get("/").context["contracts"][0]
+    row = admin_client.get("/").context["hamkor"]["contracts"][0]
     assert row["pay_pct"] == 100
 
 
@@ -534,8 +535,8 @@ def test_progress_chart_says_when_it_is_showing_a_subset(admin_client, db):
     for i in range(10):
         make_contract(brand=f"K{i}", kg="1000", price="1.00")
     resp = admin_client.get("/")
-    assert resp.context["contracts_shown"] == 8
-    assert resp.context["contracts_total"] == 10
+    assert resp.context["hamkor"]["contracts_shown"] == 8
+    assert resp.context["hamkor"]["contracts_total"] == 10
     assert "10 tadan 8 tasi" in resp.content.decode()
 
 
@@ -547,13 +548,13 @@ def test_the_card_is_read_in_the_order_it_was_dragged_into(admin_client, db):
     watched = make_contract(brand="Kuzatilayotgan", kg="9000", price="1.00", planned_trucks=2)
     make_shipment(contract=watched, kg="100")
 
-    assert [r["contract"].pk for r in admin_client.get("/").context["contracts"]] \
+    assert [r["contract"].pk for r in admin_client.get("/").context["hamkor"]["contracts"]] \
         == [behind.pk, watched.pk]
 
     resp = admin_client.post("/dashboard/contract-order/",
                              {"order": f"{watched.pk},{behind.pk}"})
     assert resp.status_code == 200
-    assert [r["contract"].pk for r in admin_client.get("/").context["contracts"]] \
+    assert [r["contract"].pk for r in admin_client.get("/").context["hamkor"]["contracts"]] \
         == [watched.pk, behind.pk]
 
 
@@ -570,7 +571,7 @@ def test_a_kelishuv_nobody_dragged_keeps_its_automatic_rank(admin_client, db):
 
     fresh = make_contract(brand="Yangi", kg="9000", price="1.00", planned_trucks=9)
     make_shipment(contract=fresh, kg="100")
-    shown = [r["contract"].pk for r in admin_client.get("/").context["contracts"]]
+    shown = [r["contract"].pk for r in admin_client.get("/").context["hamkor"]["contracts"]]
     # The dragged one leads; the other two follow in trucks-left order.
     assert shown == [second.pk, fresh.pk, first.pk]
 
@@ -812,3 +813,62 @@ class TestTheDoskaOpensOnThisMonth:
         assert resp.status_code == 200
         assert resp.context["date_from"] == today.replace(day=1).isoformat()
         assert resp.context["date_to"] == today.isoformat()
+
+
+class TestBirjaCardsStandApart:
+    """The progress cards are drawn twice — hamkorlar, then the birja — so the
+    birja's many small lots neither crowd the hamkorlar off the eight rows nor sit
+    in Yuk holatlari as one "Birja" line beside the real hamkorlar."""
+
+    def _birja_contract(self, **kw):
+        from crm.models import birja_partner
+        return make_contract(partner=birja_partner(), **kw)
+
+    def test_a_birja_kelishuv_is_on_the_birja_cards_only(self, admin_client, db):
+        hamkor = make_contract(brand="2102", kg="9000", planned_trucks=3)
+        birja = self._birja_contract(brand="и 1561", kg="9000", planned_trucks=2)
+
+        ctx = admin_client.get("/").context
+        assert [r["contract"].pk for r in ctx["hamkor"]["contracts"]] == [hamkor.pk]
+        assert [r["contract"].pk for r in ctx["birja"]["contracts"]] == [birja.pk]
+        assert ctx["hamkor"]["truck_plan_rows"] == [("Pars", 3)]
+
+    def test_birja_trucks_are_grouped_by_kelishuv_kod(self, admin_client, db):
+        """The birja is one hamkor, so "Birja" on every line says nothing — the kod
+        is what a birja purchase is followed by."""
+        first = self._birja_contract(brand="и 1561", kg="9000", planned_trucks=4)
+        second = self._birja_contract(brand="и 1561", kg="9000", planned_trucks=2)
+        status = ShipmentStatus.for_kind(birja=True).first()
+        make_shipment(contract=first, kg="100", brand="и 1561", status=status)
+        make_shipment(contract=first, kg="100", brand="и 1561", status=status)
+        make_shipment(contract=second, kg="100", brand="и 1561", status=status)
+
+        cards = admin_client.get("/").context["birja"]
+        assert cards["truck_plan_rows"] == [(first.code, 2), (second.code, 1)]
+        partners = cards["status_rows"][0]["partners"]
+        assert [(p["name"], p["count"]) for p in partners] == [(first.code, 2),
+                                                               (second.code, 1)]
+
+    def test_the_hamkor_card_limit_is_not_spent_on_birja_lots(self, admin_client, db):
+        for i in range(8):
+            self._birja_contract(brand=f"B{i}", kg="1000")
+        hamkor = make_contract(brand="2102", kg="1000")
+
+        ctx = admin_client.get("/").context
+        assert [r["contract"].pk for r in ctx["hamkor"]["contracts"]] == [hamkor.pk]
+        assert ctx["birja"]["contracts_total"] == 8
+
+    def test_no_birja_row_on_a_book_that_never_bought_on_the_birja(self, admin_client, db):
+        make_contract(brand="2102", kg="1000")
+        resp = admin_client.get("/")
+        assert resp.context["birja"]["any"] is False
+        assert "Birja kelishuvlari" not in resp.content.decode()
+
+    def test_the_birja_row_renders_under_the_hamkor_row(self, admin_client, db):
+        make_contract(brand="2102", kg="1000")
+        self._birja_contract(brand="и 1561", kg="1000")
+        html = admin_client.get("/").content.decode()
+        assert html.index("Hamkor kelishuvlari") < html.index("Birja kelishuvlari")
+        assert html.count('class="cprogs" data-cprog-reorder') == 2
+        # A birja row opens the birja list — it is not on Kelishuvlar.
+        assert f'href="{reverse("birja_contract_list")}"' in html
