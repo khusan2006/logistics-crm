@@ -61,6 +61,7 @@ from .models import (
     bron_advance_holds,
     ContractExpense,
     birja_partner,
+    SHORT_CLOSE_LIMIT_KG,
     sync_contract_expenses,
     sync_birja_transport,
     sync_contract_birja_transport,
@@ -256,7 +257,7 @@ def _progress_cards(request, contracts, shipments, statuses, birja):
     owed = {}
     for contract in contracts:
         sent, planned = contract.truck_progress
-        if planned and planned > sent:
+        if planned and planned > sent and not contract.closed_short:
             name = owner(contract)
             owed[name] = owed.get(name, 0) + (planned - sent)
     truck_plan_rows = sorted(owed.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -272,7 +273,9 @@ def _progress_cards(request, contracts, shipments, statuses, birja):
     # would never agree with it.
     chart_contracts = []
     for contract in contracts:
-        if contract.is_settled:
+        # Kam qoldiq too: the operator has said the last few kg are not coming, and
+        # a bar stuck at 99% is exactly what they moved it there to stop seeing.
+        if contract.is_settled or contract.closed_short:
             continue
         sent, planned = contract.truck_progress
         # A kelishuv covering two markalar gets a Yuk bar EACH. Summed into one
@@ -932,10 +935,22 @@ def _filter_contracts(request, birja=False):
     rows = list(contracts)
     # Tugallanmagan = still owed goods OR still owed money; a kelishuv shipped in
     # full but not paid off is unfinished business too.
+    #
+    # Kam qoldiq is carved out of it: kelishuvlar the operator moved there because
+    # the few kg still missing are not coming (`Contract.closed_short`). Counted
+    # before the state narrows the rows, so the switch above the table can say how
+    # many are waiting there whichever view is open. One that went on to be fully
+    # sent and paid is Tugallangan like any other, and leaves Kam qoldiq.
+    def is_short(c):
+        return c.closed_short and not c.is_settled
+
+    short_count = sum(1 for c in rows if is_short(c))
     if state == "done":
         rows = [c for c in rows if c.is_settled]
+    elif state == "short":
+        rows = [c for c in rows if is_short(c)]
     elif state == "open":
-        rows = [c for c in rows if not c.is_settled]
+        rows = [c for c in rows if not c.is_settled and not c.closed_short]
 
     # A Tugallangan kelishuv is fully paid by definition, so the to'lov axis has
     # only one non-empty bucket there — the filter is hidden and ignored.
@@ -953,7 +968,8 @@ def _filter_contracts(request, birja=False):
     rows.sort(key=sort_key, reverse=sort_reverse)
     return rows, {"q": q, "pay": pay, "partner_id": partner_id, "state": state,
                   "sort": sort, "date_from": date_from, "date_to": date_to,
-                  "pay_tabs": pay_tabs, "pay_applies": pay_applies, "birja": birja}
+                  "pay_tabs": pay_tabs, "pay_applies": pay_applies, "birja": birja,
+                  "short_count": short_count}
 
 
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
@@ -996,7 +1012,8 @@ def contract_list(request, birja=False):
     # a chip means "this list is narrower than it normally is".
     panel = [
         {"name": "state", "label": "Holat", "value": state, "default": "open",
-         "options": [("open", "Tugallanmagan"), ("done", "Tugallangan"), ("", "Hammasi")]},
+         "options": [("open", "Tugallanmagan"), ("short", "Kam qoldiq"),
+                     ("done", "Tugallangan"), ("", "Hammasi")]},
         {"name": "sort", "label": "Saralash", "value": sort, "default": CONTRACT_SORT_DEFAULT,
          "options": [(key, label) for key, label, *_ in CONTRACT_SORTS]},
     ]
@@ -1031,6 +1048,7 @@ def contract_list(request, birja=False):
         # What the shared template needs to know which of the two lists it is
         # drawing: the words at the top, and where the + button goes.
         "birja": birja,
+        "short_count": f["short_count"],
         "page_title": "Birja kelishuvlar" if birja else "Kelishuvlar",
         "create_url": "birja_contract_create" if birja else "contract_create",
         "search_placeholder": ("Marka yoki kod bo'yicha qidirish…" if birja
@@ -1161,6 +1179,63 @@ def contract_delete(request, pk):
         confirm_class="btn-danger",
         cancel_url_name="birja_contract_list" if birja else "contract_list",
     )
+
+
+@role_required(User.Role.ADMIN)
+def contract_close_short(request, pk):
+    """Move a kelishuv under Kam qoldiq: the last few kg are not coming, and the
+    operator no longer wants it read as unfinished business.
+
+    Only a flag — see `Contract.closed_short`. Offered below `SHORT_CLOSE_LIMIT_KG`
+    and refused above it, here as well as by the hidden button: a page left open
+    while a truck was deleted must not move a kelishuv still owed a whole load."""
+    contract = get_object_or_404(Contract.objects.select_related("partner")
+                                 .prefetch_related("lines__shipment_lines"), pk=pk)
+    list_url = contract_list_url(contract.is_birja)
+    if not contract.can_close_short:
+        messages.error(
+            request,
+            f"{contract.code}: faqat {floatformat(SHORT_CLOSE_LIMIT_KG, '-3')} kg dan kam "
+            f"qoldig'i bor kelishuvni Kam qoldiqqa ko'chirish mumkin "
+            f"(qolgan: {floatformat(contract.short_kg, '-3')} kg)")
+        return form_reload(request, list_url) if request.method == "POST" \
+            else redirect(list_url)
+    kg = floatformat(contract.short_kg, "-3")
+    if request.method == "POST":
+        contract.closed_short = True
+        contract.save(update_fields=["closed_short"])
+        AuditLog.record(request.user, AuditLog.Action.STATUS, "Kelishuv", contract.pk,
+                        f"Kam qoldiqqa ko'chirildi: {contract.code} · {kg} kg qolgan")
+        messages.success(request, f"{contract.code} Kam qoldiqqa ko'chirildi")
+        return form_reload(request, list_url)
+    return render_confirm(
+        request, "Kam qoldiqqa ko'chirish",
+        (f"“{contract.code}” bo'yicha {kg} kg yuborilmay qolgan. Kelishuv Tugallanmagan "
+         f"ro'yxatidan va bosh sahifadagi kartalardan olinib, Kam qoldiq bo'limida "
+         f"ko'rinadi. Qolgan kg va to'lov o'zgarmaydi."),
+        "Ko'chirish",
+        cancel_url_name="birja_contract_list" if contract.is_birja else "contract_list")
+
+
+@role_required(User.Role.ADMIN)
+def contract_reopen_short(request, pk):
+    """Take a kelishuv back out of Kam qoldiq — the missing kg turned out to be
+    coming after all, or it was moved by mistake."""
+    contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    list_url = contract_list_url(contract.is_birja)
+    if request.method == "POST":
+        if contract.closed_short:
+            contract.closed_short = False
+            contract.save(update_fields=["closed_short"])
+            AuditLog.record(request.user, AuditLog.Action.STATUS, "Kelishuv", contract.pk,
+                            f"Kam qoldiqdan qaytarildi: {contract.code}")
+            messages.success(request, f"{contract.code} Tugallanmaganga qaytarildi")
+        return form_reload(request, list_url)
+    return render_confirm(
+        request, "Tugallanmaganga qaytarish",
+        f"“{contract.code}” Kam qoldiqdan olinib, yana Tugallanmagan ro'yxatida ko'rinadi.",
+        "Qaytarish",
+        cancel_url_name="birja_contract_list" if contract.is_birja else "contract_list")
 
 
 # Sorted in SQL — every key here is a real column, unlike the kelishuv list.

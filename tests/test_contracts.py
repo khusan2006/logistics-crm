@@ -555,3 +555,107 @@ class TestFlatKelishuvList:
         assert resp.context["page"].paginator.count == 25      # kelishuv, not hamkor
         assert len(resp.context["rows"]) == 20
 
+
+
+class TestKamQoldiq:
+    """A hamkor's last truck often lands 25 or 100 kg short of the kelishuv, and
+    nobody sends a truck for that. Below 250 kg the operator can move the kelishuv
+    to Kam qoldiq, so Tugallanmagan stops showing it — without writing anything off."""
+
+    def _small(self):
+        contract = _contract(kg="1000")
+        _ship(contract, kg="975")                           # 25 kg qoldi
+        return contract
+
+    def test_only_a_remainder_under_250_kg_can_be_moved(self, db):
+        contract = _contract(kg="1000")
+        _ship(contract, kg="700")
+        assert not Contract.objects.get(pk=contract.pk).can_close_short   # 300 kg
+        _ship(contract, kg="60")
+        assert Contract.objects.get(pk=contract.pk).can_close_short       # 240 kg
+        _ship(contract, kg="240")
+        assert not Contract.objects.get(pk=contract.pk).can_close_short   # hammasi ketdi
+
+    def test_an_over_loaded_marka_does_not_cover_a_short_one(self, db):
+        contract = _contract(brand="2102", kg="1000")
+        other = ContractLine.objects.create(contract=contract, brand="7000",
+                                            kg=Decimal("1000"), price=Decimal("1"))
+        _ship(contract, kg="1400")                          # 2102: 400 kg ortiq
+        make_shipment(contract_line=other, kg="700")        # 7000: 300 kg qoldi
+        contract = Contract.objects.get(pk=contract.pk)
+        assert contract.short_kg == Decimal("300")
+        assert not contract.can_close_short
+
+    def test_moving_it_takes_it_off_tugallanmagan_and_into_kam_qoldiq(self, admin_client, db):
+        from crm.models import AuditLog
+        small = self._small()
+        other = _contract(kg="1000")
+
+        resp = admin_client.post(f"/contracts/{small.pk}/close-short/")
+        assert resp.status_code in (200, 302)
+        small.refresh_from_db()
+        assert small.closed_short
+
+        assert _listed(admin_client)[1] == [other.pk]
+        resp, shown = _listed(admin_client, state="short")
+        assert shown == [small.pk]
+        assert resp.context["short_count"] == 1
+        assert "Kam qoldiq (1)" in resp.content.decode()
+        assert AuditLog.objects.filter(target_type="Kelishuv", target_id=small.pk).exists()
+
+    def test_a_remainder_too_big_is_refused(self, admin_client, db):
+        contract = _contract(kg="1000")
+        _ship(contract, kg="500")
+        admin_client.post(f"/contracts/{contract.pk}/close-short/")
+        contract.refresh_from_db()
+        assert not contract.closed_short
+
+    def test_it_can_be_moved_back(self, admin_client, db):
+        small = self._small()
+        admin_client.post(f"/contracts/{small.pk}/close-short/")
+        admin_client.post(f"/contracts/{small.pk}/reopen-short/")
+        small.refresh_from_db()
+        assert not small.closed_short
+        assert _listed(admin_client)[1] == [small.pk]
+
+    def test_the_button_is_only_on_the_rows_it_applies_to(self, admin_client, db):
+        small = self._small()
+        big = _contract(kg="1000")
+        html = _listed(admin_client)[0].content.decode()
+        assert f"/contracts/{small.pk}/close-short/" in html
+        assert f"/contracts/{big.pk}/close-short/" not in html
+
+        admin_client.post(f"/contracts/{small.pk}/close-short/")
+        html = _listed(admin_client, state="short")[0].content.decode()
+        assert f"/contracts/{small.pk}/reopen-short/" in html
+
+    def test_no_switch_until_something_has_been_moved(self, admin_client, db):
+        self._small()
+        assert "Kam qoldiq (" not in _listed(admin_client)[0].content.decode()
+
+    def test_a_kelishuv_that_went_on_to_finish_is_tugallangan(self, admin_client, db):
+        small = self._small()
+        admin_client.post(f"/contracts/{small.pk}/close-short/")
+        _ship(small, kg="25")
+        _pay(small, "1000")
+        assert _listed(admin_client, state="short")[1] == []
+        assert _listed(admin_client, state="done")[1] == [small.pk]
+
+    def test_a_tarjimon_cannot_move_one(self, translator_client, db):
+        small = self._small()
+        resp = translator_client.post(f"/contracts/{small.pk}/close-short/")
+        assert resp.status_code in (302, 403)
+        small.refresh_from_db()
+        assert not small.closed_short
+
+    def test_it_leaves_the_doska_progress_cards(self, admin_client, db):
+        contract = _contract(kg="1000", planned_trucks=3)
+        _ship(contract, kg="975")
+        cards = admin_client.get("/").context["hamkor"]
+        assert [r["contract"].pk for r in cards["contracts"]] == [contract.pk]
+        assert cards["truck_plan_rows"] == [("Pars", 2)]
+
+        admin_client.post(f"/contracts/{contract.pk}/close-short/")
+        cards = admin_client.get("/").context["hamkor"]
+        assert cards["contracts"] == []
+        assert cards["truck_plan_rows"] == []

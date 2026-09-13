@@ -670,6 +670,13 @@ class Customer(models.Model):
         return self.name
 
 
+#: The most kg a kelishuv may still be waiting on and be moved under Kam qoldiq. A
+#: hamkor's trucks are loaded to the scale, not to the kelishuv, so the last truck
+#: often lands 25 or 100 kg short of what was agreed — a remainder nobody will send a
+#: truck for, which would otherwise keep the kelishuv on Tugallanmagan for good.
+SHORT_CLOSE_LIMIT_KG = Decimal("250")
+
+
 class Contract(models.Model):
     """Kelishuv: an agreement with one partner covering one or more products.
     Each product — brand, kg, USD/kg — is a ContractLine; this model is the header
@@ -699,6 +706,12 @@ class Contract(models.Model):
     #
     # See `sync_birja_transport`, which is the whole of what this field does: it
     # turns into a xarajat on each of the kelishuv's yuklar as they land.
+    # Set by the Kam qoldiqqa ko'chirish button, never by the form: the operator has
+    # said the few kg still missing are not coming. Only takes the kelishuv off
+    # Tugallanmagan and off the doska's progress cards — nothing is written off, so
+    # Qolgan kg, Qolgan to'lov and Hamkor qarzi read exactly what they did.
+    closed_short = models.BooleanField("Kam qoldiq bilan yopilgan", default=False,
+                                       editable=False)
     transport_rate_per_kg = models.DecimalField(
         "Transport · 1 kg uchun", max_digits=14, decimal_places=4, null=True,
         blank=True,
@@ -1054,6 +1067,19 @@ class Contract(models.Model):
         Uses payable_left rather than debt so it is the same number the Qolgan
         to'lov column shows; with every kg shipped the two are equal anyway."""
         return self.remaining_kg <= 0 and self.payable_left_own <= 0
+
+    @property
+    def short_kg(self):
+        """Kg still to come, added up product by product. A marka loaded over its
+        kg does not cover one still short — the short one is still owed a truck."""
+        return sum((max(ln.remaining_kg, Decimal("0")) for ln in self.lines.all()),
+                   Decimal("0"))
+
+    @property
+    def can_close_short(self):
+        """Whether the Kam qoldiqqa ko'chirish button applies: something is still to
+        come, and it is less than `SHORT_CLOSE_LIMIT_KG`."""
+        return not self.closed_short and 0 < self.short_kg < SHORT_CLOSE_LIMIT_KG
 
     def __str__(self):
         # the hamkor is already in the code

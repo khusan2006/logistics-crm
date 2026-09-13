@@ -29,6 +29,20 @@ Kelishuv sanasi window — the shared ‹ davr › bar, carried in the form as a
 so changing a select keeps it (see crm/_daterange.html).
 {% endcomment %}
 <div class="listbar">
+  {% comment %}
+  Kam qoldiq: kelishuvlar moved out of Tugallanmagan because the few kg still missing
+  are not coming (see Contract.closed_short). A switch rather than only a Holat option
+  in the Filtrlar panel, because it is a place the operator goes to on purpose, and a
+  count on it says there is something there. Drawn only once something has been moved.
+  {% endcomment %}
+  {% if short_count or state == "short" %}
+  <div class="viewswitch">
+    <a class="viewswitch-opt{% if state == 'open' %} is-on{% endif %}"
+       href="{% querystring state=None page=None %}">Tugallanmagan</a>
+    <a class="viewswitch-opt{% if state == 'short' %} is-on{% endif %}"
+       href="{% querystring state='short' page=None %}">Kam qoldiq ({{ short_count }})</a>
+  </div>
+  {% endif %}
   <form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
     {% if date_from %}<input type="hidden" name="from" value="{{ date_from }}">{% endif %}
     {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
@@ -146,6 +160,19 @@ so changing a select keeps it (see crm/_daterange.html).
       <a class="icon-action" href="{% url 'contract_expense_create' %}?contract={{ c.pk }}" data-modal title="Xarajatlar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
       </a>
+      {% comment %}
+      Kam qoldiq: offered only while less than 250 kg is still to come
+      (Contract.can_close_short), and swapped for the way back once moved.
+      {% endcomment %}
+      {% if c.closed_short %}
+      <a class="icon-action" href="{% url 'contract_reopen_short' c.pk %}" data-modal title="Tugallanmaganga qaytarish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      </a>
+      {% elif c.can_close_short %}
+      <a class="icon-action" href="{% url 'contract_close_short' c.pk %}" data-modal title="Kam qoldiqqa ko'chirish">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+      </a>
+      {% endif %}
       <a class="icon-action act-edit" href="{% url 'contract_edit' c.pk %}" data-modal title="Tahrirlash">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </a>
