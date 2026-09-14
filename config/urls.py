@@ -44,6 +44,19 @@ urlpatterns = [
          name="birja_shipment_create"),
     path("birja/yuklar/export.xlsx", crm_views.shipment_list_export,
          {"birja": True}, name="birja_shipment_list_export"),
+    # Mahalliy xarid — granula bought here from a third party (a Telegram seller, say)
+    # to sell on. Views of its own rather than the kelishuv and yuk screens again: one
+    # purchase is a kelishuv and a landed yuk written together, so it is created,
+    # edited and deleted as one row. See crm.models.LocalPurchase.
+    path("mahalliy-xaridlar/", crm_views.local_purchase_list, name="local_purchase_list"),
+    path("mahalliy-xaridlar/new/", crm_views.local_purchase_create,
+         name="local_purchase_create"),
+    path("mahalliy-xaridlar/<int:pk>/edit/", crm_views.local_purchase_edit,
+         name="local_purchase_edit"),
+    path("mahalliy-xaridlar/<int:pk>/delete/", crm_views.local_purchase_delete,
+         name="local_purchase_delete"),
+    path("mahalliy-xaridlar/export.xlsx", crm_views.local_purchase_list_export,
+         name="local_purchase_list_export"),
     path("contract-expenses/new/", crm_views.contract_expense_create,
          name="contract_expense_create"),
     path("contract-expenses/<int:pk>/edit/", crm_views.contract_expense_edit,

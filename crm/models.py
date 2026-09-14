@@ -295,6 +295,10 @@ class Partner(models.Model):
     # on; see `birja_partner`. Not editable: a real hamkor must never become the
     # birja by a tick in a form, which would re-scope every kelishuv under them.
     is_birja = models.BooleanField("Birja", default=False, editable=False)
+    # Same arrangement for granula bought here from a third party to sell on — a
+    # Telegram seller, say. One placeholder row stands in as the counterparty so the
+    # purchase is an ordinary kelishuv; see `local_partner` and `LocalPurchase`.
+    is_local = models.BooleanField("Mahalliy xarid", default=False, editable=False)
     # Kelishuv codes are frozen once issued, so the high-water mark has to outlive the
     # rows themselves — deleting sobir-3 must not hand 3 out again. The counter only
     # ever climbs; the slug tracks the current name so a rename picks up the sequence.
@@ -346,6 +350,22 @@ def birja_partner():
     partner = Partner.objects.filter(is_birja=True).order_by("pk").first()
     if partner is None:
         partner = Partner.objects.create(name=BIRJA_PARTNER_NAME, is_birja=True)
+    return partner
+
+
+#: The name the mahalliy xarid counterparty is created under — it mints mahalliy-1.
+LOCAL_PARTNER_NAME = "Mahalliy"
+
+
+def local_partner():
+    """The one hamkor row every mahalliy xarid is struck against, created on first
+    use. Lazily and found by the flag, for exactly the reasons `birja_partner` gives.
+
+    A placeholder for "whoever sold it", not a claim that sellers do not matter: the
+    sotuvchi is kept on each `LocalPurchase`."""
+    partner = Partner.objects.filter(is_local=True).order_by("pk").first()
+    if partner is None:
+        partner = Partner.objects.create(name=LOCAL_PARTNER_NAME, is_local=True)
     return partner
 
 
@@ -748,6 +768,12 @@ class Contract(models.Model):
         a second flag on the kelishuv could disagree with it. Every list that asks
         this selects the partner, so it costs no query."""
         return self.partner.is_birja
+
+    @property
+    def is_local(self):
+        """A mahalliy xarid's kelishuv — see `LocalPurchase`. Read off the hamkor for
+        the same reason `is_birja` is."""
+        return self.partner.is_local
 
     def _own(self, usd_value, uzs_value):
         """Whichever half of a stored pair is the kelishuv's OWN money — see
@@ -1759,6 +1785,11 @@ class Shipment(models.Model):
         return self.contract.is_birja
 
     @property
+    def is_local(self):
+        """A mahalliy xarid's yuk — bought here, landed the day it was bought."""
+        return self.contract.is_local
+
+    @property
     def has_qr(self):
         """Whether this load's driver is carrying a QR kod. Green in the yuklar
         table; every load without one is yellow, since "no QR" is itself the fact
@@ -1940,7 +1971,8 @@ class Shipment(models.Model):
         carry a bojxona xarajat, "not recorded yet" would be permanent: every birja
         lot in the ombor would stand in the chase list forever. Its SQL twin
         `customs_pending_loads` drops them the same way."""
-        if self.is_birja:
+        # A mahalliy xarid crossed no border either.
+        if self.is_birja or self.is_local:
             return False
         return self.arrived is not None and not self.customs_recorded
 
@@ -2126,6 +2158,60 @@ class ShipmentLine(MoneyEntry):
 
     def __str__(self):
         return f"Lot #{self.pk} · {self.brand} · {self.kg} kg"
+
+
+#: `Shipment.origin` on a mahalliy xarid's yuk — the model's default is the Eron road.
+LOCAL_ORIGIN = "Mahalliy"
+
+
+class LocalPurchase(models.Model):
+    """Mahalliy xarid: granula bought here from a third party — typically a seller
+    found in a Telegram group, when the price is good — to be sold on.
+
+    Deliberately not a stock record of its own. The ombor, the sotuvlar, FIFO and
+    every cost figure read exactly one thing, an arrived ShipmentLine, so a purchase
+    is booked as that chain: a kelishuv under `local_partner()` with one mahsulot,
+    and one yuk that landed the day it was bought. This row ties the two together
+    and keeps what the chain has no column for — who sold it.
+
+    Paid on the spot or on nasiya, what is still owed is the kelishuv's ordinary
+    qarz (`Contract.payable_left_own`), paid down through the hamkor to'lov form
+    like any other.
+
+    The sotuvchi is optional and only a name and a phone for now. When sellers need
+    a qarz line of their own they become hamkorlar, and `Contract.partner` is already
+    the column that says whose purchase it was."""
+
+    contract = models.OneToOneField(Contract, on_delete=models.CASCADE,
+                                    related_name="local_purchase",
+                                    verbose_name="Kelishuv")
+    shipment = models.OneToOneField(Shipment, on_delete=models.CASCADE,
+                                    related_name="local_purchase", verbose_name="Yuk")
+    seller_name = models.CharField("Sotuvchi", max_length=200, blank=True)
+    seller_phone = models.CharField("Sotuvchi telefoni", max_length=30, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                   null=True, related_name="local_purchases",
+                                   verbose_name="Kim kiritdi")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Mahalliy xarid"
+        verbose_name_plural = "Mahalliy xaridlar"
+
+    @property
+    def line(self):
+        """The kelishuv's one mahsulot — what the narx and the qarz are read from.
+        Through `.all()` so a prefetched list costs no query per row."""
+        return self.contract.lines.all()[0]
+
+    @property
+    def lot(self):
+        """The yuk's one ShipmentLine — the lot the ombor sells from."""
+        return self.shipment.lines.all()[0]
+
+    def __str__(self):
+        return f"{self.contract.code} · {self.seller_name or 'sotuvchi yozilmagan'}"
 
 
 class Reservation(MoneyEntry):

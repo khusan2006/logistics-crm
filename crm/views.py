@@ -27,7 +27,7 @@ from .exports import KG, PERCENT, xlsx_book_response, xlsx_response
 from .fifo import apply_plan, blockers, place_one, replay, weighted_cost
 from .templatetags.crm_extras import money_in, som, usd
 from .forms import (
-    ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm,
+    ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, LocalPurchaseForm,
     CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm,
@@ -61,6 +61,7 @@ from .models import (
     bron_advance_holds,
     ContractExpense,
     birja_partner,
+    LOCAL_ORIGIN, LocalPurchase, local_partner,
     SHORT_CLOSE_LIMIT_KG,
     sync_contract_expenses,
     sync_birja_transport,
@@ -216,8 +217,11 @@ def _progress_cards(request, contracts, shipments, statuses, birja):
     The birja is a single hamkor row, so grouping its trucks by hamkor would print
     "Birja" over every line. Its cards group by the kelishuv kod instead — birja-3,
     birja-4 — which is how a birja purchase is actually followed."""
-    contracts = [c for c in contracts if c.is_birja == birja]
-    shipments = [s for s in shipments if s.contract.is_birja == birja]
+    # A mahalliy xarid is on neither side: it lands the day it is bought, so there
+    # is no progress to follow — it is stock from the first minute.
+    contracts = [c for c in contracts if c.is_birja == birja and not c.is_local]
+    shipments = [s for s in shipments
+                 if s.contract.is_birja == birja and not s.contract.is_local]
 
     def owner(contract):
         return contract.code if birja else contract.partner.name
@@ -589,7 +593,7 @@ def partner_list(request):
     # ordinary kelishuv — and it has no telefon, no shahar and nobody to call. What
     # is owed on it is read where it is owed: the Qolgan to'lov column of the Birja
     # kelishuvlar list.
-    partners = Partner.objects.filter(is_birja=False).prefetch_related(
+    partners = Partner.objects.filter(is_birja=False, is_local=False).prefetch_related(
         "contracts__lines__shipment_lines", "contracts__supplier_payments")
     if q:
         partners = partners.filter(Q(name__icontains=q) | Q(phone__icontains=q) | Q(city__icontains=q))
@@ -915,6 +919,8 @@ def _filter_contracts(request, birja=False):
     # instead of two per product per kelishuv as the filters walk every row.
     contracts = (Contract.objects.select_related("partner")
                  .filter(partner__is_birja=birja)
+                 # Mahalliy xaridlar have a list of their own.
+                 .filter(partner__is_local=False)
                  .prefetch_related("lines__shipment_lines", "supplier_payments"))
     if q:
         # lines__brand spans a multi-valued relation, so a kelishuv whose products
@@ -1025,7 +1031,8 @@ def contract_list(request, birja=False):
         panel.insert(0, {
             "name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
             "options": [("", "Hammasi")] + [(p.pk, p.name)
-                                            for p in Partner.objects.filter(is_birja=False)]})
+                                            for p in Partner.objects.filter(
+                                                is_birja=False, is_local=False)]})
     if pay_applies:
         # After Holat, whichever list this is — one index up when the hamkor select
         # is there to be counted.
@@ -1041,7 +1048,7 @@ def contract_list(request, birja=False):
         "q": q, "pay": pay, "partner_id": partner_id,
         "state": state, "pay_tabs": pay_tabs, "pay_applies": pay_applies,
         "sort": sort, "sort_options": [(key, label) for key, label, *_ in CONTRACT_SORTS],
-        "partners": Partner.objects.filter(is_birja=False),
+        "partners": Partner.objects.filter(is_birja=False, is_local=False),
         "date_from": date_from, "date_to": date_to,
         "daterange": _daterange_bar(request, date_from, date_to),
         "has_filters": bool((pay and pay_applies) or partner_id or state != "open"),
@@ -1054,6 +1061,242 @@ def contract_list(request, birja=False):
         "search_placeholder": ("Marka yoki kod bo'yicha qidirish…" if birja
                                else "Marka, hamkor yoki kod bo'yicha qidirish…"),
     })
+
+
+# ── Mahalliy xarid ────────────────────────────────────────────────────────────────
+#
+# Granula bought here from a third party to sell on. One purchase is a kelishuv under
+# `local_partner()` and a yuk that landed the day it was bought — see LocalPurchase
+# for why it is not a stock record of its own.
+
+
+def _local_purchase_only(request):
+    """Turn the kelishuv and yuk screens away from a mahalliy xarid's rows.
+
+    The two are one purchase, written together by `_save_local_purchase`. The
+    kelishuv form would let the agreed kg drift from the lot's, and the yuk form would
+    let the lot leave arrival and drop out of the ombor. Its own page edits both."""
+    messages.error(request, "Bu mahalliy xarid — uni Mahalliy xaridlar sahifasida "
+                            "o'zgartiring")
+    return form_reload(request, reverse("local_purchase_list"))
+
+
+def _save_local_purchase(form, user, purchase=None):
+    """Write one mahalliy xarid as the chain the ombor reads, creating it or bringing
+    an existing one in line with the form. Runs inside the caller's transaction.
+
+    The kurs is the one inherited when the purchase was first booked, kept on every
+    edit — re-rating it at today's would move the so'm figure of goods already costed
+    into sotuvlar. "Hozir to'landi" becomes an ordinary naqd hamkor to'lovi against
+    the kelishuv, so it leaves the kassa and shortens the qarz the way any other does;
+    whatever it does not cover is the nasiya."""
+    data = form.cleaned_data
+    arrival = ShipmentStatus.arrival()
+    if arrival is None:
+        raise RuntimeError("Yetib kelish holati yo'q — xarid omborga tushmaydi")
+    if purchase is None:
+        contract = Contract(partner=local_partner(), created_by=user)
+        rate = latest_exchange_rate()
+    else:
+        contract = purchase.contract
+        rate = purchase.line.exchange_rate
+    contract.currency = data["currency"]
+    contract.created = data["created"]
+    contract.note = data["note"]
+    contract.save()
+
+    price, price_uzs = convert_pair(data["price"], contract.currency, rate,
+                                    usd_places="0.0001")
+    line = purchase.line if purchase else ContractLine(contract=contract)
+    line.brand, line.kg = data["brand"], data["kg"]
+    line.price, line.price_uzs, line.exchange_rate = price, price_uzs, rate
+    line.save()
+
+    shipment = purchase.shipment if purchase else Shipment(
+        contract=contract, origin=LOCAL_ORIGIN, created_by=user)
+    # Bought, handed over and on our shelf the same day: the one yuk has no road.
+    shipment.status = arrival
+    shipment.sent = shipment.eta = shipment.arrived = data["created"]
+    shipment.save()
+    lot = purchase.lot if purchase else ShipmentLine(shipment=shipment, contract_line=line)
+    lot.kg, lot.exchange_rate = data["kg"], rate
+    lot.save()
+
+    if purchase is None:
+        purchase = LocalPurchase(contract=contract, shipment=shipment, created_by=user)
+    purchase.seller_name = data["seller_name"]
+    purchase.seller_phone = data["seller_phone"]
+    purchase.save()
+
+    paid = data.get("paid_now")
+    if paid:
+        amount, amount_uzs = convert_pair(paid, contract.currency, rate)
+        SupplierPayment.objects.create(
+            contract=contract, contract_line=line, date=contract.created,
+            currency=contract.currency, amount=amount, amount_uzs=amount_uzs,
+            exchange_rate=rate, method=PayMethod.CASH,
+            note="Xarid paytida to'landi", created_by=user)
+    # The narx or kg may have moved what the purchase costs, which is the ceiling its
+    # to'lovlar are placed against — same reason `shipment_create` places them again.
+    reconcile_supplier_allocations(contract)
+    return purchase
+
+
+#: Qolgan to'lov filter on the list: nasiya still open, or settled.
+LOCAL_PURCHASE_PAY_FILTERS = {
+    "debt": lambda p: p.contract.payable_left_own > 0,
+    "paid": lambda p: p.contract.payable_left_own <= 0,
+}
+
+
+def _filter_local_purchases(request):
+    """The mahalliy xaridlar list's filters — search, davr, to'lov — in one place, so
+    the page and its Excel button cannot drift apart. The to'lov filter reads a
+    computed qarz, so it narrows in Python after the SQL ones."""
+    q = request.GET.get("q", "").strip()
+    pay = request.GET.get("pay", "").strip()
+    purchases = (LocalPurchase.objects
+                 .select_related("contract__partner", "shipment")
+                 .prefetch_related("contract__lines__shipment_lines",
+                                   "contract__supplier_payments",
+                                   "shipment__lines__sale_lots__sale__returns")
+                 .order_by("-contract__created", "-pk"))
+    if q:
+        purchases = purchases.filter(
+            Q(contract__lines__brand__icontains=q) | Q(seller_name__icontains=q)
+            | Q(seller_phone__icontains=q) | Q(contract__note__icontains=q)).distinct()
+    date_from, date_to = _date_window(request)
+    if date_from:
+        purchases = purchases.filter(contract__created__gte=date_from)
+    if date_to:
+        purchases = purchases.filter(contract__created__lte=date_to)
+    rows = list(purchases)
+    if pay in LOCAL_PURCHASE_PAY_FILTERS:
+        rows = [p for p in rows if LOCAL_PURCHASE_PAY_FILTERS[pay](p)]
+    return rows, {"q": q, "pay": pay, "date_from": date_from, "date_to": date_to}
+
+
+@role_required(User.Role.ADMIN)
+def local_purchase_list(request):
+    """Mahalliy xaridlar: one row per purchase — who sold it, what, how much is still
+    on the shelf, and how much is still owed on it."""
+    rows, f = _filter_local_purchases(request)
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    panel = [{"name": "pay", "label": "To'lov", "value": f["pay"],
+              "options": [("", "Hammasi"), ("debt", "Qarz bor"), ("paid", "To'langan")]}]
+    return render(request, "crm/local_purchase_list.html", {
+        "export_url": reverse("local_purchase_list_export"),
+        "filters": _filter_panel(request, panel),
+        "page": page, "q": f["q"], "pay": f["pay"],
+        "date_from": f["date_from"], "date_to": f["date_to"],
+        "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
+        "has_filters": bool(f["pay"]),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def local_purchase_create(request):
+    form = LocalPurchaseForm(request.POST or None)
+    title = "Yangi mahalliy xarid"
+    if request.method == "POST":
+        if form.is_valid():
+            with transaction.atomic():
+                purchase = _save_local_purchase(form, request.user)
+            AuditLog.record(
+                request.user, AuditLog.Action.CREATE, "Mahalliy xarid", purchase.pk,
+                f"Yangi mahalliy xarid: {purchase.contract.code} · {purchase.line.brand} · "
+                f"{_kg(purchase.lot.kg)} kg")
+            messages.success(request, "Xarid qo'shildi — mol omborda")
+            return form_success(request, reverse("local_purchase_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def local_purchase_edit(request, pk):
+    purchase = get_object_or_404(
+        LocalPurchase.objects.select_related("contract__partner", "shipment"), pk=pk)
+    form = LocalPurchaseForm(request.POST or None, purchase=purchase)
+    title = "Xaridni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid():
+            with transaction.atomic():
+                _save_local_purchase(form, request.user, purchase)
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Mahalliy xarid", purchase.pk,
+                f"Mahalliy xarid tahrirlandi: {purchase.contract.code} · "
+                f"{form.cleaned_data['brand']} · {_kg(form.cleaned_data['kg'])} kg")
+            messages.success(request, "Xarid yangilandi")
+            return form_reload(request, reverse("local_purchase_list"))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+@role_required(User.Role.ADMIN)
+def local_purchase_delete(request, pk):
+    """Take a mistyped purchase back off the books: its lot, its kelishuv, and the
+    to'lovlar made against it, which exist only because the purchase did.
+
+    Refused once anything has been sold from it — those sotuvlar stand on the lot,
+    and pulling stock out from under goods that already left the shelf is not a
+    correction."""
+    purchase = get_object_or_404(
+        LocalPurchase.objects.select_related("contract", "shipment"), pk=pk)
+    contract, shipment, lot = purchase.contract, purchase.shipment, purchase.lot
+    label = f"{contract.code} · {purchase.line.brand} · {_kg(lot.kg)} kg"
+    if lot.sale_lots.exists():
+        messages.error(request, "Bu xariddan sotuv qilingan — o'chirib bo'lmaydi")
+        return form_reload(request, reverse("local_purchase_list"))
+    payments = list(contract.supplier_payments.all())
+    if request.method == "POST":
+        try:
+            with transaction.atomic():
+                for payment in payments:
+                    payment.delete()
+                shipment.delete()
+                contract.delete()
+        except ProtectedError:
+            messages.error(request, "Xaridga bog'liq ma'lumot bor — o'chirib bo'lmaydi")
+            return form_reload(request, reverse("local_purchase_list"))
+        AuditLog.record(
+            request.user, AuditLog.Action.DELETE, "Mahalliy xarid", pk,
+            f"Mahalliy xarid o'chirildi: {label}"
+            + (f" · {len(payments)} ta to'lov bilan" if payments else ""))
+        messages.success(request, "Xarid o'chirildi")
+        return form_reload(request, reverse("local_purchase_list"))
+    also = f" Unga qilingan {len(payments)} ta to'lov ham o'chiriladi." if payments else ""
+    return render_confirm(
+        request,
+        "Xaridni o'chirish",
+        f"“{label}” o'chiriladi.{also} Bu amalni qaytarib bo'lmaydi.",
+        "Ha, o'chirish",
+        confirm_class="btn-danger",
+        cancel_url_name="local_purchase_list",
+    )
+
+
+def _local_purchases_table(purchases):
+    """One row per purchase, both currencies — a workbook is read away from the page
+    that knew which one each purchase was made in."""
+    headers = ["Sana", "Kod", "Sotuvchi", "Telefon", "Marka", "Kg", "Omborda kg",
+               "Valyuta", "Kurs", "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
+               "Qolgan to'lov", "Izoh"]
+    rows = (
+        [p.contract.created, p.contract.code, p.seller_name, p.seller_phone,
+         p.line.brand, p.lot.kg, p.lot.available_kg, p.contract.get_currency_display(),
+         p.line.exchange_rate, p.line.price, p.line.price_uzs, p.line.total_value,
+         p.line.total_value_uzs, p.contract.payable_left_own, p.contract.note]
+        for p in purchases
+    )
+    return headers, rows, {"Kg": KG, "Omborda kg": KG, "Kurs": "#,##0"}
+
+
+@role_required(User.Role.ADMIN)
+def local_purchase_list_export(request):
+    rows, _f = _filter_local_purchases(request)
+    headers, table, formats = _local_purchases_table(rows)
+    return xlsx_response("mahalliy-xaridlar.xlsx", headers, table, "Mahalliy xaridlar",
+                         formats)
 
 
 def _save_lines(formset, parent):
@@ -1124,6 +1367,8 @@ def _contract_form_response(request, form, lines, title, invalid=False):
 @role_required(User.Role.ADMIN)
 def contract_edit(request, pk):
     contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    if contract.is_local:
+        return _local_purchase_only(request)
     birja = contract.is_birja
     form = ContractForm(request.POST or None, instance=contract, birja=birja)
     lines = ContractLineFormSet(
@@ -1160,6 +1405,8 @@ def contract_edit(request, pk):
 @role_required(User.Role.ADMIN)
 def contract_delete(request, pk):
     contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    if contract.is_local:
+        return _local_purchase_only(request)
     birja = contract.is_birja
     if request.method == "POST":
         label = f"{contract.code} · {contract.brand_summary}"
@@ -1992,7 +2239,8 @@ def customs_pending_loads(shipments):
     there.
     """
     return shipments.filter(arrived__isnull=False,
-                            contract__partner__is_birja=False).filter(
+                            contract__partner__is_birja=False,
+                            contract__partner__is_local=False).filter(
         ~Exists(ShipmentExpense.objects.filter(
             shipment=OuterRef("pk"),
             category=ShipmentExpense.Category.CUSTOMS)))
@@ -2054,7 +2302,7 @@ def _filter_shipments(request, birja=False):
     sort = "kelish" if (request.GET.get("sort") == "kelish"
                         and show_all and not customs) else ""
     shipments = (Shipment.objects
-                 .filter(contract__partner__is_birja=birja)
+                 .filter(contract__partner__is_birja=birja, contract__partner__is_local=False)
                  .select_related("contract__partner", "status", "customs_agent")
                  .prefetch_related(
                      "delays", "legs", "expenses", "customs_payments",
@@ -2832,6 +3080,8 @@ def _shipment_changes(before, after):
 def shipment_edit(request, pk):
     shipment = get_object_or_404(
         Shipment.objects.select_related("contract__partner"), pk=pk)
+    if shipment.is_local:
+        return _local_purchase_only(request)
     # Which pipeline this load is on is the row's to say, not the URL's — `ShipmentForm`
     # reads it off the instance and scopes the kelishuv and holat pickers to match.
     form = ShipmentForm(request.POST or None, instance=shipment)
@@ -3261,6 +3511,8 @@ def shipment_delete(request, pk):
         Shipment.objects.select_related("contract__partner"), pk=pk)
     # Read while the row still exists — the delete below takes the kelishuv with it,
     # and the answer decides which list the operator lands back on.
+    if shipment.is_local:
+        return _local_purchase_only(request)
     birja = shipment.is_birja
     if request.method == "POST":
         label = f"{shipment.brand_summary} · {shipment.kg} kg"

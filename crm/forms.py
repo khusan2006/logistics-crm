@@ -630,7 +630,9 @@ class ContractForm(forms.ModelForm):
         else:
             # The birja row is not a hamkor anybody strikes a deal with, so it is
             # not on offer here — its kelishuvlar are opened from the Birja page.
-            self.fields["partner"].queryset = Partner.objects.filter(is_birja=False)
+            # Nor is the mahalliy xarid placeholder — see `LocalPurchase`.
+            self.fields["partner"].queryset = Partner.objects.filter(
+                is_birja=False, is_local=False)
         if not self.instance.pk:  # new contract → default the date to today
             self.fields["created"].initial = timezone.localdate
         # Re-striking a live kelishuv in the other currency would re-read every
@@ -747,6 +749,140 @@ def customer_option_label(customer):
     return " · ".join([customer.name, *parts])
 
 
+def resolve_marka(typed):
+    """The marka already on the books, however it was typed — or a new one, stored
+    the way the ombor reads it.
+
+    Every box a marka is TYPED into goes through here — the kelishuv mahsulot row and
+    the mahalliy xarid form — so neither can be where a second name for one granula
+    is born. See `ContractLineForm.clean_brand` for how that happened once.
+
+    Refused only when the name fits two markalar already split on the books: picking
+    one would be a guess, and that pair wants merge_brand."""
+    raw = (typed or "").strip()
+    if not raw:
+        return raw
+    known = set(ContractLine.objects.values_list("brand", flat=True).distinct())
+    # Exactly as on file wins outright, so a kelishuv under a name that already has
+    # a split twin can still be corrected without being asked to choose between them.
+    if raw in known:
+        return raw
+    key = marka_kaliti(raw)
+    same = sorted(name for name in known if marka_kaliti(name) == key)
+    if len(same) > 1:
+        names = ", ".join(f"“{name}”" for name in same)
+        raise forms.ValidationError(
+            f"Bu nom bazadagi {len(same)} ta markaga to'g'ri keladi: {names}. "
+            f"Aynan birini o'zidek yozing — agar ular bitta granula bo'lsa, "
+            f"markalarni birlashtirish kerak.")
+    if same:
+        return same[0]
+    return marka_nomi(raw)
+
+
+class LocalPurchaseForm(forms.Form):
+    """One mahalliy xarid: what was bought, how many kg, at what narx and in which
+    currency, from whom — and how much of it was paid there and then.
+
+    A plain form rather than a ModelForm: its fields land on four rows (kelishuv,
+    mahsulot, yuk, lot) that are written together — see
+    `crm.views._save_local_purchase`.
+
+    `purchase` is the row being corrected. Once anything has been sold off its lot,
+    the marka and the sana are frozen — a sotuv was placed against that marka, in
+    that day's FIFO order — and the kg cannot drop below what has left the shelf.
+    The valyuta freezes once a to'lov is on it, the rule `contract_locked` keeps for
+    every kelishuv. Hozir to'landi is asked only when creating; money paid later goes
+    through the hamkor to'lov form like any other."""
+
+    created = forms.DateField(label="Sana", widget=date_widget())
+    brand = forms.CharField(
+        label="Granula markasi", max_length=100,
+        widget=forms.TextInput(attrs={"placeholder": "Masalan: 2102 репак"}))
+    kg = forms.DecimalField(label="Kg", max_digits=12, decimal_places=3,
+                            widget=forms.NumberInput(attrs={"placeholder": "0"}))
+    currency = forms.ChoiceField(label="Valyuta", choices=Currency.choices)
+    price = forms.DecimalField(
+        label="1 kg narxi", max_digits=18, decimal_places=4,
+        widget=forms.NumberInput(attrs={"step": "any", "placeholder": "0"}))
+    paid_now = forms.DecimalField(
+        label="Hozir to'landi", max_digits=18, decimal_places=2, required=False,
+        widget=forms.NumberInput(attrs={"step": "any", "placeholder": "0"}),
+        help_text="Xarid valyutasida. Nasiyaga olingan bo'lsa — bo'sh qoldiring: "
+                  "qolgani keyin hamkor to'lovi bilan to'lanadi.")
+    seller_name = forms.CharField(label="Sotuvchi", max_length=200, required=False,
+                                  help_text="Ixtiyoriy")
+    seller_phone = forms.CharField(label="Sotuvchi telefoni", max_length=30,
+                                   required=False)
+    note = forms.CharField(label="Izoh", required=False,
+                           widget=forms.Textarea(attrs={"rows": 2}))
+
+    def __init__(self, *args, purchase=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.purchase = purchase
+        no_future_date(self.fields["created"])
+        for name in ("kg", "price", "paid_now"):
+            _group_thousands(self.fields[name])
+        #: kg that are no longer on the lot's shelf — the floor an edit may not cross.
+        self.gone_kg = Decimal("0")
+        if purchase is None:
+            self.fields["created"].initial = timezone.localdate
+            return
+        contract, line, lot = purchase.contract, purchase.line, purchase.lot
+        self.initial.update({
+            "created": contract.created, "brand": line.brand, "kg": lot.kg,
+            "currency": contract.currency,
+            "price": line.price_uzs if contract.is_som else line.price,
+            "seller_name": purchase.seller_name, "seller_phone": purchase.seller_phone,
+            "note": contract.note,
+        })
+        del self.fields["paid_now"]
+        self.gone_kg = lot.kg - lot.available_kg
+        if lot.sale_lots.exists():
+            for name in ("created", "brand"):
+                self.fields[name].disabled = True
+                self.fields[name].help_text = "Bu xariddan sotuv qilingan — o'zgartirilmaydi"
+        if contract.supplier_payments.exists():
+            self.fields["currency"].disabled = True
+            self.fields["currency"].help_text = (
+                "To'lov qilingan xaridning valyutasi o'zgartirilmaydi")
+
+    def clean_brand(self):
+        return resolve_marka(self.cleaned_data.get("brand"))
+
+    def clean_kg(self):
+        kg = self.cleaned_data.get("kg")
+        if kg is not None and kg <= 0:
+            raise forms.ValidationError("Kg musbat bo'lishi kerak")
+        if kg is not None and kg < self.gone_kg:
+            raise forms.ValidationError(
+                f"{_clean_number(self.gone_kg)} kg allaqachon sotilgan — "
+                "bundan kam bo'lmaydi")
+        return kg
+
+    def clean_price(self):
+        price = self.cleaned_data.get("price")
+        if price is not None and price <= 0:
+            raise forms.ValidationError("Narx musbat bo'lishi kerak")
+        return price
+
+    def clean_paid_now(self):
+        paid = self.cleaned_data.get("paid_now")
+        if paid is not None and paid < 0:
+            raise forms.ValidationError("Summa manfiy bo'lmaydi")
+        return paid
+
+    def clean(self):
+        cleaned = super().clean()
+        kg, price, paid = cleaned.get("kg"), cleaned.get("price"), cleaned.get("paid_now")
+        if kg and price and paid:
+            total = (kg * price).quantize(Decimal("0.01"))
+            if paid > total:
+                self.add_error("paid_now", f"Xarid summasidan ({_clean_number(total)}) "
+                                           "ko'p bo'lmaydi")
+        return cleaned
+
+
 class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
     """One "Mahsulot" row on the kelishuv form.
 
@@ -795,25 +931,7 @@ class ContractLineForm(PriceEntryFormMixin, forms.ModelForm):
 
         Refused only when the name fits two markalar already split on the books: picking
         one would be a guess, and that pair wants merge_brand."""
-        raw = (self.cleaned_data.get("brand") or "").strip()
-        if not raw:
-            return raw
-        known = set(ContractLine.objects.values_list("brand", flat=True).distinct())
-        # Exactly as on file wins outright, so a kelishuv under a name that already has
-        # a split twin can still be corrected without being asked to choose between them.
-        if raw in known:
-            return raw
-        key = marka_kaliti(raw)
-        same = sorted(name for name in known if marka_kaliti(name) == key)
-        if len(same) > 1:
-            names = ", ".join(f"“{name}”" for name in same)
-            raise forms.ValidationError(
-                f"Bu nom bazadagi {len(same)} ta markaga to'g'ri keladi: {names}. "
-                f"Aynan birini o'zidek yozing — agar ular bitta granula bo'lsa, "
-                f"markalarni birlashtirish kerak.")
-        if same:
-            return same[0]
-        return marka_nomi(raw)
+        return resolve_marka(self.cleaned_data.get("brand"))
 
     def __init__(self, *args, currency=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1126,6 +1244,9 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # booked onto a hamkor's agreement — and take its holat chain with it.
         base = (Contract.objects.select_related("partner")
                 .filter(partner__is_birja=birja)
+                # A mahalliy xarid already carries its one landed yuk — see
+                # `LocalPurchase` — so it is never something to load a truck against.
+                .filter(partner__is_local=False)
                 .prefetch_related("lines__shipment_lines"))
         self.fields["contract"].queryset = _keep_if(
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
