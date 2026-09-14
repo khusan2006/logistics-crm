@@ -13,7 +13,7 @@ import pytest
 from conftest import line_data, supplier_payment_rows
 
 from crm.models import (
-    Contract, Customer, LocalPurchase, Sale, Shipment, SupplierPayment,
+    Contract, Customer, LocalPurchase, Sale, Shipment, ShipmentStatus, SupplierPayment,
     brand_on_hand_kg, local_partner,
 )
 
@@ -157,6 +157,20 @@ def test_the_kelishuv_and_yuk_screens_send_it_back_to_its_own_page(admin_client)
         assert resp.status_code == 302, url
         assert resp["Location"] == "/mahalliy-xaridlar/", url
     assert LocalPurchase.objects.exists()
+
+
+def test_its_yuk_cannot_be_moved_off_arrival(admin_client):
+    """The lot page links to the yuk page, and the yuk page carries the holat buttons.
+    Taken off arrival the lot would leave the ombor with its sotuvlar still on it."""
+    _post(admin_client)
+    shipment = LocalPurchase.objects.get().shipment
+    other = ShipmentStatus.objects.exclude(is_arrival=True).first()
+    resp = admin_client.post(f"/shipments/{shipment.pk}/status/", {"status": other.pk})
+    assert resp.status_code == 302
+    shipment.refresh_from_db()
+    assert shipment.status.is_arrival
+    assert shipment.arrived is not None
+    assert brand_on_hand_kg("LLDPE") == Decimal("5000")
 
 
 def test_a_tarjimon_cannot_reach_it(translator_client):

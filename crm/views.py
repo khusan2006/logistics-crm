@@ -3377,6 +3377,11 @@ def shipment_set_status(request, pk):
     # when a bron becomes sellable — which is more than driver detail.
     shipment = get_object_or_404(
         Shipment.objects.select_related("status", "contract__partner"), pk=pk)
+    # A mahalliy xarid's yuk is reachable from its lot page, but it has no road to be
+    # on: taken off arrival it would clear `arrived` and drop out of the ombor while
+    # its sotuvlar still stand on the lot.
+    if shipment.is_local:
+        return _local_purchase_only(request)
     # Only a holat from this load's own chain. The tabs on each list already offer
     # nothing else, so this is the lock behind the courtesy: posting an Eron holat
     # onto a birja yuk would put it in a bosqich its own page cannot draw a tab for,
