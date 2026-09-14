@@ -4939,7 +4939,14 @@ def reservation_edit(request, pk):
     title = "Bronni tahrirlash"
     if request.method == "POST":
         if form.is_valid():
-            form.save()
+            reservation = form.save(commit=False)
+            # Lowered to exactly what was already handed over: nothing is owed any
+            # more, so it ends served — the same end `draw_down_bron` gives a bron
+            # whose last kg a sotuv covers. Left ACTIVE it stayed on Faol reading
+            # "Mol kutilmoqda" with 0 kg to wait for (bron #5, 150 000 → 115 000).
+            if reservation.remaining_kg <= 0:
+                reservation.status = Reservation.Status.CONVERTED
+            reservation.save()
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Bron", reservation.pk,
                 f"Bron tahrirlandi: {reservation.kg} kg · {reservation.customer.name}",

@@ -443,6 +443,25 @@ class TestEditAndDelete:
         r.refresh_from_db()
         assert r.kg == Decimal("20000.000")
 
+    def test_shrinking_to_what_is_already_given_ends_it_served(self, admin_client, db):
+        """Bron #5: 150 000 kg booked, 115 000 handed over, then edited to 115 000.
+        Nothing is owed any more, so it is Sotuvga aylandi — not a Faol bron reading
+        "Mol kutilmoqda" with 0 kg to wait for."""
+        _arrived_lot(kg="12000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
+        r = Reservation.objects.get()
+        _convert(admin_client, r)                       # 12 000 kg handed over
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
+        })
+        assert resp.status_code == 302
+        r.refresh_from_db()
+        assert r.kg == Decimal("12000.000")
+        assert r.status == Reservation.Status.CONVERTED
+        assert not r.is_open
+
     def test_delete_removes_it(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
