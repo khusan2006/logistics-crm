@@ -152,6 +152,73 @@ class TestKassaCountsTheMoneyOnce:
         assert balances["cash"]["out"] == Decimal("0")
 
 
+class TestVositachiFoizi:
+    """A logist sits in Eron too, so a top-up reaches them through a vositachi who
+    keeps a percentage — the same arrangement as a hamkor to'lov. The summa is what
+    the logist RECEIVES; the cut rides on top and is a cost of the transfer."""
+
+    def test_the_cut_rides_on_top_and_leaves_their_balance_alone(self, db):
+        logist = _logist()
+        payment = _send(logist, "1000", commission_percent=Decimal("2"))
+        assert payment.commission_amount == Decimal("20.00")
+        assert payment.total_out == Decimal("1020.00")
+        assert payment.total_out_uzs == Decimal("12240000.00")
+        assert logist.received_total == Decimal("1000.00")
+        assert logist.balance == Decimal("1000.00")
+
+    def test_it_stacks_with_a_bank_foiz_we_carry(self, db):
+        payment = _send(_logist(), "1000", method="transfer",
+                        fee_percent=Decimal("1"), commission_percent=Decimal("2"))
+        assert payment.total_out == Decimal("1030.00")
+
+    def test_the_kassa_shows_it_once_as_its_own_vositachi_row(self, admin_client, db):
+        _send(_logist(), "1000", commission_percent=Decimal("2"))
+        ctx = admin_client.get("/kassa/?davr=all").context
+        assert ctx["net_out"] == Decimal("1020.00")
+        assert ctx["cash_total"] == Decimal("-1020.00")
+        rows = ctx["outflow_page"].paginator.object_list
+        cuts = [r for r in rows if r["kind"] == "commission_logist"]
+        assert [r["amount"] for r in cuts] == [Decimal("20.00")]
+
+    def test_the_waterfall_still_closes_on_the_cash_total(self, admin_client, db):
+        customer = Customer.objects.create(name="Mijoz", phone="1", address="T")
+        CustomerPayment.objects.create(customer=customer, date="2026-07-02",
+                                       amount=Decimal("4000"),
+                                       amount_uzs=Decimal("48000000"), method="cash")
+        _send(_logist(), "1000", commission_percent=Decimal("2"))
+        ctx = admin_client.get("/kassa/?davr=all").context
+        closing = ctx["waterfall"][-1]
+        assert closing["running"] == ctx["cash_total"] == Decimal("2980.00")
+        assert closing["running_uzs"] == ctx["cash_total_uzs"]
+        labels = {b["label"]: b["amount"] for b in ctx["waterfall"]}
+        assert labels["Logistlarga"] == Decimal("-1000.00")
+        assert labels["Vositachi ustamasi"] == Decimal("-20.00")
+
+    def test_a_split_top_up_keeps_each_row_s_own_cut(self, admin_client, db):
+        """Half sent through the vositachi, half handed over directly: one paid a cut
+        and the other did not, so the foiz lives on the row."""
+        logist = _logist()
+        data = {"logist": logist.pk, "date": "2026-07-01",
+                "form-TOTAL_FORMS": "2", "form-INITIAL_FORMS": "0",
+                "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000"}
+        for i, (amount, pct) in enumerate((("1000", "2"), ("500", ""))):
+            data.update({f"form-{i}-currency": "usd", f"form-{i}-amount": amount,
+                         f"form-{i}-exchange_rate": "12000",
+                         f"form-{i}-commission_percent": pct, f"form-{i}-method": "cash",
+                         f"form-{i}-fee_percent": "0", f"form-{i}-note": ""})
+        assert admin_client.post("/logist-payments/new/", data).status_code in (302, 204)
+        cuts = sorted(p.commission_percent for p in LogistPayment.objects.all())
+        assert cuts == [Decimal("0.00"), Decimal("2.00")]
+        assert Logist.objects.get(pk=logist.pk).balance == Decimal("1500.00")
+
+    def test_their_page_names_the_extra_the_kassa_paid(self, admin_client, db):
+        from django.urls import reverse
+        logist = _logist()
+        _send(logist, "1000", commission_percent=Decimal("2"))
+        html = admin_client.get(reverse("logist_detail", args=[logist.pk])).content.decode()
+        assert "ustiga" in html
+
+
 class TestDriverAdvancePricesTheYuk:
     def test_it_lands_on_the_yuk_expenses_and_the_landed_cost(self, db):
         logist = _logist()

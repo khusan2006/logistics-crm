@@ -1551,6 +1551,14 @@ class LogistPayment(HeldFloat, CashEntry):
                                      default=0)
     method = models.CharField("To'lov usuli", max_length=8, choices=PayMethod.choices,
                               default=PayMethod.CASH)
+    # The vositachi's cut. A logist sits in Eron too, so money reaches them the way it
+    # reaches a hamkor — through a middleman who keeps a percentage. Same rule as
+    # `SupplierPayment.commission_percent`: `amount` is what the LOGIST receives, so it
+    # is what their balance grows by, and the cut rides on top of it and leaves the
+    # kassa as a cost of the transfer.
+    commission_percent = models.DecimalField(
+        "Vositachi foizi (%)", max_digits=5, decimal_places=2, default=0, blank=True,
+        help_text="Vositachisiz to'lov uchun bo'sh qoldiring")
     note = models.CharField("Izoh", max_length=255, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="logist_payments",
@@ -1561,6 +1569,26 @@ class LogistPayment(HeldFloat, CashEntry):
         ordering = ["-date", "-created_at"]
         verbose_name = "Logistga to'lov"
         verbose_name_plural = "Logistga to'lovlar"
+
+    @property
+    def commission_amount(self):
+        """The vositachi's cut, on top of what the logist receives."""
+        return (self.amount * self.commission_percent / 100).quantize(Decimal("0.01"))
+
+    @property
+    def commission_amount_uzs(self):
+        return self.in_som(self.commission_amount)
+
+    @property
+    def total_out(self):
+        """What the kassa loses: the `HeldFloat` figure plus the vositachi's cut.
+        `net_amount` — what the logist's balance grows by — is deliberately left
+        alone: the cut went to the middleman and never reached them."""
+        return super().total_out + self.commission_amount
+
+    @property
+    def total_out_uzs(self):
+        return super().total_out_uzs + self.commission_amount_uzs
 
     def __str__(self):
         return f"{self.logist_id} · {self.amount}$ ({self.date})"

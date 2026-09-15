@@ -2975,23 +2975,35 @@ class LogistPaymentRowForm(DebtTargetedRateMixin, FeePercentFormMixin,
     No `fee_bearer` here either — the bank's cut on money going out is ours."""
 
     float_currency = Currency.USD
-    field_order = ["amount", "currency", "method", "fee_percent",
-                   "exchange_rate", "note"]
+    # Vositachi before perechisleniya, for the reason SupplierPaymentRowForm gives: the
+    # two foiz share a line and the bank one is the half a naqd row drops.
+    field_order = ["amount", "currency", "method", "commission_percent",
+                   "fee_percent", "exchange_rate", "note"]
 
     class Meta:
         model = LogistPayment
-        fields = ["currency", "amount", "exchange_rate", "method", "fee_percent",
-                  "note"]
-        widgets = {"note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"})}
-        labels = {"amount": "Yuboriladigan summa"}
+        fields = ["currency", "amount", "exchange_rate", "commission_percent",
+                  "method", "fee_percent", "note"]
+        widgets = {
+            "commission_percent": forms.NumberInput(attrs={
+                "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
+                "placeholder": "0"}),
+            "note": forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}),
+        }
+        labels = {"amount": "Logist oladigan summa"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["amount"].widget.attrs.update({
+            "data-commission-base": "", "data-commission-recipient": "logistga"})
         self.fields["exchange_rate"].help_text = "Faqat so'mda yuborilayotganda kerak"
         self.fields["currency"].widget.attrs["data-settled-against"] = self.float_currency
 
     def settled_against(self):
         return self.float_currency
+
+    def clean_commission_percent(self):
+        return _clean_percent(self.cleaned_data.get("commission_percent"))
 
 
 LogistPaymentFormSet = split_payment_formset(LogistPayment, LogistPaymentRowForm)
@@ -3935,13 +3947,23 @@ class LogistPaymentForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelFor
     class Meta:
         model = LogistPayment
         fields = ["logist", "date", "currency", "amount", "exchange_rate",
-                  "method", "fee_percent", "note"]
-        widgets = {"date": date_widget()}
-        labels = {"amount": "Yuboriladigan summa"}
+                  "commission_percent", "method", "fee_percent", "note"]
+        widgets = {
+            "date": date_widget(),
+            "commission_percent": forms.NumberInput(attrs={
+                "data-commission-percent": "", "step": "0.01", "min": "0", "max": "100",
+                "placeholder": "0"}),
+        }
+        labels = {"amount": "Logist oladigan summa"}
+
+    def clean_commission_percent(self):
+        return _clean_percent(self.cleaned_data.get("commission_percent"))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["logist"].label_from_instance = logist_option_label
+        self.fields["amount"].widget.attrs.update({
+            "data-commission-base": "", "data-commission-recipient": "logistga"})
         self.fields["exchange_rate"].help_text = (
             "Faqat so'mda yuborilayotganda kerak")
         # A constant rather than a picker: unlike a kelishuv there is nothing to

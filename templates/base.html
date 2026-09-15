@@ -1456,8 +1456,11 @@
       var r = parseFloat(pct.value);
       if (a > 0 && r > 0) {
         var cut = a * r / 100;
+        // Who receives the summa — a hamkor unless the form says otherwise (a logist
+        // is paid through a vositachi the same way).
+        var who = base.getAttribute('data-commission-recipient') || 'hamkorga';
         hint.textContent = 'Vositachi ' + money(cut) + ' · kassadan ' + money(a + cut)
-                         + ' · hamkorga ' + money(a);
+                         + ' · ' + who + ' ' + money(a);
       } else { hint.textContent = ''; }
     }
     function enhance(root) {

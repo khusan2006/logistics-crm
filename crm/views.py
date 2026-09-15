@@ -6607,6 +6607,20 @@ def _kassa_ledger_rows(window):
             "amount_uzs": p.amount_uzs, "amount": p.amount,
         })
     for p in logist_pays:
+        if not p.commission_amount:
+            continue
+        outflow_rows.append({
+            "kind": "commission_logist", "pk": p.pk, "date": p.date, "obj": p,
+            "crossed": p.crosses_currency,
+            "title": f"Vositachi ({p.commission_percent}%) · logist {p.logist.name}",
+            "method_code": p.method, "method": p.get_method_display(),
+            # A slice of the top-up, so it inherits that row's kurs — same as the
+            # hamkor vositachi row above.
+            "currency": p.currency, "exchange_rate": p.exchange_rate,
+            "amount_uzs": uzs_slice(p, p.commission_amount),
+            "amount": p.commission_amount,
+        })
+    for p in logist_pays:
         if not p.fee_amount:
             continue
         outflow_rows.append({
@@ -7026,8 +7040,12 @@ def kassa(request):
 
     sup_amount = sum((p.amount for p in sup_pays), Decimal("0"))
     sup_amount_uzs = sum((p.amount_uzs for p in sup_pays), Decimal("0"))
-    commission = commission_total(sup_pays)
-    commission_uzs = sum((p.commission_amount_uzs for p in sup_pays), Decimal("0"))
+    # Hamkor and logist alike — both are paid in Eron through a vositachi, and the
+    # logist's cut is in `total_out` too, so leaving it out would stop the waterfall
+    # closing on the till.
+    commission = commission_total(sup_pays) + commission_total(logist_pays)
+    commission_uzs = sum((p.commission_amount_uzs for p in [*sup_pays, *logist_pays]),
+                         Decimal("0"))
     # Outgoing foiz only. A mijoz's perechisleniya foiz never reached the kassa —
     # `net_in` is already net of it — so billing it again here would take the same
     # money out twice and the waterfall would stop landing on the ledger total.
@@ -7840,7 +7858,8 @@ def _konvertatsiya_table(rows):
 # How each ledger row reads in the export — the same words the badges on the page use.
 LEDGER_KINDS = {
     "customer": "Mijoz to'lovi", "kapital": "Kapital", "supplier": "Hamkor to'lovi",
-    "commission": "Vositachi", "fee": "Perechisleniya foizi",
+    "commission": "Vositachi", "commission_logist": "Vositachi",
+    "fee": "Perechisleniya foizi",
     "fee_logist": "Perechisleniya foizi", "fee_customs": "Perechisleniya foizi",
     "fee_expense": "Perechisleniya foizi", "logist": "Logistga", "customs": "Bojxona",
     "expense": "Yuk xarajati", "exchange": "Konvertatsiya",
@@ -8155,7 +8174,11 @@ def logist_detail(request, pk):
             "driver_advances__shipment__status"), pk=pk)
     sent_rows = [
         {"date": payment.date, "obj": payment,
-         "title": payment.note or "Bizdan olindi",
+         # What landed with them is the summa; the vositachi and bank cuts riding on
+         # top are named in the detail, the way `partner_detail` names them.
+         "title": (payment.note or "Bizdan olindi")
+                  + (f" · ustiga {usd(payment.total_out - payment.net_amount)} xarajat"
+                     if payment.total_out != payment.net_amount else ""),
          "amount": payment.net_amount, "amount_uzs": payment.net_amount_uzs,
          "currency": payment.currency, "method": payment.get_method_display(),
          "method_code": payment.method}
