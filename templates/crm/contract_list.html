@@ -109,16 +109,30 @@ so changing a select keeps it (see crm/_daterange.html).
     Jami and Qolgan to'lov stay kelishuv-level: a hamkor to'lov is paid against the
     kelishuv, not against one of its products, so there is nothing to split it by.
     {% endcomment %}
-    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.brand }}</div>{% endfor %}</td>
-    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}</td>
+    {% comment %}
+    O'rtacha: the summary line under a marka the kelishuv took more than once — a
+    birja purchase buys the same granula in lots, five rows of и 1561 at five
+    narxlar, and "what did it cost us" has no answer in that column otherwise. It
+    is one line in EVERY per-line column, not a lone extra figure under Narx,
+    because these columns read across row-for-row — see `Contract.brand_averages`
+    for the weighting, and for why an ordinary one-line-per-marka kelishuv draws
+    nothing here at all.
+    {% endcomment %}
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.brand }}</div>{% endfor %}{% for g in c.brand_averages %}<div class="cell-line cell-avg">{{ g.brand }} · o'rtacha</div>{% endfor %}</td>
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}{% for g in c.brand_averages %}<div class="cell-line cell-avg">{{ g.kg|floatformat:"-3" }}</div>{% endfor %}</td>
     {% if user.is_admin_role %}
-    <td>{% for ln in c.lines.all %}<div class="cell-line">{% money ln.price ln.price_uzs ln.currency %}</div>{% endfor %}</td>
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{% money ln.price ln.price_uzs ln.currency %}</div>{% endfor %}{% for g in c.brand_averages %}<div class="cell-line cell-avg">{% money g.price g.price_uzs c.currency %}</div>{% endfor %}</td>
     <td>{% money c.total_value c.total_value_uzs c.currency %}</td>
     {% endif %}
     <td>
       {% for ln in c.lines.all %}
       <div class="cell-line">
         <span class="badge {% if ln.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ ln.remaining_kg|floatformat:"-3" }}</span>
+      </div>
+      {% endfor %}
+      {% for g in c.brand_averages %}
+      <div class="cell-line cell-avg">
+        <span class="badge {% if g.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ g.remaining_kg|floatformat:"-3" }}</span>
       </div>
       {% endfor %}
     </td>
@@ -141,6 +155,11 @@ so changing a select keeps it (see crm/_daterange.html).
       {% for ln in c.lines.all %}
       <div class="cell-line">
         <span class="badge {% if ln.payable_left_own > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money ln.payable_left ln.payable_left_uzs c.currency %}</span>
+      </div>
+      {% endfor %}
+      {% for g in c.brand_averages %}
+      <div class="cell-line cell-avg">
+        <span class="badge {% if g.payable_left_own > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money g.payable_left g.payable_left_uzs c.currency %}</span>
       </div>
       {% endfor %}
       {% else %}

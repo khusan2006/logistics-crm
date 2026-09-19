@@ -867,6 +867,59 @@ class Contract(models.Model):
         return ", ".join(dict.fromkeys(ln.brand for ln in self.lines.all()))
 
     @property
+    def brand_averages(self):
+        """Per marka totals for a kelishuv that took the same granula more than once.
+
+        A birja purchase takes one marka in lots at whatever the exchange was asking
+        that hour — five rows of и 1561 at 16 707, 16 697, 16 687, 16 677, 16 667 —
+        and the question the operator then has is what that granula cost them, one
+        figure. Five narxlar down a column do not answer it.
+
+        Weighted by kg, not a plain mean over the rows: birja-7 took 11 000 kg on its
+        last lot beside three of 30 000, and a plain mean would price the small lot as
+        heavily as the big ones. Both currencies are averaged from their own sums —
+        the so'm side is not the dollar side converted, because each lot carried its
+        own day's kurs.
+
+        Only markalar standing on more than one line. Where a marka has one line the
+        average IS the narx already in the column, and repeating it under itself says
+        nothing — which is why the ordinary kelishuv draws no summary at all.
+        """
+        by_brand = defaultdict(list)
+        for ln in self.lines.all():
+            by_brand[ln.brand].append(ln)
+        rows = []
+        for brand, lines in by_brand.items():
+            # One line for this marka: the average IS that line's narx. Skipped
+            # before anything is summed, so the ordinary kelishuv — which is most
+            # of them — pays nothing for a summary it does not draw.
+            if len(lines) < 2:
+                continue
+            kg = sum((ln.kg for ln in lines), Decimal("0"))
+            # A kelishuv line cannot be booked at 0 kg (the form refuses it), but a
+            # row built straight into the DB could, and a ZeroDivisionError on the
+            # kelishuvlar list would take the whole page down over that one row.
+            if not kg:
+                continue
+            value = sum((ln.total_value for ln in lines), Decimal("0"))
+            value_uzs = sum((ln.total_value_uzs for ln in lines), Decimal("0"))
+            payable_left = sum((ln.payable_left for ln in lines), Decimal("0"))
+            payable_left_uzs = sum((ln.payable_left_uzs for ln in lines),
+                                   Decimal("0"))
+            rows.append({
+                "brand": brand,
+                "kg": kg,
+                "price": (value / kg).quantize(Decimal("0.0001")),
+                "price_uzs": (value_uzs / kg).quantize(Decimal("0.01")),
+                "remaining_kg": sum((ln.remaining_kg for ln in lines),
+                                    Decimal("0")),
+                "payable_left": payable_left,
+                "payable_left_uzs": payable_left_uzs,
+                "payable_left_own": own_side(self, payable_left,
+                                             payable_left_uzs)})
+        return rows
+
+    @property
     def paid_total(self):
         """Gross, unlike the mijoz side: a hamkor is credited the whole `amount`
         because the vositachi cut and the bank foiz ride on top of it rather than

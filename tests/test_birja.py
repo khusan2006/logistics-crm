@@ -611,3 +611,60 @@ def test_a_tarjimon_cannot_reach_a_birja_yuk_by_typing_its_number(translator_cli
     assert translator_client.get(f"/shipments/{birja.pk}/driver/").status_code == 403
     assert translator_client.get(f"/shipments/{hamkor.pk}/").status_code == 200
     assert translator_client.get(f"/shipments/{hamkor.pk}/driver/").status_code == 200
+
+
+class TestBrandAverage:
+    """The o'rtacha narx under a marka a kelishuv took in several lots.
+
+    A birja purchase buys the same granula through the day at whatever the exchange
+    is asking, so one kelishuv carries и 1561 five times at five narxlar. The column
+    then answers "which lot cost what" and not "what did this granula cost us",
+    which is the question the operator actually has — see Contract.brand_averages.
+    """
+
+    def _lots(self, contract, brand, lots):
+        for kg, price in lots:
+            ContractLine.objects.create(contract=contract, brand=brand,
+                                        kg=Decimal(kg), price=Decimal(price))
+
+    def test_average_is_weighted_by_kg(self, admin_client):
+        """birja-7's shape: three lots of 30 000 and a short one of 11 000. A plain
+        mean over the four rows would price the 11 000 as heavily as a 30 000."""
+        contract = Contract.objects.create(partner=birja_partner(),
+                                           created="2026-07-01")
+        self._lots(contract, "и 1561",
+                   [("30000", "1.00"), ("30000", "1.20"),
+                    ("30000", "1.30"), ("11000", "1.50")])
+        [avg] = contract.brand_averages
+        assert avg["brand"] == "и 1561"
+        assert avg["kg"] == Decimal("101000.000")
+        # (30 000·1 + 30 000·1.20 + 30 000·1.30 + 11 000·1.50) / 101 000 = 1.2030
+        assert avg["price"] == Decimal("1.2030")
+        # ...and not the plain mean over the four rows, which is 1.25.
+        assert avg["price"] != Decimal("1.2500")
+
+    def test_single_line_marka_draws_no_average(self, admin_client):
+        """The ordinary kelishuv. Its average is the narx already in the column, and
+        a second line repeating it under itself says nothing."""
+        contract = _birja_contract(brand="LLDPE", kg="1000", price="1.00")
+        assert contract.brand_averages == []
+
+    def test_two_markalar_average_apart(self, admin_client):
+        contract = Contract.objects.create(partner=birja_partner(),
+                                           created="2026-07-01")
+        self._lots(contract, "и 1561", [("1000", "1.00"), ("1000", "2.00")])
+        self._lots(contract, "ftor oq", [("1000", "3.00"), ("3000", "5.00")])
+        avgs = {g["brand"]: g["price"] for g in contract.brand_averages}
+        assert avgs == {"и 1561": Decimal("1.5000"), "ftor oq": Decimal("4.5000")}
+
+    def test_list_shows_the_average_line(self, admin_client):
+        contract = Contract.objects.create(partner=birja_partner(),
+                                           created="2026-07-01")
+        self._lots(contract, "и 1561", [("1000", "1.00"), ("1000", "2.00")])
+        html = admin_client.get("/birja/kelishuvlar/").content.decode()
+        assert "o&#x27;rtacha" in html or "o'rtacha" in html
+
+    def test_list_of_single_line_kelishuv_has_no_average_line(self, admin_client):
+        _birja_contract(brand="LLDPE", kg="1000", price="1.00")
+        html = admin_client.get("/birja/kelishuvlar/").content.decode()
+        assert "rtacha" not in html

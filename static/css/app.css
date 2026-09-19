@@ -3142,6 +3142,19 @@ form.stacked .lineset-field[hidden] { display: none; }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
+/* The o'rtacha line under a marka a kelishuv took in several lots — see
+   `Contract.brand_averages`. A rule above it and a quieter weight: it is a total
+   over the lines it follows, not another line of the same kind, and read down the
+   column it must not be mistaken for a sixth purchase. The rule runs the width of
+   the cell in every column at once, so the summary reads across the row the same
+   way the per-line figures do. */
+.cell-avg {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-weight: 600;
+}
 /* The reys number beside a marka — which mashina of that load the row went out on.
    A circle rather than "2-reys" in words: it sits in a cell that already carries a
    lot id and a marka name, and the whole point is that it is read at a glance down
