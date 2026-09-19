@@ -24,7 +24,7 @@ from accounts.decorators import role_required
 from accounts.models import User
 
 from .exports import KG, PERCENT, xlsx_book_response, xlsx_response
-from .fifo import apply_plan, blockers, place_one, replay, weighted_cost
+from .fifo import apply_plan, blockers, replay, weighted_cost
 from .templatetags.crm_extras import money_in, som, usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, LocalPurchaseForm,
@@ -37,7 +37,7 @@ from .forms import (
     CustomsAgentForm, CustomsPaymentForm,
     ContractExpenseGridForm, ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     ContractExpenseForm,
-    SaleCreateForm, SaleForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
+    SaleCreateForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
     ShipmentExpenseForm,
     ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
     ShipmentLineFormSet,
@@ -4208,13 +4208,13 @@ def _reys_numbers(rows):
     return [order[number] for number in raw]
 
 
-def _sale_form_response(request, form, lines, title, invalid=False):
+def _sale_form_response(request, form, lines, title, invalid=False, **extra):
     """`lines_reys` turns on the Reys qo'shish button and the ①②③ the rows of one
     marka wear as they are typed. Sotuv only: a kelishuv or a yuk lists a marka once
     by nature, and repeating one there is the slip the guard still calls it."""
     return form_response(request, form, title, invalid=invalid,
                          extra_context={"lines": lines, "lines_legend": "Mahsulotlar",
-                                        "lines_reys": True})
+                                        "lines_reys": True, **extra})
 
 
 @role_required(User.Role.ADMIN)
@@ -4472,95 +4472,6 @@ def sale_shift_preview(request, pk):
 
 
 @role_required(User.Role.ADMIN)
-def sale_edit(request, pk):
-    sale = get_object_or_404(Sale, pk=pk)
-    previous_customer_id = sale.customer_id
-    # Read before validation, which writes the posted sana onto the instance.
-    previous_date = sale.date
-    form = SaleForm(request.POST or None, instance=sale)
-    title = "Sotuvni tahrirlash"
-    shift_url = reverse("sale_shift_preview", args=[sale.pk])
-    if request.method == "POST":
-        if form.is_valid():
-            # Asked BEFORE the edit lands: whether the chain may move is a fact about
-            # the sotuvlar behind this one as they stand now, and saving first would
-            # be asking about a chain the edit has already disturbed.
-            brand = sale.line.contract_line.brand
-            may_shift = not blockers(replay(brand), sale)
-            previous_kg = Sale.objects.values_list("kg", flat=True).get(pk=sale.pk)
-            # The bron this sotuv drew from is holding kg that are about to change
-            # (or move to another mijoz). Put them back before the edit lands, then
-            # draw again from whatever the sotuv now is — releasing afterwards would
-            # give back the NEW kg, which is not what was taken.
-            # Whether this sotuv came out of a bron is decided when it is created and
-            # must survive an edit. Re-drawing unconditionally would quietly convert a
-            # sotuv booked alongside a bron into one taken from it, the first time
-            # anybody corrected a kg.
-            served_id = sale.reservation_id
-            # `previous_kg`, not `sale.kg`: validation has already put the posted kg
-            # on the instance.
-            was_from_bron = release_bron(sale, kg=previous_kg) > 0
-            sale = form.save()
-            if sale.date != previous_date and sale.position is not None:
-                # Its place was a place in the OLD day; in the new one it starts on top.
-                sale.position = None
-                sale.save(update_fields=["position"])
-            if sale.reservation_id:
-                sale.reservation = None
-                sale.save(update_fields=["reservation"])
-            if was_from_bron:
-                # Back into the bron it came out of, even one opened after the sotuv
-                # was entered — see `served_id` on `draw_down_bron`.
-                draw_down_bron(sale, served_id=served_id)
-            moved = sale.customer_id != previous_customer_id
-            if moved:
-                # The allocations are slices of the PREVIOUS mijoz's to'lovlar. They
-                # cannot follow the sotuv to somebody else: the money would show as
-                # paid here while still counting against the mijoz who handed it over.
-                sale.allocations.all().delete()
-            # kg or narx may have moved either way: drop allocation the sotuv can no
-            # longer hold, then let avans in if it grew.
-            trim_sale_allocations(sale)
-            reconcile_customer_allocations(sale.customer)
-            if moved:
-                previous = Customer.objects.filter(pk=previous_customer_id).first()
-                if previous:
-                    reconcile_customer_allocations(previous)
-            # The kg moved, so FIFO's answer for this marka moved with it. Re-run it
-            # when the chain behind this sotuv is FIFO's to re-run; otherwise place
-            # only this sotuv, which still has to land on lots that really hold it
-            # but leaves everybody else's assignment alone.
-            if may_shift:
-                shifted = apply_plan(replay(brand))
-                spread = [pk for pk in shifted if pk != sale.pk]
-            else:
-                place_one(sale)
-                spread = []
-
-            AuditLog.record(
-                request.user, AuditLog.Action.UPDATE, "Sotuv", sale.pk,
-                f"Sotuv tahrirlandi: {previous_kg} kg → {sale.kg} kg · "
-                f"{sale.customer.name}"
-                + (f" · {len(spread)} ta sotuvning loti siljidi" if spread else ""),
-            )
-            if spread:
-                messages.success(
-                    request, f"Sotuv yangilandi · {len(spread)} ta sotuvning loti "
-                             f"va tannarxi FIFO bo'yicha qayta hisoblandi")
-            elif not may_shift:
-                messages.success(
-                    request, "Sotuv yangilandi · keyingi sotuvlar FIFO tartibida "
-                             "emas, shuning uchun ular tegilmadi")
-            else:
-                messages.success(request, "Sotuv yangilandi")
-            return form_reload(request, reverse("sale_list"))
-        return form_response(request, form, title, invalid=True,
-                             extra_context={"shift_preview_url": shift_url})
-    return form_response(request, form, title,
-                         extra_context={"shift_preview_url": shift_url})
-
-
-@role_required(User.Role.ADMIN)
 def sale_delete(request, pk):
     sale = get_object_or_404(Sale, pk=pk)
     if request.method == "POST":
@@ -4634,13 +4545,15 @@ def _blocking_return(sales):
 
 
 @role_required(User.Role.ADMIN)
-def sale_group_edit(request, pk):
-    """Tahrirlash for a sotuv of several mahsulotlar — the whole trip to the counter
-    in the form it was typed in, rather than one lot slice of it.
+def sale_edit(request, pk):
+    """Tahrirlash for a sotuv — the whole trip to the counter in the form it was
+    TYPED in, whether that was one marka or five.
 
-    The single-row door (`sale_edit`) stays exactly where it was and is what a
-    one-product sotuv still opens; this is its multi-product twin, and a group that
-    has shrunk to one row is handed straight back to it.
+    Deliberately the same form as Yangi sotuv, only already filled in: the header
+    (mijoz, valyuta, kurs, sana, muddat, izoh) with the Mahsulotlar rows under it,
+    read back out of the sotuv's FIFO slices. A correction should be made in the
+    words the sotuv was entered in — the old edit asked for a LOT and one kg/narx,
+    which is FIFO's arithmetic rather than the deal anybody made.
 
     Nothing is deleted and recreated. A row whose kg and narx did not move keeps its
     Sale rows, their pks, their vazvratlar and their history — which is what lets the
@@ -4649,12 +4562,13 @@ def sale_group_edit(request, pk):
     and it changes with them."""
     sale = get_object_or_404(Sale, pk=pk)
     rows_now = sale.group_sales
-    if len(rows_now) == 1:
-        return sale_edit(request, rows_now[0].pk)
     current = _group_rows(rows_now)
     head = rows_now[0]
-    # Read before validation, which writes the posted sana onto `head`.
+    # Read before validation, which writes the posted sana and mijoz onto `head` —
+    # asked afterwards, "did the mijoz change" is always no, and the previous mijoz's
+    # to'lovlar would stay allocated to a sotuv that is now somebody else's.
     previous_date = head.date
+    previous_customer = head.customer
     title = "Sotuvni tahrirlash"
 
     form = SaleGroupEditForm(request.POST or None, instance=head)
@@ -4670,6 +4584,11 @@ def sale_group_edit(request, pk):
     for row in current:
         allowance[row["brand"]] += row["kg"]
     lines.allowance = allowance
+    # The FIFO preview under the kg box: what changing these kg would do to the
+    # sotuvlar behind this one. Only on a sotuv that IS one row — the dry run plans
+    # one Sale, and a form with several kg boxes has no single one to hang it on.
+    shift = ({"shift_preview_url": reverse("sale_shift_preview", args=[head.pk])}
+             if len(rows_now) == 1 else {})
 
     if request.method == "POST" and form.is_valid() and lines.is_valid():
         data = form.cleaned_data
@@ -4700,10 +4619,10 @@ def sale_group_edit(request, pk):
             else:
                 lines.non_form_errors().append(message)
         if any(line.errors for line in lines.forms) or lines.non_form_errors():
-            return _sale_form_response(request, form, lines, title, invalid=True)
+            return _sale_form_response(request, form, lines, title, invalid=True,
+                                       **shift)
 
-        moved = head.customer_id != data["customer"].pk
-        previous_customer = head.customer
+        moved = previous_customer.pk != data["customer"].pk
         # Only the markalar whose KG moved: a header-only correction (a mijoz typed
         # wrong, a sana a day out) takes nothing off the shelf and must not set FIFO
         # loose on every marka the sotuv happens to mention.
@@ -4720,18 +4639,24 @@ def sale_group_edit(request, pk):
             anchor = min((s for s in rows_now if s.line.brand == brand),
                          key=lambda s: (s.date, s.pk), default=head)
             may_shift[brand] = not blockers(replay(brand), anchor)
-        slices, sold = [], []
+        slices, sold, resliced, replaced = [], [], [], []
         # One number on every row, re-sliced ones included: the list folds a group by
         # adjacency. A new sana drops it — the sotuv starts on top of its new day.
         position = head.position if data["date"] == previous_date else None
+        # Every row of the sotuv on ONE group id, the re-sliced ones included — the
+        # list bands a sotuv by it, falling back to a lone row's pk. A sotuv entered
+        # before groups existed has none, and re-slicing such a row across two lots
+        # without giving it one would read back as two separate sotuvlar.
+        group = head.group or uuid4()
         with transaction.atomic():
             for key, row in doomed:
                 for old in row["sales"]:
                     # The promise this slice settled is unkept again until the new
-                    # slices draw it down; releasing first is the same order
-                    # `sale_edit` uses, and for the same reason — releasing after
-                    # would give back the NEW kg rather than what was taken.
+                    # slices draw it down; released first rather than after,
+                    # because releasing after would give back the NEW kg rather
+                    # than what was taken.
                     release_bron(old)
+                    replaced.append(old.pk)
                     old.delete()
             for (brand, reys), (kg, price, _line) in wanted.items():
                 usd, uzs = convert_pair(price, currency, rate, "0.0001")
@@ -4742,6 +4667,7 @@ def sale_group_edit(request, pk):
                     # the narx say about them is rewritten.
                     for kept in row["sales"]:
                         kept.customer = data["customer"]
+                        kept.group = group
                         kept.price, kept.price_uzs = usd, uzs
                         kept.currency, kept.exchange_rate = currency, rate
                         kept.date = data["date"]
@@ -4764,11 +4690,12 @@ def sale_group_edit(request, pk):
                             customer=data["customer"], line=lot, kg=take,
                             price=usd, price_uzs=uzs,
                             currency=currency, exchange_rate=rate,
-                            group=head.group, reys=reys, position=position,
+                            group=group, reys=reys, position=position,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=head.created_by,
                         )
                         slices.append(fresh)
+                        resliced.append(fresh.pk)
                         remaining -= take
                         # A row that came out of a bron goes on coming out of it:
                         # whether a sotuv draws on a promise is decided when it is
@@ -4777,6 +4704,22 @@ def sale_group_edit(request, pk):
                             draw_down_bron(fresh, served_id=served_id)
                 sold.append(f"{_kg(kg)} kg {brand}"
                             + (f" ({reys}-reys)" if reys else ""))
+            # A re-sliced row is the SAME sotuv, corrected — not work entered today.
+            # `created_at` is auto_now_add, so the new rows are stamped now and the
+            # Yangi bugun lens would read a corrected old sotuv as today's entry;
+            # what happened today is the correction, and that is in the AuditLog.
+            if resliced:
+                Sale.objects.filter(pk__in=resliced).update(
+                    created_at=head.created_at)
+            # A replaced row's pk is gone and its Tarix lines point at it, so the
+            # sotuv's trail — what it was entered as, and every correction since —
+            # would fall off the page the first time a kg was corrected. The lines
+            # are re-pointed at the row that survives: what they describe is this
+            # sotuv, not the slice number FIFO happened to give it.
+            if replaced and slices:
+                AuditLog.objects.filter(target_type="Sotuv",
+                                        target_id__in=replaced).update(
+                    target_id=slices[0].pk)
 
         if moved:
             # Slices of the PREVIOUS mijoz's to'lovlar cannot follow the sotuv to
@@ -4817,7 +4760,7 @@ def sale_group_edit(request, pk):
         return form_reload(request, reverse("sale_list"))
 
     invalid = request.method == "POST"
-    return _sale_form_response(request, form, lines, title, invalid=invalid)
+    return _sale_form_response(request, form, lines, title, invalid=invalid, **shift)
 
 
 @role_required(User.Role.ADMIN)

@@ -13,7 +13,7 @@ from decimal import Decimal
 import pytest
 from django.utils import timezone
 
-from conftest import payment_rows
+from conftest import line_data, payment_rows
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, Return,
     Sale, Shipment, ShipmentLine, ShipmentStatus,
@@ -54,14 +54,20 @@ def _post_sale(client, lot, customer, **kw):
     return Sale.objects.filter(customer=customer).order_by("-id").first()
 
 
-def _edit_payload(sale, **overrides):
-    """What SaleForm renders for an existing sotuv — the values a human would
-    re-submit by opening the edit modal and pressing Saqlash."""
-    data = {"customer": sale.customer_id, "line": sale.line_id,
-            "kg": str(sale.kg), "currency": sale.currency,
-            "price": str(sale.price), "exchange_rate": str(sale.exchange_rate),
+def _edit_payload(sale, kg=None, price=None, **overrides):
+    """What the edit modal renders for an existing sotuv — the values a human would
+    re-submit by opening it and pressing Saqlash.
+
+    The same form as Yangi sotuv: the header, and the marka/kg/narx as a Mahsulot
+    row under it. `kg` and `price` belong to that row; anything else is the header."""
+    data = {"customer": sale.customer_id, "currency": sale.currency,
+            "exchange_rate": str(sale.exchange_rate),
             "date": str(sale.date), "debt_deadline": str(sale.debt_deadline or ""),
-            "note": sale.note}
+            "note": sale.note,
+            **line_data({"brand": sale.line.brand,
+                         "kg": kg if kg is not None else str(sale.kg),
+                         "price": price if price is not None else str(sale.price)},
+                        initial=1)}
     data.update(overrides)
     return data
 
@@ -163,15 +169,15 @@ def test_uzs_sale_edit_form_reopens_bound_to_the_som_figure(admin_client, db):
     """Re-opening the edit modal must show the operator the number they typed.
 
     ReturnForm does exactly this (`self.initial["price"] = self.sale.price_uzs`
-    when the sale is in so'm); SaleForm has no such branch, so the narx box shows
-    1.0417 next to a Valyuta picker that reads So'm."""
+    when the sale is in so'm); a sotuv form without such a branch shows 1.0417 next
+    to a Valyuta picker that reads So'm."""
     customer, lot = _customer(), _lot()
     sale = _post_sale(admin_client, lot, customer, kg="1000", currency="uzs",
                       price="12500", rate="12000")
 
     html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
-    assert _selected_option(html, "currency") == "uzs"      # this half is fine
-    assert _input_value(html, "price") == "12500.00"        # this half is not
+    assert _selected_option(html, "currency") == "uzs"
+    assert _input_value(html, "lines-0-price") == "12500.00"
 
 
 # ── (b) IDEMPOTENCE / NO DRIFT ───────────────────────────────────────────────
@@ -232,13 +238,15 @@ def test_resaving_a_uzs_sale_as_the_form_renders_it_moves_nothing(admin_client, 
     before = _money(sale)
 
     html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
-    rendered = {"customer": str(customer.pk), "line": str(sale.line_id),
-                "kg": _input_value(html, "kg"),
+    rendered = {"customer": str(customer.pk),
                 "currency": _selected_option(html, "currency"),
-                "price": _input_value(html, "price"),
                 "exchange_rate": _input_value(html, "exchange_rate"),
                 "date": _input_value(html, "date"),
-                "debt_deadline": _input_value(html, "debt_deadline"), "note": ""}
+                "debt_deadline": _input_value(html, "debt_deadline"), "note": "",
+                **line_data({"brand": sale.line.brand,
+                             "kg": _input_value(html, "lines-0-kg"),
+                             "price": _input_value(html, "lines-0-price")},
+                            initial=1)}
     for _ in range(2):
         admin_client.post(f"/sales/{sale.pk}/edit/", rendered)
         sale.refresh_from_db()

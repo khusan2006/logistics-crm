@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from conftest import line_data
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner, PaymentAllocation, Sale, Shipment, ShipmentLine, ShipmentStatus, allocate_customer_payment, apply_customer_advance,
     unspent_payment_amount, unspent_payment_pair,
@@ -222,9 +223,10 @@ def test_sale_edit_to_another_customer_drops_stale_allocations(admin_client, db)
     assert sale.remaining == Decimal("0")
 
     resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
-        "customer": other.pk, "line": lot.pk, "kg": "1000",
-        "currency": "usd", "exchange_rate": "12000", "price": "1.00",
+        "customer": other.pk,
+        "currency": "usd", "exchange_rate": "12000",
         "date": "2026-07-17", "debt_deadline": "", "note": "",
+        **line_data({"brand": lot.brand, "kg": "1000", "price": "1.00"}, initial=1),
     })
     assert resp.status_code == 302
 

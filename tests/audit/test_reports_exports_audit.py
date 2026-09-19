@@ -809,7 +809,7 @@ def test_re_saving_a_som_hamkor_tolovi_unchanged_keeps_the_exported_figures(admi
 
 
 @pytest.mark.xfail(reason="UPHELD — same known defect, PriceEntryFormMixin side, reaching "
-                          "sotuvlar.xlsx. SaleForm (crm/forms.py:810) renders the derived "
+                          "sotuvlar.xlsx. The sotuv form renders the derived "
                           "USD narx 1.1700 in the box beside a Valyuta select reading So'm. "
                           "One untouched Saqlash reads 1.17 as so'm: Sotuv narx (so'm) goes "
                           "14 040 → 1.17 and Jami (so'm) 14 040 000 → 1 170; a second goes "
@@ -830,7 +830,8 @@ def test_re_saving_a_som_sotuv_unchanged_keeps_the_exported_figures(admin_client
     url = f"/sales/{sale.pk}/edit/"
     shown = _resubmit_payload(admin_client, url)
     assert shown["currency"] == "uzs"
-    assert Decimal(shown["price"]) == sale.price == Decimal("1.1700")
+    # The narx lives on the Mahsulot row now — the same form Yangi sotuv uses.
+    assert Decimal(shown["lines-0-price"]) == sale.price == Decimal("1.1700")
 
     for _ in range(2):
         assert admin_client.post(
@@ -861,7 +862,7 @@ def test_a_dollar_sotuv_re_saved_unchanged_does_not_move(admin_client, db):
     url = f"/sales/{sale.pk}/edit/"
     shown = _resubmit_payload(admin_client, url)
     assert shown["currency"] == "usd"
-    assert Decimal(shown["price"]) == sale.price == Decimal("1.1700")
+    assert Decimal(shown["lines-0-price"]) == sale.price == Decimal("1.1700")
 
     for _ in range(2):
         assert admin_client.post(

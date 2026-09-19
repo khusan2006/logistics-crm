@@ -154,10 +154,10 @@ urlpatterns = [
     path("sales/<int:pk>/shift-preview/", crm_views.sale_shift_preview,
          name="sale_shift_preview"),
     path("sales/<int:pk>/delete/", crm_views.sale_delete, name="sale_delete"),
-    # A sotuv of several mahsulotlar is edited and deleted WHOLE — the pk is any of
-    # its rows (Sotuvlar hands over the first), and the view reads the rest off the
-    # group it was entered under.
-    path("sales/<int:pk>/group/edit/", crm_views.sale_group_edit, name="sale_group_edit"),
+    # A sotuv is edited and deleted WHOLE — the pk is any of its rows (Sotuvlar hands
+    # over the first), and the view reads the rest off the group it was entered under.
+    # Tahrirlash has one door for every sotuv (`sale_edit`); O'chirish still has two,
+    # because deleting one lot slice of a sotuv is a thing the sotuv's own page does.
     path("sales/<int:pk>/group/delete/", crm_views.sale_group_delete,
          name="sale_group_delete"),
     path("sales/<int:pk>/", crm_views.sale_detail, name="sale_detail"),

@@ -491,7 +491,8 @@ def test_a_return_does_not_move_when_its_sotuv_is_resaved_untouched(admin_client
 
     for _ in range(2):
         page = admin_client.get(f"/sales/{sale.pk}/edit/")
-        body = _rendered_post(page.context["form"])
+        body = {**_rendered_post(page.context["form"]),
+                **_rendered_formset_post(page.context["lines"])}
         resp = admin_client.post(f"/sales/{sale.pk}/edit/", body)
         assert resp.status_code == 302, resp.content.decode()[:1500]
 
@@ -514,7 +515,8 @@ def test_a_som_sotuv_with_a_qaytarish_survives_an_untouched_resave(admin_client)
     assert sale.total_uzs == Decimal("8000000.00")
 
     page = admin_client.get(f"/sales/{sale.pk}/edit/")
-    body = _rendered_post(page.context["form"])
+    body = {**_rendered_post(page.context["form"]),
+            **_rendered_formset_post(page.context["lines"])}
     resp = admin_client.post(f"/sales/{sale.pk}/edit/", body)
     assert resp.status_code == 302, resp.content.decode()[:1500]
 

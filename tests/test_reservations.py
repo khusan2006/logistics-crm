@@ -887,10 +887,13 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         assert bron.status == Reservation.Status.ACTIVE   # the promise is unkept again
 
     def _edit_kg(self, client, sale, kg):
+        """The kg corrected in the modal it was typed in. The row is re-sliced, so the
+        corrected sotuv is read back by its kg rather than by a pk."""
         return client.post(f"/sales/{sale.pk}/edit/", {
-            "customer": sale.customer_id, "line": sale.line_id, "kg": kg,
-            "currency": "usd", "price": "1.50", "date": "2026-07-20",
-            "debt_deadline": "", "note": ""})
+            "customer": sale.customer_id, "currency": "usd",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": sale.line.brand, "kg": kg, "price": "1.50"},
+                        initial=1)})
 
     def test_raising_the_kg_draws_the_difference(self, admin_client, db):
         """Bron #5 in the real book: a 3 000 kg sotuv corrected to 7 000 left the bron
@@ -908,9 +911,8 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         assert sale.reservation_id == bron.pk
 
         self._edit_kg(admin_client, sale, "7000")
-        sale.refresh_from_db()
         bron.refresh_from_db()
-        assert sale.kg == Decimal("7000.000")
+        assert Sale.objects.get(kg=Decimal("7000")).reservation_id == bron.pk
         assert bron.fulfilled_kg == Decimal("12000.000")
 
     def test_lowering_the_kg_gives_the_difference_back(self, admin_client, db):
@@ -991,12 +993,13 @@ class TestBronDrawIsAsked:
         sale = Sale.objects.get()
 
         admin_client.post(f"/sales/{sale.pk}/edit/", {
-            "customer": customer.pk, "line": lot.pk, "kg": "2500",
-            "currency": "usd", "price": "1.50", "date": "2026-07-20",
-            "debt_deadline": "", "note": ""})
-        sale.refresh_from_db()
-        assert sale.kg == Decimal("2500.000")
-        assert sale.reservation_id is None
+            "customer": customer.pk, "currency": "usd",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "2500", "price": "1.50"},
+                        initial=1)})
+        corrected = Sale.objects.get()
+        assert corrected.kg == Decimal("2500.000")
+        assert corrected.reservation_id is None
         assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")
 
 
@@ -1088,13 +1091,14 @@ class TestCountingAnEarlierSotuvIntoABron:
         self._count(admin_client, bron, sale)
 
         admin_client.post(f"/sales/{sale.pk}/edit/", {
-            "customer": customer.pk, "line": lot.pk, "kg": "2000",
-            "currency": "usd", "price": "1.50", "date": "2026-07-20",
-            "debt_deadline": "", "note": ""})
-        sale.refresh_from_db()
+            "customer": customer.pk, "currency": "usd",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
+                        initial=1)})
+        corrected = Sale.objects.get()
         bron.refresh_from_db()
-        assert sale.kg == Decimal("2000.000")
-        assert sale.reservation_id == bron.pk
+        assert corrected.kg == Decimal("2000.000")
+        assert corrected.reservation_id == bron.pk
         assert bron.fulfilled_kg == Decimal("2000.000")
 
     def test_the_row_offers_it_only_while_there_is_something_to_count(

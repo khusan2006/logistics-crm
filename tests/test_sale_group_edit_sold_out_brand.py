@@ -51,7 +51,7 @@ def _group_sale(client):
 
 def test_sold_out_marka_is_still_offered_when_editing_its_sotuv(admin_client, db):
     sale = _group_sale(admin_client)
-    html = admin_client.get(f"/sales/{sale.pk}/group/edit/").content.decode()
+    html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
 
     assert f'value="{SOLD_OUT}"' in html, (
         "the sotuv's own marka is missing from the picker — the box falls back to "
@@ -60,7 +60,7 @@ def test_sold_out_marka_is_still_offered_when_editing_its_sotuv(admin_client, db
 
 def test_the_sotuvs_own_marka_is_the_one_selected(admin_client, db):
     sale = _group_sale(admin_client)
-    html = admin_client.get(f"/sales/{sale.pk}/group/edit/").content.decode()
+    html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
 
     assert f'value="{SOLD_OUT}" selected' in html, (
         "the marka box does not open on the marka that was actually sold")
@@ -76,7 +76,7 @@ def test_correcting_the_narx_keeps_the_sotuv_on_its_own_marka(admin_client, db):
     group = Sale.objects.filter(group=sale.group)
     assert {s.line.contract_line.brand for s in group} == {SOLD_OUT, IN_STOCK}
 
-    resp = admin_client.post(f"/sales/{sale.pk}/group/edit/", {
+    resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
         "customer": sale.customer_id, "currency": "usd", "exchange_rate": "12000",
         "date": "2026-09-06", "debt_deadline": "", "note": "",
         "lines-TOTAL_FORMS": "2", "lines-INITIAL_FORMS": "2",
@@ -101,7 +101,7 @@ def test_a_sold_out_marka_still_cannot_grow(admin_client, db):
     """Keeping the marka in the list must not turn into permission to sell more of
     it: the shelf is empty, so the only kg it may carry are the ones it already has."""
     sale = _group_sale(admin_client)
-    resp = admin_client.post(f"/sales/{sale.pk}/group/edit/", {
+    resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
         "customer": sale.customer_id, "currency": "usd", "exchange_rate": "12000",
         "date": "2026-09-06", "debt_deadline": "", "note": "",
         "lines-TOTAL_FORMS": "2", "lines-INITIAL_FORMS": "2",

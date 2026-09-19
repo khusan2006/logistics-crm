@@ -21,7 +21,6 @@ from .models import (
     customer_balance_by_currency, last_sale_prices_by_customer,
     latest_exchange_rate, _by_currency,
 )
-from .fifo import brand_available_kg
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .yozuv import marka_kaliti, marka_nomi
 from .templatetags.crm_extras import rate, som, usd
@@ -2161,44 +2160,6 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
             # who is waiting, it does not refuse the sotuv.
             self.add_error("kg", f"Bu lotning qoldig'idan oshmasligi kerak "
                                  f"({_clean_number(lot.available_kg)} kg)")
-        return cleaned
-
-
-class SaleForm(InheritedRateMixin, PriceEntryFormMixin, forms.ModelForm):
-    class Meta:
-        model = Sale
-        fields = ["customer", "line", "kg", "currency", "price", "exchange_rate",
-                  "date", "debt_deadline", "note"]
-        widgets = {
-            "date": date_widget(),
-            "debt_deadline": date_widget(),
-            "note": forms.Textarea(attrs={"rows": 2}),
-            "customer": _customer_picker_widget(),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["line"].queryset = arrived_lots()
-        _customer_phone_field(self.fields["customer"])
-
-    def clean(self):
-        cleaned = super().clean()
-        line, kg = cleaned.get("line"), cleaned.get("kg")
-        if kg is not None and kg <= 0:
-            self.add_error("kg", "Kg musbat bo'lishi kerak")
-        if line and line.arrived is None:
-            self.add_error("line", "Faqat kelgan (arrived) lotdan sotish mumkin")
-        if line and line.arrived is not None and kg is not None and kg > 0:
-            # Measured against the MARKA, not against this one lot. The same granula
-            # sits in several lots at once, and after fifty sotuvlar the lot a sotuv
-            # happens to be attached to is almost always empty — checking it refused
-            # every correction to an old sotuv while the ombor was full of the stuff.
-            # Where the extra kg come from is the replay's problem, not the form's.
-            available = brand_available_kg(line.contract_line.brand,
-                                           excluding=self.instance)
-            if kg > available:
-                self.add_error("kg", f"Bu markadan omborda {_clean_number(available)} "
-                                     f"kg bor — undan oshmasligi kerak")
         return cleaned
 
 

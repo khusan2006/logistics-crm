@@ -84,8 +84,8 @@ found by scrolling Sotuvlar.
         <td>{% rate s.price s.price_uzs s.currency %}</td>
         <td>{% money s.total s.total_uzs s.currency %}</td>
         {% comment %}
-        Each row keeps its own pair: this card is where Bitta qatorda sends an
-        operator who needs to correct one lot of a merged sotuv.
+        O'chirish is this row's alone — one lot slice of a merged sotuv can be
+        dropped from here. Tahrirlash opens the whole sotuv either way.
         {% endcomment %}
         <td class="row-actions">{% include "crm/_sale_row_actions.html" %}</td>
       </tr>

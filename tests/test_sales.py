@@ -230,8 +230,10 @@ def test_sale_edit_re_snapshots_cost_from_current_shipment(admin_client, db):
     assert new_landed != Decimal("1.2000")
 
     resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
-        "customer": customer.pk, "line": lot.pk, "kg": "1000",
-        "currency": "usd", "exchange_rate": "12000", "price": "1.60", "date": "2026-07-18", "debt_deadline": "", "note": "",
+        "customer": customer.pk,
+        "currency": "usd", "exchange_rate": "12000",
+        "date": "2026-07-18", "debt_deadline": "", "note": "",
+        **line_data({"brand": lot.brand, "kg": "1000", "price": "1.60"}, initial=1),
     })
     assert resp.status_code == 302
     sale.refresh_from_db()
@@ -969,14 +971,17 @@ class TestTheOneRowView:
         html = admin_client.get("/sales/").content.decode()
         assert "$300" in html and "$150" not in html
 
-    def test_a_merged_sotuv_offers_its_page_not_a_guessed_row(self, admin_client, db):
-        """Tahrirlash acts on one lot's row, so a sotuv of several links to its page
-        instead of silently picking the first of them."""
+    def test_a_merged_sotuv_is_edited_whole_and_deleted_whole(self, admin_client, db):
+        """Tahrirlash opens the SOTUV — every marka on it, in the form it was typed
+        in — and O'chirish takes all of it. Reached through the first row's pk, which
+        is how the view finds the rest of the group."""
         self._sotuv(admin_client)
         first = Sale.objects.order_by("pk").first()
         html = admin_client.get("/sales/").content.decode()
-        assert f"/sales/{first.pk}/" in html
-        assert f"/sales/{first.pk}/edit/" not in html
+        assert f"/sales/{first.pk}/" in html            # the sotuv's own page
+        assert f"/sales/{first.pk}/edit/" in html
+        assert f"/sales/{first.pk}/group/delete/" in html
+        assert f"/sales/{first.pk}/delete/" not in html   # never half a sotuv
 
     def test_a_lone_sotuv_keeps_its_own_actions(self, admin_client, db):
         _lot_at("LLDPE", "500", "1.00", "2026-07-10")
@@ -1018,6 +1023,16 @@ def _sale_today(admin_client, lot, customer, kg="1000", date="2026-07-18"):
     return Sale.objects.get(line=lot, kg=Decimal(kg))
 
 
+def _edit_sale(admin_client, sale, lot, customer, kg="900", date="2026-07-18"):
+    """The sotuv corrected through the real modal — the header plus its one Mahsulot
+    row, which is the form Tahrirlash now opens."""
+    return admin_client.post(f"/sales/{sale.pk}/edit/", {
+        "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+        "date": date, "debt_deadline": "", "note": "",
+        **line_data({"brand": lot.brand, "kg": kg, "price": "1.60"}, initial=1),
+    })
+
+
 def _entered_earlier(sale):
     """Push the row's entry back a week. `created_at` is auto_now_add, so a test
     cannot write an old one on the way in — and without an old row the two lenses
@@ -1056,11 +1071,7 @@ def test_an_edited_sale_reads_as_changed(admin_client, db):
     customer = _customer()
     sale = _entered_earlier(_sale_today(admin_client, lot, customer))
 
-    admin_client.post(f"/sales/{sale.pk}/edit/", {
-        "customer": customer.pk, "line": lot.pk, "kg": "900",
-        "currency": "usd", "exchange_rate": "12000", "price": "1.60",
-        "date": "2026-07-18", "debt_deadline": "", "note": "",
-    })
+    _edit_sale(admin_client, sale, lot, customer)
 
     resp = admin_client.get("/sales/?changed=today")
     assert resp.context["changed_count"] == 1
@@ -1087,16 +1098,15 @@ def test_the_two_lenses_answer_different_questions(admin_client, db):
     customer = _customer()
     old = _entered_earlier(_sale_today(admin_client, lot, customer, kg="1000"))
     _sale_today(admin_client, lot, customer, kg="2000")          # today's work
-    admin_client.post(f"/sales/{old.pk}/edit/", {
-        "customer": customer.pk, "line": lot.pk, "kg": "900",
-        "currency": "usd", "exchange_rate": "12000", "price": "1.60",
-        "date": "2026-07-18", "debt_deadline": "", "note": "",
-    })
+    _edit_sale(admin_client, old, lot, customer)
+    # Correcting the kg re-slices the row, so the corrected sotuv is read back by its
+    # kg rather than by a pk the re-slice replaced.
+    corrected = Sale.objects.get(kg=Decimal("900"))
 
     changed = admin_client.get("/sales/?changed=today")
-    assert [g["first"].pk for g in changed.context["groups"]] == [old.pk]
+    assert [g["first"].pk for g in changed.context["groups"]] == [corrected.pk]
     new = admin_client.get("/sales/?new=today")
-    assert old.pk not in [g["first"].pk for g in new.context["groups"]]
+    assert corrected.pk not in [g["first"].pk for g in new.context["groups"]]
     assert len(new.context["groups"]) == 1
 
 
@@ -1168,9 +1178,11 @@ class TestLastPricePrefill:
 
         latest = Sale.objects.filter(customer=customer).order_by("date", "pk").last()
         resp = admin_client.post(f"/sales/{latest.pk}/edit/", {
-            "customer": customer.pk, "line": lot.pk, "kg": "100",
-            "currency": "usd", "exchange_rate": "12000", "price": "1.72",
+            "customer": customer.pk,
+            "currency": "usd", "exchange_rate": "12000",
             "date": "2026-07-25", "debt_deadline": "", "note": "",
+            **line_data({"brand": "LLDPE", "kg": "100", "price": "1.72"},
+                        initial=1),
         })
         assert resp.status_code == 302
         assert last_sale_prices_by_customer()[customer.pk]["LLDPE"][0] == Decimal("1.7200")
@@ -1260,12 +1272,12 @@ class TestEditingAWholeSotuv:
                 "exchange_rate": "12000", "date": "2026-07-24",
                 "debt_deadline": "", "note": "", **line_data(*rows, initial=initial)}
         data.update(extra)
-        return client.post(f"/sales/{sale.pk}/group/edit/", data)
+        return client.post(f"/sales/{sale.pk}/edit/", data)
 
     def test_the_form_opens_with_every_mahsulot_filled_in(self, admin_client, db):
         """The same modal a new sotuv is typed in, holding what was typed."""
         _customer_unused, rows = self._two_marka_sotuv(admin_client)
-        html = admin_client.get(f"/sales/{rows[0].pk}/group/edit/").content.decode()
+        html = admin_client.get(f"/sales/{rows[0].pk}/edit/").content.decode()
         assert 'name="lines-0-brand"' in html and 'name="lines-1-brand"' in html
         import re as _re
         kgs = _re.findall(r'name="lines-\d-kg"[^>]*value="([^"]*)"', html)
@@ -1355,15 +1367,21 @@ class TestEditingAWholeSotuv:
         assert resp.status_code == 302
         assert not Sale.objects.exists()
 
-    def test_a_one_mahsulot_sotuv_still_uses_its_own_door(self, admin_client, db):
-        """A group that holds one row is the ordinary sotuv, and gets the ordinary
-        form — one door for it rather than two that must be kept in step."""
+    def test_a_one_mahsulot_sotuv_opens_the_same_form(self, admin_client, db):
+        """One door for every sotuv: a one-marka sotuv opens the Yangi sotuv form
+        too, with its single Mahsulot row filled in — not a different form asking
+        for a LOT and one kg, which is FIFO's arithmetic rather than the deal."""
         _lot_at("LLDPE", "500", "1.00", "2026-07-10")
         customer = Customer.objects.create(name="Bitta marka")
         self._post(admin_client, customer, {"brand": "LLDPE", "kg": "100", "price": "1.50"})
         sale = Sale.objects.get()
-        html = admin_client.get(f"/sales/{sale.pk}/group/edit/").content.decode()
-        assert 'name="lines-0-brand"' not in html and 'name="kg"' in html
+        html = admin_client.get(f"/sales/{sale.pk}/edit/").content.decode()
+        assert 'name="lines-0-brand"' in html
+        assert 'name="lines-0-kg"' in html and 'value="100.000"' in html
+        # The spare row Yangi sotuv also carries, and nothing else beyond it.
+        assert 'name="lines-1-brand"' in html and 'name="lines-2-brand"' not in html
+        # The old form's own boxes — a LOT picker and one kg — are gone.
+        assert 'id="id_line"' not in html and 'id="id_kg"' not in html
 
     def test_a_header_only_edit_leaves_other_sotuvlar_where_they_are(
             self, admin_client, db):
@@ -1536,10 +1554,12 @@ class TestDragInsideADay:
         a, b = self._sale(lot, "A"), self._sale(lot, "B")
         self._order(admin_client, a, b)
         admin_client.post(f"/sales/{a.pk}/edit/", {
-            "customer": a.customer_id, "line": lot.pk, "kg": "1",
-            "currency": "usd", "exchange_rate": "12000", "price": "1.50",
+            "customer": a.customer_id,
+            "currency": "usd", "exchange_rate": "12000",
             "date": (date.today() - timedelta(days=2)).isoformat(),
-            "debt_deadline": "", "note": ""})
+            "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "1", "price": "1.50"},
+                        initial=1)})
         a.refresh_from_db()
         assert a.date == date.today() - timedelta(days=2)
         assert a.position is None

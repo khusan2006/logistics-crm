@@ -167,7 +167,7 @@ def test_the_multi_mahsulot_edit_form_does_not_price_the_ombor_per_row(
     customer = _world()
     sale = _group_sale(admin_client, customer, [("marka-0", "100"), ("marka-1", "100")])
     with django_assert_max_num_queries(25):
-        assert admin_client.get(f"/sales/{sale.pk}/group/edit/").status_code == 200
+        assert admin_client.get(f"/sales/{sale.pk}/edit/").status_code == 200
 
 
 def test_that_form_does_not_get_slower_as_the_ombor_fills(
@@ -182,4 +182,4 @@ def test_that_form_does_not_get_slower_as_the_ombor_fills(
     # not follow the ombor at all. A budget that grew with the fixture would have let
     # the original defect through — it was 57 queries on six lots and 327 on 24.
     with django_assert_max_num_queries(25):
-        assert admin_client.get(f"/sales/{sale.pk}/group/edit/").status_code == 200
+        assert admin_client.get(f"/sales/{sale.pk}/edit/").status_code == 200

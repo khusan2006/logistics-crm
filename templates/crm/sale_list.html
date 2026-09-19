@@ -214,16 +214,15 @@ it elsewhere to be moved against.
     <td>{% money g.profit g.profit_uzs g.first.currency %}</td>
     <td{% if g.owing %} class="late"{% endif %}>{% money g.remaining g.remaining_uzs g.first.currency %}</td>
     {% comment %}
-    The same pair on every row, whatever the sotuv carries. A multi-mahsulot sotuv
-    used to get an eye instead — open the sotuv's page and edit a lot at a time —
-    because Tahrirlash worked on ONE lot's row and an icon that silently picked the
-    first of three would be worse than no icon. It gets its own door now: the whole
-    sotuv, in the form it was typed in, and O'chirish takes all of it. The mijoz's
-    name still opens the sotuv's page for anybody who wants to read it row by row.
+    The same pair on every row, whatever the sotuv carries. Tahrirlash opens the whole
+    sotuv in the form it was typed in — the same form as Yangi sotuv, already filled
+    in — so a three-mahsulot sotuv and a one-mahsulot sotuv are corrected the same
+    way. O'chirish takes all of it. The mijoz's name still opens the sotuv's page for
+    anybody who wants to read it row by row.
     {% endcomment %}
     <td class="row-actions">
       {% if g.count > 1 %}
-      <a class="icon-action act-edit" href="{% url 'sale_group_edit' g.first.pk %}" data-modal title="Tahrirlash">
+      <a class="icon-action act-edit" href="{% url 'sale_edit' g.first.pk %}" data-modal title="Tahrirlash">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </a>
       <a class="icon-action act-delete" href="{% url 'sale_group_delete' g.first.pk %}" data-modal title="O'chirish">

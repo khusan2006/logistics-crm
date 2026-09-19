@@ -77,8 +77,8 @@ def test_customer_quick_create_translator_forbidden(translator_client, db):
 
 
 def test_sale_form_customer_has_quick_add_hook(db):
-    from crm.forms import SaleForm
-    html = str(SaleForm())
+    from crm.forms import SaleCreateForm
+    html = str(SaleCreateForm())
     assert "data-quick-add-url" in html and "/customers/quick/" in html
 
 

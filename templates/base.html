@@ -1502,7 +1502,10 @@
         if (box.dataset.shiftReady) { return; }
         box.dataset.shiftReady = '1';
         var form = box.closest('form');
-        var kg = form && form.querySelector('[name="kg"]');
+        // `lines-0-kg` on a sotuv form — the kg live on the Mahsulot row now, and a
+        // sotuv that is one row is the only one offered a preview. `kg` is the older
+        // single-box shape, still used by the one-lot sotuv form.
+        var kg = form && form.querySelector('[name="lines-0-kg"], [name="kg"]');
         if (!kg) { return; }
         var timer = null;
         var seq = 0;

@@ -536,8 +536,8 @@ def test_quick_create_returns_what_the_calling_modal_consumes(admin_client):
     assert data["id"] == customer.pk
     assert data["text"] == str(customer) == "Yangi Mijoz"
     # and the id is actually selectable in the sotuv form it was opened from
-    from crm.forms import SaleForm
-    assert SaleForm().fields["customer"].queryset.filter(pk=data["id"]).exists()
+    from crm.forms import SaleCreateForm
+    assert SaleCreateForm().fields["customer"].queryset.filter(pk=data["id"]).exists()
 
 
 def test_quick_create_blank_name_is_a_400_the_modal_can_show(admin_client):

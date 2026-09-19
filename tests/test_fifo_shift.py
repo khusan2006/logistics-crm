@@ -41,15 +41,36 @@ def _sell(client, brand, kg, date, customer, price="3.00"):
 
 
 def _edit(client, sale, kg):
+    """The sotuv corrected in the modal it was typed in: the header, and its marka
+    with the new kg as the Mahsulot row.
+
+    Correcting the kg re-slices the row, exactly as entering it would have — so the
+    corrected sotuv is read back off its group (`_sotuv`), not off a pk."""
     return client.post(f"/sales/{sale.pk}/edit/", {
-        "customer": sale.customer_id, "line": sale.line_id, "kg": kg,
-        "currency": "usd", "exchange_rate": "12000", "price": str(sale.price),
-        "date": str(sale.date), "debt_deadline": "", "note": ""})
+        "customer": sale.customer_id, "currency": "usd",
+        "exchange_rate": "12000", "date": str(sale.date),
+        "debt_deadline": "", "note": "",
+        **line_data({"brand": sale.line.brand, "kg": kg,
+                     "price": str(sale.price)}, initial=1)})
 
 
 def _slices(sale):
     sale.refresh_from_db()
     return [(sl.line_id, sl.kg) for sl in sale.lots.all()]
+
+
+def _sotuv(customer, brand):
+    """The rows of that mijoz's sotuv of `brand`, oldest first. A row that reaches
+    across two lots is two rows under one group — the same shape a freshly entered
+    sotuv has."""
+    return list(Sale.objects.filter(customer=customer,
+                                    line__contract_line__brand=brand)
+                .order_by("pk"))
+
+
+def _sotuv_slices(customer, brand):
+    return [(sl.line_id, sl.kg)
+            for row in _sotuv(customer, brand) for sl in row.lots.all()]
 
 
 def test_edit_up_spills_into_another_lot_of_the_same_marka(admin_client, db):
@@ -65,9 +86,13 @@ def test_edit_up_spills_into_another_lot_of_the_same_marka(admin_client, db):
     resp = _edit(admin_client, sale, "1500")
     assert resp.status_code == 302
 
-    assert _slices(sale) == [(old.pk, Decimal("1000")), (new.pk, Decimal("500"))]
-    # 1000 kg at 1.00 + 500 kg at 2.00, weighted over 1500
-    assert sale.cost_price == Decimal("1.3333")
+    assert _sotuv_slices(customer, "LDPE") == [(old.pk, Decimal("1000")),
+                                               (new.pk, Decimal("500"))]
+    # 1000 kg off the cheap truck and 500 off the dearer one, each billed its own
+    rows = _sotuv(customer, "LDPE")
+    assert [(r.kg, r.cost_price) for r in rows] == [
+        (Decimal("1000.000"), Decimal("1.0000")),
+        (Decimal("500.000"), Decimal("2.0000"))]
     assert new.available_kg == Decimal("500")
 
 
@@ -89,8 +114,12 @@ def test_edit_up_shifts_the_sotuvlar_behind_it(admin_client, db):
     resp = _edit(admin_client, first, "800")
     assert resp.status_code == 302
 
-    first.refresh_from_db()
-    assert _slices(first) == [(cheap.pk, Decimal("800"))]
+    # 800 kg off the cheap lot, however many rows the re-slice made of them: it fills
+    # from what is free at that moment, and the replay then puts the chain in order.
+    corrected = [s for s in Sale.objects.order_by("pk") if s.date == first.date]
+    assert sum(s.kg for s in corrected) == Decimal("800.000")
+    assert [(sl.line_id, sl.kg) for s in corrected for sl in s.lots.all()] == [
+        (cheap.pk, Decimal("500.000")), (cheap.pk, Decimal("300.000"))]
     # only 200 cheap kg are left for the sotuv behind it; the rest comes off the dear lot
     moved = [sl for s in behind for sl in s.lots.all()]
     assert sum(sl.kg for sl in moved if sl.line_id == cheap.pk) == Decimal("200")
@@ -116,8 +145,8 @@ def test_hand_picked_lot_behind_it_stops_the_shift(admin_client, db):
     resp = _edit(admin_client, first, "600")
     assert resp.status_code == 302
 
-    first.refresh_from_db()
-    assert _slices(first) == [(cheap.pk, Decimal("600"))]
+    corrected = Sale.objects.get(kg=Decimal("600"))
+    assert _slices(corrected) == [(cheap.pk, Decimal("600"))]
     # untouched — it is still on the lot it was pointed at
     assert _slices(chosen) == [(dear.pk, Decimal("400"))]
 

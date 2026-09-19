@@ -37,10 +37,14 @@ def _sell(client, brand, kg, date, customer, price="3.00"):
 
 
 def _edit(client, sale, kg):
+    """The kg corrected in the modal the sotuv was typed in. Correcting them
+    re-slices the row, so a caller that edits twice re-reads the sotuv in between."""
     return client.post(f"/sales/{sale.pk}/edit/", {
-        "customer": sale.customer_id, "line": sale.line_id, "kg": kg,
-        "currency": "usd", "exchange_rate": "12000", "price": str(sale.price),
-        "date": str(sale.date), "debt_deadline": "", "note": ""})
+        "customer": sale.customer_id, "currency": "usd",
+        "exchange_rate": "12000", "date": str(sale.date),
+        "debt_deadline": "", "note": "",
+        **line_data({"brand": sale.line.brand, "kg": kg,
+                     "price": str(sale.price)}, initial=1)})
 
 
 def test_an_edit_records_both_sides(admin_client, db):
@@ -53,7 +57,8 @@ def test_an_edit_records_both_sides(admin_client, db):
 
     _edit(admin_client, sale, "1500")
     entry = AuditLog.objects.filter(target_type="Sotuv", action="update").first()
-    assert "2000" in entry.summary and "1500" in entry.summary
+    # Grouped with an NBSP, as every figure written through `_kg` is.
+    assert "2\u00a0000" in entry.summary and "1\u00a0500" in entry.summary
     assert "→" in entry.summary
 
 
@@ -61,9 +66,11 @@ def test_history_reads_as_a_path_oldest_first(admin_client, db):
     _lot("HDPE", "5000", "1.00", "2026-07-10")
     customer = _customer()
     _sell(admin_client, "HDPE", "2000", "2026-07-16", customer)
+    _edit(admin_client, Sale.objects.get(), "1500")
+    # Re-read: correcting the kg re-slices the row, and the trail follows the sotuv
+    # rather than the pk the re-slice replaced.
+    _edit(admin_client, Sale.objects.get(), "1800")
     sale = Sale.objects.get()
-    _edit(admin_client, sale, "1500")
-    _edit(admin_client, sale, "1800")
 
     from crm.views import sale_history
     trail = sale_history(sale)

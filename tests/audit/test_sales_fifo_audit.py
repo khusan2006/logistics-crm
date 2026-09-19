@@ -65,14 +65,21 @@ def _sale_post(customer, brand, kg, price, currency="usd", rate="12000",
     }
 
 
-def _edit_post(sale, **overrides):
-    """The payload the Sotuvni tahrirlash form posts back for an unchanged sale,
-    built from the values the form actually renders (see `_rendered`)."""
+def _edit_post(sale, kg=None, price=None, **overrides):
+    """The payload the Sotuvni tahrirlash form posts back for an unchanged sale.
+
+    The same form as Yangi sotuv: the header, with the marka/kg/narx as a Mahsulot
+    row under it — so `kg` and `price` belong to that row, everything else to the
+    header (see `_rendered`)."""
     data = {
-        "customer": sale.customer_id, "line": sale.line_id, "kg": str(sale.kg),
-        "currency": sale.currency, "price": str(sale.price),
+        "customer": sale.customer_id,
+        "currency": sale.currency,
         "exchange_rate": str(sale.exchange_rate), "date": str(sale.date),
         "debt_deadline": str(sale.debt_deadline or ""), "note": sale.note,
+        **line_data({"brand": sale.line.brand,
+                     "kg": str(sale.kg) if kg is None else str(kg),
+                     "price": str(sale.price) if price is None else str(price)},
+                    initial=1),
     }
     data.update({k: str(v) for k, v in overrides.items()})
     return data
@@ -80,10 +87,14 @@ def _edit_post(sale, **overrides):
 
 def _rendered(admin_client, sale):
     """What the real edit form puts in its fields — the values an operator would
-    post straight back by pressing Saqlash without touching anything."""
-    from crm.forms import SaleForm
-    form = SaleForm(instance=Sale.objects.get(pk=sale.pk))
-    return {name: form[name].value() for name in form.fields}
+    post straight back by pressing Saqlash without touching anything. The header's
+    own fields, plus the marka/kg/narx off the sotuv's first Mahsulot row."""
+    page = admin_client.get(f"/sales/{sale.pk}/edit/")
+    form, lines = page.context["form"], page.context["lines"]
+    shown = {name: form[name].value() for name in form.fields}
+    row = lines.forms[0]
+    shown.update({name: row[name].value() for name in ("brand", "kg", "price")})
+    return shown
 
 
 def _money_snapshot(sale):
@@ -218,11 +229,12 @@ def test_resaving_a_uzs_sale_from_the_rendered_form_moves_no_money(admin_client,
     for _ in range(2):
         shown = _rendered(admin_client, sale)
         resp = admin_client.post(f"/sales/{sale.pk}/edit/", {
-            "customer": shown["customer"], "line": shown["line"],
-            "kg": str(shown["kg"]), "currency": shown["currency"],
-            "price": str(shown["price"]), "exchange_rate": str(shown["exchange_rate"]),
+            "customer": shown["customer"], "currency": shown["currency"],
+            "exchange_rate": str(shown["exchange_rate"]),
             "date": str(shown["date"]), "debt_deadline": str(shown["debt_deadline"] or ""),
             "note": shown["note"] or "",
+            **line_data({"brand": shown["brand"], "kg": str(shown["kg"]),
+                         "price": str(shown["price"])}, initial=1),
         })
         assert resp.status_code == 302
         sale.refresh_from_db()
