@@ -7,6 +7,12 @@ what does it already cost, and what am I adding. The rows are listed rather than
 hidden behind a second click for the reason the yuk's grid opens filled: coming
 back to add a broker to a kelishuv that already carries one has to SHOW that, or
 the same fee is entered twice.
+
+The adding half is the yuk's grid, not a one-xarajat form: the turkumlar ARE the
+boxes, valyuta / kurs / usul are asked once above them, and a box that opened
+showing a row rewrites that row. See `ContractExpenseGridForm` for the three ways
+the three boxes differ — a foiz, a per-kg rate and a plain summa are not the same
+kind of number and the grid is what absorbs that.
 {% endcomment %}
 {% load crm_extras %}
 <div class="modal-head">
@@ -39,47 +45,24 @@ that drops to a line of its own mid-sentence and reads as a stray number.
 </div>
 {% endif %}
 
-{% if rows or contract.transport_rate_per_kg %}
+{% if rows %}
 {% comment %}
 Three columns, not six. This is a dialog, and the app's usual Sana/Turkum/Summa/
 Usul/Izoh/actions table only fits by scrolling sideways — which puts Tahrirlash off
 the edge, where nobody finds it. The secondary facts stack under the two that
 matter: sana and izoh under the turkum, usul under the summa.
+
+Kept beside the grid rather than replaced by it. The boxes below hold one row per
+turkum; a turkum recorded twice — two "boshqa" agreed on two different days — has
+no single figure to show and is edited from HERE. This is also where each row's own
+sana and izoh live, which the grid does not ask per box.
+
+Transport is not in this table. It stores no row: it is `transport_rate_per_kg` on
+the kelishuv, and it is edited and cleared in its own box below.
 {% endcomment %}
 <div class="table-wrap">
   <table>
     <tr><th>Turkum</th><th>Summa</th><th></th></tr>
-    {% comment %}
-    Transport sits in the same table because to the operator it is the same
-    question — what does this kelishuv cost us. It is not one of the rows though:
-    it stores no sum and moves no money HERE. What it does instead is written in
-    the Summa column, and the count says how much of that has already happened.
-    {% endcomment %}
-    {% if contract.transport_rate_per_kg %}
-    <tr>
-      <td>
-        Transport
-        <div class="muted" style="font-size: 12px;">
-          {% rate_typed contract.transport_rate_per_kg contract.currency %}
-        </div>
-      </td>
-      <td class="muted">
-        Har bir yuk omborga kelganda yoziladi
-        {% if logged_transport %}
-        <div style="font-size: 12px;">{{ logged_transport }} ta yukka yozilgan</div>
-        {% endif %}
-      </td>
-      {% comment %}
-      Icons, not labelled buttons. Two words apiece pushed this table wider than the
-      dialog, and a horizontally scrolling table puts Tahrirlash off the edge where
-      nobody looks for it — the same pair of icons the kelishuv row itself carries.
-      {% endcomment %}
-      <td class="row-actions">
-        <a class="icon-action" href="{% url 'contract_expense_create' %}?contract={{ contract.pk }}&category=transport" data-modal title="Tahrirlash"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg></a>
-        <a class="icon-action danger" href="{% url 'contract_transport_clear' contract.pk %}" data-modal title="O'chirish"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></a>
-      </td>
-    </tr>
-    {% endif %}
     {% for e in rows %}
     <tr>
       <td>
@@ -109,17 +92,15 @@ The money rows only. A transport rate is not in this total and must not look as 
 it were: its money is booked per yuk on arrival, so counting it here would state it
 twice — once as a kelishuv cost and again on every truck.
 {% endcomment %}
-{% if rows %}
 <p class="cexp-total">
   Jami: {% money_both contract.expenses_total contract.expenses_total_uzs %} ·
   har bir yukning 1 kg tannarxiga {{ contract.expenses_per_kg|floatformat:"-4" }} $ qo'shiladi
 </p>
-{% endif %}
 {% else %}
 {% comment %}
-Transport is named only where it is offered. On the Eron road the picker below has
-no such turkum — a logist quotes the run and the yuk form asks for the avans — so
-naming it here would send the operator looking for a box that is not there.
+Transport is named only where it is offered. On the Eron road the grid below has no
+such box — a logist quotes the run and the yuk form asks for the avans — so naming
+it here would send the operator looking for a box that is not there.
 {% endcomment %}
 <div class="cexp-empty">
   <strong>Hali xarajat kiritilmagan</strong>
@@ -128,13 +109,111 @@ naming it here would send the operator looking for a box that is not there.
   taqsimlanadi.
 </div>
 {% endif %}
-
-<p class="cexp-section">Yangi xarajat</p>
 </div>
 
-<form method="post" action="{{ request.path }}" class="stacked cexp-form">
+{% comment %}
+`xgrid-form` and `xcell` are the yuk grid's own classes, not a copy of them: the
+per-box foiz reveal in base.html keys on exactly those, so a box whose effective
+usul is Bank shows its foiz here for free and on naqd or karta never offers one
+CashEntry.fee_amount would drop.
+{% endcomment %}
+<form method="post" action="{{ request.path }}" class="stacked xgrid-form cexp-form">
   {% csrf_token %}
-  {% include "crm/_form_fields.html" %}
+  {{ form.contract }}
+  {% if form.non_field_errors %}<ul class="errorlist">{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+
+  <div class="xgrid-shared">
+    {% comment %}
+    Sana dates the rows being added. The ones already recorded keep theirs — each
+    shows it under its own box — so correcting a figure never drags a xarajat
+    entered last week onto today.
+    {% endcomment %}
+    <label>{{ form.date.label }}{{ form.date }}
+      {% if form.recorded %}<small class="field-hint">yangi qatorlar uchun</small>{% endif %}
+      {{ form.date.errors }}</label>
+    <div class="xfield"><span class="xfield-label">{{ form.currency.label }}</span>
+      {% include "crm/_seg_field.html" with field=form.currency %}{{ form.currency.errors }}</div>
+    <div class="xfield"><span class="xfield-label">{{ form.method.label }}</span>
+      {% include "crm/_seg_field.html" with field=form.method %}{{ form.method.errors }}</div>
+
+    <label>{{ form.exchange_rate.label }}{{ form.exchange_rate }}{{ form.exchange_rate.errors }}</label>
+  </div>
+
+  <p class="xgrid-legend">Xarajatlar
+    {% if form.recorded %}<span>yozilganlari ko'rinib turibdi — o'zgartiring yoki bo'shatib o'chiring</span>
+    {% else %}<span>faqat kerakli turkumlarni to'ldiring</span>{% endif %}</p>
+  <div class="xgrid">
+    {% for cell in form.amount_fields %}
+    <div class="xcell{% if cell.amount.errors or cell.fee.errors %} is-bad{% endif %}" data-cat="{{ cell.category }}">
+      {% if cell.row %}{{ cell.row }}{% endif %}
+      <label class="xcell-main">
+        <span class="xcell-label">{{ cell.amount.label }}</span>
+        {{ cell.amount }}
+      </label>
+      {% comment %}
+      Only the sum box carries the two satellite dropdowns. A broker is booked in the
+      kelishuv's own money whatever the shared picker says — the value it is a
+      percentage OF is the kelishuv's — so a valyuta box there would offer a choice
+      that is quietly overruled; and transport books no money here at all.
+      {% endcomment %}
+      {% if cell.currency or cell.method %}
+      <div class="xcell-side">
+        {% if cell.currency %}{{ cell.currency }}{% endif %}
+        {% if cell.method %}{{ cell.method }}{% endif %}
+      </div>
+      {% endif %}
+      {% comment %}
+      What the box is actually saying, said under it. A foiz is not a sum and a rate
+      is not a sum, and the operator's question is the sum in both cases — how much
+      the broker's cut comes to, and how many yuklar the rate has already been
+      written onto.
+      {% endcomment %}
+      {% if cell.kind == "percent" %}
+      <small class="xcell-note">kelishuvning to'liq qiymatidan olinadi</small>
+      {% elif cell.kind == "rate" %}
+      <small class="xcell-note">
+        Har bir yuk omborga kelganda yoziladi{% if cell.logged_transport %} · {{ cell.logged_transport }} ta yukka yozilgan{% endif %}
+      </small>
+      {% comment %}
+      Blank here means "leave it as it is", NOT "delete" — the one box on this grid
+      that does not clear on being emptied. The rate it holds has already written a
+      xarajat onto every yuk that landed, and taking N of those out of the kassa is
+      not something an empty box should do quietly. Clearing it is this link, which
+      asks first and says how many.
+      {% endcomment %}
+      {% if contract.transport_rate_per_kg %}
+      <a class="xcell-clear" href="{% url 'contract_transport_clear' contract.pk %}" data-modal>Transport narxini o'chirish</a>
+      {% endif %}
+      {% endif %}
+      {% comment %}
+      A prefilled box shows the sana its row was recorded with: the Sana above dates
+      the rows being ADDED and leaves the existing ones where they are, so without
+      this the figure would look as if it belonged to today.
+      {% endcomment %}
+      {% if cell.recorded %}<small class="xcell-note">{{ cell.recorded.date|date:"j-E" }} · yozilgan</small>{% endif %}
+      {% comment %}
+      Rows this box cannot stand in for — a turkum entered twice. Named rather than
+      hidden: the jadval above shows figures for this turkum that the box does not
+      carry, and an empty box beside them does not mean there are none.
+      {% endcomment %}
+      {% if cell.others %}<small class="xcell-note">{{ cell.others|length }} ta yozuv bor — jadvaldan tahrirlanadi</small>{% endif %}
+      {% if cell.fee %}
+      <label class="xcell-fee" data-cell-fee hidden>
+        <span class="xcell-fee-label">Perechisleniya foizi (%)</span>
+        {{ cell.fee }}
+      </label>
+      {% endif %}
+      {{ cell.amount.errors }}{{ cell.fee.errors }}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="xgrid-extra">
+    <label>{{ form.fee_percent.label }}{{ form.fee_percent }}
+      <small class="field-hint">{{ form.fee_percent.help_text }}</small>{{ form.fee_percent.errors }}</label>
+    <label>{{ form.note.label }}{{ form.note }}{{ form.note.errors }}</label>
+  </div>
+
   <div class="modal-actions">
     <button type="submit" class="btn">Saqlash</button>
     <button type="button" class="btn btn-ghost" data-modal-close>Bekor qilish</button>

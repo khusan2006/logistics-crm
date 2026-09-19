@@ -35,7 +35,7 @@ from .forms import (
     ReturnBatchForm, ReturnSettlementEditForm, ReturnSettlementPayForm,
     parse_return_rows, returns_without,
     CustomsAgentForm, CustomsPaymentForm,
-    ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
+    ContractExpenseGridForm, ExpenseGridForm, KapitalForm, KonvertatsiyaForm, LogistForm, LogistPaymentForm,
     ContractExpenseForm,
     SaleCreateForm, SaleForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
     ShipmentExpenseForm,
@@ -3622,76 +3622,80 @@ def expense_edit(request, pk):
 
 @role_required(User.Role.ADMIN)
 def contract_expense_create(request):
-    """The kelishuv's own xarajatlar — what it already carries, and a box to add one.
+    """The kelishuv's own xarajatlar — what it already carries, and a grid to fill.
 
     Opened from the kelishuvlar list rather than from a detail page, because a
     kelishuv has no detail page: the list row IS the kelishuv, the way the to'lov and
     tahrirlash modals on the same row already work.
 
-    The rows are listed above the form for the same reason the yuk's grid opens
-    filled: coming back to add a broker to a kelishuv that already carries one wants
-    to show that, not offer an empty box beside it."""
+    A grid rather than one xarajat at a time (`ContractExpenseGridForm`), the shape
+    the yuk's xarajatlar already take. A birja kelishuv routinely carries a broker AND
+    a transport narx AND something agreed on the side, and each of those used to be
+    its own trip through a form whose fields moved under the turkum picker. Saqlash
+    may add, rewrite AND remove rows in one go — and may write the kelishuv's
+    transport arrangement, which is not a row at all.
+
+    The jadval above the grid stays: it is where a turkum recorded twice is edited,
+    and where each row's own sana and izoh are read."""
     asked = (request.POST.get("contract") if request.method == "POST"
              else request.GET.get("contract")) or ""
     contract = (Contract.objects.select_related("partner")
                 .prefetch_related("lines", "expenses")
                 .filter(pk=asked).first() if asked.isdigit() else None)
-    initial = {"contract": asked}
-    if contract:
-        initial["currency"] = contract.currency
-    # The transport pseudo-row's Tahrirlash opens this same modal with its turkum
-    # already chosen, so editing the rate is one click rather than a picker hunt.
-    asked_category = request.GET.get("category")
-    if asked_category in ContractExpense.Category.values:
-        initial["category"] = asked_category
-        if asked_category == ContractExpense.Category.TRANSPORT and contract:
-            initial["rate_per_kg"] = contract.transport_rate_per_kg
-    form = ContractExpenseForm(request.POST or None, initial=initial,
-                               contract=contract)
+    form = ContractExpenseGridForm(request.POST or None,
+                                   initial={"contract": asked}, contract=contract)
     title = "Kelishuv xarajatlari"
 
     def respond(invalid=False):
         return form_response(
             request, form, title, invalid=invalid,
             modal_template="crm/_contract_expenses_modal.html",
-            extra_context={
-                "contract": contract,
-                "rows": contract.expenses.all() if contract else [],
-                # How much of the transport arrangement has already turned into
-                # money — the half of it the operator cannot see from this screen.
-                "logged_transport": (
-                    ShipmentExpense.objects.filter(
-                        shipment__contract=contract, is_auto_transport=True).count()
-                    if contract else 0)})
+            extra_context={"contract": contract,
+                           "rows": contract.expenses.all() if contract else []})
 
     if request.method == "POST":
         if form.is_valid():
-            if form.is_transport:
-                # No row of its own: this turkum edits the kelishuv's arrangement,
-                # and the money shows up on each yuk as it lands.
-                #
-                # The audit line is read off what save() RETURNS, not off the copy
-                # this view loaded from the URL — that one is a different instance
-                # still carrying the old rate, and a line written from it records
-                # what the rate used to be while looking like a record of the change.
-                edited = form.save()
-                AuditLog.record(
-                    request.user, AuditLog.Action.UPDATE, "Kelishuv", edited.pk,
-                    f"Transport narxi: {edited.transport_rate_per_kg} / 1 kg · "
-                    f"kelishuv {edited.code}")
-                messages.success(request, "Transport narxi saqlandi")
-            else:
-                expense = form.save(commit=False)
-                expense.created_by = request.user
-                expense.save()
+            with transaction.atomic():
+                created, updated, deleted, transport = form.save(request.user)
+            code = contract.code
+            done = []
+            # One line per bucket, the way the yuk's grid audits the same three
+            # things. A deleted row's pk is gone by now — Django clears it — so the
+            # DELETE line names no target rather than naming None as if it were one.
+            if created:
+                total = sum((e.amount for e in created), Decimal("0"))
                 AuditLog.record(
                     request.user, AuditLog.Action.CREATE, "Kelishuv xarajati",
-                    expense.pk,
-                    f"Yangi kelishuv xarajati: {expense.get_category_display()} · "
-                    f"{expense.amount}$ · kelishuv {expense.contract.code}")
-                messages.success(request, "Xarajat qo'shildi")
-            return form_reload(request, contract_list_url(
-                contract.is_birja if contract else False))
+                    created[0].pk,
+                    f"Yangi kelishuv xarajati: {len(created)} ta · {total}$ · "
+                    f"kelishuv {code}")
+                done.append(f"{len(created)} ta xarajat qo'shildi")
+            if updated:
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Kelishuv xarajati",
+                    updated[0].pk,
+                    f"Kelishuv xarajati tahrirlandi: {len(updated)} ta · "
+                    f"kelishuv {code}")
+                done.append(f"{len(updated)} ta yangilandi")
+            if deleted:
+                AuditLog.record(
+                    request.user, AuditLog.Action.DELETE, "Kelishuv xarajati", None,
+                    f"Kelishuv xarajati o'chirildi: {len(deleted)} ta · "
+                    f"kelishuv {code}")
+                done.append(f"{len(deleted)} ta o'chirildi")
+            if transport is not None:
+                # Read off what the form actually wrote, not off the copy this view
+                # loaded from the URL: a line written from the stale one records what
+                # the rate USED to be while looking like a record of the change.
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
+                    f"Transport narxi: {transport} / 1 kg · kelishuv {code}")
+                done.append("transport narxi saqlandi")
+            if done:
+                messages.success(request, " · ".join(done))
+            else:
+                messages.info(request, "O'zgarish yo'q")
+            return form_reload(request, contract_list_url(contract.is_birja))
         return respond(invalid=True)
     return respond()
 

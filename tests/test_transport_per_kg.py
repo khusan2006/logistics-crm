@@ -148,9 +148,10 @@ def test_the_xarajatlar_modal_re_prices_through_to_the_yuk(birja_contract,
     on the kelishuv header form, and this test used to post there."""
     landed = _shipment(birja_contract, arrived=ARRIVED)
     admin_client.post("/contract-expenses/new/", {
-        "contract": birja_contract.pk, "date": ARRIVED, "category": "transport",
-        "rate_per_kg": "600", "percent": "", "amount": "", "currency": "uzs",
-        "exchange_rate": "12000", "method": "cash", "fee_percent": "0", "note": ""})
+        "contract": birja_contract.pk, "date": ARRIVED, "currency": "uzs",
+        "exchange_rate": "12000", "method": "cash", "fee_percent": "0", "note": "",
+        "amount_broker": "", "amount_transport": "600", "amount_other": "",
+        "row_broker": "", "row_other": ""})
     birja_contract.refresh_from_db()
     assert birja_contract.transport_rate_per_kg == Decimal("600")
     assert _auto(landed).amount_uzs == KG * Decimal("600")

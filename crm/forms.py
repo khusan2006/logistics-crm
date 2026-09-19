@@ -3765,9 +3765,13 @@ class ContractExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
     **Transport saves no row of its own.** It is an arrangement, not a payment: it
     writes `Contract.transport_rate_per_kg` and the money appears later, per yuk, as
     each truck lands (`sync_birja_transport`). A ModelForm whose save() sometimes
-    writes the PARENT and returns None is unusual enough to say out loud — it is
-    here so the operator has one screen for "what does this kelishuv cost us"
-    instead of a per-kg box on the header form and a broker two clicks away."""
+    writes the PARENT and returns None is unusual enough to say out loud.
+
+    This is the per-ROW form now: `contract_expense_edit` binds it to one xarajat
+    picked out of the jadval in the Xarajatlar modal. Adding goes through
+    `ContractExpenseGridForm`, which asks for every turkum at once — so the transport
+    branch below is reachable only by opening an existing row and switching its
+    turkum to Transport, which was always a strange thing to be able to do."""
 
     rate_per_kg = forms.DecimalField(
         label="1 kg uchun", max_digits=14, decimal_places=4, required=False,
@@ -3908,6 +3912,421 @@ class ContractExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelF
         contract.save(update_fields=["transport_rate_per_kg"])
         sync_contract_birja_transport(contract)
         return contract
+
+
+class ContractExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
+    """Every kelishuv-level xarajat as its own small box, filled in one pass.
+
+    The same shape the yuk's grid took, and for the same reason. `ContractExpenseForm`
+    asks for ONE xarajat: pick a turkum, watch half the form appear and the other half
+    disappear, type, save, reopen, pick again. A birja kelishuv routinely carries a
+    broker AND a transport narx AND something else agreed on the side, and those are
+    three trips through a form whose fields move under the picker each time.
+
+    Here the turkumlar ARE the form. Sana, valyuta, kurs and to'lov usuli are asked
+    once above the boxes because they are shared in practice, with a per-box override
+    where a box can have one — exactly as on the yuk.
+
+    The three boxes are not three of a kind, which is the whole difficulty this form
+    absorbs so the operator does not have to:
+
+    * **Broker** is a FOIZ, never a sum. The sum is worked out from the kelishuv's own
+      value and re-worked whenever that value moves (`sync_contract_expenses`), so a
+      box that took the sum instead would be quietly overwritten the next time a
+      mahsulot was edited. It is booked in the kelishuv's own money whatever the
+      shared valyuta says — the base it is a percentage OF is the kelishuv's value —
+      so that box carries no valyuta override.
+    * **Transport** is a RATE PER KG and stores no row at all. It writes
+      `Contract.transport_rate_per_kg`, and its money appears later on each truck as
+      it lands. Only the birja road has it (see `ContractExpenseForm`).
+    * **Boshqa** is an ordinary sum somebody was quoted.
+
+    Clearing a box deletes the row it opened with — the same rule the yuk's grid
+    follows, and the reason both open filled. Transport is the one exception: the
+    rate it holds has already written a xarajat onto every yuk that landed, and
+    emptying a box must not silently take N of those out of the kassa. A blank
+    transport box therefore means "leave the arrangement alone", and clearing it is
+    its own action with its own confirm, which says how many yuklar it will take with
+    it (`contract_transport_clear`)."""
+
+    #: A turkum recorded more than once has no single figure to show, so its box
+    #: stays empty and additive and the rows are edited from the jadval above —
+    #: which is why this modal keeps that jadval while the yuk's grid does not.
+    contract = forms.ModelChoiceField(queryset=Contract.objects.all(),
+                                      widget=forms.HiddenInput)
+    date = forms.DateField(label="Sana", widget=date_widget(),
+                           initial=timezone.localdate)
+    currency = forms.ChoiceField(label="Valyuta", choices=Currency.choices,
+                                 initial=Currency.USD, widget=forms.RadioSelect)
+    method = forms.ChoiceField(label="To'lov usuli", choices=PayMethod.choices,
+                               initial=PayMethod.CASH, widget=forms.RadioSelect)
+    exchange_rate = forms.DecimalField(
+        label="Dollar kursi (1$ = so'm)", max_digits=12, decimal_places=2,
+        initial=LEGACY_RATE)
+    fee_percent = forms.DecimalField(
+        label="Perechisleniya foizi (%)", max_digits=5, decimal_places=2,
+        required=False, initial=0,
+        help_text="Bank orqali to'langan xarajatlarga qo'llanadi — turkum o'zinikini "
+                  "kiritsa, o'shanisi ustun")
+    note = forms.CharField(label="Izoh", max_length=255, required=False,
+                           widget=forms.TextInput(attrs={"placeholder": "Ixtiyoriy"}))
+
+    #: The turkumlar that write a xarajat row. Transport is the third choice and is
+    #: not among them: it writes the kelishuv.
+    MONEY_CATEGORIES = (ContractExpense.Category.BROKER,
+                        ContractExpense.Category.OTHER)
+    #: ...and the one that asks for a foiz rather than a sum.
+    PERCENT_CATEGORY = ContractExpense.Category.BROKER
+    TRANSPORT = ContractExpense.Category.TRANSPORT
+
+    def __init__(self, *args, contract=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.contract = contract
+        self.recorded, self.others = self.load_rows(contract)
+        # Transport is the exchange road's arrangement — on the Eron side a logist
+        # quotes the run and the yuk form asks for the haydovchi avansi, so a per-kg
+        # box there would be a second and contradictory answer to one question.
+        self.categories = [(value, label)
+                           for value, label in ContractExpense.Category.choices
+                           if value != self.TRANSPORT
+                           or (contract is not None and contract.is_birja)]
+        for value, label in self.categories:
+            self.fields[self.field_name(value)] = self.amount_field(value, label)
+            if value == self.TRANSPORT:
+                # No row_, no valyuta, no usul, no foiz: a rate books nothing here.
+                # It has no row to stand in for, and the kurs it is eventually
+                # converted at is the one in force the day the truck lands, which
+                # sync_birja_transport reads for itself.
+                continue
+            # Which row this box was showing when the modal was DRAWN. Saqlash
+            # rewrites and removes only that one — the grid speaks for what the
+            # operator had in front of them, not for whatever the kelishuv holds by
+            # the time it is submitted. Without it a modal opened before a colleague
+            # added a xarajat would delete that xarajat on save, because its box was
+            # blank here for the innocent reason that it did not exist yet.
+            self.fields[self.row_name(value)] = forms.IntegerField(
+                required=False, widget=forms.HiddenInput)
+            # The broker keeps no valyuta override either — see the class docstring.
+            if value != self.PERCENT_CATEGORY:
+                self.fields[self.currency_name(value)] = forms.ChoiceField(
+                    label="Valyuta", required=False, initial="",
+                    choices=[("", "Valyuta"), (Currency.USD, "$"),
+                             (Currency.UZS, "so'm")],
+                    widget=forms.Select(attrs={"class": "xmini"}))
+            self.fields[self.method_name(value)] = forms.ChoiceField(
+                label="To'lov usuli", required=False, initial="",
+                choices=[("", "Usul"), (PayMethod.CASH, "Naqd"),
+                         (PayMethod.CARD, "Karta"), (PayMethod.TRANSFER, "Bank")],
+                widget=forms.Select(attrs={"class": "xmini"}))
+            self.fields[self.fee_name(value)] = forms.DecimalField(
+                label="Perechisleniya foizi (%)", max_digits=5, decimal_places=2,
+                required=False, min_value=Decimal("0"), max_value=Decimal("100"),
+                widget=forms.NumberInput(attrs={
+                    "class": "xmini xfee", "placeholder": "foiz",
+                    "step": "0.01", "min": "0", "max": "100"}))
+        if not self.is_bound:
+            self.prefill()
+
+    def amount_field(self, category, label):
+        """The box itself — a foiz, a per-kg rate or a sum, depending on the turkum.
+
+        Three different numbers behind one grid position, so the label says which:
+        "Broker (%)" is not a summa and must not read like one beside a box that is."""
+        if category == self.PERCENT_CATEGORY:
+            field = forms.DecimalField(
+                label=f"{label} (%)", max_digits=5, decimal_places=2, required=False,
+                min_value=Decimal("0"), max_value=Decimal("100"),
+                widget=forms.NumberInput(attrs={"placeholder": "0",
+                                                "step": "0.01", "min": "0",
+                                                "max": "100"}))
+            return field
+        if category == self.TRANSPORT:
+            field = forms.DecimalField(
+                label="Transport (1 kg uchun)", max_digits=14, decimal_places=4,
+                required=False, min_value=Decimal("0"),
+                widget=forms.NumberInput(attrs={"placeholder": "0",
+                                                "step": "0.0001", "min": "0"}))
+            _group_thousands(field)
+            return field
+        field = forms.DecimalField(
+            label=label, max_digits=14, decimal_places=2, required=False,
+            min_value=Decimal("0"),
+            widget=forms.NumberInput(attrs={"placeholder": "0", "step": "0.01"}))
+        _group_thousands(field)
+        # The shared Valyuta picker previews every sum box at once, the same hook
+        # the single-amount forms use.
+        field.widget.attrs["data-money-amount"] = ""
+        return field
+
+    @classmethod
+    def load_rows(cls, contract):
+        """({turkum: the row its box stands in for}, {turkum: [the rest]}).
+
+        The yuk grid's rule, for the yuk grid's reason: a turkum recorded exactly
+        once maps onto its box, and one recorded twice has no single figure to show.
+        Prefilling one of the two would rewrite that one and silently leave the
+        other, so the box stays empty and additive and those rows keep being edited
+        from the jadval — which is why this modal still draws one."""
+        if contract is None or not getattr(contract, "pk", None):
+            return {}, {}
+        found = {}
+        for row in contract.expenses.all():
+            found.setdefault(row.category, []).append(row)
+        recorded, others = {}, {}
+        for category, rows in found.items():
+            if len(rows) == 1:
+                recorded[category] = rows[0]
+            else:
+                others[category] = rows
+        return recorded, others
+
+    def prefill(self):
+        """Show the kelishuv's xarajatlar in their boxes.
+
+        Sana is deliberately not among them — it dates the rows being ADDED, and an
+        existing row keeps the sana it was recorded with (see `save`), shown under
+        its own box."""
+        if self.contract is not None:
+            self.initial.setdefault("currency", self.contract.currency)
+            if self.contract.transport_rate_per_kg is not None:
+                self.initial[self.field_name(self.TRANSPORT)] = \
+                    self.contract.transport_rate_per_kg
+        rows = [row for category, row in self.recorded.items()
+                if category in self.MONEY_CATEGORIES]
+        if not rows:
+            return
+        shared = {
+            "currency": _agreed(row.currency for row in rows),
+            "method": _agreed(row.method for row in rows),
+            "exchange_rate": _agreed(row.exchange_rate for row in rows),
+            "fee_percent": _agreed(row.fee_percent for row in rows),
+        }
+        # Valyuta, usul and foiz have a per-box override to fall back on when the
+        # rows disagree; the kurs has none, and leaving it on the legacy default
+        # would price a new box at a rate this kelishuv never used.
+        if shared["exchange_rate"] is None:
+            shared["exchange_rate"] = max(
+                rows, key=lambda row: (row.date, row.pk)).exchange_rate
+        for name, value in shared.items():
+            if value is not None:
+                self.initial[name] = value
+        for category, row in self.recorded.items():
+            if category not in self.MONEY_CATEGORIES:
+                continue
+            self.initial[self.row_name(category)] = row.pk
+            self.initial[self.field_name(category)] = self.typed_box(row)
+            if (category != self.PERCENT_CATEGORY
+                    and row.currency != shared["currency"]):
+                self.initial[self.currency_name(category)] = row.currency
+            if row.method != shared["method"]:
+                self.initial[self.method_name(category)] = row.method
+            if row.fee_percent != shared["fee_percent"]:
+                self.initial[self.fee_name(category)] = row.fee_percent
+
+    def typed_box(self, row):
+        """What this row's box shows: a broker's FOIZ, anything else's typed summa.
+
+        A so'm row shows its so'm side rather than the dollar twin — the same rule
+        `MoneyEntryFormMixin._seed_typed_side` follows, and for the same reason: a
+        12 000 000 so'm row reopening as 1 000 is read back as 1 000 so'm."""
+        if row.category == self.PERCENT_CATEGORY:
+            return row.percent
+        return row.amount_uzs if row.currency == Currency.UZS else row.amount
+
+    @staticmethod
+    def field_name(category):
+        return f"amount_{category}"
+
+    @staticmethod
+    def currency_name(category):
+        return f"currency_{category}"
+
+    @staticmethod
+    def method_name(category):
+        return f"method_{category}"
+
+    @staticmethod
+    def fee_name(category):
+        return f"fee_{category}"
+
+    @staticmethod
+    def row_name(category):
+        return f"row_{category}"
+
+    def amount_fields(self):
+        """One box per turkum, for a template that lays the grid out itself."""
+        cells = []
+        for value, _label in self.categories:
+            cells.append({
+                "category": value,
+                "kind": ("percent" if value == self.PERCENT_CATEGORY
+                         else "rate" if value == self.TRANSPORT else "amount"),
+                "amount": self[self.field_name(value)],
+                "row": (self[self.row_name(value)]
+                        if self.row_name(value) in self.fields else None),
+                # None where the box has none, so the template asks `{% if %}`
+                # rather than repeating the rules above.
+                "currency": (self[self.currency_name(value)]
+                             if self.currency_name(value) in self.fields else None),
+                "method": (self[self.method_name(value)]
+                           if self.method_name(value) in self.fields else None),
+                "fee": (self[self.fee_name(value)]
+                        if self.fee_name(value) in self.fields else None),
+                "recorded": self.recorded.get(value),
+                "others": self.others.get(value, []),
+                "logged_transport": (self.logged_transport
+                                     if value == self.TRANSPORT else 0)})
+        return cells
+
+    @property
+    def logged_transport(self):
+        """How many yuklar already carry a xarajat written from this rate — the half
+        of the transport arrangement the operator cannot see from this screen."""
+        if self.contract is None or not getattr(self.contract, "pk", None):
+            return 0
+        return ShipmentExpense.objects.filter(
+            shipment__contract=self.contract, is_auto_transport=True).count()
+
+    def row_fee(self, category):
+        """The foiz this turkum is charged: its own if one was typed, else the shared
+        one. `0` typed into a box is an explicit "no foiz here" and wins over the
+        shared figure, so a blank is told apart from a zero rather than both being
+        falsy."""
+        own = self.cleaned_data.get(self.fee_name(category))
+        if own is not None:
+            return own
+        return self.cleaned_data.get("fee_percent") or Decimal("0")
+
+    def clean(self):
+        cleaned = super().clean()
+        contract = cleaned.get("contract")
+        entered = [(value, cleaned.get(self.field_name(value)))
+                   for value in self.MONEY_CATEGORIES
+                   if self.field_name(value) in self.fields]
+        self.entries = [(value, typed) for value, typed in entered
+                        if typed is not None and typed > 0]
+        for value, typed in entered:
+            if typed is not None and typed <= 0:
+                self.add_error(self.field_name(value), "Musbat son kiriting")
+        self.transport_rate = (cleaned.get(self.field_name(self.TRANSPORT))
+                               if self.field_name(self.TRANSPORT) in self.fields
+                               else None)
+        if self.transport_rate is not None and self.transport_rate <= 0:
+            self.add_error(self.field_name(self.TRANSPORT), "Musbat son kiriting")
+            self.transport_rate = None
+        # Nothing typed, no box that opened showing a row, and no rate: the modal
+        # would otherwise save nothing and close as if it had worked. On a grid that
+        # DID open filled, an empty one is not an empty submission — it is every
+        # xarajat cleared, which save() carries out.
+        showed = any(cleaned.get(self.row_name(value))
+                     for value in self.MONEY_CATEGORIES
+                     if self.row_name(value) in self.fields)
+        if not self.entries and not showed and self.transport_rate is None:
+            raise forms.ValidationError("Kamida bitta xarajat kiritilishi kerak")
+        rate = cleaned.get("exchange_rate")
+        if self.entries and (not rate or rate <= 0):
+            self.add_error("exchange_rate", "Dollar kursini kiriting")
+        # A foiz and a per-kg rate alike are multiplied by the kelishuv's own
+        # figures, so an empty kelishuv has nothing to multiply.
+        if contract is None or not contract.kg:
+            if dict(self.entries).get(self.PERCENT_CATEGORY):
+                self.add_error(self.field_name(self.PERCENT_CATEGORY),
+                               "Kelishuvda mahsulot yo'q — avval kg va narx kiriting")
+            if self.transport_rate is not None:
+                self.add_error(self.field_name(self.TRANSPORT),
+                               "Kelishuvda mahsulot yo'q — avval kg kiriting")
+        return cleaned
+
+    def row_money(self, category, typed, rate):
+        """What a filled box means in money.
+
+        A broker's box holds a FOIZ, so the sum is worked out here from the
+        kelishuv's own value and booked in the kelishuv's own currency — the base it
+        is a percentage of is that value, and pricing the cut in another currency
+        would leave the two talking about different figures. Everything else is the
+        sum as typed, at its own valyuta."""
+        contract = self.cleaned_data["contract"]
+        percent = None
+        if category == self.PERCENT_CATEGORY:
+            percent = typed
+            currency = contract.currency
+            base = contract._own(contract.total_value, contract.total_value_uzs)
+            typed = (base * percent / 100).quantize(Decimal("0.01"))
+        else:
+            currency = (self.cleaned_data.get(self.currency_name(category))
+                        or self.cleaned_data["currency"])
+        method = (self.cleaned_data.get(self.method_name(category))
+                  or self.cleaned_data["method"])
+        usd_value, uzs_value = convert_pair(typed, currency, rate)
+        return {"amount": usd_value, "amount_uzs": uzs_value, "currency": currency,
+                "method": method, "exchange_rate": rate, "percent": percent,
+                "fee_percent": self.row_fee(category)}
+
+    def save(self, user):
+        """Make the kelishuv's xarajatlar match the grid — (created, updated,
+        deleted, transport).
+
+        A box that opened showing a row rewrites THAT row rather than adding a second
+        one, and the row it rewrites is the one the box carried when the modal was
+        DRAWN (`row_<turkum>`) — never simply whatever the kelishuv holds under that
+        turkum now. A xarajat added while this modal sat open is left alone rather
+        than deleted for being absent from a grid that never showed it.
+
+        A rewrite touches only the money. The row keeps its sana — a xarajat entered
+        last week does not move to today because the figure beside it was corrected —
+        along with its izoh, which the shared box names for the rows being ADDED.
+
+        Transport is not one of the rows. A rate in that box writes the kelishuv and
+        re-syncs every yuk that has already landed; a BLANK one leaves the
+        arrangement exactly where it is, because emptying a box must not quietly take
+        N yuk xarajatlari out of the kassa. Clearing it is its own action, with its
+        own confirm that says how many (`contract_transport_clear`)."""
+        contract = self.cleaned_data["contract"]
+        rewritable = {row.pk: row for row in contract.expenses.all()}
+        rate = self.cleaned_data["exchange_rate"]
+        note = self.cleaned_data.get("note", "")
+        typed_by_category = dict(self.entries)
+        created, updated, deleted = [], [], []
+        for category in self.MONEY_CATEGORIES:
+            if self.field_name(category) not in self.fields:
+                continue
+            typed = typed_by_category.get(category)
+            row = rewritable.get(self.cleaned_data.get(self.row_name(category)))
+            if row is not None and row.category != category:
+                # The box moved turkum under it — leave that row alone rather than
+                # rewriting a broker as a boshqa.
+                row = None
+            if typed is None:
+                if row is not None:
+                    row.delete()
+                    deleted.append(row)
+                continue
+            money = self.row_money(category, typed, rate)
+            if row is None:
+                created.append(ContractExpense.objects.create(
+                    contract=contract, category=category, created_by=user,
+                    date=self.cleaned_data["date"], note=note, **money))
+                continue
+            # As drawn: the same figure the same way at the same foiz. Compared
+            # against what the BOX showed rather than field by field against the row,
+            # so the shared kurs — which no box can show per row — cannot make an
+            # untouched submission look like an edit and re-rate every row on it.
+            if (typed == self.typed_box(row) and money["currency"] == row.currency
+                    and money["method"] == row.method
+                    and money["fee_percent"] == row.fee_percent):
+                continue
+            for name, value in money.items():
+                setattr(row, name, value)
+            row.save(update_fields=list(money))
+            updated.append(row)
+        transport = None
+        if self.transport_rate is not None:
+            if contract.transport_rate_per_kg != self.transport_rate:
+                contract.transport_rate_per_kg = self.transport_rate
+                contract.save(update_fields=["transport_rate_per_kg"])
+                transport = self.transport_rate
+            sync_contract_birja_transport(contract)
+        return created, updated, deleted, transport
 
 
 class LogistForm(forms.ModelForm):
