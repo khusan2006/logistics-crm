@@ -190,12 +190,30 @@ search never drops the way the list was already narrowed.
         <a class="icon-action act-delete" href="{% url 'reservation_delete' r.pk %}" data-modal title="O'chirish">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         </a>
-      {% elif r.status == "converted" %}
-        <span class="muted">—</span>
       {% else %}
+        {% comment %}
+        A tugallangan bron — sotuvga aylangan yoki tugatilgan — keeps Tahrirlash.
+        The row carried a bare dash here, which was right while the view refused
+        the edit; it is not right now that a bron closes itself the moment its kg
+        are lowered to what was already given, because a digit mistyped in THAT
+        edit has no other way back. The sotuv behind it is untouched either way.
+        Bekor qilingan is the one that stays uneditable, and only shows O'chirish.
+        {% endcomment %}
+        {% if r.status != "cancelled" %}
+        <a class="icon-action act-edit" href="{% url 'reservation_edit' r.pk %}" data-modal title="Tahrirlash">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </a>
+        {% endif %}
+        {% comment %}
+        No O'chirish on a sotuvga aylangan bron: its sotuv points back here
+        (SET_NULL), so the view refuses it — offering the button would only lead
+        to that refusal. Tugatildi and Bekor qilindi hold nothing and may go.
+        {% endcomment %}
+        {% if r.status != "converted" %}
         <a class="icon-action act-delete" href="{% url 'reservation_delete' r.pk %}" data-modal title="O'chirish">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         </a>
+        {% endif %}
       {% endif %}
       </div>
       {% endfor %}

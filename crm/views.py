@@ -5185,12 +5185,20 @@ def reservation_create(request):
 
 @role_required(User.Role.ADMIN)
 def reservation_edit(request, pk):
-    """Only an active bron is editable. A converted one has already become a sotuv
-    that snapshotted its kg and narx — editing the bron behind it would leave the
-    two disagreeing with no way to tell which is real."""
+    """A faol bron and a tugallangan one alike — only a bekor qilingan one is not.
+
+    Tugallangan was refused here on the grounds that the sotuv behind a CONVERTED
+    bron snapshotted its kg and narx. It still does: the sotuv is a document of what
+    was actually handed over and this form does not touch it. What the refusal cost
+    was the way OUT of a mistake — an edit that lowers kg to exactly what was already
+    given closes the bron itself (see below), so a digit mistyped there could never
+    be put right afterwards.
+
+    A bekor qilingan bron stays closed to editing: it is a promise that never
+    happened, and there is nothing in it to correct."""
     reservation = get_object_or_404(Reservation, pk=pk)
-    if reservation.status != Reservation.Status.ACTIVE:
-        messages.error(request, "Faqat faol bronni tahrirlash mumkin")
+    if reservation.status == Reservation.Status.CANCELLED:
+        messages.error(request, "Bekor qilingan bronni tahrirlash mumkin emas")
         return form_reload(request, reverse("reservation_list"))
     form = ReservationForm(request.POST or None, instance=reservation)
     title = "Bronni tahrirlash"
@@ -5202,7 +5210,18 @@ def reservation_edit(request, pk):
             # whose last kg a sotuv covers. Left ACTIVE it stayed on Faol reading
             # "Mol kutilmoqda" with 0 kg to wait for (bron #5, 150 000 → 115 000).
             if reservation.remaining_kg <= 0:
-                reservation.status = Reservation.Status.CONVERTED
+                if reservation.status == Reservation.Status.ACTIVE:
+                    reservation.status = Reservation.Status.CONVERTED
+            elif reservation.status == Reservation.Status.CONVERTED:
+                # The way back. Raised again — the kg were mistyped, or the mijoz
+                # asked for more — so there IS something still owed, and a bron
+                # left on "Sotuvga aylandi" would say the opposite while `is_open`
+                # kept it out of the queue and off the ombor's promised kg.
+                #
+                # Tugatildi is not reopened: that one ended by agreement, not by
+                # arithmetic, and only the operator can say the mijoz wants the
+                # rest after all — the row still offers Tahrirlash for the figures.
+                reservation.status = Reservation.Status.ACTIVE
             reservation.save()
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Bron", reservation.pk,

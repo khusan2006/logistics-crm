@@ -462,6 +462,83 @@ class TestEditAndDelete:
         assert r.status == Reservation.Status.CONVERTED
         assert not r.is_open
 
+    def test_completed_bron_is_editable_again(self, admin_client, db):
+        """The way out of a mistyped figure. Lowering kg to exactly what was handed
+        over closes the bron (test above), so until this the digit that closed it
+        could never be corrected — Tahrirlash refused every non-faol bron."""
+        _arrived_lot(kg="12000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
+        r = Reservation.objects.get()
+        _convert(admin_client, r)                       # 12 000 kg handed over
+        admin_client.post(f"/reservations/{r.pk}/edit/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
+        })
+        r.refresh_from_db()
+        assert r.status == Reservation.Status.CONVERTED
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
+            "currency": "usd", "price": "2.50", "exchange_rate": "12000",
+            "note": "narx to'g'rilandi",
+        })
+        assert resp.status_code == 302
+        r.refresh_from_db()
+        assert r.price == Decimal("2.5000")
+        assert r.note == "narx to'g'rilandi"
+
+    def test_raising_a_converted_bron_reopens_it(self, admin_client, db):
+        """Raised past what was given, so something IS still owed — it goes back to
+        Faol rather than sitting on "Sotuvga aylandi" with kg nobody is queued for."""
+        _arrived_lot(kg="12000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="12000", price="2.00")
+        r = Reservation.objects.get()
+        _convert(admin_client, r)                       # served in full
+        r.refresh_from_db()
+        assert r.status == Reservation.Status.CONVERTED
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "18000",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
+        })
+        assert resp.status_code == 302
+        r.refresh_from_db()
+        assert r.status == Reservation.Status.ACTIVE
+        assert r.remaining_kg == Decimal("6000.000")
+        assert r.is_open
+
+    def test_closed_bron_stays_closed_when_edited(self, admin_client, db):
+        """Tugatildi ended by agreement, not by arithmetic: the figures may be
+        corrected, but only the operator can say the mijoz wants the rest after all."""
+        _arrived_lot(kg="12000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
+        r = Reservation.objects.get()
+        admin_client.post(f"/reservations/{r.pk}/close/", {})
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "18000",
+            "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
+        })
+        assert resp.status_code == 302
+        r.refresh_from_db()
+        assert r.kg == Decimal("18000.000")
+        assert r.status == Reservation.Status.CLOSED
+
+    def test_cancelled_bron_is_not_editable(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="5000")
+        r = Reservation.objects.get()
+        admin_client.post(f"/reservations/{r.pk}/cancel/", {})
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+            "customer": customer.pk, "brand": "LLDPE", "kg": "3000",
+            "currency": "usd", "price": "", "exchange_rate": "12000", "note": "",
+        })
+        assert resp.status_code == 302
+        r.refresh_from_db()
+        assert r.kg == Decimal("5000.000")
+        assert r.status == Reservation.Status.CANCELLED
+
     def test_delete_removes_it(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
