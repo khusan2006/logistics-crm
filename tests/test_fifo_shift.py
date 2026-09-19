@@ -205,3 +205,43 @@ def test_preview_names_the_sotuvlar_that_block_a_shift(admin_client, db):
         f"/sales/{first.pk}/shift-preview/?kg=600").content.decode()
     assert "Avtomatik siljitib bo'lmaydi" in html
     assert f"#{chosen.pk}" in html
+
+
+def test_a_header_only_edit_leaves_a_two_lot_row_on_both_lots(admin_client, db):
+    """A sotuv the replay spread across two lots keeps both slices when only the
+    header is corrected.
+
+    `Sale.save()` calls `sync_lot`, which collapses a single-slice sotuv onto its
+    `line` — and a two-slice one is a replay's work that only a replay may rewrite.
+    Fixing an izoh must not quietly bill the whole sotuv to one truck."""
+    _lot("PA", "1000", "1.00", "2026-07-10")
+    _lot("PA", "1000", "2.00", "2026-07-15")
+    customer = _customer()
+    _sell(admin_client, "PA", "500", "2026-07-16", customer)
+    _sell(admin_client, "PA", "1000", "2026-07-17", customer)
+    # Correcting the first sotuv up re-runs FIFO, which pushes the sotuv behind it
+    # across the lot boundary.
+    _edit(admin_client, Sale.objects.order_by("date", "id").first(), "800")
+
+    behind = [s for s in Sale.objects.order_by("pk")
+              if s.date.isoformat() == "2026-07-17"]
+    assert any(len(s.lots.all()) > 1 for s in behind), \
+        [(s.pk, _slices(s)) for s in behind]
+    before = [(s.pk, _slices(s)) for s in behind]
+
+    # The sotuv as the modal shows it: ONE Mahsulot row of 1 000 kg, however many
+    # lot slices FIFO made of it. Only the izoh is touched.
+    head = behind[0]
+    resp = admin_client.post(f"/sales/{head.pk}/edit/", {
+        "customer": head.customer_id, "currency": "usd",
+        "exchange_rate": "12000", "date": str(head.date),
+        "debt_deadline": "", "note": "izoh to'g'irlandi",
+        **line_data({"brand": "PA", "kg": "1000", "price": str(head.price)},
+                    initial=1)})
+    assert resp.status_code == 302, resp.content.decode()[:800]
+
+    after = [(s.pk, _slices(s)) for s in Sale.objects.order_by("pk")
+             if s.date.isoformat() == "2026-07-17"]
+    assert after == before
+    assert {Sale.objects.get(pk=pk).note for pk, _slices_ in after} == {
+        "izoh to'g'irlandi"}

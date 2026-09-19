@@ -1002,6 +1002,56 @@ class TestBronDrawIsAsked:
         assert corrected.reservation_id is None
         assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")
 
+    def test_moving_the_sotuv_to_another_mijoz_gives_the_bron_back(
+            self, admin_client, db):
+        """The promise belongs to the mijoz who was given it. A sotuv typed against
+        the wrong name and corrected must leave their bron whole again — otherwise it
+        reads as served by kg that now belong to somebody else, and goes on blocking
+        the shelf against granula that mijoz never took."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        holder, other = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", holder, kg="6000")
+        _sell(admin_client, "LLDPE", holder, kg="2000")
+        bron = Reservation.objects.get()
+        assert bron.fulfilled_kg == Decimal("2000.000")
+
+        # Only the mijoz changes — the kg and the narx stay exactly as typed.
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
+            "customer": other.pk, "currency": "usd",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
+                        initial=1)})
+
+        bron.refresh_from_db()
+        moved_sale = Sale.objects.get()
+        assert moved_sale.customer_id == other.pk
+        assert moved_sale.reservation_id is None
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert bron.remaining_kg == Decimal("6000.000")
+        assert bron.status == Reservation.Status.ACTIVE
+
+    def test_moving_it_to_a_mijoz_who_holds_a_bron_draws_on_theirs(
+            self, admin_client, db):
+        """The other half: the sotuv came out of a bron when it was entered, so it
+        goes on coming out of one — the NEW mijoz's promise for that marka."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        first, second = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", first, kg="6000")
+        _reserve(admin_client, "LLDPE", second, kg="5000")
+        _sell(admin_client, "LLDPE", first, kg="2000")
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
+            "customer": second.pk, "currency": "usd",
+            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
+                        initial=1)})
+
+        theirs = Reservation.objects.get(customer=second)
+        mine = Reservation.objects.get(customer=first)
+        assert Sale.objects.get().reservation_id == theirs.pk
+        assert theirs.fulfilled_kg == Decimal("2000.000")
+        assert mine.fulfilled_kg == Decimal("0.000")
+
 
 # ── Oldin yozilgan sotuvni bronga hisoblash ──────────────────────────────────
 

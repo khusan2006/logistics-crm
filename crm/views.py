@@ -4666,6 +4666,17 @@ def sale_edit(request, pk):
                     # with everything that hangs off them. Only what the header and
                     # the narx say about them is rewritten.
                     for kept in row["sales"]:
+                        # The bron this row came out of is the PREVIOUS mijoz's
+                        # promise and cannot follow the sotuv to somebody else: it
+                        # would go on reading as served by kg that are now another
+                        # mijoz's. The kg go back, and are drawn again from the NEW
+                        # mijoz's own bron for that marka if this row came out of a
+                        # bron at all — whether a sotuv draws on a promise is decided
+                        # when it is entered and survives a correction.
+                        served_id, was_from_bron = kept.reservation_id, False
+                        if moved:
+                            was_from_bron = release_bron(kept) > 0
+                            kept.reservation = None
                         kept.customer = data["customer"]
                         kept.group = group
                         kept.price, kept.price_uzs = usd, uzs
@@ -4675,6 +4686,8 @@ def sale_edit(request, pk):
                         kept.debt_deadline = data["debt_deadline"]
                         kept.note = data["note"]
                         kept.save()
+                        if was_from_bron:
+                            draw_down_bron(kept, served_id=served_id)
                         slices.append(kept)
                 else:
                     remaining = kg
