@@ -884,6 +884,9 @@ class Contract(models.Model):
         Only markalar standing on more than one line. Where a marka has one line the
         average IS the narx already in the column, and repeating it under itself says
         nothing — which is why the ordinary kelishuv draws no summary at all.
+
+        `kg` rides along as the weight the average was taken over, not as a figure
+        the list prints: the summary is one line under Narx and under Narx only.
         """
         by_brand = defaultdict(list)
         for ln in self.lines.all():
@@ -903,20 +906,16 @@ class Contract(models.Model):
                 continue
             value = sum((ln.total_value for ln in lines), Decimal("0"))
             value_uzs = sum((ln.total_value_uzs for ln in lines), Decimal("0"))
-            payable_left = sum((ln.payable_left for ln in lines), Decimal("0"))
-            payable_left_uzs = sum((ln.payable_left_uzs for ln in lines),
-                                   Decimal("0"))
+            # The narx and the kg it is weighted over, and nothing else. Totals for
+            # qolgan kg and qolgan to'lov were here too and are not any more: the
+            # operator acts on those PER line — which truck is still to come, which
+            # product is still owed for — so a total under each was three more
+            # figures to read past to reach the one that was wanted.
             rows.append({
                 "brand": brand,
                 "kg": kg,
                 "price": (value / kg).quantize(Decimal("0.0001")),
-                "price_uzs": (value_uzs / kg).quantize(Decimal("0.01")),
-                "remaining_kg": sum((ln.remaining_kg for ln in lines),
-                                    Decimal("0")),
-                "payable_left": payable_left,
-                "payable_left_uzs": payable_left_uzs,
-                "payable_left_own": own_side(self, payable_left,
-                                             payable_left_uzs)})
+                "price_uzs": (value_uzs / kg).quantize(Decimal("0.01"))})
         return rows
 
     @property

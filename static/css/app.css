@@ -3142,18 +3142,24 @@ form.stacked .lineset-field[hidden] { display: none; }
 
 /* A table cell listing one entry per product (Marka / kg / Narx on Kelishuvlar). */
 .cell-line + .cell-line { margin-top: 4px; }
-/* The o'rtacha line under a marka a kelishuv took in several lots — see
-   `Contract.brand_averages`. A rule above it and a quieter weight: it is a total
-   over the lines it follows, not another line of the same kind, and read down the
-   column it must not be mistaken for a sixth purchase. The rule runs the width of
-   the cell in every column at once, so the summary reads across the row the same
-   way the per-line figures do. */
+/* The o'rtacha narx under a marka a kelishuv took in several lots — see
+   `Contract.brand_averages`. It stands in the Narx column alone, so it carries its
+   own word: with nothing beside it in the Marka column to say what it is, a fourth
+   figure under three narxlar would read as a fourth purchase. A rule above it and a
+   quieter weight for the same reason — it is a total over the lines it follows, not
+   another line of the same kind. */
 .cell-avg {
   margin-top: 6px;
   padding-top: 5px;
   border-top: 1px solid var(--border-strong);
   color: var(--text-muted);
   font-weight: 600;
+  white-space: nowrap;
+}
+.cell-avg-label {
+  display: block;
+  font-size: 10.5px; font-weight: 600; line-height: 1.3;
+  color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em;
 }
 /* The reys number beside a marka — which mashina of that load the row went out on.
    A circle rather than "2-reys" in words: it sits in a cell that already carries a
