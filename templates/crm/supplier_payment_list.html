@@ -1,8 +1,21 @@
 {% extends "base.html" %}
 {% load crm_extras %}
-{% block title %}To'lovlar (hamkor) · GranulaLog{% endblock %}
-{% block topbar_title %}To'lovlar (hamkor){% endblock %}
-{% block fab %}<a class="fab" href="{% url 'supplier_payment_create' %}" data-modal data-hotkey="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Yangi to'lov</a>{% endblock %}
+{% block title %}{{ page_title }} · GranulaLog{% endblock %}
+{% block topbar_title %}{{ page_title }}{% endblock %}
+{% comment %}
+Two lists, one template. `birja` says which: money sent to a hamkor in Eron, or
+money paid for granula bought on the exchange here. They differ in the words at the
+top, in the hamkor column and filter — a birja to'lov has only ever the one
+counterparty, so neither narrows anything — and in what the + button opens the
+Kelishuv picker on. Everything else is the same page because a birja to'lov IS a
+kelishuv to'lov; see crm.views.supplier_payment_list.
+{% endcomment %}
+{% comment %}
+`?birja=1` on the + link, so the Kelishuv picker inside opens on this side of the
+books. Without it the modal offers every kelishuv that still owes money, which on
+this page is the wall of hamkor names the operator came here to get away from.
+{% endcomment %}
+{% block fab %}<a class="fab" href="{% url 'supplier_payment_create' %}{% if birja %}?birja=1{% endif %}" data-modal data-hotkey="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Yangi birja to'lov{% else %}Yangi to'lov{% endif %}</a>{% endblock %}
 {% block content %}
 
 {% comment %}
@@ -19,7 +32,7 @@ changing a select never drops the window the user picked.
     {% if date_to %}<input type="hidden" name="to" value="{{ date_to }}">{% endif %}
     <div class="toolbar-search{% if q %} is-active{% endif %}">
       <svg class="toolbar-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="search" name="q" value="{{ q }}" placeholder="Kod, hamkor…" autocomplete="off" aria-label="To'lov qidirish">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ search_placeholder }}" autocomplete="off" aria-label="To'lov qidirish">
       {# Clears the search term only — the chosen davr stays where it is. #}
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
@@ -40,7 +53,7 @@ part derived.
 {% endcomment %}
 <p class="muted" style="margin-bottom: 12px;">
   {{ page.paginator.count }} ta to'lov{% for t in totals %}<br>
-  {% if totals|length > 1 %}{{ t.count }} tasi · {% endif %}hamkorga
+  {% if totals|length > 1 %}{{ t.count }} tasi · {% endif %}{% if birja %}birjaga{% else %}hamkorga{% endif %}
   <strong>{% money_in t.paid t.currency %}</strong>
   · kassadan <strong>{% money_in t.out t.currency %}</strong>
   {% endfor %}
@@ -50,8 +63,13 @@ part derived.
   <tr>
     <th class="sticky-col">Sana</th>
     <th>Kelishuv</th>
-    <th>Hamkor</th>
-    <th title="Hamkor qo'liga tegadigan summa">Hamkorga</th>
+    {% comment %}
+    No Hamkor column on the birja list: every row on it names the same counterparty,
+    so the column would repeat one word down the page — the same reason its Filtrlar
+    panel drops the hamkor select.
+    {% endcomment %}
+    {% if not birja %}<th>Hamkor</th>{% endif %}
+    <th title="{% if birja %}Birjaga to'lanadigan summa{% else %}Hamkor qo'liga tegadigan summa{% endif %}">{% if birja %}To'langan{% else %}Hamkorga{% endif %}</th>
     <th title="Vositachi ushlab qoladigan foiz va summa">Vositachi</th>
     <th title="Kassadan chiqadigan jami summa">Kassadan</th>
     <th>Usul</th>
@@ -73,7 +91,7 @@ part derived.
       <div class="muted load-sub">{{ p.contract_line.brand }} uchun</div>
       {% endif %}
     </td>
-    <td>{{ p.contract.partner.name }}</td>
+    {% if not birja %}<td>{{ p.contract.partner.name }}</td>{% endif %}
     {% comment %}
     The converted twin used to sit under this figure. It is a derived number — and
     since a same-currency to'lov no longer carries a kurs the operator chose, it would

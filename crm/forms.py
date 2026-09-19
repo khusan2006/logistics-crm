@@ -2831,11 +2831,25 @@ class SupplierPaymentTargetForm(forms.Form):
         queryset=ContractLine.objects.none(), label="Mahsulot", required=False,
         widget=ContractLineChoiceSelect(attrs={"data-line-source": ""}))
     date = forms.DateField(label="Sana", widget=date_widget(), initial=timezone.localdate)
+    # Which side of the books the modal was opened from, carried through the POST.
+    # A modal form posts to `request.path` and drops the query string, so without a
+    # field of its own a failed submit would come back with the picker widened to
+    # every kelishuv — offering the operator a hamkor to pay on the birja screen.
+    birja = forms.CharField(required=False, widget=forms.HiddenInput)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, birja=None, **kwargs):
         super().__init__(*args, **kwargs)
         base = (Contract.objects.select_related("partner")
                 .prefetch_related("lines__shipment_lines", "supplier_payments"))
+        # Narrowed to the side of the books the modal was opened from, when the
+        # caller says which. The picker is this form's first question and it runs to
+        # every kelishuv that still owes money — an operator who came here off the
+        # birja to'lovlar page should not have to find their one counterparty in
+        # among the hamkor ones. Left as None (the plain /supplier-payments/new/
+        # URL) it offers everything, which is what it has always done.
+        if birja is not None:
+            base = base.filter(partner__is_birja=birja, partner__is_local=False)
+            self.initial.setdefault("birja", "1" if birja else "0")
         self.fields["contract"].queryset = _keep_if(base, lambda c: c.payable_left_own > 0)
         self.fields["contract"].label_from_instance = (
             lambda c: contract_option_label(c, payable=True))

@@ -44,6 +44,13 @@ urlpatterns = [
          name="birja_shipment_create"),
     path("birja/yuklar/export.xlsx", crm_views.shipment_list_export,
          {"birja": True}, name="birja_shipment_list_export"),
+    # The money side of the same books. Registered here rather than left on the
+    # hamkor to'lovlar page for the reason the two lists above are separate: a birja
+    # purchase is a different set of books, not a filter of the Eron road.
+    path("birja/tolovlar/", crm_views.supplier_payment_list, {"birja": True},
+         name="birja_supplier_payment_list"),
+    path("birja/tolovlar/export.xlsx", crm_views.supplier_payment_list_export,
+         {"birja": True}, name="birja_supplier_payment_list_export"),
     # Mahalliy xarid — granula bought here from a third party (a Telegram seller, say)
     # to sell on. Views of its own rather than the kelishuv and yuk screens again: one
     # purchase is a kelishuv and a landed yuk written together, so it is created,

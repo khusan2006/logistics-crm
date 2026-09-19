@@ -1497,9 +1497,26 @@ SUPPLIER_PAYMENT_SORTS = [
 SUPPLIER_PAYMENT_SORT_DEFAULT = "-date"
 
 
-def _filter_supplier_payments(request):
+def supplier_payment_list_url(birja):
+    """Which to'lovlar list a to'lov belongs back on. The create, edit and delete
+    views are shared by both — a to'lov never changes sides, because its kelishuv
+    does not — so they ask the row rather than being registered twice. The twin of
+    `contract_list_url`, and for the same reason."""
+    return reverse("birja_supplier_payment_list" if birja
+                   else "supplier_payment_list")
+
+
+def _filter_supplier_payments(request, birja=False):
     """The hamkor to'lovlari list's own filters — shared by the page and its Excel
-    button, so the file is what the screen was showing."""
+    button, so the file is what the screen was showing.
+
+    `birja` picks which of the two lists is being drawn: money sent to a hamkor in
+    Eron, or money paid for granula bought on the exchange here. A parameter rather
+    than something read off `request.path`, so the Excel button has to pass the flag
+    its page did — which is what stops the file from holding the other list.
+
+    Mahalliy xaridlar are not split out: their to'lovlar ride this list as they
+    always have. That is a separate question from this one."""
     q = request.GET.get("q", "").strip()
     partner_id = request.GET.get("partner", "").strip()
     method = request.GET.get("method", "").strip()
@@ -1512,6 +1529,7 @@ def _filter_supplier_payments(request):
     # multi-product kelishuv, and asking how many it has is a query per row without
     # this. `brand_summary` reads the same relation.
     payments = (SupplierPayment.objects
+                .filter(contract__partner__is_birja=birja)
                 .select_related("contract__partner", "contract_line")
                 .prefetch_related("contract__lines"))
     contract_id = request.GET.get("contract")
@@ -1539,8 +1557,18 @@ def _filter_supplier_payments(request):
 
 
 @role_required(User.Role.ADMIN)
-def supplier_payment_list(request):
-    payments, f = _filter_supplier_payments(request)
+def supplier_payment_list(request, birja=False):
+    """To'lovlar: money that went out against a kelishuv.
+
+    `birja=True` draws the same page for the granula bought on the exchange here —
+    one view rather than a copy, because the two lists differ in exactly two ways:
+    which rows they hold, and that a birja to'lov has no hamkor to filter by (there
+    is only ever the one). Registered twice in the URLconf; see config/urls.
+
+    A birja to'lov is off the hamkor list entirely rather than on both. A second page
+    showing the same rows is not a separation — it is the rule the kelishuvlar and
+    yuklar pairs already follow."""
+    payments, f = _filter_supplier_payments(request, birja=birja)
     q, partner_id, method = f["q"], f["partner_id"], f["method"]
     date_from, date_to, sort = f["date_from"], f["date_to"], f["sort"]
 
@@ -1564,24 +1592,41 @@ def supplier_payment_list(request):
             })
 
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    panel = [
+        {"name": "method", "label": "Usul", "value": method,
+         "options": [("", "Hammasi")] + list(PayMethod.choices)},
+        {"name": "sort", "label": "Saralash", "value": sort,
+         "default": SUPPLIER_PAYMENT_SORT_DEFAULT,
+         "options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS]},
+    ]
+    # No hamkor filter on the birja list: every row on it is the same counterparty,
+    # so the select would offer one option that narrows nothing — the same rule the
+    # birja kelishuvlar list follows.
+    if not birja:
+        panel.insert(0, {
+            "name": "partner", "label": "Hamkor", "value": partner_id,
+            "combobox": True,
+            "options": [("", "Hammasi")] + [(p.pk, p.name)
+                                            for p in Partner.objects.filter(
+                                                is_birja=False)]})
     return render(request, "crm/supplier_payment_list.html", {
-        "export_url": reverse("supplier_payment_list_export"),
-        "filters": _filter_panel(request, [
-            {"name": "partner", "label": "Hamkor", "value": partner_id, "combobox": True,
-             "options": [("", "Hammasi")] + [(p.pk, p.name) for p in Partner.objects.all()]},
-            {"name": "method", "label": "Usul", "value": method,
-             "options": [("", "Hammasi")] + list(PayMethod.choices)},
-            {"name": "sort", "label": "Saralash", "value": sort,
-             "default": SUPPLIER_PAYMENT_SORT_DEFAULT,
-             "options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS]},
-        ]),
+        "export_url": reverse("birja_supplier_payment_list_export" if birja
+                              else "supplier_payment_list_export"),
+        "filters": _filter_panel(request, panel),
         "page": page, "q": q, "partner_id": partner_id, "method": method,
         "date_from": date_from, "date_to": date_to, "sort": sort,
         "daterange": _daterange_bar(request, date_from, date_to),
         "sort_options": [(key, label) for key, label, *_ in SUPPLIER_PAYMENT_SORTS],
-        "methods": PayMethod.choices, "partners": Partner.objects.all(),
+        "methods": PayMethod.choices,
+        "partners": Partner.objects.filter(is_birja=False),
         "totals": totals,
-        "has_filters": bool(q or partner_id or method or date_from or date_to),
+        "has_filters": bool(q or (partner_id and not birja) or method
+                            or date_from or date_to),
+        # What the shared template needs to know which of the two lists it is
+        # drawing: the words at the top, and where the + button goes.
+        "birja": birja,
+        "page_title": "Birja to'lovlar" if birja else "To'lovlar (hamkor)",
+        "search_placeholder": "Kod, marka…" if birja else "Kod, hamkor…",
     })
 
 
@@ -1613,7 +1658,18 @@ def supplier_payment_create(request):
     contract_id = request.GET.get("contract")
     if contract_id and contract_id.isdigit():
         initial["contract"] = int(contract_id)
-    target = SupplierPaymentTargetForm(request.POST or None, initial=initial)
+    # Which side of the books the modal was opened from. The Kelishuv picker is the
+    # whole form's first question, and an operator who came here off the birja page
+    # should not have to find their one counterparty among every hamkor kelishuv
+    # that still owes money. The deep link from a kelishuv row works either way —
+    # that kelishuv is in whichever list it belongs to.
+    # True only when the flag is actually there. Absent it stays None and the picker
+    # offers everything — including a mahalliy xarid's nasiya, which is paid through
+    # this same modal and would silently drop off a list narrowed to "not birja".
+    birja = True if (request.GET.get("birja") == "1"
+                     or request.POST.get("birja") == "1") else None
+    target = SupplierPaymentTargetForm(request.POST or None, initial=initial,
+                                       birja=birja)
     # Read straight off POST rather than from cleaned_data: the rows have to be BUILT
     # knowing which kelishuv is being paid, because that is what decides whether each
     # one has to ask for a kurs, and the header is not clean yet.
@@ -1645,7 +1701,8 @@ def supplier_payment_create(request):
             messages.success(
                 request,
                 f"{len(saved)} ta to'lov qo'shildi" if len(saved) > 1 else "To'lov qo'shildi")
-            return form_success(request, reverse("supplier_payment_list"))
+            return form_success(
+                request, supplier_payment_list_url(contract.partner.is_birja))
         return respond(invalid=True)
     return respond()
 
@@ -1670,7 +1727,8 @@ def supplier_payment_edit(request, pk):
                 f"To'lov tahrirlandi: {payment.amount}$ · kelishuv #{payment.contract_id}",
             )
             messages.success(request, "To'lov yangilandi")
-            return form_reload(request, reverse("supplier_payment_list"))
+            return form_reload(
+                request, supplier_payment_list_url(payment.contract.partner.is_birja))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
 
@@ -1691,14 +1749,17 @@ def supplier_payment_delete(request, pk):
             f"To'lov o'chirildi: {amount}$ · kelishuv #{contract_id}",
         )
         messages.success(request, "To'lov o'chirildi")
-        return form_reload(request, reverse("supplier_payment_list"))
+        return form_reload(
+            request, supplier_payment_list_url(contract.partner.is_birja))
     return render_confirm(
         request,
         "To'lovni o'chirish",
         f"“{payment.amount}$” to'lovi o'chiriladi. Bu amalni qaytarib bo'lmaydi.",
         "Ha, o'chirish",
         confirm_class="btn-danger",
-        cancel_url_name="supplier_payment_list",
+        cancel_url_name=("birja_supplier_payment_list"
+                         if payment.contract.partner.is_birja
+                         else "supplier_payment_list"),
     )
 
 
@@ -7992,10 +8053,12 @@ def debt_customer_history_export(request, pk):
 
 
 @role_required(User.Role.ADMIN)
-def supplier_payment_list_export(request):
-    payments, _f = _filter_supplier_payments(request)
+def supplier_payment_list_export(request, birja=False):
+    payments, _f = _filter_supplier_payments(request, birja=birja)
     headers, table, formats = _supplier_payments_table(payments)
-    return xlsx_response("hamkor-tolovlari.xlsx", headers, table, "To'lovlar", formats)
+    return xlsx_response(
+        "birja-tolovlari.xlsx" if birja else "hamkor-tolovlari.xlsx",
+        headers, table, "To'lovlar", formats)
 
 
 @role_required(User.Role.ADMIN, User.Role.SKLADCHI)

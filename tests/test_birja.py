@@ -668,3 +668,89 @@ class TestBrandAverage:
         _birja_contract(brand="LLDPE", kg="1000", price="1.00")
         html = admin_client.get("/birja/kelishuvlar/").content.decode()
         assert "rtacha" not in html
+
+
+# --- the money -----------------------------------------------------------------
+#
+# To'lovlar split the way the kelishuvlar and the yuklar already do. A birja to'lov
+# rode the To'lovlar (hamkor) page among the Eron ones, where the single thing it
+# has in common with a hamkor to'lov — that it settles a kelishuv — was the only
+# thing the page said about it.
+
+def _paid(admin_client, contract, amount="100"):
+    return admin_client.post("/supplier-payments/new/", supplier_payment_rows(
+        {"amount": amount}, contract=contract))
+
+
+def test_the_two_tolovlar_lists_hold_only_their_own(admin_client):
+    birja, hamkor = _birja_contract(), _hamkor_contract()
+    _paid(admin_client, birja, "100")
+    _paid(admin_client, hamkor, "200")
+    on_birja = admin_client.get("/birja/tolovlar/").context["page"].object_list
+    on_hamkor = admin_client.get("/supplier-payments/").context["page"].object_list
+    assert [p.contract_id for p in on_birja] == [birja.pk]
+    assert [p.contract_id for p in on_hamkor] == [hamkor.pk]
+
+
+def test_the_totals_count_only_the_list_they_are_on(admin_client):
+    """The figure under the search box is what the page is FOR — a total that
+    silently included the other set of books would be the old page with a new
+    title."""
+    birja, hamkor = _birja_contract(), _hamkor_contract()
+    _paid(admin_client, birja, "100")
+    _paid(admin_client, hamkor, "200")
+    [total] = admin_client.get("/birja/tolovlar/").context["totals"]
+    assert total["count"] == 1 and total["paid"] == Decimal("100")
+
+
+def test_the_birja_tolovlar_page_drops_the_hamkor_column_and_filter(admin_client):
+    """One counterparty, so neither narrows nor says anything — the same rule the
+    birja kelishuvlar list follows."""
+    _paid(admin_client, _birja_contract(), "100")
+    resp = admin_client.get("/birja/tolovlar/")
+    assert not any(f["name"] == "partner" for f in resp.context["filters"]["fields"])
+    assert "<th>Hamkor</th>" not in resp.content.decode()
+
+
+def test_the_excel_button_exports_the_tolovlar_list_it_was_pressed_on(admin_client):
+    """The flag is threaded through `_filter_supplier_payments` rather than read off
+    the path, so the file cannot end up holding the other list. Matched on the kod —
+    the workbook names the kelishuv, not its marka."""
+    birja, hamkor = _birja_contract(), _hamkor_contract()
+    _paid(admin_client, birja, "100")
+    _paid(admin_client, hamkor, "200")
+    birja_file = _sheet_text(admin_client.get("/birja/tolovlar/export.xlsx"))
+    hamkor_file = _sheet_text(admin_client.get("/supplier-payments/export.xlsx"))
+    assert birja.code in birja_file and hamkor.code not in birja_file
+    assert hamkor.code in hamkor_file and birja.code not in hamkor_file
+
+
+def test_a_tolov_goes_back_to_the_list_it_belongs_on(admin_client):
+    """Create, edit and delete are one view apiece for both lists — a to'lov never
+    changes sides, because its kelishuv does not — so they ask the row."""
+    birja = _birja_contract()
+    resp = _paid(admin_client, birja, "100")
+    assert resp.status_code == 302 and resp["Location"] == "/birja/tolovlar/"
+    payment = birja.supplier_payments.get()
+    resp = admin_client.post(f"/supplier-payments/{payment.pk}/delete/", {})
+    assert resp.status_code == 302 and resp["Location"] == "/birja/tolovlar/"
+
+
+def test_the_new_tolov_modal_opens_on_the_side_it_was_opened_from(admin_client):
+    """The Kelishuv picker is the modal's first question and it lists every kelishuv
+    that still owes money. Opened off the birja page it must not be the wall of
+    hamkor names the operator came here to get away from."""
+    birja, hamkor = _birja_contract(), _hamkor_contract()
+    offered = admin_client.get(
+        "/supplier-payments/new/?birja=1").context["form"].fields["contract"]
+    assert [c.pk for c in offered.queryset] == [birja.pk]
+    # And the plain link keeps offering everything, as it always has.
+    offered = admin_client.get(
+        "/supplier-payments/new/").context["form"].fields["contract"]
+    assert {c.pk for c in offered.queryset} == {birja.pk, hamkor.pk}
+
+
+def test_a_translator_cannot_reach_the_birja_tolovlar(translator_client):
+    """Their whole job is the Eron road — the same reason the birja kelishuvlar and
+    yuklar lists are closed to them."""
+    assert translator_client.get("/birja/tolovlar/").status_code == 403
