@@ -178,12 +178,8 @@ CashEntry.fee_amount would drop.
       Blank here means "leave it as it is", NOT "delete" — the one box on this grid
       that does not clear on being emptied. The rate it holds has already written a
       xarajat onto every yuk that landed, and taking N of those out of the kassa is
-      not something an empty box should do quietly. Clearing it is this link, which
-      asks first and says how many.
+      not something an empty box should do quietly.
       {% endcomment %}
-      {% if contract.transport_rate_per_kg %}
-      <a class="xcell-clear" href="{% url 'contract_transport_clear' contract.pk %}" data-modal>Transport narxini o'chirish</a>
-      {% endif %}
       {% endif %}
       {% comment %}
       A prefilled box shows the sana its row was recorded with: the Sana above dates

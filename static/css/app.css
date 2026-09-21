@@ -3406,16 +3406,6 @@ form.stacked .lineset-field--fee_bearer label {
   grid-column: 1 / -1; margin-top: 1px;
   font-size: 10.5px; line-height: 1.3; color: var(--text-faint);
 }
-/* Transport narxini o'chirish, inside the transport box on the kelishuv's grid.
-   A link rather than the red icon the jadval rows carry: emptying that box does
-   NOT clear the arrangement (it has already written a xarajat onto every landed
-   yuk), so the way to clear it has to be visibly its own act — and it opens a
-   confirm that says how many yuklar go with it. */
-.xcell-clear {
-  grid-column: 1 / -1; margin-top: 2px;
-  font-size: 11px; color: var(--danger); text-decoration: none;
-}
-.xcell-clear:hover { text-decoration: underline; }
 /* The turkum's own perechisleniya foizi. Full width under the figure and its
    overrides, and only on show when this box is paid by Bank — so a grid of cash
    xarajatlar stays a plain grid of figures. */
