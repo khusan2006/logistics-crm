@@ -76,6 +76,7 @@ so changing a select keeps it (see crm/_daterange.html).
     <th>Kelishilgan kg</th>
     {% if user.is_admin_role %}
     <th>Narx</th>
+    <th title="Kelishilgan narx ustiga kelishuv xarajatlari, vositachi ulushi va birja transporti — 1 kg uchun. Yukning bojxonasi bunga kirmaydi, u yuk yetib kelgach ma'lum bo'ladi.">Xarajat bilan</th>
     <th>Jami</th>
     {% endif %}
     <th title="Har bir marka bo'yicha yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
@@ -127,6 +128,20 @@ so changing a select keeps it (see crm/_daterange.html).
     <td>{% for ln in c.lines.all %}<div class="cell-line">{{ ln.kg|floatformat:"-3" }}</div>{% endfor %}</td>
     {% if user.is_admin_role %}
     <td>{% for ln in c.lines.all %}<div class="cell-line">{% money ln.price ln.price_uzs ln.currency %}</div>{% endfor %}{% for g in c.brand_averages %}<div class="cell-line cell-avg"><span class="cell-avg-label">{% if c.brand_averages|length > 1 %}{{ g.brand }} · {% endif %}o'rtacha</span>{% money g.price g.price_uzs c.currency %}</div>{% endfor %}</td>
+    {% comment %}
+    Xarajat bilan: the same narx with everything the KELISHUV puts on a kg added —
+    broker and the rest of its xarajatlar, the vositachi cut, and on a birja kelishuv
+    the transport rate agreed per kg. Drawn line for line beside Narx, with the same
+    o'rtacha summary underneath, so the two columns stay level row for row.
+
+    In the kelishuv's own currency only, and with the /kg spelled out: it is a rate
+    rather than a sum, and the four decimals matter — the add-on is often hundredths
+    of a cent, which the Narx column's two decimals would round away. It is also the
+    one ESTIMATE on the page; what a yuk paid on the road is not knowable per kg
+    until it lands, and the true tannarx is on that yuk's own page. See
+    `Contract.expense_add_on_per_kg`.
+    {% endcomment %}
+    <td>{% for ln in c.lines.all %}<div class="cell-line">{% rate_typed ln.price_with_expenses c.currency %}</div>{% endfor %}{% for g in c.brand_averages %}<div class="cell-line cell-avg"><span class="cell-avg-label">{% if c.brand_averages|length > 1 %}{{ g.brand }} · {% endif %}o'rtacha</span>{% rate_typed g.price_with_expenses c.currency %}</div>{% endfor %}</td>
     <td>{% money c.total_value c.total_value_uzs c.currency %}</td>
     {% endif %}
     <td>

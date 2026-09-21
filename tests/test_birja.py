@@ -16,8 +16,8 @@ import pytest
 from conftest import line_data, make_shipment, supplier_payment_rows
 
 from crm.models import (
-    Contract, ContractLine, Currency, Partner, Shipment, ShipmentExpense,
-    ShipmentStatus, birja_partner, brand_stock_costed,
+    Contract, ContractExpense, ContractLine, Currency, Partner, Shipment,
+    ShipmentExpense, ShipmentStatus, birja_partner, brand_stock_costed,
 )
 
 pytestmark = pytest.mark.django_db
@@ -668,6 +668,87 @@ class TestBrandAverage:
         _birja_contract(brand="LLDPE", kg="1000", price="1.00")
         html = admin_client.get("/birja/kelishuvlar/").content.decode()
         assert "rtacha" not in html
+
+
+class TestPriceWithExpenses:
+    """Xarajat bilan — the narx with everything the KELISHUV puts on a kg.
+
+    Narx and o'rtacha answer what was agreed with the seller, which is what the
+    qarz is measured in and must stay. What that kg actually cost is a second
+    question, and until this column it had no answer anywhere on the kelishuv: the
+    broker and the birja transport only surfaced on a yuk's tannarx, one truck at
+    a time. See `Contract.expense_add_on_per_kg`.
+    """
+
+    def test_kelishuv_with_no_xarajat_prices_at_the_narx(self, admin_client):
+        """Nothing has been spent, so there is nothing to add. The column repeating
+        Narx is the honest answer, not a missing one."""
+        contract = _birja_contract(brand="LLDPE", kg="1000", price="1.00")
+        [line] = contract.lines.all()
+        assert contract.expense_add_on_per_kg == Decimal("0")
+        assert line.price_with_expenses == Decimal("1.0000")
+
+    def test_broker_and_transport_both_land_on_the_kg(self, admin_client):
+        """$200 of broker over 1 000 kg is 0,20/kg, and the birja transport rate is
+        added whole — it is already quoted per kg."""
+        contract = _birja_contract(brand="LLDPE", kg="1000", price="1.00",
+                                   transport_rate_per_kg=Decimal("0.05"))
+        ContractExpense.objects.create(contract=contract, amount=Decimal("200"),
+                                       amount_uzs=Decimal("2400000"),
+                                       exchange_rate=Decimal("12000"))
+        contract = Contract.objects.get(pk=contract.pk)
+        assert contract.expenses_per_kg == Decimal("0.2000")
+        assert contract.expense_add_on_per_kg == Decimal("0.2500")
+        [line] = contract.lines.all()
+        assert line.price_with_expenses == Decimal("1.2500")
+
+    def test_a_som_kelishuv_adds_up_on_its_own_side(self, admin_client):
+        """Each side is summed from its own column — the so'm figure is not the
+        dollar one re-rated, the same rule `brand_averages` follows."""
+        contract = Contract.objects.create(partner=birja_partner(),
+                                           created="2026-07-01",
+                                           currency=Currency.UZS,
+                                           transport_rate_per_kg=Decimal("350"))
+        ContractLine.objects.create(contract=contract, brand="и 1561",
+                                    kg=Decimal("1000"), price=Decimal("1.00"),
+                                    price_uzs=Decimal("13000"))
+        ContractExpense.objects.create(contract=contract, amount=Decimal("100"),
+                                       amount_uzs=Decimal("1300000"),
+                                       currency=Currency.UZS,
+                                       exchange_rate=Decimal("13000"))
+        contract = Contract.objects.get(pk=contract.pk)
+        # 1 300 000 / 1 000 = 1 300 so'm/kg, plus the 350 transport.
+        assert contract.expense_add_on_per_kg == Decimal("1650.00")
+        [line] = contract.lines.all()
+        assert line.price_with_expenses == Decimal("14650.00")
+
+    def test_the_average_carries_the_same_add_on(self, admin_client):
+        """The summary line under Xarajat bilan sits level with the one under Narx,
+        so the two columns read row for row."""
+        contract = Contract.objects.create(partner=birja_partner(),
+                                           created="2026-07-01",
+                                           transport_rate_per_kg=Decimal("0.10"))
+        for price in ("1.00", "2.00"):
+            ContractLine.objects.create(contract=contract, brand="и 1561",
+                                        kg=Decimal("1000"), price=Decimal(price))
+        [avg] = contract.brand_averages
+        assert avg["price"] == Decimal("1.5000")
+        assert avg["price_with_expenses"] == Decimal("1.6000")
+
+    def test_the_list_draws_the_column(self, admin_client):
+        _birja_contract(brand="LLDPE", kg="1000", price="1.00",
+                        transport_rate_per_kg=Decimal("0.05"))
+        html = admin_client.get("/birja/kelishuvlar/").content.decode()
+        assert "Xarajat bilan" in html
+        assert "1.05 $/kg" in html
+
+    def test_a_tarjimon_sees_no_such_column(self, translator_client):
+        """It is a money column like Narx beside it, and that role sees none of
+        them — on the page or in the file."""
+        _birja_contract(brand="LLDPE", kg="1000", price="1.00")
+        resp = translator_client.get("/contracts/")
+        assert resp.status_code == 200
+        assert "Xarajat bilan" not in resp.content.decode()
 
 
 # --- the money -----------------------------------------------------------------

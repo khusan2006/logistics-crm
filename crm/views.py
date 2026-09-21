@@ -921,7 +921,10 @@ def _filter_contracts(request, birja=False):
                  .filter(partner__is_birja=birja)
                  # Mahalliy xaridlar have a list of their own.
                  .filter(partner__is_local=False)
-                 .prefetch_related("lines__shipment_lines", "supplier_payments"))
+                 # `expenses` rides along for the Xarajat bilan column, which asks
+                 # every row for `expense_add_on_per_kg`.
+                 .prefetch_related("lines__shipment_lines", "supplier_payments",
+                                   "expenses"))
     if q:
         # lines__brand spans a multi-valued relation, so a kelishuv whose products
         # both match would otherwise come back twice.
@@ -7609,14 +7612,21 @@ def _contracts_table(contracts, include_money=True):
     app. An export the screen will not show is still the screen's data, so the two have
     to agree — otherwise the Excel button is a way around the rule rather than a copy
     of what is on it."""
-    price_headers = ["Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)"] if include_money else []
+    # Xarajat bilan is ONE column where the others are a dollar/so'm pair: the
+    # kelishuv's own currency is all it has (see `Contract.expense_add_on_per_kg`),
+    # and the Valyuta column beside it already says which that is.
+    price_headers = (["Narx ($)", "Narx (so'm)", "Xarajat bilan", "Jami ($)",
+                      "Jami (so'm)"] if include_money else [])
     owed_headers = ["To'langan ($)", "To'langan (so'm)",
                     "Qarz ($)", "Qarz (so'm)"] if include_money else []
     headers = ["Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
                *price_headers, "Yuborilgan kg", *owed_headers]
 
     def price_cells(ln):
-        return [ln.price, ln.price_uzs, ln.total_value, ln.total_value_uzs] if include_money else []
+        if not include_money:
+            return []
+        return [ln.price, ln.price_uzs, ln.price_with_expenses,
+                ln.total_value, ln.total_value_uzs]
 
     def owed_cells(c):
         return [c.paid_total, c.paid_total_uzs, c.debt, c.debt_uzs] if include_money else []

@@ -911,11 +911,18 @@ class Contract(models.Model):
             # operator acts on those PER line — which truck is still to come, which
             # product is still owed for — so a total under each was three more
             # figures to read past to reach the one that was wanted.
+            price = (value / kg).quantize(Decimal("0.0001"))
+            price_uzs = (value_uzs / kg).quantize(Decimal("0.01"))
             rows.append({
                 "brand": brand,
                 "kg": kg,
-                "price": (value / kg).quantize(Decimal("0.0001")),
-                "price_uzs": (value_uzs / kg).quantize(Decimal("0.01"))})
+                "price": price,
+                "price_uzs": price_uzs,
+                # The same add-on every line of this marka carries, on top of the
+                # average the lines weigh out to — so the Xarajat bilan column has
+                # a summary line wherever Narx does, and the two stay level.
+                "price_with_expenses": (own_side(self, price, price_uzs)
+                                        + self.expense_add_on_per_kg)})
         return rows
 
     @property
@@ -949,6 +956,15 @@ class Contract(models.Model):
         if not hasattr(self, "supplier_payments"):
             return Decimal("0")
         return sum((p.commission_amount for p in self.supplier_payments.all()), Decimal("0"))
+
+    @property
+    def commission_accrued_uzs(self):
+        """The so'm twin of `commission_accrued`, each to'lov's cut at its own
+        entry-day kurs rather than the dollar total re-rated at today's."""
+        if not hasattr(self, "supplier_payments"):
+            return Decimal("0")
+        return sum((p.commission_amount_uzs for p in self.supplier_payments.all()),
+                   Decimal("0"))
 
     @property
     def expenses_total(self):
@@ -995,6 +1011,23 @@ class Contract(models.Model):
         return (self.commission_accrued / kg).quantize(Decimal("0.0001"))
 
     @property
+    def expenses_per_kg_uzs(self):
+        """`expenses_per_kg` on the so'm side. Summed from the so'm column and then
+        divided, never the dollar figure converted: each xarajat was booked at its
+        own day's kurs, the same rule `brand_averages` follows."""
+        kg = self.kg
+        if not kg:
+            return Decimal("0")
+        return (self.expenses_total_uzs / kg).quantize(Decimal("0.01"))
+
+    @property
+    def commission_per_kg_uzs(self):
+        kg = self.kg
+        if not kg:
+            return Decimal("0")
+        return (self.commission_accrued_uzs / kg).quantize(Decimal("0.01"))
+
+    @property
     def cost_per_kg(self):
         """Everything the KELISHUV puts on a kg — the vositachi cut and the
         kelishuv's own xarajatlar — on top of the mol and the truck it rode on.
@@ -1010,6 +1043,36 @@ class Contract(models.Model):
         is already rounded to 0,0001 there, and rounding the sum a second time could
         put the explanation a hundredth of a cent away from the number it explains."""
         return self.commission_per_kg + self.expenses_per_kg
+
+    @property
+    def cost_per_kg_uzs(self):
+        return self.commission_per_kg_uzs + self.expenses_per_kg_uzs
+
+    @property
+    def expense_add_on_per_kg(self):
+        """Everything the kelishuv puts on a kg, in the kelishuv's OWN currency —
+        what `price_with_expenses` adds to an agreed narx to answer "and what did
+        that kg really cost us".
+
+        One figure rather than a pair, because the birja transport rate inside it
+        has no twin: `transport_rate_per_kg` is typed in the kelishuv's currency and
+        stored once, so converting it here would invent a kurs nobody agreed to. The
+        other two halves DO keep both sides, and `own_side` picks the one the rest of
+        the row is drawn in.
+
+        The transport rate is folded in even though it lands as a xarajat on each yuk
+        rather than on the kelishuv (see `sync_birja_transport`): it is agreed per kg
+        up front, so on a birja kelishuv it is the largest part of the answer and
+        leaving it out priced the granula below what it cost. It is NOT double
+        counted — this figure is read only by the kelishuvlar list, never by
+        `ShipmentLine.landed_cost_per_kg`, which picks the transport up from the yuk's
+        own xarajat row.
+
+        That also makes it an ESTIMATE, and the only one on the page: a yuk's bojxona
+        and whatever else it paid on the road are not knowable per kg until the truck
+        lands, so they are absent here and present in the tannarx on the yuk's page."""
+        own = own_side(self, self.cost_per_kg, self.cost_per_kg_uzs)
+        return own + (self.transport_rate_per_kg or Decimal("0"))
 
     @property
     def shipped_value(self):
@@ -1218,6 +1281,18 @@ class ContractLine(MoneyEntry):
     @property
     def total_value_uzs(self):
         return (self.kg * self.price_uzs).quantize(Decimal("0.01"))
+
+    @property
+    def price_with_expenses(self):
+        """The agreed narx plus everything the kelishuv puts on a kg — the Xarajat
+        bilan column beside Narx.
+
+        In the kelishuv's own currency and nothing else, because the add-on has no
+        second side: see `Contract.expense_add_on_per_kg`, which also says which
+        costs are in it and which — the yuk's own bojxona — can only be known once
+        the truck has landed."""
+        own = own_side(self.contract, self.price, self.price_uzs)
+        return own + self.contract.expense_add_on_per_kg
 
     @property
     def shipped_kg(self):

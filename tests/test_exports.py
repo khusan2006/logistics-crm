@@ -15,7 +15,11 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 EXPORT_URLS = {
     "/reports/export/contracts.xlsx": [
         "Kelishuv", "Sana", "Hamkor", "Marka", "Kg", "Valyuta", "Kurs",
-        "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)", "Yuborilgan kg",
+        # Xarajat bilan is the one exception below: the narx with the kelishuv's
+        # own xarajatlar on it exists in the kelishuv's currency alone, so there is
+        # no twin to ship — see Contract.expense_add_on_per_kg.
+        "Narx ($)", "Narx (so'm)", "Xarajat bilan", "Jami ($)", "Jami (so'm)",
+        "Yuborilgan kg",
         "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)",
     ],
     "/reports/export/supplier-payments.xlsx": [
