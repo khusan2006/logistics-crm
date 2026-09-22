@@ -372,11 +372,9 @@ def test_the_list_page_prints_jami_in_the_kelishuvs_own_currency(admin_client, d
     assert escape(som(dollar_contract.total_value_uzs)) not in html
 
 
-@pytest.mark.xfail(reason="BUG: the Kelishuvlar Narx column renders a per-kg narx with "
-                          "the lump-sum {% money %} tag instead of {% rate %}, so a 4dp "
-                          "$/kg is shown rounded to cents (0.9759 reads as $0.98) and "
-                          "loses its /kg unit — narx x kg no longer matches Jami",
-                   strict=False)
+# Regression guard. This was an xfail documenting that the Kelishuvlar Narx column
+# rounded a per-kg narx to cents with {% money %}; it passes since the column uses
+# {% rate %}. Kept as a test so the defect cannot come back.
 def test_the_list_page_prints_a_per_kg_narx_at_its_full_precision(admin_client, db):
     from django.utils.html import escape
 

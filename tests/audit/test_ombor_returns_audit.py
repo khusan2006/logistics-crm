@@ -674,12 +674,10 @@ def test_stock_value_equals_the_ombor_shelf_at_landed_cost(admin_client):
     assert page_kg == kg
 
 
-@pytest.mark.xfail(reason="BUG: the group's so'm tan narx range is taken from the "
-                          "lot that is cheapest in DOLLARS (min() over (usd, uzs) "
-                          "tuples, crm/views.py:1026). With lots booked at "
-                          "different kursi the so'm pair comes out inverted — the "
-                          "Ombor prints a range whose low end is above its high end",
-                   strict=False)
+# Regression guard. This was an xfail documenting an inverted so'm tan narx range
+# when lots were booked at different kursi; it passes since every lot's so'm
+# tannarx is taken at the one kurs the Ombor page is drawn at (`_ombor_kurs`).
+# Kept as a test so the defect cannot come back.
 def test_som_tannarx_range_is_a_real_range_when_kursi_differ(admin_client):
     # cheaper in dollars, dearer in so'm (booked when the kurs was high)
     _lot(brand="2102", kg="1000", lot_typed="18000", contract_currency=UZS,
