@@ -133,6 +133,37 @@ def test_the_excel_button_exports_the_list_it_was_pressed_on(admin_client):
     assert "ERONMARKA" in hamkor_file and "BIRJAMARKA" not in hamkor_file
 
 
+def test_the_birja_list_opens_oldest_first(admin_client):
+    """The other way up from the Eron list: the oldest open birja kelishuv is the one
+    whose trucks are arriving now, so it leads. Created out of date order, so the
+    list cannot pass by reading the pk."""
+    middle = _birja_contract(brand="B", created="2026-09-10")
+    newest = _birja_contract(brand="C", created="2026-09-18")
+    oldest = _birja_contract(brand="A", created="2026-09-08")
+    resp = admin_client.get("/birja/kelishuvlar/")
+    assert [c.pk for c in resp.context["rows"]] == [oldest.pk, middle.pk, newest.pk]
+    # It is the list's normal state, so Saralash draws no chip over it.
+    assert resp.context["filters"]["chips"] == []
+
+
+def test_a_chosen_sort_still_wins_on_the_birja_list(admin_client):
+    old = _birja_contract(brand="A", created="2026-09-08")
+    new = _birja_contract(brand="B", created="2026-09-18")
+    resp = admin_client.get("/birja/kelishuvlar/", {"sort": "-created"})
+    assert [c.pk for c in resp.context["rows"]] == [new.pk, old.pk]
+    assert [chip["label"] for chip in resp.context["filters"]["chips"]] == ["Saralash"]
+
+
+def test_the_birja_excel_comes_out_in_the_page_s_order(admin_client):
+    new = _birja_contract(brand="B", created="2026-09-18")
+    old = _birja_contract(brand="A", created="2026-09-08")
+    ws = openpyxl.load_workbook(BytesIO(
+        admin_client.get("/birja/kelishuvlar/export.xlsx").content)).active
+    codes = [cell.value for row in ws.iter_rows() for cell in row
+             if cell.value in (old.code, new.code)]
+    assert codes == [old.code, new.code]
+
+
 # --- valyuta ---------------------------------------------------------------
 #
 # Birja purchases are struck in so'm, which is a DEFAULT and not a rule. Everything
