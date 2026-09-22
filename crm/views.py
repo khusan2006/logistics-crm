@@ -23,6 +23,8 @@ from django.views.decorators.http import require_POST
 from accounts.decorators import role_required
 from accounts.models import User
 
+# `birja` is a flag on half the views below, so the module goes by another name.
+from . import birja as birja_rule
 from .exports import KG, PERCENT, xlsx_book_response, xlsx_response
 from .fifo import apply_plan, blockers, replay, weighted_cost
 from .templatetags.crm_extras import money_in, som, usd
@@ -40,7 +42,7 @@ from .forms import (
     SaleCreateForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
     ShipmentExpenseForm,
     ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
-    ShipmentLineFormSet,
+    ShipmentLineFormSet, BirjaTruckFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
     SupplierPaymentFormSet, SupplierPaymentTargetForm,
     LogistPaymentFormSet, LogistPaymentTargetForm,
@@ -3061,9 +3063,107 @@ def lot_detail(request, pk):
     })
 
 
-def _shipment_form_response(request, form, lines, title, invalid=False):
+def _shipment_form_response(request, form, lines, title, invalid=False,
+                            legend="Mahsulotlar"):
     return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+                         extra_context={"lines": lines, "lines_legend": legend})
+
+
+#: The birja rows say where their kg come from, because nothing else on the form
+#: does any more — the kelishuv is the rule's to pick (crm.birja).
+BIRJA_LINES_LEGEND = "Mahsulotlar — eng eski birja kelishuvidan olinadi"
+
+
+def _birja_saved(yuklar, verb):
+    """The flash after a birja truck is written. It names the kelishuv the rule put
+    the truck on — the operator no longer picks one, so this is where they see it."""
+    where = ", ".join(f"{yuk.contract.code} · {birja_rule.kg_text(yuk.kg)} kg"
+                      for yuk in yuklar)
+    if len(yuklar) > 1:
+        return f"Yuk {verb} va {len(yuklar)} ta kelishuvga bo'lindi: {where}"
+    return f"Yuk {verb}: {where}"
+
+
+def _birja_shipment_create(request):
+    """A new birja truck: the header any yuk has, and marka/kg rows the rule books
+    against the oldest birja kelishuv with room — split across two when the oldest
+    has less left than the truck carries. See crm.birja."""
+    form = ShipmentForm(request.POST or None, birja=True)
+    lines = BirjaTruckFormSet(request.POST or None, prefix="lines")
+    title = "Yangi birja yuk"
+    if request.method == "POST":
+        if form.is_valid() and lines.is_valid():
+            try:
+                with transaction.atomic():
+                    shipment = form.save(commit=False)
+                    shipment.created_by = request.user
+                    # The model's default route is the Eron one. A birja truck starts
+                    # at the exchange and never leaves the country.
+                    shipment.origin = "Birja"
+                    if shipment.status.is_arrival:
+                        shipment.arrived = timezone.localdate()
+                    yuklar = birja_rule.save_truck(
+                        shipment, birja_rule.plan_truck(lines.rows()))
+                    # One advance per truck, however many kelishuvlar it was split
+                    # across: it is handed to the driver once.
+                    form.sync_driver_advance(yuklar[0], request.user)
+            except birja_rule.BirjaShortage as short:
+                # Another truck took the room between the form's check and this save.
+                form.add_error(None, str(short))
+            else:
+                for yuk in yuklar:
+                    AuditLog.record(
+                        request.user, AuditLog.Action.CREATE, "Yuk", yuk.pk,
+                        f"Yangi yuk: {yuk.contract.code} · {yuk.brand_summary} · "
+                        f"{yuk.kg} kg")
+                messages.success(request, _birja_saved(yuklar, "qo'shildi"))
+                return form_success(request, shipment_list_url(True))
+        return _shipment_form_response(request, form, lines, title, invalid=True,
+                                       legend=BIRJA_LINES_LEGEND)
+    return _shipment_form_response(request, form, lines, title, legend=BIRJA_LINES_LEGEND)
+
+
+def _birja_shipment_edit(request, shipment):
+    """Correct a booked birja truck. The header edits as any yuk's does; the marka/kg
+    rows move its kg the way `crm.birja.retune_truck` says — a correction keeps the
+    truck on its own kelishuv, and only kg that kelishuv has no room for are split
+    off onto the next one."""
+    form = ShipmentForm(request.POST or None, instance=shipment)
+    lines = BirjaTruckFormSet(request.POST or None, prefix="lines", shipment=shipment)
+    title = "Yukni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid() and lines.is_valid():
+            before = _shipment_snapshot(shipment)
+            try:
+                with transaction.atomic():
+                    shipment = form.save(commit=False)
+                    # The holat decides WHETHER a yuk has arrived, the date only WHEN —
+                    # the rule `shipment_edit` spells out for the Eron road.
+                    if shipment.status.is_arrival:
+                        shipment.arrived = shipment.arrived or timezone.localdate()
+                    else:
+                        shipment.arrived = None
+                    shipment.save()
+                    split = birja_rule.retune_truck(shipment, lines.rows())
+                    form.sync_driver_advance(shipment, request.user)
+            except birja_rule.BirjaShortage as short:
+                form.add_error(None, str(short))
+            else:
+                moved = _shipment_changes(before, _shipment_snapshot(shipment))
+                AuditLog.record(
+                    request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
+                    (f"Yuk tahrirlandi: {'; '.join(moved)}" if moved
+                     else "Yuk tahrirlandi (o'zgarish yo'q)")[:255])
+                for yuk in split:
+                    AuditLog.record(
+                        request.user, AuditLog.Action.CREATE, "Yuk", yuk.pk,
+                        f"Yuk #{shipment.pk} dan bo'lindi: {yuk.contract.code} · "
+                        f"{yuk.kg} kg")
+                messages.success(request, _birja_saved([shipment] + split, "yangilandi"))
+                return form_reload(request, shipment_list_url(True))
+        return _shipment_form_response(request, form, lines, title, invalid=True,
+                                       legend=BIRJA_LINES_LEGEND)
+    return _shipment_form_response(request, form, lines, title, legend=BIRJA_LINES_LEGEND)
 
 
 def shipment_list_url(birja):
@@ -3077,7 +3177,10 @@ def shipment_list_url(birja):
 def shipment_create(request, birja=False):
     """A new yuk. `birja=True` loads it against a birja kelishuv instead: the same
     form with the QR and bojxonachi boxes gone, and the kelishuv and holat pickers
-    narrowed to that pipeline — see `ShipmentForm`."""
+    narrowed to that pipeline — see `ShipmentForm`. A birja truck names no kelishuv
+    at all: see `_birja_shipment_create`."""
+    if birja:
+        return _birja_shipment_create(request)
     form = ShipmentForm(request.POST or None, birja=birja)
     lines = ShipmentLineFormSet(request.POST or None)
     title = "Yangi birja yuk" if birja else "Yangi yuk"
@@ -3166,6 +3269,8 @@ def shipment_edit(request, pk):
         Shipment.objects.select_related("contract__partner"), pk=pk)
     if shipment.is_local:
         return _local_purchase_only(request)
+    if shipment.is_birja:
+        return _birja_shipment_edit(request, shipment)
     # Which pipeline this load is on is the row's to say, not the URL's — `ShipmentForm`
     # reads it off the instance and scopes the kelishuv and holat pickers to match.
     form = ShipmentForm(request.POST or None, instance=shipment)
