@@ -2341,7 +2341,12 @@ def _filter_shipments(request, birja=False):
     so the Excel button must hand over the same flag its page did — otherwise the
     file would be of the other list."""
     q = request.GET.get("q", "").strip()
-    show_all = request.GET.get("all") == "1"
+    # The birja list opens on Hammasi, ordered by Kelish sanasi — the owner's call
+    # (2026-09-22): a birja purchase is entered once it is already in the ombor, so
+    # the active view is nearly always empty and the day it landed is how it is
+    # looked up. Turning either off sends an explicit `0` (see the toolbar), since a
+    # param that is simply absent means the default.
+    show_all = request.GET.get("all", "1" if birja else "") == "1"
     # Bojxona to'lanmagan — the loads in the ombor whose clearing is still unpaid.
     #
     # It sits beside the holat tabs and is deliberately NOT one. A yuk in it already
@@ -2385,7 +2390,7 @@ def _filter_shipments(request, birja=False):
     # question, which the toolbar does not draw this button on either. Both are
     # enforced here rather than by hiding the pill, so a hand-typed `?sort=` cannot
     # reorder a view whose order means something else.
-    sort = "kelish" if (request.GET.get("sort") == "kelish"
+    sort = "kelish" if (request.GET.get("sort", "kelish" if birja else "") == "kelish"
                         and show_all and not customs) else ""
     shipments = (Shipment.objects
                  .filter(contract__partner__is_birja=birja, contract__partner__is_local=False)
@@ -2702,6 +2707,9 @@ def shipment_list(request, birja=False):
                               else "shipment_list_export"),
         # What the shared template needs to know which list it is drawing.
         "birja": birja,
+        # How the toolbar switches a view OFF: dropping the param on the Eron list,
+        # an explicit 0 on the birja one, where an absent param means "on".
+        "param_off": "0" if birja else None,
         "page_title": "Birja yuklar" if birja else "Yuklar",
         "create_url": "birja_shipment_create" if birja else "shipment_create",
         "shipments": rows, "groups": groups, "statuses": statuses, "tabs": tabs,

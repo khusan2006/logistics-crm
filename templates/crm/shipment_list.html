@@ -72,7 +72,7 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     which is the only reading that would leave it changing nothing when pressed.
     {% endcomment %}
     <a class="btn{% if not show_all or customs %} btn-ghost{% endif %}"
-       href="{% if show_all and not customs %}{% querystring all=None sort=None page=None %}{% else %}{% querystring all=1 customs=None page=None %}{% endif %}"
+       href="{% if show_all and not customs %}{% querystring all=param_off sort=None page=None %}{% else %}{% querystring all=1 customs=None page=None %}{% endif %}"
        title="{% if show_all and not customs %}Faqat yo'ldagi yuklar{% else %}Yakunlangan yuklar bilan birga hammasi{% endif %}">
       {% if show_all and not customs %}Faol yuklar{% else %}Hammasi{% endif %}
     </a>
@@ -119,7 +119,7 @@ date, exactly what the Sana ustuni prints. The shared ‹ davr › bar, as on ev
     {% endcomment %}
     {% if show_all and not customs %}
     <a class="btn{% if not sort %} btn-ghost{% endif %}"
-       href="{% if sort %}{% querystring sort=None page=None %}{% else %}{% querystring sort='kelish' page=None %}{% endif %}"
+       href="{% if sort %}{% querystring sort=param_off page=None %}{% else %}{% querystring sort='kelish' page=None %}{% endif %}"
        title="{% if sort %}Saralashni bekor qilish — yuklar yana kelishuvlar bo'yicha guruhlanadi{% else %}Kelish sanasi bo'yicha: bugun kelgan yuklar eng tepada, keyin kecha kelganlari{% endif %}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h13"/><path d="M4 12h9"/><path d="M4 18h5"/></svg>
       Kelish sanasi bo'yicha
@@ -154,7 +154,7 @@ inside a view with no control left to leave it by.
   {% endcomment %}
   {% for t in tabs %}
     {% if customs %}
-  <a class="status-tab status-tab--link" href="{% if t.status.is_arrival %}{% querystring customs=None holat=t.status.pk all=1 page=None %}{% else %}{% querystring customs=None holat=t.status.pk all=None page=None %}{% endif %}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></a>
+  <a class="status-tab status-tab--link" href="{% if t.status.is_arrival %}{% querystring customs=None holat=t.status.pk all=1 page=None %}{% else %}{% querystring customs=None holat=t.status.pk all=param_off page=None %}{% endif %}">{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></a>
     {% else %}
   <button type="button" class="status-tab{% if t.status.pk == default_tab %} is-active{% endif %}" data-tab="{{ t.status.pk }}"{% if t.status.pk == default_tab %} data-default{% endif %}>{{ t.status.name }} <span class="status-tab-count">{{ t.count }}</span></button>
     {% endif %}

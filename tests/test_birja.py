@@ -470,9 +470,10 @@ def test_each_list_offers_only_its_own_chain(admin_client):
 
 def test_the_birja_list_opens_on_the_first_step_of_its_own_chain(admin_client):
     """There is no "Yo'lda" to open on — the operator has not named the birja steps
-    yet — so it opens on whichever step is currently first."""
+    yet — so the active view opens on whichever step is currently first. (The list
+    itself opens on Hammasi, which preselects no tab — see below.)"""
     make_shipment(contract=_birja_contract(), status=_first_birja_status())
-    context = admin_client.get("/birja/yuklar/").context
+    context = admin_client.get("/birja/yuklar/", {"all": "0"}).context
     assert context["default_tab"] == _first_birja_status().pk
 
 
@@ -899,3 +900,21 @@ def test_a_translator_cannot_reach_the_birja_tolovlar(translator_client):
     """Their whole job is the Eron road — the same reason the birja kelishuvlar and
     yuklar lists are closed to them."""
     assert translator_client.get("/birja/tolovlar/").status_code == 403
+
+
+def test_the_birja_list_opens_on_hammasi_by_kelish_sanasi(admin_client):
+    """The owner's call: a birja yuk is entered once it is in the ombor, so the list
+    opens on everything, the day each landed on top. The Eron list is untouched."""
+    ctx = admin_client.get("/birja/yuklar/").context
+    assert ctx["show_all"] and ctx["sort"] == "kelish"
+    eron = admin_client.get("/shipments/").context
+    assert not eron["show_all"] and not eron["sort"]
+
+
+def test_both_birja_defaults_can_still_be_switched_off(admin_client):
+    ctx = admin_client.get("/birja/yuklar/", {"sort": "0"}).context
+    assert ctx["show_all"] and not ctx["sort"]
+    ctx = admin_client.get("/birja/yuklar/", {"all": "0"}).context
+    assert not ctx["show_all"]
+    page = admin_client.get("/birja/yuklar/").content.decode()
+    assert "all=0" in page and "sort=0" in page       # the ways back out
