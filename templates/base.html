@@ -2952,8 +2952,46 @@
       var flat = form.querySelector('input[name=price]');
       return (fixed && flat) ? [{ brand: fixed, price: flat }] : [];
     }
+    // The valyuta this mijoz last took the marka in: set it before the narx is
+    // filled, so a mijoz who buys in so'm opens on so'm. The first row with a record
+    // decides (one sotuv, one valyuta). Only while every narx box is empty or ours —
+    // an edit of a saved sotuv, or a figure typed in, keeps the valyuta it has — and
+    // never after the operator picked one themselves.
+    function preferCurrency(form, prices) {
+      if (!prices || form.dataset.currencyChosen === '1') { return; }
+      var list = rows(form);
+      var free = list.every(function (row) {
+        return !row.price.value || row.price.dataset[MINE] === '1';
+      });
+      if (!free) { return; }
+      var first = list.map(function (row) { return prices[row.brand]; })
+        .filter(function (p) { return p && p.currency; })[0];
+      if (!first) { return; }
+      var want = String(first.currency).toLowerCase();
+      var controls = form.querySelectorAll('[data-money-currency]');
+      var target = null;
+      controls.forEach(function (el) {
+        if (el.type === 'radio') {
+          if (String(el.value).toLowerCase() === want) { target = el; }
+        } else { target = el; }
+      });
+      if (!target) { return; }
+      if (target.type === 'radio') {
+        if (target.checked) { return; }
+        target.checked = true;
+      } else {
+        if (String(target.value).toLowerCase() === want) { return; }
+        target.value = want;
+      }
+      // The kurs box and the narx labels follow the valyuta on `change`. Flagged
+      // while it runs, so the listener below can tell ours from the operator's.
+      form.dataset.currencyPainting = '1';
+      try { target.dispatchEvent(new Event('change', { bubbles: true })); }
+      finally { delete form.dataset.currencyPainting; }
+    }
     function update(form) {
       var prices = pricesFor(form);
+      preferCurrency(form, prices);
       var key = side(form);
       rows(form).forEach(function (row) {
         var box = row.price;
@@ -3002,6 +3040,10 @@
       if (!e.target.closest) { return; }
       var form = e.target.closest('form');
       if (!form || !form.querySelector('select[name=customer]')) { return; }
+      // A valyuta the operator picked is theirs; ours is only a starting point.
+      if (e.target.matches('[data-money-currency]') && form.dataset.currencyPainting !== '1') {
+        form.dataset.currencyChosen = '1';
+      }
       if (e.target.matches('select[name=customer], [data-bron-brand], [data-money-currency]')) {
         update(form);
       }

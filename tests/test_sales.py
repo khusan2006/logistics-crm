@@ -1208,9 +1208,11 @@ class TestLastPricePrefill:
         customer = _customer()
         self._sell(admin_client, lot, customer, "1.65", "2026-07-18")
 
-        usd_price, uzs_price = last_sale_prices_by_customer()[customer.pk]["LLDPE"]
+        usd_price, uzs_price, currency = last_sale_prices_by_customer()[customer.pk]["LLDPE"]
         assert usd_price == Decimal("1.6500")
         assert uzs_price == Decimal("19800.00")
+        # …and the valyuta it was agreed in, which the form opens on.
+        assert currency == "usd"
 
     def test_the_sotuv_form_stamps_every_mijoz_who_has_bought_before(
             self, admin_client, db):

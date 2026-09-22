@@ -336,8 +336,8 @@ class CustomerFactsSelect(forms.Select):
 
     #: {customer_id: [brand, ...]}, set by the form.
     bron_brands = {}
-    #: {customer_id: {brand: (usd, uzs)}}, set by the form. Empty for a mijoz who
-    #: has not bought from us yet.
+    #: {customer_id: {brand: (usd, uzs, currency)}}, set by the form. Empty for a
+    #: mijoz who has not bought from us yet.
     last_prices = {}
 
     def _for(self, table, value):
@@ -361,8 +361,9 @@ class CustomerFactsSelect(forms.Select):
         prices = self._for(self.last_prices, value)
         if prices:
             option["attrs"]["data-last-prices"] = json.dumps(
-                {brand: {"usd": str(usd_price), "uzs": str(uzs_price)}
-                 for brand, (usd_price, uzs_price) in sorted(prices.items())})
+                {brand: {"usd": str(usd_price), "uzs": str(uzs_price),
+                         "currency": currency}
+                 for brand, (usd_price, uzs_price, currency) in sorted(prices.items())})
         return option
 
 

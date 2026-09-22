@@ -3154,8 +3154,9 @@ def bron_brands():
 
 
 def last_sale_prices_by_customer():
-    """{customer_id: {brand: (price_usd, price_uzs)}} — the narx each marka last
-    went out at, per mijoz, which is what the sotuv form opens with.
+    """{customer_id: {brand: (price_usd, price_uzs, currency)}} — the narx each marka
+    last went out at, per mijoz, and the valyuta it was agreed in, which is what the
+    sotuv form opens with.
 
     Every mijoz. The last narx is simply what this mijoz paid last time, and an
     operator who is quoting a new one types over it — so there is nothing to decide
@@ -3170,7 +3171,9 @@ def last_sale_prices_by_customer():
 
     Both currencies are carried. Which of them the form fills is the SOTUV's own
     valyuta, decided in the browser when the row is filled — a sotuv agreed in so'm
-    must not open with a dollar figure standing in a so'm box.
+    must not open with a dollar figure standing in a so'm box. The valyuta the last
+    one was agreed in rides along too: the form opens on it, so a mijoz who buys in
+    so'm is offered so'm without the operator switching it first.
 
     Values rather than Sale objects: this now walks every sotuv in the app on every
     sotuv form, and the marka is one join away, so there is no reason to build a
@@ -3178,11 +3181,11 @@ def last_sale_prices_by_customer():
     prices = {}
     # Oldest first, so a later sotuv of the same marka simply writes over it — one
     # pass, and no per-row comparison of dates that the ordering already settles.
-    for customer_id, brand, usd_price, uzs_price in (
+    for customer_id, brand, usd_price, uzs_price, currency in (
             Sale.objects.order_by("date", "pk")
             .values_list("customer_id", "line__contract_line__brand",
-                         "price", "price_uzs")):
-        prices.setdefault(customer_id, {})[brand] = (usd_price, uzs_price)
+                         "price", "price_uzs", "currency")):
+        prices.setdefault(customer_id, {})[brand] = (usd_price, uzs_price, currency)
     return prices
 
 
