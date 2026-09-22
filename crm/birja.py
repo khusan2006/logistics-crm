@@ -1,17 +1,15 @@
-"""Birja yuklari: which kelishuv a truck's kg come off.
+"""Birja yuklari and the order they go out in.
 
-The owner's rule (2026-09-22). A birja truck is not booked against a kelishuv
-anybody picks. However many kg it carries come off the OLDEST birja kelishuv that
-still has that marka to send, its lots taken in the order they stand on it, and the
-next truck takes what is left — one kelishuv is finished before the next is started,
-which is how the exchange hands them over.
+The owner's rule (2026-09-22): a birja truck comes off the OLDEST birja kelishuv
+that still has the marka to send, and one kelishuv is finished before the next is
+started — the order the exchange hands them over in. The operator still picks the
+kelishuv on the yuk form (the owner's call: not automatic); the form opens on the
+oldest one with kg left and lists the rest oldest first — see ShipmentForm.
 
-A yuk belongs to one kelishuv: its kod, its transport rate and its to'lovlar are
-that kelishuv's. So a truck bigger than what is left on the oldest one becomes two
-yuklar, one per kelishuv, both carrying the same truck.
-
-The Eron road is untouched. A hamkor load is still booked against the kelishuv its
-papers name, through the ordinary yuk form.
+What lives here is the one-off that puts the trucks booked before that where the
+rule would have put them (`manage.py birja_fifo`). A yuk belongs to one kelishuv —
+its kod, its transport rate and its to'lovlar are that kelishuv's — so a truck that
+straddles two kelishuvlar under the rule becomes two yuklar, the same truck on both.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -54,32 +52,6 @@ def dispatch_key(shipment):
     return (day, shipment.created_at, shipment.pk)
 
 
-def open_birja_lines(brand=None):
-    """Every birja kelishuv line still owed kg, in the order a truck takes them:
-    oldest kelishuv first, each kelishuv's lots in the order they stand on it.
-
-    A kelishuv moved to Kam qoldiq is not offered — the operator has said what it
-    still owes is not coming, so no truck can be coming against it."""
-    lines = (ContractLine.objects
-             .filter(contract__partner__is_birja=True, contract__closed_short=False)
-             .select_related("contract__partner")
-             .prefetch_related("shipment_lines")
-             .order_by("contract__created", "contract__code_number", "contract_id",
-                       "position", "id"))
-    if brand is not None:
-        lines = lines.filter(brand=brand)
-    return [ln for ln in lines if ln.remaining_kg > 0]
-
-
-class BirjaShortage(Exception):
-    """The birja kelishuvlar together have less of a marka left than was asked."""
-
-    def __init__(self, brand, wanted, available):
-        self.brand, self.wanted, self.available = brand, wanted, available
-        super().__init__(f"Birja kelishuvlarida {brand} dan {kg_text(available)} kg "
-                         f"qolgan, {kg_text(wanted)} kg so'raldi")
-
-
 def _take(lines, room, kg):
     """Fill `kg` from `lines` in order, spending `room` (line pk → kg free).
     Returns ([(line, kg)], the kg that found no room)."""
@@ -115,20 +87,6 @@ def _parts(pieces):
         by_contract.setdefault(line.contract_id, Part(line.contract)).pieces.append(
             (line, kg))
     return sorted(by_contract.values(), key=lambda p: kelishuv_key(p.contract))
-
-
-def plan_truck(items):
-    """Where a new truck's kg go. `items` is [(marka, kg)]; the answer is one Part
-    per kelishuv the truck reaches, oldest first — more than one only when the
-    oldest has less left than the truck carries."""
-    pieces = []
-    for brand, kg in items:
-        lines = open_birja_lines(brand)
-        taken, short = _take(lines, {ln.pk: ln.remaining_kg for ln in lines}, kg)
-        if short > 0:
-            raise BirjaShortage(brand, kg, kg - short)
-        pieces += taken
-    return _parts(pieces)
 
 
 def split_note(parts):
@@ -174,127 +132,6 @@ def settle(yuklar, contracts):
         if contract.pk not in seen:
             seen.add(contract.pk)
             reconcile_supplier_allocations(contract)
-
-
-def save_truck(shipment, parts):
-    """Write a new truck. `shipment` (header filled in, unsaved) carries the oldest
-    kelishuv's part; each further part is split off into a yuk of its own. Returns
-    the yuklar written, `shipment` first."""
-    original_note = shipment.note
-    if len(parts) > 1:
-        shipment.note = _with_note(original_note, split_note(parts))
-    shipment.contract = parts[0].contract
-    shipment.save()
-    yuklar = [shipment]
-    for part in parts[1:]:
-        yuklar.append(_split_off(shipment, part.contract,
-                                 _with_note(original_note, split_note(parts))))
-    for yuk, part in zip(yuklar, parts):
-        for position, (line, kg) in enumerate(part.pieces):
-            _write_line(yuk, line, kg, position)
-    settle(yuklar, [part.contract for part in parts])
-    return yuklar
-
-
-# --- correcting a truck that is already booked ------------------------------------
-
-def truck_kg(shipment):
-    """{marka: kg} on a truck."""
-    kg = defaultdict(lambda: ZERO)
-    for line in shipment.lines.select_related("contract_line"):
-        kg[line.contract_line.brand] += line.kg
-    return dict(kg)
-
-
-def sold_floor(shipment):
-    """{marka: kg} already sold off this truck's lots — how low an edit may take it."""
-    floor = defaultdict(lambda: ZERO)
-    for line in (shipment.lines.select_related("contract_line")
-                 .prefetch_related("sale_lots")):
-        floor[line.contract_line.brand] += line.sold_kg
-    return dict(floor)
-
-
-def _shrink(shipment, brand, less):
-    """Take `less` kg of `brand` off a booked truck, last lot first, never below what
-    a lot has sold (the form refuses that before it gets here)."""
-    lines = sorted(
-        (ln for ln in shipment.lines.select_related("contract_line")
-         .prefetch_related("sale_lots") if ln.contract_line.brand == brand),
-        key=lambda ln: (ln.position, ln.pk), reverse=True)
-    for line in lines:
-        if less <= 0:
-            break
-        take = min(line.kg - line.sold_kg, less)
-        if take <= 0:
-            continue
-        less -= take
-        if take == line.kg and not line.sale_lots.all():
-            line.delete()
-        else:
-            line.kg -= take
-            line.save(update_fields=["kg"])
-    return less
-
-
-def _grow(shipment, brand, extra):
-    """Add `extra` kg of `brand` to a booked truck: into its OWN kelishuv first — a
-    correction does not move a truck — and whatever does not fit there into the
-    oldest kelishuv with room, split off as a new truck would be. Returns the
-    split-off yuklar."""
-    lines = open_birja_lines(brand)
-    lines = ([ln for ln in lines if ln.contract_id == shipment.contract_id]
-             + [ln for ln in lines if ln.contract_id != shipment.contract_id])
-    taken, short = _take(lines, {ln.pk: ln.remaining_kg for ln in lines}, extra)
-    if short > 0:
-        raise BirjaShortage(brand, extra, extra - short)
-
-    existing = {ln.contract_line_id: ln for ln in shipment.lines.all()}
-    position = max((ln.position for ln in existing.values()), default=-1) + 1
-    elsewhere = []
-    for line, kg in taken:
-        if line.contract_id != shipment.contract_id:
-            elsewhere.append((line, kg))
-        elif line.pk in existing:
-            existing[line.pk].kg += kg
-            existing[line.pk].save(update_fields=["kg"])
-        else:
-            _write_line(shipment, line, kg, position)
-            position += 1
-    if not elsewhere:
-        return []
-
-    parts = _parts(elsewhere)
-    own = Part(shipment.contract,
-               [(None, kg) for kg in truck_kg(shipment).values()])
-    note = split_note([own] + parts)
-    original_note = shipment.note
-    shipment.note = _with_note(original_note, note)
-    shipment.save(update_fields=["note"])
-    yuklar = []
-    for part in parts:
-        yuk = _split_off(shipment, part.contract, _with_note(original_note, note))
-        for position, (line, kg) in enumerate(part.pieces):
-            _write_line(yuk, line, kg, position)
-        yuklar.append(yuk)
-    return yuklar
-
-
-def retune_truck(shipment, rows):
-    """Bring a booked truck to the marka/kg an edit says. A marka taken down loses
-    kg from its last lot; one taken up gains them as described in `_grow`.
-    Returns the yuklar split off along the way."""
-    want = dict(rows)
-    have = truck_kg(shipment)
-    split = []
-    for brand in sorted(set(want) | set(have)):
-        new, old = want.get(brand, ZERO), have.get(brand, ZERO)
-        if new < old:
-            _shrink(shipment, brand, old - new)
-        elif new > old:
-            split += _grow(shipment, brand, new - old)
-    settle([shipment] + split, [shipment.contract] + [y.contract for y in split])
-    return split
 
 
 # --- putting the trucks already booked where the rule says ------------------------
