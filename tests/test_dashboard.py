@@ -872,3 +872,58 @@ class TestBirjaCardsStandApart:
         assert html.count('class="cprogs" data-cprog-reorder') == 2
         # A birja row opens the birja list — it is not on Kelishuvlar.
         assert f'href="{reverse("birja_contract_list")}"' in html
+
+
+class TestBirjaQarzi:
+    """The goods side of the birja on the doska: how many tonnes its kelishuvlar
+    still have to send, beside the qoldiq already on the floor."""
+
+    def _birja_contract(self, **kw):
+        from crm.models import birja_partner
+        return make_contract(partner=birja_partner(), **kw)
+
+    def test_it_sums_what_is_still_to_be_sent_in_tonnes(self, admin_client, db):
+        part_sent = self._birja_contract(brand="и 1561", kg="30000")
+        make_shipment(contract=part_sent, kg="26000",
+                      status=ShipmentStatus.for_kind(birja=True).first())
+        self._birja_contract(brand="и 1561", kg="50000")
+        make_contract(brand="2102", kg="90000")        # a hamkor's kg are not the birja's
+
+        resp = admin_client.get("/")
+        assert resp.context["birja_owed_t"] == Decimal("54")
+        assert resp.context["birja_owed_count"] == 2
+        html = resp.content.decode()
+        assert '54<span class="unit">tonna</span>' in html
+        assert "kpi-grid--standing kpi-grid--five" in html
+
+    def test_a_marka_loaded_over_its_kg_does_not_cover_a_short_one(self, admin_client, db):
+        contract = self._birja_contract(brand="и 1561", kg="10000")
+        ContractLine.objects.create(contract=contract, brand="2102",
+                                    kg=Decimal("10000"), price=Decimal("1.00"))
+        make_shipment(contract_line=contract.lines.get(brand="и 1561"), kg="12000")
+        # 10 t of 2102 are still owed; the extra 2 t of и 1561 do not pay for them.
+        assert admin_client.get("/").context["birja_owed_t"] == Decimal("10")
+
+    def test_a_kelishuv_moved_to_kam_qoldiq_is_left_out(self, admin_client, db):
+        self._birja_contract(brand="и 1561", kg="20000")
+        moved = self._birja_contract(brand="и 1561", kg="20000")
+        make_shipment(contract=moved, kg="19500")
+        Contract.objects.filter(pk=moved.pk).update(closed_short=True)
+
+        ctx = admin_client.get("/").context
+        assert ctx["birja_owed_t"] == Decimal("20")
+        assert ctx["birja_owed_count"] == 1
+
+    def test_a_birja_that_has_sent_everything_still_says_so(self, admin_client, db):
+        """Zero is an answer: the card follows the birja row's switch, not the kg."""
+        done = self._birja_contract(brand="и 1561", kg="20000")
+        make_shipment(contract=done, kg="20000")
+        resp = admin_client.get("/")
+        assert resp.context["birja_owed_t"] == 0
+        assert '0<span class="unit">tonna</span>' in resp.content.decode()
+
+    def test_no_card_on_a_book_that_never_bought_on_the_birja(self, admin_client, db):
+        make_contract(brand="2102", kg="1000")
+        html = admin_client.get("/").content.decode()
+        assert "Birja qarzi" not in html
+        assert "kpi-grid--five" not in html
