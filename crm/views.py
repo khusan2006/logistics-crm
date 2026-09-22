@@ -419,6 +419,13 @@ def dashboard(request):
     statuses = list(ShipmentStatus.objects.all())
     hamkor_cards = _progress_cards(request, contracts, shipments, statuses, birja=False)
     birja_cards = _progress_cards(request, contracts, shipments, statuses, birja=True)
+    # What the birja still owes us in goods: the kg of its kelishuvlar not yet sent,
+    # marka by marka (`short_kg` — a marka loaded over its kg does not cover one
+    # still short). A kelishuv moved to Kam qoldiq is left out, as it is off the
+    # progress cards: the operator has said those kg are not coming. Read off the
+    # kelishuvlar `payable_by_currency` already fetched, so it costs no query.
+    birja_short = [c.short_kg for c in contracts if c.is_birja and not c.closed_short]
+    birja_owed_kg = sum(birja_short, Decimal("0"))
 
     arrived_lots = shipments.filter(arrived__isnull=False)
     stock_kg = sum((s.available_kg for s in arrived_lots), Decimal("0"))
@@ -449,6 +456,9 @@ def dashboard(request):
         "customer_debt_split": customer_debt_split,
         "sales_profit_total_uzs": sales_profit_total_uzs,
         "hamkor": hamkor_cards, "birja": birja_cards,
+        # In tonnes: that is how a birja lot is bought and talked about.
+        "birja_owed_t": birja_owed_kg / 1000,
+        "birja_owed_count": sum(1 for kg in birja_short if kg > 0),
         "stock_kg": stock_kg,
         "sales_profit_total": sales_profit_total,
         "monthly": _monthly_rows(),

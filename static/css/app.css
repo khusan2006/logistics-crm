@@ -484,11 +484,22 @@ html[data-yozuv="lotin"] #yozuv-toggle .yozuv-kiril { display: inline; }
    like a mistake. Stepped 5 → 3 → 2 → 1 rather than straight to 2, and it leaves the
    five at 1550 rather than squeezing further: "Omborga kelgan kg" beside its icon
    chip wraps to two lines below roughly 230px of card, which is what a fifth column
-   costs at 1520 of viewport. */
-.kpi-grid--flow { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-@media (max-width: 1550px) { .kpi-grid--flow { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 900px) { .kpi-grid--flow { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 640px) { .kpi-grid--flow { grid-template-columns: 1fr; } }
+   costs at 1520 of viewport.
+
+   The standing group takes the same steps once the Birja qarzi card makes it five
+   too (`--five`, only on a doska that buys on the birja) — and at full width its
+   cards then sit exactly under the davr group's. */
+.kpi-grid--flow,
+.kpi-grid--standing.kpi-grid--five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1550px) {
+  .kpi-grid--flow, .kpi-grid--standing.kpi-grid--five { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 900px) {
+  .kpi-grid--flow, .kpi-grid--standing.kpi-grid--five { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .kpi-grid--flow, .kpi-grid--standing.kpi-grid--five { grid-template-columns: 1fr; }
+}
 
 /* …and its four standing twins, which divide evenly and only need the same steps. */
 .kpi-grid--standing { grid-template-columns: repeat(4, minmax(0, 1fr)); }
