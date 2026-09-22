@@ -134,9 +134,9 @@ def test_the_excel_button_exports_the_list_it_was_pressed_on(admin_client):
 
 
 def test_the_birja_list_opens_oldest_first(admin_client):
-    """The other way up from the Eron list: the oldest open birja kelishuv is the one
-    whose trucks are arriving now, so it leads. Created out of date order, so the
-    list cannot pass by reading the pk."""
+    """The owner's decision, and the other way up from the Eron list: the oldest open
+    birja kelishuv is the one whose trucks are arriving now, so it leads. Created out
+    of date order, so the list cannot pass by reading the pk."""
     middle = _birja_contract(brand="B", created="2026-09-10")
     newest = _birja_contract(brand="C", created="2026-09-18")
     oldest = _birja_contract(brand="A", created="2026-09-08")

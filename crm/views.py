@@ -891,9 +891,10 @@ CONTRACT_SORTS = [
     ("-kg", "Qolgan kg — kattadan", lambda c: (c.remaining_kg, c.pk), True),
 ]
 CONTRACT_SORT_DEFAULT = "-created"
-# The birja list opens the other way up. Its lots come in roughly the order they were
-# bought, so the kelishuv whose trucks are arriving now is the oldest open one — and
-# newest first left it at the bottom of the page, under the ones not yet started.
+# The birja list opens the other way up, oldest first — the owner's decision, so it is
+# not to be brought back in line with the Eron list. It suits the road: birja lots
+# come in roughly the order they were bought, so the kelishuv whose trucks are
+# arriving now is the oldest open one, and newest first left it at the bottom.
 BIRJA_CONTRACT_SORT_DEFAULT = "created"
 
 
