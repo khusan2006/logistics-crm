@@ -571,6 +571,39 @@ def test_the_yuk_form_drops_the_qr_and_bojxonachi_boxes():
     assert "qr_date" in hamkor_fields and "customs_agent" in hamkor_fields
 
 
+def test_the_yuk_form_has_no_logist_or_haydovchi_avansi():
+    """The birja truck is not paid through a logist, so there is no balance for an
+    avans to come out of. The Eron form keeps both."""
+    from crm.forms import ShipmentForm
+    birja_fields = ShipmentForm(birja=True).fields
+    assert "logist" not in birja_fields and "driver_advance" not in birja_fields
+    hamkor_fields = ShipmentForm(birja=False).fields
+    assert "logist" in hamkor_fields and "driver_advance" in hamkor_fields
+
+
+def test_a_new_birja_yuk_opens_on_the_arrival_holat():
+    from crm.forms import ShipmentForm
+    assert ShipmentForm(birja=True).initial["status"] == ShipmentStatus.arrival().pk
+    assert "status" not in ShipmentForm(birja=False).initial
+
+
+def test_editing_a_birja_yuk_keeps_its_own_holat():
+    from crm.forms import ShipmentForm
+    shipment = make_shipment(contract=_birja_contract(), status=_first_birja_status())
+    form = ShipmentForm(instance=shipment)
+    assert form["status"].value() == _first_birja_status().pk
+
+
+def test_a_birja_yuk_posted_on_the_arrival_holat_lands_today(admin_client):
+    from django.utils import timezone
+    contract = _birja_contract()
+    assert _post_birja_shipment(admin_client, contract, sent=str(timezone.localdate()),
+                                eta="", status=ShipmentStatus.arrival().pk
+                                ).status_code == 302
+    shipment = Shipment.objects.get()
+    assert shipment.arrived == timezone.localdate() and shipment.logist is None
+
+
 def test_the_yuk_detail_page_says_nothing_about_a_qr_kod(admin_client):
     """The shared detail page draws the Eron-road facts off `shipment.is_birja`.
     Left alone it printed "QR kod · Berilmagan" and offered the mark-as-given

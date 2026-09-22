@@ -1261,9 +1261,14 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             oldest = self.fields["contract"].queryset.first()
             if oldest is not None:
                 self.initial.setdefault("contract", oldest.pk)
+            # A birja purchase is entered once it is already in the ombor — the
+            # truck from the exchange is local and short, nobody tracks it on the
+            # way — so a new one opens on the arrival holat. Still a choice.
+            arrival = ShipmentStatus.arrival()
+            if arrival is not None:
+                self.initial.setdefault("status", arrival.pk)
         # Only the holatlar of this yuk's own chain — plus the shared arrival one.
         self.fields["status"].queryset = ShipmentStatus.for_kind(birja)
-        self.fields["logist"].empty_label = "Logistsiz"
         if birja:
             # Both are Eron-road facts. A QR kod is what gets a driver off the
             # border queue faster, and a bojxonachi clears a load that crossed one;
@@ -1271,7 +1276,12 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             # more things to leave empty on every single yuk.
             del self.fields["qr_date"]
             del self.fields["customs_agent"]
+            # No logist either: the birja truck is not paid through one, so there
+            # is no balance for a haydovchi avansi to come out of.
+            del self.fields["logist"]
+            del self.fields["driver_advance"]
         else:
+            self.fields["logist"].empty_label = "Logistsiz"
             # Named at dispatch, paid whenever it is paid. The help text is the whole
             # point of the field and says so outright: an operator who has watched the
             # kassa drop every previous time a bojxonachi was named on a yuk will not
@@ -1293,10 +1303,11 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # that is about to be cleared.
         if not (self.instance.pk and self.instance.arrived):
             self.fields.pop("arrived")
-        _group_thousands(self.fields["driver_advance"])
+        if "driver_advance" in self.fields:
+            _group_thousands(self.fields["driver_advance"])
         # Editing a yuk shows the advance already recorded — otherwise saving an
         # untouched form would wipe it.
-        if self.instance.pk and not self.is_bound:
+        if "driver_advance" in self.fields and self.instance.pk and not self.is_bound:
             advance = self.instance.expenses.filter(is_driver_advance=True).first()
             if advance:
                 self.initial.setdefault("driver_advance", advance.amount)

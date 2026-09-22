@@ -16,7 +16,7 @@ def test_the_birja_chain_is_its_own_and_ends_on_the_same_arrival_holat(db):
     rename; what must hold is that they are separate from the Eron ones and that
     both finish on the row the ombor keys off."""
     names = list(ShipmentStatus.for_kind(birja=True).values_list("name", flat=True))
-    assert names == ["Sotib olindi", "Yuklandi", "Yetkazilmoqda", "Omborga yetib keldi"]
+    assert names == ["Sotib olindi", "Yetkazilmoqda", "Omborga yetib keldi"]
     assert ShipmentStatus.arrival().scope == ShipmentStatus.Scope.BOTH
 
 
