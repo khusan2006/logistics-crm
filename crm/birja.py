@@ -31,10 +31,9 @@ from crm.models import (
 ZERO = Decimal("0")
 
 #: What a split-off yuk copies from the truck it came off — everything that
-#: describes the TRUCK rather than which kelishuv it is booked against.
-TRUCK_FIELDS = ("status", "sent", "eta", "arrived", "transport", "container",
-                "responsible", "logist", "driver_name", "driver_phone",
-                "origin", "destination", "created_by")
+#: describes the TRUCK rather than which kelishuv it is booked against, and who
+#: entered it.
+TRUCK_FIELDS = Shipment.TRUCK_FIELDS + ("created_by",)
 
 
 def kg_text(value):
