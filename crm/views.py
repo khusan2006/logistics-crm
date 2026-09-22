@@ -23,6 +23,8 @@ from django.views.decorators.http import require_POST
 from accounts.decorators import role_required
 from accounts.models import User
 
+# `birja` is a flag on half the views below, so the module goes by another name.
+from . import birja as birja_rule
 from .exports import KG, PERCENT, xlsx_book_response, xlsx_response
 from .fifo import apply_plan, blockers, replay, weighted_cost
 from .templatetags.crm_extras import money_in, som, usd
@@ -2645,6 +2647,9 @@ def shipment_list(request, birja=False):
             groups = list(page.object_list)
         rows = [s for g in groups for s in g["shipments"]]
 
+    if birja:
+        _attach_trucks(rows)
+
     # This pipeline's chain only, in its own order — plus the shared arrival holat,
     # which both end on.
     statuses = list(ShipmentStatus.for_kind(birja))  # ordered by (order, id)
@@ -3066,6 +3071,53 @@ def _shipment_form_response(request, form, lines, title, invalid=False):
                          extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
 
 
+def _attach_trucks(shipments):
+    """Stamp each birja row that is one part of a bigger truck with the whole truck
+    — `truck_group` (its yuklar, first part first) and `truck_total` — so the list
+    can say "26 000 kg, bitta mashina" beside the 12 000 this row carries. One query
+    for the page rather than `truck_yuklar` per row."""
+    heads = {s.truck_id or s.pk for s in shipments}
+    groups = {}
+    for yuk in (Shipment.objects.filter(Q(pk__in=heads) | Q(truck_id__in=heads))
+                .select_related("contract").prefetch_related("lines")
+                .order_by("pk")):
+        groups.setdefault(yuk.truck_id or yuk.pk, []).append(yuk)
+    for s in shipments:
+        group = groups.get(s.truck_id or s.pk, [])
+        s.truck_group = group if len(group) > 1 else None
+        s.truck_total = sum((yuk.kg for yuk in group), Decimal("0"))
+
+
+def _spill_birja(shipment):
+    """A birja truck carrying more than its lots have left takes the rest off the
+    next lot and the next birja kelishuv — see crm.birja.spill_truck. Runs inside
+    the save's transaction; returns the other parts of the truck it wrote to, their
+    transport and to'lovlar already brought in line."""
+    if not shipment.is_birja:
+        return []
+    parts = birja_rule.spill_truck(shipment)
+    birja_rule.settle(parts, [part.contract for part in parts])
+    return parts
+
+
+def _truck_saved(shipment, verb):
+    """The flash after a yuk is written — naming every kelishuv a birja truck was
+    split across, since the operator picked only the first."""
+    yuklar = shipment.truck_yuklar
+    if len(yuklar) == 1:
+        return f"Yuk {verb}"
+    where = " + ".join(f"{yuk.contract.code} · {birja_rule.kg_text(yuk.kg)} kg"
+                       for yuk in yuklar)
+    return f"Yuk {verb} — bitta mashina: {where}"
+
+
+def _record_parts(user, shipment, parts):
+    for part in parts:
+        AuditLog.record(user, AuditLog.Action.UPDATE, "Yuk", part.pk,
+                        f"Yuk #{shipment.pk} dan o'tdi: {part.contract.code} · "
+                        f"{part.kg} kg"[:255])
+
+
 def shipment_list_url(birja):
     """Which yuklar list a load belongs back on. The edit, delete and status views
     are shared — a yuk never changes pipeline — so they ask the row instead of being
@@ -3083,38 +3135,45 @@ def shipment_create(request, birja=False):
     title = "Yangi birja yuk" if birja else "Yangi yuk"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
-            with transaction.atomic():
-                shipment = form.save(commit=False)
-                shipment.created_by = request.user
-                if birja:
-                    # The model's default route is the Eron one, which is what every
-                    # load was until now. A birja truck starts at the exchange and
-                    # never leaves the country.
-                    shipment.origin = "Birja"
-                if shipment.status.is_arrival:
-                    shipment.arrived = timezone.localdate()
-                shipment.save()
-                _save_lines(lines, shipment)
-                # The advance goes out with the truck, so it is recorded by the
-                # dispatch form rather than waiting for somebody to remember it as
-                # an xarajat later.
-                form.sync_driver_advance(shipment, request.user)
-                # Now that the mahsulot rows exist, the yuk has a kg — which is what
-                # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
-                # already ran this, but on a yuk being created it ran against no
-                # lines at all.
-                sync_birja_transport(shipment)
-                # A truck changes what its marka COSTS (`expected_value`), which is
-                # the ceiling every hamkor to'lov is placed against. Money that
-                # spilled onto the next marka — or sat as the hamkor's avans —
-                # belongs to this one now, so the kelishuv is placed again.
-                reconcile_supplier_allocations(shipment.contract)
-            AuditLog.record(
-                request.user, AuditLog.Action.CREATE, "Yuk", shipment.pk,
-                f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
-            )
-            messages.success(request, "Yuk qo'shildi")
-            return form_success(request, shipment_list_url(birja))
+            try:
+                with transaction.atomic():
+                    shipment = form.save(commit=False)
+                    shipment.created_by = request.user
+                    if birja:
+                        # The model's default route is the Eron one, which is what every
+                        # load was until now. A birja truck starts at the exchange and
+                        # never leaves the country.
+                        shipment.origin = "Birja"
+                    if shipment.status.is_arrival:
+                        shipment.arrived = timezone.localdate()
+                    shipment.save()
+                    _save_lines(lines, shipment)
+                    parts = _spill_birja(shipment)
+                    # The advance goes out with the truck, so it is recorded by the
+                    # dispatch form rather than waiting for somebody to remember it as
+                    # an xarajat later.
+                    form.sync_driver_advance(shipment, request.user)
+                    # Now that the mahsulot rows exist, the yuk has a kg — which is what
+                    # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
+                    # already ran this, but on a yuk being created it ran against no
+                    # lines at all.
+                    sync_birja_transport(shipment)
+                    # A truck changes what its marka COSTS (`expected_value`), which is
+                    # the ceiling every hamkor to'lov is placed against. Money that
+                    # spilled onto the next marka — or sat as the hamkor's avans —
+                    # belongs to this one now, so the kelishuv is placed again.
+                    reconcile_supplier_allocations(shipment.contract)
+            except birja_rule.BirjaShortage as short:
+                # Another truck took the room between the form's check and this save.
+                form.add_error(None, str(short))
+            else:
+                AuditLog.record(
+                    request.user, AuditLog.Action.CREATE, "Yuk", shipment.pk,
+                    f"Yangi yuk: {shipment.brand_summary} · {shipment.kg} kg",
+                )
+                _record_parts(request.user, shipment, parts)
+                messages.success(request, _truck_saved(shipment, "qo'shildi"))
+                return form_success(request, shipment_list_url(birja))
         return _shipment_form_response(request, form, lines, title, invalid=True)
     return _shipment_form_response(request, form, lines, title)
 
@@ -3178,35 +3237,41 @@ def shipment_edit(request, pk):
             # another kelishuv, and the one it LEFT has to be placed again too — it
             # just got cheaper, so its to'lovlar may now reach further than they did.
             previous_contract = Contract.objects.filter(pk=shipment.contract_id).first()
-            with transaction.atomic():
-                shipment = form.save(commit=False)
-                # The holat decides WHETHER a yuk has arrived; the date field only
-                # says WHEN. Same rule shipment_set_status follows, and this screen
-                # did not follow it at all: setting the holat to arrival here left
-                # `arrived` empty, so the load claimed to have landed and never
-                # appeared in the ombor — `arrived_lots` filters on the date, not the
-                # status. Moving away from arrival left the date behind, which kept a
-                # load on the shelf after it went back on the road.
-                #
-                # `or` and not a plain assignment: a date the operator just typed is
-                # the whole point of the field, so it wins over today's date.
-                if shipment.status.is_arrival:
-                    shipment.arrived = shipment.arrived or timezone.localdate()
-                else:
-                    shipment.arrived = None
-                shipment.save()
-                _save_lines(lines, shipment)
-                form.sync_driver_advance(shipment, request.user)
-                # Now that the mahsulot rows exist, the yuk has a kg — which is what
-                # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
-                # already ran this, but on a yuk being created it ran against no
-                # lines at all.
-                sync_birja_transport(shipment)
-                # Editing a yuk re-prices its marka, so every to'lov on the kelishuv
-                # is placed again — see shipment_create.
-                reconcile_supplier_allocations(shipment.contract)
-                if previous_contract and previous_contract.pk != shipment.contract_id:
-                    reconcile_supplier_allocations(previous_contract)
+            try:
+                with transaction.atomic():
+                    shipment = form.save(commit=False)
+                    # The holat decides WHETHER a yuk has arrived; the date field only
+                    # says WHEN. Same rule shipment_set_status follows, and this screen
+                    # did not follow it at all: setting the holat to arrival here left
+                    # `arrived` empty, so the load claimed to have landed and never
+                    # appeared in the ombor — `arrived_lots` filters on the date, not the
+                    # status. Moving away from arrival left the date behind, which kept a
+                    # load on the shelf after it went back on the road.
+                    #
+                    # `or` and not a plain assignment: a date the operator just typed is
+                    # the whole point of the field, so it wins over today's date.
+                    if shipment.status.is_arrival:
+                        shipment.arrived = shipment.arrived or timezone.localdate()
+                    else:
+                        shipment.arrived = None
+                    shipment.save()
+                    _save_lines(lines, shipment)
+                    parts = _spill_birja(shipment)
+                    form.sync_driver_advance(shipment, request.user)
+                    # Now that the mahsulot rows exist, the yuk has a kg — which is what
+                    # a birja kelishuv's transport rate is multiplied by. `Shipment.save`
+                    # already ran this, but on a yuk being created it ran against no
+                    # lines at all.
+                    sync_birja_transport(shipment)
+                    # Editing a yuk re-prices its marka, so every to'lov on the kelishuv
+                    # is placed again — see shipment_create.
+                    reconcile_supplier_allocations(shipment.contract)
+                    if previous_contract and previous_contract.pk != shipment.contract_id:
+                        reconcile_supplier_allocations(previous_contract)
+            except birja_rule.BirjaShortage as short:
+                form.add_error(None, str(short))
+                return _shipment_form_response(request, form, lines, title,
+                                               invalid=True)
             moved = _shipment_changes(before, _shipment_snapshot(shipment))
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Yuk", shipment.pk,
@@ -3215,7 +3280,8 @@ def shipment_edit(request, pk):
                 (f"Yuk tahrirlandi: {'; '.join(moved)}" if moved
                  else "Yuk tahrirlandi (o'zgarish yo'q)")[:255],
             )
-            messages.success(request, "Yuk yangilandi")
+            _record_parts(request.user, shipment, parts)
+            messages.success(request, _truck_saved(shipment, "yangilandi"))
             return form_reload(request, shipment_list_url(form.birja))
         return _shipment_form_response(request, form, lines, title, invalid=True)
     return _shipment_form_response(request, form, lines, title)

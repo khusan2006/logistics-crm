@@ -262,7 +262,13 @@ inside a view with no control left to leave it by.
       <div class="load-partner">{{ s.brand_summary }}</div>
       <div class="muted load-sub">{{ s.contract.partner.name }}</div>
     </td>
-    <td class="num">{{ s.kg|floatformat:"-3" }}</td>
+    <td class="num">
+      {{ s.kg|floatformat:"-3" }}
+      {% if s.truck_group %}
+      {# One truck booked across two kelishuvlar: this row is its share here. #}
+      <div class="muted load-sub" title="{% for yuk in s.truck_group %}#{{ yuk.pk }} {{ yuk.contract.code }} · {{ yuk.kg|floatformat:"-3" }} kg{% if not forloop.last %} + {% endif %}{% endfor %}">bitta mashina: {{ s.truck_total|floatformat:"-3" }} kg</div>
+      {% endif %}
+    </td>
     {% if user.is_admin_role %}
     <td class="num">
       <div>{% money_both s.goods_value s.goods_value_uzs s.contract.currency %}</div>

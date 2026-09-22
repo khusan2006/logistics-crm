@@ -6,15 +6,22 @@ started — the order the exchange hands them over in. The operator still picks 
 kelishuv on the yuk form (the owner's call: not automatic); the form opens on the
 oldest one with kg left and lists the rest oldest first — see ShipmentForm.
 
-What lives here is the one-off that puts the trucks booked before that where the
-rule would have put them (`manage.py birja_fifo`). A yuk belongs to one kelishuv —
-its kod, its transport rate and its to'lovlar are that kelishuv's — so a truck that
-straddles two kelishuvlar under the rule becomes two yuklar, the same truck on both.
+A yuk belongs to one kelishuv — its kod, its transport rate and its to'lovlar are
+that kelishuv's — so a truck that straddles two kelishuvlar becomes two yuklar, the
+same truck on both, linked by `Shipment.truck` so it still reads as one load.
+
+Two things live here. `spill_truck` is what the yuk form does when a truck carries
+more than the kelishuv the operator picked has left (the owner's rule, confirmed
+2026-09-22: a 20 t load on a kelishuv with 15 t left takes the other 5 t off the
+next one). And the one-off that puts the trucks booked before the rule where it
+would have put them (`manage.py birja_fifo`).
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+
+from django.db.models import Max, Sum
 
 from crm.models import (
     Contract, ContractLine, Sale, SaleLot, Shipment, ShipmentLine, latest_exchange_rate,
@@ -111,8 +118,9 @@ def _write_line(shipment, contract_line, kg, position):
 
 
 def _split_off(truck, contract, note):
-    """A new yuk for the same truck, booked against `contract`."""
-    yuk = Shipment(contract=contract, note=note,
+    """A new yuk for the same truck, booked against `contract`, and linked to the
+    yuk the truck started on so the parts still read as one load."""
+    yuk = Shipment(contract=contract, note=note, truck_id=truck.truck_id or truck.pk,
                    **{name: getattr(truck, name) for name in TRUCK_FIELDS})
     yuk.save()
     # One truck, one moment: see `dispatch_key`.
@@ -132,6 +140,110 @@ def settle(yuklar, contracts):
         if contract.pk not in seen:
             seen.add(contract.pk)
             reconcile_supplier_allocations(contract)
+
+
+# --- a truck bigger than what its kelishuv has left --------------------------------
+
+class BirjaShortage(Exception):
+    """The birja kelishuvlar together have less of a marka left than a truck
+    carries — there is nowhere for the rest to come off."""
+
+
+def _lot_room(contract_line, exclude_row=None):
+    """kg still free on one lot. Read from the database rather than a prefetch:
+    the rows are being rewritten while this runs."""
+    booked = ShipmentLine.objects.filter(contract_line=contract_line)
+    if exclude_row is not None:
+        booked = booked.exclude(pk=exclude_row.pk)
+    return contract_line.kg - (booked.aggregate(kg=Sum("kg"))["kg"] or ZERO)
+
+
+def _spill_lots(brand, contract):
+    """Where kg go that a lot has no room for, in order: the kelishuv's own lots of
+    the marka, then every other open birja kelishuv's, oldest first. A kelishuv
+    moved to Kam qoldiq is closed as it stands and takes nothing more."""
+    others = sorted(Contract.objects.filter(partner__is_birja=True, closed_short=False)
+                    .exclude(pk=contract.pk), key=kelishuv_key)
+    lots = []
+    for owner in [contract] + others:
+        lots += list(owner.lines.filter(brand=brand).order_by("position", "id"))
+    return lots
+
+
+def birja_room(brand, contract, shipment=None):
+    """How much of `brand` a truck booked on `contract` can carry in all: every kg
+    still free where `spill_truck` would put it, plus what `shipment` itself already
+    holds there (an edit frees its own rows before it re-books them)."""
+    lots = _spill_lots(brand, contract)
+    free = sum((_lot_room(lot) for lot in lots), ZERO)
+    if shipment is not None and shipment.pk:
+        lot_ids = {lot.pk for lot in lots}
+        free += sum((row.kg for row in shipment.lines.all()
+                     if row.contract_line_id in lot_ids), ZERO)
+    return free
+
+
+def _truck_part(yuk, contract):
+    """The yuk of `yuk`'s truck booked on `contract` — made when there is none."""
+    for part in yuk.truck_yuklar:
+        if part.contract_id == contract.pk:
+            return part
+    return _split_off(yuk, contract, yuk.note)
+
+
+def _add_kg(yuk, lot, kg):
+    row = yuk.lines.filter(contract_line=lot).first()
+    if row is not None:
+        row.kg += kg
+        row.save(update_fields=["kg"])
+        return
+    position = (yuk.lines.aggregate(p=Max("position"))["p"] or 0) + 1
+    _write_line(yuk, lot, kg, position if yuk.lines.exists() else 0)
+
+
+def spill_truck(yuk):
+    """Put whatever `yuk`'s rows carry beyond their lots' kg where it belongs.
+
+    The owner's rule: a truck bigger than what is left takes the rest off the next
+    lot of the marka in the same kelishuv, and then off the next birja kelishuv,
+    oldest first. Kg that stay in the kelishuv become more rows on this yuk; kg that
+    land on another kelishuv go onto that kelishuv's part of the same truck (made
+    here if the truck has none yet). Runs after the form saved the rows, inside its
+    transaction; raises BirjaShortage, which rolls it back, when the birja has not
+    got the kg at all. Returns the other yuklar it wrote to."""
+    touched = []
+    rows = yuk.lines.select_related("contract_line__contract").order_by("position", "id")
+    for row in list(rows):
+        line = row.contract_line
+        excess = row.kg - _lot_room(line, exclude_row=row)
+        if excess <= 0:
+            continue
+        sold = sum((sl.kg for sl in row.sale_lots.all()), ZERO)
+        if row.kg - excess < sold:
+            raise BirjaShortage(f"{line.brand}: bu lotdan {kg_text(sold)} kg sotilgan — "
+                                f"uni boshqa kelishuvga ko'chirib bo'lmaydi")
+        row.kg -= excess
+        if row.kg > 0:
+            row.save(update_fields=["kg"])
+        else:
+            row.delete()
+        for lot in _spill_lots(line.brand, line.contract):
+            if excess <= 0:
+                break
+            if lot.pk == line.pk:
+                continue
+            take = min(_lot_room(lot), excess)
+            if take <= 0:
+                continue
+            target = yuk if lot.contract_id == yuk.contract_id else _truck_part(yuk, lot.contract)
+            _add_kg(target, lot, take)
+            excess -= take
+            if target.pk != yuk.pk and target.pk not in {t.pk for t in touched}:
+                touched.append(target)
+        if excess > 0:
+            raise BirjaShortage(f"Birja kelishuvlarida {line.brand} dan yana "
+                                f"{kg_text(excess)} kg yetmaydi")
+    return touched
 
 
 # --- putting the trucks already booked where the rule says ------------------------

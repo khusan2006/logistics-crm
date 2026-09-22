@@ -5,7 +5,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.db.models import DecimalField, Max, Sum
+from django.db.models import DecimalField, Max, Q, Sum
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -1886,10 +1886,24 @@ class Shipment(models.Model):
     destination = models.CharField("Qayerga (yetkazish joyi)", max_length=120,
                                    blank=True, default="O'zbekiston")
     note = models.TextField("Izoh", blank=True)
+    # One birja truck that carries more than its kelishuv has left: the rest comes
+    # off the next kelishuv, and a yuk belongs to one kelishuv (its kod, transport
+    # and to'lovlar are that kelishuv's), so the truck is several yuklar. Every part
+    # after the first points here, at the yuk the truck started on, so the pair
+    # still reads as the one load it is — see `truck_yuklar` and crm.birja.
+    truck = models.ForeignKey("self", on_delete=models.SET_NULL, null=True,
+                              blank=True, related_name="truck_parts",
+                              verbose_name="Bitta mashina")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="shipments",
                                    verbose_name="Kim kiritdi")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    #: What describes the TRUCK rather than which kelishuv a part is booked on —
+    #: kept the same on every yuk of one truck (see `save`).
+    TRUCK_FIELDS = ("status", "sent", "eta", "arrived", "transport", "container",
+                    "responsible", "logist", "driver_name", "driver_phone",
+                    "origin", "destination")
 
     class Meta:
         ordering = ["-created_at"]
@@ -1908,9 +1922,37 @@ class Shipment(models.Model):
         rows are saved. That is not belt-and-braces: a yuk being created has no
         lines at the moment it is first saved, so its kg — which is what the rate is
         multiplied by — is not knowable until they exist. The sync rewrites nothing
-        when nothing has changed, so the second call is free on every other path."""
+        when nothing has changed, so the second call is free on every other path.
+
+        A yuk that is one part of a truck (`truck`) hands its truck fields to the
+        other parts: a holat clicked, a date or a plate corrected on one of them is
+        a fact about the one truck they all ride."""
         super().save(*args, **kwargs)
         sync_birja_transport(self)
+        others = [yuk for yuk in self.truck_yuklar if yuk.pk != self.pk]
+        if others:
+            Shipment.objects.filter(pk__in=[yuk.pk for yuk in others]).update(
+                **{name: getattr(self, name) for name in self.TRUCK_FIELDS})
+            # `update` skips save(), so each part's transport follows here — an
+            # arrival date moving is what dates and creates that xarajat.
+            for yuk in Shipment.objects.filter(pk__in=[yuk.pk for yuk in others]):
+                sync_birja_transport(yuk)
+
+    @property
+    def truck_yuklar(self):
+        """Every yuk of the truck this one rides, the first part first — just
+        [self] for a truck that is one yuk, which is nearly all of them."""
+        if not self.pk:
+            return [self]
+        head_id = self.truck_id or self.pk
+        parts = list(Shipment.objects.filter(Q(pk=head_id) | Q(truck_id=head_id))
+                     .select_related("contract").order_by("pk"))
+        return parts if len(parts) > 1 else [self]
+
+    @property
+    def truck_kg(self):
+        """What the whole truck carries, across every kelishuv it came off."""
+        return sum((yuk.kg for yuk in self.truck_yuklar), Decimal("0"))
 
     @property
     def order_in_contract(self):

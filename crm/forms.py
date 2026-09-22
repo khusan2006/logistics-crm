@@ -21,6 +21,8 @@ from .models import (
     customer_balance_by_currency, last_sale_prices_by_customer,
     latest_exchange_rate, _by_currency,
 )
+# `birja` is a flag on half the forms below, so the module goes by another name.
+from . import birja as birja_rule
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .yozuv import marka_kaliti, marka_nomi
 from .templatetags.crm_extras import rate, som, usd
@@ -1524,11 +1526,25 @@ class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
             for existing in self.instance.lines.all():
                 already[existing.contract_line_id] = existing.kg
 
+        birja_kg = {}
         for form, line, kg in wanted.values():
+            if line.contract.is_birja:
+                # A birja truck may carry more than its lot has left: the rest comes
+                # off the next lot, then the next birja kelishuv (the owner's rule —
+                # crm.birja.spill_truck). Checked per marka against all of that.
+                birja_kg.setdefault(line.brand, []).append((form, line, kg))
+                continue
             left = line.remaining_kg + already.get(line.pk, Decimal("0"))
             if kg > left:
                 form.add_error(
                     "kg", f"Yuk miqdori qolgan kg dan oshmasligi kerak ({left} kg)")
+        for brand, picked in birja_kg.items():
+            room = birja_rule.birja_room(brand, picked[0][1].contract, self.instance)
+            total = sum((kg for _, _, kg in picked), Decimal("0"))
+            if total > room:
+                picked[-1][0].add_error(
+                    "kg", f"Birja kelishuvlarida {brand} dan jami "
+                          f"{birja_rule.kg_text(room)} kg qolgan")
 
 
 ShipmentLineFormSet = forms.inlineformset_factory(
