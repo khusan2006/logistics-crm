@@ -881,6 +881,14 @@ CONTRACT_SORTS = [
     ("-kg", "Qolgan kg — kattadan", lambda c: (c.remaining_kg, c.pk), True),
 ]
 CONTRACT_SORT_DEFAULT = "-created"
+# The birja list opens the other way up. Its lots come in roughly the order they were
+# bought, so the kelishuv whose trucks are arriving now is the oldest open one — and
+# newest first left it at the bottom of the page, under the ones not yet started.
+BIRJA_CONTRACT_SORT_DEFAULT = "created"
+
+
+def _contract_sort_default(birja):
+    return BIRJA_CONTRACT_SORT_DEFAULT if birja else CONTRACT_SORT_DEFAULT
 
 
 def _contract_code_filter(q):
@@ -913,7 +921,7 @@ def _filter_contracts(request, birja=False):
     state = request.GET.get("state", "open").strip()
     sort = request.GET.get("sort", "").strip()
     if sort not in {key for key, *_ in CONTRACT_SORTS}:
-        sort = CONTRACT_SORT_DEFAULT
+        sort = _contract_sort_default(birja)
 
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
@@ -1023,7 +1031,8 @@ def contract_list(request, birja=False):
         {"name": "state", "label": "Holat", "value": state, "default": "open",
          "options": [("open", "Tugallanmagan"), ("short", "Kam qoldiq"),
                      ("done", "Tugallangan"), ("", "Hammasi")]},
-        {"name": "sort", "label": "Saralash", "value": sort, "default": CONTRACT_SORT_DEFAULT,
+        {"name": "sort", "label": "Saralash", "value": sort,
+         "default": _contract_sort_default(birja),
          "options": [(key, label) for key, label, *_ in CONTRACT_SORTS]},
     ]
     # No hamkor filter on the birja list: every row on it is the same counterparty,
