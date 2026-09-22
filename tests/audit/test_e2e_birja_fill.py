@@ -112,3 +112,40 @@ def test_more_than_the_birja_has_says_so(page, live_server, world):
     page.wait_for_timeout(700)
     summary = page.inner_text("[data-fill-summary]")
     assert "5 000 kg yetmaydi" in summary or "5 000 kg yetmaydi" in summary
+
+
+def test_the_edit_modal_opens_on_the_truck_and_refills_it(page, live_server, world):
+    """A truck of 15 000 (birja-1) + 5 000 (birja-2): the box opens on 20 000 and
+    the split, and 26 000 fills the rest of birja-2 without a third yuk."""
+    older, newer = world["older"], world["newer"]
+    status = ShipmentStatus.for_kind(birja=True).first()
+    older.lines.get().shipment_lines.all().delete()     # birja-1 back to 30 000
+    head = make_shipment(contract_line=older.lines.get(), kg="15000", status=status,
+                         sent="2026-09-20")
+    part = make_shipment(contract_line=newer.lines.get(), kg="5000", status=status,
+                         sent="2026-09-20")
+    Shipment.objects.filter(pk=part.pk).update(truck=head)
+    Shipment.objects.exclude(pk__in=[head.pk, part.pk]).delete()
+
+    page.goto(f"{live_server.url}/login/")
+    page.fill("[name=username]", "e2eboss")
+    page.fill("[name=password]", PASSWORD)
+    page.click("button[type=submit], input[type=submit]")
+    page.wait_for_load_state("networkidle")
+    page.goto(f"{live_server.url}/shipments/{part.pk}/edit/")
+    page.wait_for_selector("[data-fill-kg]")
+    assert page.input_value("[data-fill-kg]").replace(" ", "").replace(" ", "") == "20000"
+    assert newer.code in page.inner_text("[data-fill-summary]")
+
+    page.fill("[data-fill-kg]", "36000")
+    page.wait_for_timeout(700)
+    rows = _rows(page)
+    assert rows == [[str(older.lines.get().pk), "30000"], [str(newer.lines.get().pk), "6000"]]
+    if os.environ.get("E2E_SHOT_EDIT"):
+        page.screenshot(path=os.environ["E2E_SHOT_EDIT"], full_page=True)
+    page.click("form.stacked button[type=submit]")
+    page.wait_for_load_state("networkidle")
+    head.refresh_from_db()
+    assert {y.contract.code: y.kg for y in head.truck_yuklar} == {
+        older.code: Decimal("30000.000"), newer.code: Decimal("6000.000")}
+    assert Shipment.objects.count() == 2

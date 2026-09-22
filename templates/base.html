@@ -1389,59 +1389,83 @@
       fixed[0] = fixed[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
       return fixed.join(',');
     }
-    function fillFromTotal(set) {
-      var box = set.querySelector('[data-line-fill]');
-      var tpl = set.querySelector('[data-line-template]');
-      if (!box || !tpl) { return; }
-      var brand = box.querySelector('[data-fill-brand]').value;
-      var kgBox = box.querySelector('[data-fill-kg]');
-      var total = fillNumber(kgBox.value);
-      var summary = box.querySelector('[data-fill-summary]');
-      // Out go the rows this box filled before (this marka) and blank ones; a row
-      // of another marka, filled or typed, stays — a truck may carry two.
-      visibleRows(set).forEach(function (row) {
+    function fillRows(set, brand) {
+      // The rows that belong to the box: this marka's, and blank ones.
+      return visibleRows(set).filter(function (row) {
         var sel = row.querySelector('select[data-line-source]');
         var o = sel && sel.options[sel.selectedIndex];
-        if (!sel || !sel.value || (o && o.getAttribute('data-brand') === brand)) {
-          removeRow(set, row);
-        }
+        return !sel || !sel.value || (o && o.getAttribute('data-brand') === brand);
       });
-      var left = total;
+    }
+    function fillSummary(set, brand, short) {
+      // Each kelishuv's share, read off the rows as they now stand.
+      var box = set.querySelector('[data-line-fill]');
+      var summary = box.querySelector('[data-fill-summary]');
       var shares = [];
-      Array.prototype.forEach.call(
-        tpl.content.querySelectorAll('select[data-line-source] option'), function (o) {
-          if (!o.value || o.getAttribute('data-brand') !== brand || left <= 0) { return; }
-          var take = Math.min(fillNumber(o.getAttribute('data-remaining')), left);
-          if (take <= 0) { return; }
-          left = Math.round((left - take) * 1000) / 1000;
-          var row = addRow(set);
-          if (!row) { return; }
-          var sel = row.querySelector('select[data-line-source]');
-          sel.value = o.value;
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-          var kg = row.querySelector('input[name$="-kg"]');
-          kg.value = String(take);
-          kg.dispatchEvent(new Event('input', { bubbles: true }));
-          var code = o.getAttribute('data-code');
-          var last = shares[shares.length - 1];
-          if (last && last.code === code) { last.kg += take; }
-          else { shares.push({ code: code, kg: take }); }
-        });
-      if (!visibleRows(set).length) { addRow(set); }
-      syncReys(set);
+      var total = 0;
+      fillRows(set, brand).forEach(function (row) {
+        var sel = row.querySelector('select[data-line-source]');
+        var o = sel && sel.options[sel.selectedIndex];
+        var kg = fillNumber((row.querySelector('input[name$="-kg"]') || {}).value);
+        if (!o || !o.value || kg <= 0) { return; }
+        total += kg;
+        var code = o.getAttribute('data-code');
+        var last = shares[shares.length - 1];
+        if (last && last.code === code) { last.kg += kg; }
+        else { shares.push({ code: code, kg: kg }); }
+      });
       var text = shares.map(function (sh) {
         return sh.code + ' · ' + fillKgText(sh.kg) + ' kg';
       }).join(' + ');
       if (shares.length > 1) {
         text += ' — bitta mashina, ' + shares.length + ' ta kelishuvdan';
       }
-      if (left > 0) {
-        text += (text ? '. ' : '') + 'Birjada yana ' + fillKgText(left) +
+      if (short > 0) {
+        text += (text ? '. ' : '') + 'Birjada yana ' + fillKgText(short) +
                 ' kg yetmaydi';
       }
       summary.textContent = text;
       summary.hidden = !text;
-      summary.classList.toggle('is-short', left > 0);
+      summary.classList.toggle('is-short', short > 0);
+      return total;
+    }
+    function fillFromTotal(set) {
+      var box = set.querySelector('[data-line-fill]');
+      var tpl = set.querySelector('[data-line-template]');
+      if (!box || !tpl) { return; }
+      var brand = box.querySelector('[data-fill-brand]').value;
+      var kgBox = box.querySelector('[data-fill-kg]');
+      var left = fillNumber(kgBox.value);
+      // Which lots, how much off each: in the order the server lists them.
+      var pieces = [];
+      Array.prototype.forEach.call(
+        tpl.content.querySelectorAll('select[data-line-source] option'), function (o) {
+          if (!o.value || o.getAttribute('data-brand') !== brand || left <= 0) { return; }
+          var take = Math.min(fillNumber(o.getAttribute('data-remaining')), left);
+          if (take <= 0) { return; }
+          left = Math.round((left - take) * 1000) / 1000;
+          pieces.push({ lot: o.value, kg: take });
+        });
+      // The rows already there are reused first — a saved row keeps its id, and
+      // with it any sotuv drawn off it — then more are added, and what is left
+      // over goes. A row of another marka is not the box's and stays as it is.
+      var mine = fillRows(set, brand);
+      pieces.forEach(function (piece, i) {
+        var row = mine[i] || addRow(set);
+        if (!row) { return; }
+        var sel = row.querySelector('select[data-line-source]');
+        if (sel.value !== piece.lot) {
+          sel.value = piece.lot;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        var kg = row.querySelector('input[name$="-kg"]');
+        kg.value = String(piece.kg);
+        kg.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      mine.slice(pieces.length).forEach(function (row) { removeRow(set, row); });
+      if (!visibleRows(set).length) { addRow(set); }
+      syncReys(set);
+      fillSummary(set, brand, left);
       // addRow focuses the row it made; the operator is still typing the kg.
       window.focusField(kgBox);
       var end = kgBox.value.length;
@@ -1450,15 +1474,31 @@
     function wireFill(set) {
       var box = set.querySelector('[data-line-fill]');
       if (!box) { return; }
+      var brandBox = box.querySelector('[data-fill-brand]');
+      var kgBox = box.querySelector('[data-fill-kg]');
+      // An edit opens on the truck as it stands: the marka of its first row, and
+      // what the rows of that marka add up to — nothing is refilled until changed.
+      var first = visibleRows(set).map(function (row) {
+        var sel = row.querySelector('select[data-line-source]');
+        var o = sel && sel.options[sel.selectedIndex];
+        return o && o.value ? o.getAttribute('data-brand') : null;
+      }).filter(Boolean)[0];
+      if (first) {
+        brandBox.value = first;
+        var now = fillSummary(set, first, 0);
+        if (now > 0) {
+          kgBox.value = String(now);
+          kgBox.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
       var timer = null;
-      box.querySelector('[data-fill-kg]').addEventListener('input', function () {
+      kgBox.addEventListener('input', function (e) {
+        if (!e.isTrusted) { return; }          // the prefill above, not the operator
         clearTimeout(timer);
         timer = setTimeout(function () { fillFromTotal(set); }, 350);
       });
-      box.querySelector('[data-fill-brand]').addEventListener('change', function () {
-        if (fillNumber(box.querySelector('[data-fill-kg]').value) > 0) {
-          fillFromTotal(set);
-        }
+      brandBox.addEventListener('change', function () {
+        if (fillNumber(kgBox.value) > 0) { fillFromTotal(set); }
       });
     }
     function enhance(root) {

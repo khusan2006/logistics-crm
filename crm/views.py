@@ -42,7 +42,7 @@ from .forms import (
     SaleCreateForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
     ShipmentExpenseForm,
     ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
-    ShipmentLineFormSet,
+    ShipmentLineFormSet, BirjaTruckLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
     SupplierPaymentFormSet, SupplierPaymentTargetForm,
     LogistPaymentFormSet, LogistPaymentTargetForm,
@@ -3073,9 +3073,13 @@ def _shipment_form_response(request, form, lines, title, invalid=False):
     if "contract" not in form.fields:
         # A new birja truck: the marka + kg box that fills the rows, offered the
         # markas the open birja lots still have, with how much of each is left.
+        # On an edit the truck's own kg count as free — it is about to re-book them.
+        field = lines.empty_form.fields["contract_line"]
+        own = field.widget.own_kg
         left = {}
-        for line in lines.empty_form.fields["contract_line"].queryset:
-            left[line.brand] = left.get(line.brand, Decimal("0")) + line.remaining_kg
+        for line in field.queryset:
+            left[line.brand] = (left.get(line.brand, Decimal("0")) + line.remaining_kg
+                                + own.get(line.pk, Decimal("0")))
         extra["lines_fill"] = [(brand, kg) for brand, kg in left.items() if kg > 0]
     return form_response(request, form, title, invalid=invalid, extra_context=extra)
 
@@ -3265,12 +3269,71 @@ def _shipment_changes(before, after):
     return out
 
 
+def _birja_truck_edit(request, shipment):
+    """Correct a birja TRUCK — whichever of its yuklar was opened, the whole truck:
+    one header, and every part's rows in one list filled from the marka and the kg
+    the way it was entered. On save each row goes back on its kelishuv's part, the
+    truck on the oldest kelishuv its rows come off (crm.birja.regroup_truck)."""
+    head = shipment.truck or shipment
+    form = ShipmentForm(request.POST or None, instance=head)
+    lines = BirjaTruckLineFormSet(request.POST or None, truck=head)
+    title = "Yukni tahrirlash"
+    if request.method == "POST":
+        if form.is_valid() and lines.is_valid():
+            before = _shipment_snapshot(head)
+            before_kg = {yuk.pk: (yuk.contract.code, yuk.kg) for yuk in head.truck_yuklar}
+            try:
+                with transaction.atomic():
+                    head = form.save(commit=False)
+                    # The holat decides WHETHER a yuk has arrived — see shipment_edit.
+                    if head.status.is_arrival:
+                        head.arrived = head.arrived or timezone.localdate()
+                    else:
+                        head.arrived = None
+                    head.save()
+                    rows = lines.save(commit=False)
+                    for row in lines.deleted_objects:
+                        row.delete()
+                    for row in rows:
+                        if not row.shipment_id:
+                            row.shipment = head
+                        row.save()
+                    yuklar, contracts = birja_rule.regroup_truck(head)
+                    for yuk in list(yuklar):
+                        for part in birja_rule.spill_truck(yuk):
+                            if part.pk not in {y.pk for y in yuklar}:
+                                yuklar.append(part)
+                                contracts.append(part.contract)
+                    birja_rule.settle(yuklar, contracts)
+            except birja_rule.BirjaShortage as short:
+                form.add_error(None, str(short))
+                return _shipment_form_response(request, form, lines, title,
+                                               invalid=True)
+            head.refresh_from_db()
+            moved = _shipment_changes(before, _shipment_snapshot(head))
+            after_kg = {yuk.pk: (yuk.contract.code, yuk.kg) for yuk in head.truck_yuklar}
+            if after_kg != before_kg:
+                moved.append("mashina: " + " + ".join(
+                    f"{code} {birja_rule.kg_text(kg)} kg" for code, kg in after_kg.values()))
+            AuditLog.record(
+                request.user, AuditLog.Action.UPDATE, "Yuk", head.pk,
+                (f"Yuk tahrirlandi: {'; '.join(moved)}" if moved
+                 else "Yuk tahrirlandi (o'zgarish yo'q)")[:255],
+            )
+            messages.success(request, _truck_saved(head, "yangilandi"))
+            return form_reload(request, shipment_list_url(True))
+        return _shipment_form_response(request, form, lines, title, invalid=True)
+    return _shipment_form_response(request, form, lines, title)
+
+
 @role_required(User.Role.ADMIN)
 def shipment_edit(request, pk):
     shipment = get_object_or_404(
         Shipment.objects.select_related("contract__partner"), pk=pk)
     if shipment.is_local:
         return _local_purchase_only(request)
+    if shipment.is_birja:
+        return _birja_truck_edit(request, shipment)
     # Which pipeline this load is on is the row's to say, not the URL's — `ShipmentForm`
     # reads it off the instance and scopes the kelishuv and holat pickers to match.
     form = ShipmentForm(request.POST or None, instance=shipment)

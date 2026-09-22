@@ -1105,6 +1105,10 @@ class ContractLineChoiceSelect(forms.Select):
     form's JS can hide the products of other kelishuvlar and prefill kg/narx —
     no dependent AJAX, and the server re-checks the pairing anyway."""
 
+    #: lot pk → kg the truck being edited already books there. Counted as still
+    #: free: the edit is about to re-book them (see BaseBirjaTruckLineFormSet).
+    own_kg = {}
+
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
         instance = getattr(value, "instance", None)
@@ -1114,7 +1118,8 @@ class ContractLineChoiceSelect(forms.Select):
             # the kelishuv kod to name each share by.
             option["attrs"]["data-brand"] = instance.brand
             option["attrs"]["data-code"] = instance.contract.code
-            option["attrs"]["data-remaining"] = _clean_number(instance.remaining_kg)
+            option["attrs"]["data-remaining"] = _clean_number(
+                instance.remaining_kg + self.own_kg.get(instance.pk, Decimal("0")))
             # The narx in the currency it was AGREED in — the yuk form paints it
             # into a read-only box, and a so'm kelishuv's dollar twin painted there
             # would read as $/kg on a figure nobody ever quoted in dollars.
@@ -1263,12 +1268,13 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         self.fields["contract"].queryset = _keep_if(
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
-        if birja and not self.instance.pk:
-            # No kelishuv to pick on a new birja truck: the operator names the marka
-            # and the kg, the rows fill oldest kelishuv first (see _line_fields.html),
+        if birja:
+            # No kelishuv to pick on a birja truck: the operator names the marka and
+            # the kg, the rows fill oldest kelishuv first (see _line_fields.html),
             # and the yuk lands on the oldest kelishuv its rows came off — the rest
-            # on linked parts of the same truck (crm.birja.split_by_kelishuv).
+            # on linked parts of the same truck (crm.birja.regroup_truck).
             del self.fields["contract"]
+        if birja and not self.instance.pk:
             # A birja purchase is entered once it is already in the ombor — the
             # truck from the exchange is local and short, nobody tracks it on the
             # way — so a new one opens on the arrival holat. Still a choice.
@@ -1394,7 +1400,7 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""})}
         labels = {"kg": "Yuboriladigan kg", "price": "1 kg narxi"}
 
-    def __init__(self, *args, birja_fill=False, **kwargs):
+    def __init__(self, *args, birja_fill=False, own_kg=None, **kwargs):
         super().__init__(*args, **kwargs)
         # Read here and nowhere later: _post_clean is about to write None over both,
         # and by then the row would look like it never had a narx of its own.
@@ -1411,15 +1417,21 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
                                 contract__closed_short=False)
                     .order_by("contract__created", "contract__code_number",
                               "contract_id", "position", "id"))
+        own_kg = own_kg or {}
+
+        def free(ln):
+            return ln.remaining_kg + own_kg.get(ln.pk, Decimal("0"))
+
         self.fields["contract_line"].queryset = _keep_if(
-            base, lambda ln: ln.remaining_kg > 0, self.instance.contract_line_id)
+            base, lambda ln: free(ln) > 0, self.instance.contract_line_id)
+        self.fields["contract_line"].widget.own_kg = own_kg
         # Everything needed to pick the right row without leaving the dropdown:
         # which kelishuv, which marka, how much is still owed, at what price.
         # Priced in its own kelishuv's currency — a so'm line printed with a dollar
         # sign in front of it is the exact lie this phase is removing.
         self.fields["contract_line"].label_from_instance = (
             lambda ln: f"{ln.contract.code} · {ln.brand} · "
-                       f"{_clean_number(ln.remaining_kg)} kg qolgan · "
+                       f"{_clean_number(free(ln))} kg qolgan · "
                        f"{rate(ln.price, ln.price_uzs, ln.currency)}")
         self._lock_price()
 
@@ -1506,66 +1518,124 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         return super().clean()
 
 
-class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
+def _clean_truck_rows(formset, own_rows):
     """Guards the three ways a truck's product rows can be wrong: empty, carrying
-    the same product twice, or carrying more than the kelishuv has left."""
+    the same product twice, or carrying more than the kelishuv has left.
+    `own_rows` are the rows the truck already books, which free their kg back up."""
+    rows = [f for f in formset.forms
+            if f.cleaned_data and not f.cleaned_data.get("DELETE")
+            and f.cleaned_data.get("contract_line")]
+    if not rows:
+        raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
+
+    wanted = {}
+    for form in rows:
+        line = form.cleaned_data["contract_line"]
+        if line.pk in wanted:
+            form.add_error("contract_line", "Bu mahsulot ro'yxatda bor")
+            continue
+        wanted[line.pk] = (form, line, form.cleaned_data.get("kg") or Decimal("0"))
+
+    contracts = {line.contract_id for _, line, _ in wanted.values()}
+    # A birja truck may come off several kelishuvlar — the rows are split into
+    # one yuk per kelishuv on save (crm.birja.split_by_kelishuv).
+    all_birja = all(line.contract.is_birja for _, line, _ in wanted.values())
+    if len(contracts) > 1 and not all_birja:
+        raise forms.ValidationError(
+            "Bitta yukdagi mahsulotlar bitta kelishuvga tegishli bo'lishi kerak")
+
+    already = {}
+    for existing in own_rows:
+        already[existing.contract_line_id] = (
+            already.get(existing.contract_line_id, Decimal("0")) + existing.kg)
+
+    birja_kg = {}
+    for form, line, kg in wanted.values():
+        if line.contract.is_birja:
+            # A birja truck may carry more than its lot has left: the rest comes
+            # off the next lot, then the next birja kelishuv (the owner's rule —
+            # crm.birja.spill_truck). Checked per marka against all of that.
+            birja_kg.setdefault(line.brand, []).append((form, line, kg))
+            continue
+        left = line.remaining_kg + already.get(line.pk, Decimal("0"))
+        if kg > left:
+            form.add_error(
+                "kg", f"Yuk miqdori qolgan kg dan oshmasligi kerak ({left} kg)")
+    for brand, picked in birja_kg.items():
+        room = birja_rule.birja_room(brand, picked[0][1].contract, own_rows)
+        total = sum((kg for _, _, kg in picked), Decimal("0"))
+        if total > room:
+            picked[-1][0].add_error(
+                "kg", f"Birja kelishuvlarida {brand} dan jami "
+                      f"{birja_rule.kg_text(room)} kg qolgan")
+
+
+class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
+    """One yuk's product rows — see `_clean_truck_rows`."""
 
     def clean(self):
         super().clean()
         if any(self.errors):
             return
-        rows = [f for f in self.forms
-                if f.cleaned_data and not f.cleaned_data.get("DELETE")
-                and f.cleaned_data.get("contract_line")]
-        if not rows:
-            raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
+        own = list(self.instance.lines.all()) if self.instance.pk else []
+        _clean_truck_rows(self, own)
 
-        wanted = {}
-        for form in rows:
-            line = form.cleaned_data["contract_line"]
-            if line.pk in wanted:
-                form.add_error("contract_line", "Bu mahsulot ro'yxatda bor")
+
+class BaseBirjaTruckLineFormSet(forms.BaseModelFormSet):
+    """Every product row of one birja truck — all its parts, whichever kelishuv
+    each is booked on — edited as one list, the way the truck was entered. The view
+    puts each row back on its kelishuv's part (crm.birja.regroup_truck)."""
+
+    def __init__(self, *args, truck=None, **kwargs):
+        self.truck = truck
+        self.own_rows = list(
+            ShipmentLine.objects.filter(shipment__in=truck.truck_yuklar)
+            .select_related("contract_line__contract").prefetch_related("sale_lots")
+            .order_by("contract_line__contract__created",
+                      "contract_line__contract__code_number", "position", "id"))
+        kwargs.setdefault("queryset", ShipmentLine.objects.filter(
+            pk__in=[row.pk for row in self.own_rows]).order_by(
+                "contract_line__contract__created",
+                "contract_line__contract__code_number", "position", "id"))
+        kwargs.setdefault("prefix", "lines")
+        own_kg = {}
+        for row in self.own_rows:
+            own_kg[row.contract_line_id] = own_kg.get(row.contract_line_id,
+                                                      Decimal("0")) + row.kg
+        kwargs.setdefault("form_kwargs", {"birja_fill": True, "own_kg": own_kg})
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        _clean_truck_rows(self, self.own_rows)
+        # A row a mijoz has already bought from cannot give those kg back: not by
+        # shrinking under them, and not by being taken off the truck.
+        sold = {row.pk: sum((sl.kg for sl in row.sale_lots.all()), Decimal("0"))
+                for row in self.own_rows}
+        for form in self.forms:
+            row = form.instance
+            if not row.pk or not sold.get(row.pk):
                 continue
-            wanted[line.pk] = (form, line, form.cleaned_data.get("kg") or Decimal("0"))
-
-        contracts = {line.contract_id for _, line, _ in wanted.values()}
-        # A birja truck may come off several kelishuvlar — the rows are split into
-        # one yuk per kelishuv on save (crm.birja.split_by_kelishuv).
-        all_birja = all(line.contract.is_birja for _, line, _ in wanted.values())
-        if len(contracts) > 1 and not all_birja:
-            raise forms.ValidationError(
-                "Bitta yukdagi mahsulotlar bitta kelishuvga tegishli bo'lishi kerak")
-
-        # What this truck already books against each product frees that much back up.
-        already = {}
-        if self.instance.pk:
-            for existing in self.instance.lines.all():
-                already[existing.contract_line_id] = existing.kg
-
-        birja_kg = {}
-        for form, line, kg in wanted.values():
-            if line.contract.is_birja:
-                # A birja truck may carry more than its lot has left: the rest comes
-                # off the next lot, then the next birja kelishuv (the owner's rule —
-                # crm.birja.spill_truck). Checked per marka against all of that.
-                birja_kg.setdefault(line.brand, []).append((form, line, kg))
-                continue
-            left = line.remaining_kg + already.get(line.pk, Decimal("0"))
-            if kg > left:
-                form.add_error(
-                    "kg", f"Yuk miqdori qolgan kg dan oshmasligi kerak ({left} kg)")
-        for brand, picked in birja_kg.items():
-            room = birja_rule.birja_room(brand, picked[0][1].contract, self.instance)
-            total = sum((kg for _, _, kg in picked), Decimal("0"))
-            if total > room:
-                picked[-1][0].add_error(
-                    "kg", f"Birja kelishuvlarida {brand} dan jami "
-                          f"{birja_rule.kg_text(room)} kg qolgan")
+            if form.cleaned_data.get("DELETE"):
+                raise forms.ValidationError(
+                    f"{row.contract_line.brand}: bu qatordan "
+                    f"{birja_rule.kg_text(sold[row.pk])} kg sotilgan — uni olib "
+                    f"tashlab bo'lmaydi")
+            kg = form.cleaned_data.get("kg") or Decimal("0")
+            if kg < sold[row.pk]:
+                form.add_error("kg", f"Bu qatordan {birja_rule.kg_text(sold[row.pk])} "
+                                     f"kg sotilgan — undan kam bo'la olmaydi")
 
 
 ShipmentLineFormSet = forms.inlineformset_factory(
     Shipment, ShipmentLine, form=ShipmentLineForm, formset=BaseShipmentLineFormSet,
     extra=1, min_num=0, can_delete=True)
+
+BirjaTruckLineFormSet = forms.modelformset_factory(
+    ShipmentLine, form=ShipmentLineForm, formset=BaseBirjaTruckLineFormSet,
+    extra=0, can_delete=True)
 
 
 class ShipmentExtendForm(forms.Form):

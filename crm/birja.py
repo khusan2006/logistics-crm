@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
-from django.db.models import Max, Sum
+from django.db.models import Max, ProtectedError, Sum
 
 from crm.models import (
     Contract, ContractLine, Sale, SaleLot, Shipment, ShipmentLine, latest_exchange_rate,
@@ -169,17 +169,15 @@ def _spill_lots(brand, contract):
     return lots
 
 
-def birja_room(brand, contract, shipment=None):
+def birja_room(brand, contract, own_rows=()):
     """How much of `brand` a truck booked on `contract` can carry in all: every kg
-    still free where `spill_truck` would put it, plus what `shipment` itself already
-    holds there (an edit frees its own rows before it re-books them)."""
+    still free where `spill_truck` would put it, plus what the truck's own rows
+    (`own_rows`) already hold there — an edit frees them before it re-books them."""
     lots = _spill_lots(brand, contract)
     free = sum((_lot_room(lot) for lot in lots), ZERO)
-    if shipment is not None and shipment.pk:
-        lot_ids = {lot.pk for lot in lots}
-        free += sum((row.kg for row in shipment.lines.all()
-                     if row.contract_line_id in lot_ids), ZERO)
-    return free
+    lot_ids = {lot.pk for lot in lots}
+    return free + sum((row.kg for row in own_rows if row.contract_line_id in lot_ids),
+                      ZERO)
 
 
 def _truck_part(yuk, contract):
@@ -223,6 +221,42 @@ def split_by_kelishuv(yuk):
         if part.pk not in {t.pk for t in touched}:
             touched.append(part)
     return touched
+
+
+def regroup_truck(head):
+    """After a whole birja truck was edited as one list: every row back on its
+    kelishuv's part, the truck on the oldest kelishuv its rows come off, and a part
+    left with no rows removed. Returns (yuklar that remain, every kelishuv touched
+    before or after) for `settle`. Raises BirjaShortage when a part that has to go
+    still carries something that cannot be deleted with it (a to'lov, a delay)."""
+    before = {yuk.contract_id: yuk.contract for yuk in head.truck_yuklar}
+    rows = list(ShipmentLine.objects.filter(shipment__in=head.truck_yuklar)
+                .select_related("contract_line__contract"))
+    oldest = oldest_contract(row.contract_line for row in rows)
+    if head.contract_id != oldest.pk:
+        head.contract = oldest
+        Shipment.objects.filter(pk=head.pk).update(contract=oldest)
+    for row in sorted(rows, key=lambda r: (r.shipment_id, r.position, r.pk)):
+        target = _truck_part(head, row.contract_line.contract)
+        if row.shipment_id != target.pk:
+            row.shipment = target
+            row.save(update_fields=["shipment"])
+    yuklar = []
+    for yuk in head.truck_yuklar:
+        if yuk.pk != head.pk and not yuk.lines.exists():
+            try:
+                yuk.delete()
+            except ProtectedError:
+                raise BirjaShortage(f"#{yuk.pk} ({yuk.contract.code}) bo'shab qoladi, "
+                                    f"lekin unga bog'langan yozuvlar bor — "
+                                    f"o'chirib bo'lmaydi") from None
+            continue
+        for position, row in enumerate(yuk.lines.order_by("position", "id")):
+            if row.position != position:
+                ShipmentLine.objects.filter(pk=row.pk).update(position=position)
+        yuklar.append(yuk)
+    after = {yuk.contract_id: yuk.contract for yuk in yuklar}
+    return yuklar, list({**before, **after}.values())
 
 
 def spill_truck(yuk):

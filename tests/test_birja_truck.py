@@ -197,3 +197,78 @@ def test_the_new_birja_modal_offers_the_marka_and_kg_box(admin_client):
     lot = older.lines.get()
     assert f'data-brand="{BRAND}"' in page and f'data-code="{older.code}"' in page
     assert f'value="{lot.pk}"' in page
+
+
+# --- editing the whole truck ---------------------------------------------------------
+
+def _truck(admin_client):
+    older, newer = _older_with_15t_left()
+    _post_truck(admin_client, older, "20000")
+    return older, newer, Shipment.objects.filter(truck__isnull=True).latest("pk")
+
+
+def _edit_post(truck, rows, initial):
+    return {"status": truck.status_id, "sent": "2026-09-20", "eta": "2026-09-25",
+            "transport": "01 777 AAA", "note": "",
+            **line_data(*rows, initial=initial)}
+
+
+def test_either_part_opens_the_whole_truck(admin_client):
+    older, newer, truck = _truck(admin_client)
+    part = truck.truck_parts.get()
+    resp = admin_client.get(f"/shipments/{part.pk}/edit/")
+    assert "contract" not in resp.context["form"].fields
+    assert resp.context["form"].instance == truck
+    rows = [f.instance for f in resp.context["lines"].forms]
+    assert [(r.shipment_id, r.kg) for r in rows] == [
+        (truck.pk, Decimal("15000.000")), (part.pk, Decimal("5000.000"))]
+
+
+def test_taking_a_parts_row_off_the_truck_removes_the_part(admin_client):
+    older, newer, truck = _truck(admin_client)
+    head_row = truck.lines.get()
+    part_row = truck.truck_parts.get().lines.get()
+    resp = admin_client.post(f"/shipments/{truck.pk}/edit/", _edit_post(truck, [
+        {"id": head_row.pk, "contract_line": older.lines.get().pk, "kg": "15000"},
+        {"id": part_row.pk, "contract_line": newer.lines.get().pk, "kg": "5000",
+         "DELETE": "on"}], initial=2))
+    assert resp.status_code in (204, 302)
+    assert not truck.truck_parts.exists()
+    assert _truck_kg(truck) == {older.code: Decimal("15000.000")}
+
+
+def test_a_row_moved_to_another_kelishuvs_lot_lands_on_that_part(admin_client):
+    """The edit is one list: a row re-pointed at a lot of a kelishuv the truck had
+    no part on gets one made, and the part it left is removed when emptied."""
+    older, newer, truck = _truck(admin_client)
+    third = _kelishuv("2026-09-12", ("30000", "1.20"))
+    head_row = truck.lines.get()
+    part_row = truck.truck_parts.get().lines.get()
+    admin_client.post(f"/shipments/{truck.pk}/edit/", _edit_post(truck, [
+        {"id": head_row.pk, "contract_line": older.lines.get().pk, "kg": "15000"},
+        {"id": part_row.pk, "contract_line": third.lines.get().pk, "kg": "5000"}],
+        initial=2))
+    assert _truck_kg(truck) == {older.code: Decimal("15000.000"),
+                                third.code: Decimal("5000.000")}
+    assert not Shipment.objects.filter(contract=newer).exists()
+
+
+def test_a_row_a_mijoz_bought_from_cannot_leave_the_truck(admin_client):
+    from crm.models import Customer, Sale, SaleLot
+    older, newer, truck = _truck(admin_client)
+    part = truck.truck_parts.get()
+    part_row = part.lines.get()
+    customer = Customer.objects.create(name="Ali", phone="1")
+    sale = Sale.objects.create(customer=customer, line=part_row, kg=Decimal("1000"),
+                               price=Decimal("2"), date="2026-09-21")
+    SaleLot.objects.get_or_create(sale=sale, line=part_row,
+                                  defaults={"kg": Decimal("1000")})
+    resp = admin_client.post(f"/shipments/{truck.pk}/edit/", _edit_post(truck, [
+        {"id": truck.lines.get().pk, "contract_line": older.lines.get().pk,
+         "kg": "15000"},
+        {"id": part_row.pk, "contract_line": newer.lines.get().pk, "kg": "500"}],
+        initial=2))
+    assert resp.status_code == 200
+    assert "kg sotilgan" in resp.content.decode()
+    part_row.refresh_from_db()
+    assert part_row.kg == Decimal("5000.000")
