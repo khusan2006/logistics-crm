@@ -52,23 +52,31 @@ def _yuk_form(client, url="/birja/yuklar/new/"):
     return client.get(url).context["form"]
 
 
-def test_the_birja_kelishuv_picker_leads_with_the_oldest(admin_client):
+def _lot_picker(client):
+    """The lots a new birja yuk's rows are filled from, in the order they fill."""
+    lines = client.get("/birja/yuklar/new/").context["lines"]
+    return list(lines.empty_form.fields["contract_line"].queryset)
+
+
+def test_a_new_birja_yuk_names_no_kelishuv(admin_client):
+    """The operator gives the marka and the kg; the rows say which kelishuv."""
+    _kelishuv("2026-09-07", ("30000", "1.00"))
+    assert "contract" not in _yuk_form(admin_client).fields
+
+
+def test_the_birja_lots_fill_oldest_kelishuv_first(admin_client):
     newest = _kelishuv("2026-09-18", ("30000", "1.00"))
-    oldest = _kelishuv("2026-09-07", ("30000", "1.00"))
+    oldest = _kelishuv("2026-09-07", ("30000", "1.00"), ("10000", "0.90"))
     middle = _kelishuv("2026-09-10", ("30000", "1.00"))
-    picker = _yuk_form(admin_client).fields["contract"].queryset
-    assert list(picker) == [oldest, middle, newest]
+    assert [ln.contract for ln in _lot_picker(admin_client)] == [
+        oldest, oldest, middle, newest]
 
 
-def test_a_new_birja_truck_opens_on_the_oldest_kelishuv_with_kg_left(admin_client):
-    """A kelishuv already sent in full is off the list, so the next one leads."""
+def test_a_kelishuv_sent_in_full_offers_nothing_to_fill(admin_client):
     sent = _kelishuv("2026-09-04", ("3000", "1.00"))
     make_shipment(contract_line=sent.lines.get(), kg="3000", status=_status())
     oldest_open = _kelishuv("2026-09-07", ("30000", "1.00"))
-    _kelishuv("2026-09-10", ("30000", "1.00"))
-    resp = admin_client.get("/birja/yuklar/new/")
-    assert resp.context["form"].initial["contract"] == oldest_open.pk
-    assert f'<option value="{oldest_open.pk}" selected>' in resp.content.decode()
+    assert [ln.contract for ln in _lot_picker(admin_client)] == [oldest_open]
 
 
 def test_the_operator_can_still_book_a_newer_kelishuv(admin_client):

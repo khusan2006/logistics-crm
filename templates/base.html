@@ -1374,6 +1374,93 @@
         price.value = pr; price.dispatchEvent(new Event('input', { bubbles: true }));
       }
     }
+    // A new birja truck names no kelishuv: the operator picks the marka and types
+    // what the truck carries, and the rows are filled off the open birja lots in
+    // the order the server lists them — oldest kelishuv first, its lots in turn —
+    // each lot taking what it has left. The rows are the formset itself, so what
+    // is saved is what is shown; the server books each kelishuv's share as its own
+    // yuk of the one truck (crm.birja.split_by_kelishuv).
+    function fillNumber(text) {
+      var n = parseFloat(String(text || '').replace(/[\s  ]/g, '').replace(',', '.'));
+      return isNaN(n) ? 0 : n;
+    }
+    function fillKgText(n) {
+      var fixed = String(Math.round(n * 1000) / 1000).split('.');
+      fixed[0] = fixed[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+      return fixed.join(',');
+    }
+    function fillFromTotal(set) {
+      var box = set.querySelector('[data-line-fill]');
+      var tpl = set.querySelector('[data-line-template]');
+      if (!box || !tpl) { return; }
+      var brand = box.querySelector('[data-fill-brand]').value;
+      var kgBox = box.querySelector('[data-fill-kg]');
+      var total = fillNumber(kgBox.value);
+      var summary = box.querySelector('[data-fill-summary]');
+      // Out go the rows this box filled before (this marka) and blank ones; a row
+      // of another marka, filled or typed, stays — a truck may carry two.
+      visibleRows(set).forEach(function (row) {
+        var sel = row.querySelector('select[data-line-source]');
+        var o = sel && sel.options[sel.selectedIndex];
+        if (!sel || !sel.value || (o && o.getAttribute('data-brand') === brand)) {
+          removeRow(set, row);
+        }
+      });
+      var left = total;
+      var shares = [];
+      Array.prototype.forEach.call(
+        tpl.content.querySelectorAll('select[data-line-source] option'), function (o) {
+          if (!o.value || o.getAttribute('data-brand') !== brand || left <= 0) { return; }
+          var take = Math.min(fillNumber(o.getAttribute('data-remaining')), left);
+          if (take <= 0) { return; }
+          left = Math.round((left - take) * 1000) / 1000;
+          var row = addRow(set);
+          if (!row) { return; }
+          var sel = row.querySelector('select[data-line-source]');
+          sel.value = o.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          var kg = row.querySelector('input[name$="-kg"]');
+          kg.value = String(take);
+          kg.dispatchEvent(new Event('input', { bubbles: true }));
+          var code = o.getAttribute('data-code');
+          var last = shares[shares.length - 1];
+          if (last && last.code === code) { last.kg += take; }
+          else { shares.push({ code: code, kg: take }); }
+        });
+      if (!visibleRows(set).length) { addRow(set); }
+      syncReys(set);
+      var text = shares.map(function (sh) {
+        return sh.code + ' · ' + fillKgText(sh.kg) + ' kg';
+      }).join(' + ');
+      if (shares.length > 1) {
+        text += ' — bitta mashina, ' + shares.length + ' ta kelishuvdan';
+      }
+      if (left > 0) {
+        text += (text ? '. ' : '') + 'Birjada yana ' + fillKgText(left) +
+                ' kg yetmaydi';
+      }
+      summary.textContent = text;
+      summary.hidden = !text;
+      summary.classList.toggle('is-short', left > 0);
+      // addRow focuses the row it made; the operator is still typing the kg.
+      window.focusField(kgBox);
+      var end = kgBox.value.length;
+      try { kgBox.setSelectionRange(end, end); } catch (err) { /* not a text box */ }
+    }
+    function wireFill(set) {
+      var box = set.querySelector('[data-line-fill]');
+      if (!box) { return; }
+      var timer = null;
+      box.querySelector('[data-fill-kg]').addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () { fillFromTotal(set); }, 350);
+      });
+      box.querySelector('[data-fill-brand]').addEventListener('change', function () {
+        if (fillNumber(box.querySelector('[data-fill-kg]').value) > 0) {
+          fillFromTotal(set);
+        }
+      });
+    }
     function enhance(root) {
       // The hamkor to'lovi form asks which MAHSULOT the money is against, and it
       // is a plain field on the form rather than a row of a formset — so the
@@ -1445,6 +1532,7 @@
         filterLineOptions(set);
         syncRemoveButtons(set);
         syncReys(set);
+        wireFill(set);
       });
     }
     document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });

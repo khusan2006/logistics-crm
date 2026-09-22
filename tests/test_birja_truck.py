@@ -150,8 +150,13 @@ def test_the_list_and_the_yuk_page_read_the_whole_truck(admin_client):
     older, newer = _older_with_15t_left()
     _post_truck(admin_client, older, "20000")
     truck = Shipment.objects.filter(truck__isnull=True).latest("pk")
+    part = truck.truck_parts.get()
     listing = admin_client.get("/birja/yuklar/").content.decode()
-    assert "bitta mashina: 20\u00a0000 kg" in listing
+    # One row for the truck — its birja-2 share is a line inside it, not a row.
+    assert f'href="/shipments/{truck.pk}/">#{truck.pk}' in listing
+    assert f'href="/shipments/{part.pk}/">#{part.pk}' not in listing
+    assert "jami 20\u00a0000" in listing
+    assert f'href="/shipments/{part.pk}/">{newer.code}</a>' in listing
     page = admin_client.get(f"/shipments/{truck.pk}/").content.decode()
     assert "Bitta mashina" in page and newer.code in page
 
@@ -166,3 +171,29 @@ def test_birja_fifo_links_the_truck_it_splits(admin_client):
     apply_redistribution(plan_redistribution())
     assert _truck_kg(truck) == {older.code: Decimal("20000.000"),
                                 newer.code: Decimal("6000.000")}
+
+
+def test_a_truck_filled_off_two_kelishuvlar_is_booked_as_one_truck(admin_client):
+    """What the modal posts once the kg box has filled the rows: lots of two
+    kelishuvlar, no kelishuv named. The oldest is the yuk; the other its part."""
+    older, newer = _older_with_15t_left()
+    resp = admin_client.post("/birja/yuklar/new/", {
+        "status": _status().pk, "sent": "2026-09-20", "eta": "2026-09-25",
+        "transport": "01 777 AAA", "note": "",
+        **line_data({"contract_line": newer.lines.get().pk, "kg": "5000"},
+                    {"contract_line": older.lines.get().pk, "kg": "15000"})})
+    assert resp.status_code == 302
+    truck = Shipment.objects.filter(truck__isnull=True).latest("pk")
+    assert truck.contract == older
+    assert _truck_kg(truck) == {older.code: Decimal("15000.000"),
+                                newer.code: Decimal("5000.000")}
+
+
+def test_the_new_birja_modal_offers_the_marka_and_kg_box(admin_client):
+    older, newer = _older_with_15t_left()
+    page = admin_client.get("/birja/yuklar/new/").content.decode()
+    assert "data-line-fill" in page and "Mashinadagi jami kg" in page
+    # Each lot option carries what the box fills from.
+    lot = older.lines.get()
+    assert f'data-brand="{BRAND}"' in page and f'data-code="{older.code}"' in page
+    assert f'value="{lot.pk}"' in page

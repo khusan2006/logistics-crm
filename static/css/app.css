@@ -3071,6 +3071,21 @@ form.stacked .lineset-field[hidden] { display: none; }
 .lineset-rm[disabled] { opacity: 0.35; cursor: not-allowed; }
 .lineset-del { display: none; }        /* the − button drives DELETE */
 .lineset-add { margin-top: 10px; }
+/* The new birja truck's marka + jami kg box, above the rows it fills. Two columns
+   from tablet width up; the line under it names each kelishuv's share. */
+.lineset-fill {
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  padding: 12px;
+  margin-top: 10px;
+}
+@media (min-width: 560px) { .lineset-grid--fill { grid-template-columns: 1fr 1fr; } }
+.lineset-fill-summary { margin: 10px 0 0; font-size: 13px; }
+.lineset-fill-summary[hidden] { display: none; }
+.lineset-fill-summary.is-short { color: var(--danger); }
+/* One birja truck across several kelishuvlar: each share on its own line in the
+   Yuklar row, the marka and kg columns kept level with each other. */
+.truck-part + .truck-part { margin-top: 4px; }
 /* Mahsulot qo'shish and Reys qo'shish sit side by side and wrap together on a
    phone rather than stacking full-width, which read as two unrelated controls. */
 .lineset-adds { display: flex; flex-wrap: wrap; gap: 8px; }

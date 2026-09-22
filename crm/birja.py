@@ -200,6 +200,31 @@ def _add_kg(yuk, lot, kg):
     _write_line(yuk, lot, kg, position if yuk.lines.exists() else 0)
 
 
+def oldest_contract(lines):
+    """Which kelishuv a new birja truck is booked on: the oldest its rows come off.
+    `lines` are the ContractLines the rows picked."""
+    return min((line.contract for line in lines), key=kelishuv_key)
+
+
+def split_by_kelishuv(yuk):
+    """Move every row of `yuk` whose lot is another kelishuv's onto that kelishuv's
+    part of the same truck — a yuk carries one kelishuv's goods (its kod, transport
+    and to'lovlar are that kelishuv's). Returns the parts written to."""
+    touched = []
+    for row in list(yuk.lines.select_related("contract_line__contract")
+                    .order_by("position", "id")):
+        contract = row.contract_line.contract
+        if contract.pk == yuk.contract_id:
+            continue
+        part = _truck_part(yuk, contract)
+        row.shipment = part
+        row.position = part.lines.count()
+        row.save(update_fields=["shipment", "position"])
+        if part.pk not in {t.pk for t in touched}:
+            touched.append(part)
+    return touched
+
+
 def spill_truck(yuk):
     """Put whatever `yuk`'s rows carry beyond their lots' kg where it belongs.
 

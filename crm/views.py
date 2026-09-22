@@ -2579,6 +2579,8 @@ def shipment_list(request, birja=False):
     sort = f["sort"]
     date_from, date_to, qr_waiting_count = f["date_from"], f["date_to"], f["qr_waiting_count"]
     shipments = list(shipments)
+    if birja:
+        shipments = _collapse_trucks(shipments)
 
     counts = {}
     overdue_count = 0
@@ -3067,25 +3069,58 @@ def lot_detail(request, pk):
 
 
 def _shipment_form_response(request, form, lines, title, invalid=False):
-    return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+    extra = {"lines": lines, "lines_legend": "Mahsulotlar"}
+    if "contract" not in form.fields:
+        # A new birja truck: the marka + kg box that fills the rows, offered the
+        # markas the open birja lots still have, with how much of each is left.
+        left = {}
+        for line in lines.empty_form.fields["contract_line"].queryset:
+            left[line.brand] = left.get(line.brand, Decimal("0")) + line.remaining_kg
+        extra["lines_fill"] = [(brand, kg) for brand, kg in left.items() if kg > 0]
+    return form_response(request, form, title, invalid=invalid, extra_context=extra)
+
+
+def _picked_lines(formset):
+    """The kelishuv lots a valid product formset's live rows point at."""
+    return [f.cleaned_data["contract_line"] for f in formset.forms
+            if f.cleaned_data and not f.cleaned_data.get("DELETE")
+            and f.cleaned_data.get("contract_line")]
+
+
+def _collapse_trucks(shipments):
+    """One birja row per TRUCK. A part (`truck` set) whose first yuk is also in
+    the list is drawn inside that yuk's row rather than as a row of its own — the
+    operator entered one truck and reads one truck. A part whose first yuk did not
+    make the list (a search matched only it) keeps its own row."""
+    here = {s.pk for s in shipments}
+    return [s for s in shipments if not (s.truck_id and s.truck_id in here)]
 
 
 def _attach_trucks(shipments):
-    """Stamp each birja row that is one part of a bigger truck with the whole truck
-    — `truck_group` (its yuklar, first part first) and `truck_total` — so the list
-    can say "26 000 kg, bitta mashina" beside the 12 000 this row carries. One query
-    for the page rather than `truck_yuklar` per row."""
+    """Stamp each birja row that is a truck of several yuklar with the whole truck:
+    `truck_group` (its yuklar, first part first) and the sums its cells print —
+    kg, goods value, xarajat. One query for the page rather than `truck_yuklar`
+    per row."""
     heads = {s.truck_id or s.pk for s in shipments}
     groups = {}
     for yuk in (Shipment.objects.filter(Q(pk__in=heads) | Q(truck_id__in=heads))
-                .select_related("contract").prefetch_related("lines")
+                .select_related("contract")
+                .prefetch_related("lines__contract_line", "expenses")
                 .order_by("pk")):
         groups.setdefault(yuk.truck_id or yuk.pk, []).append(yuk)
+    zero = Decimal("0")
     for s in shipments:
         group = groups.get(s.truck_id or s.pk, [])
         s.truck_group = group if len(group) > 1 else None
-        s.truck_total = sum((yuk.kg for yuk in group), Decimal("0"))
+        if not s.truck_group:
+            continue
+        s.truck_total = sum((yuk.kg for yuk in group), zero)
+        s.truck_goods = sum((yuk.goods_value for yuk in group), zero)
+        s.truck_goods_uzs = sum((yuk.goods_value_uzs for yuk in group), zero)
+        s.truck_lines = sum(len(yuk.lines.all()) for yuk in group)
+        s.truck_expenses = sum((yuk.expenses_total for yuk in group), zero)
+        s.truck_expenses_uzs = sum((yuk.expenses_total_uzs for yuk in group), zero)
+        s.truck_expense_count = sum(len(yuk.expenses.all()) for yuk in group)
 
 
 def _spill_birja(shipment):
@@ -3095,7 +3130,13 @@ def _spill_birja(shipment):
     transport and to'lovlar already brought in line."""
     if not shipment.is_birja:
         return []
-    parts = birja_rule.spill_truck(shipment)
+    # Rows the form filled off other kelishuvlar go to that kelishuv's part first,
+    # then anything a lot has no room for spills on from wherever it landed.
+    parts = birja_rule.split_by_kelishuv(shipment)
+    for yuk in [shipment] + list(parts):
+        for part in birja_rule.spill_truck(yuk):
+            if part.pk != shipment.pk and part.pk not in {p.pk for p in parts}:
+                parts.append(part)
     birja_rule.settle(parts, [part.contract for part in parts])
     return parts
 
@@ -3131,7 +3172,10 @@ def shipment_create(request, birja=False):
     form with the QR and bojxonachi boxes gone, and the kelishuv and holat pickers
     narrowed to that pipeline — see `ShipmentForm`."""
     form = ShipmentForm(request.POST or None, birja=birja)
-    lines = ShipmentLineFormSet(request.POST or None)
+    # A new birja truck names no kelishuv: its rows are filled from the marka and
+    # the kg, off the open birja lots only — see _line_fields.html.
+    lines = ShipmentLineFormSet(request.POST or None,
+                                form_kwargs={"birja_fill": True} if birja else {})
     title = "Yangi birja yuk" if birja else "Yangi yuk"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():
@@ -3140,6 +3184,8 @@ def shipment_create(request, birja=False):
                     shipment = form.save(commit=False)
                     shipment.created_by = request.user
                     if birja:
+                        shipment.contract = birja_rule.oldest_contract(
+                            _picked_lines(lines))
                         # The model's default route is the Eron one, which is what every
                         # load was until now. A birja truck starts at the exchange and
                         # never leaves the country.

@@ -1110,6 +1110,10 @@ class ContractLineChoiceSelect(forms.Select):
         instance = getattr(value, "instance", None)
         if instance is not None:
             option["attrs"]["data-contract"] = str(instance.contract_id)
+            # What the birja yuk's kg box fills the rows from: which marka, and
+            # the kelishuv kod to name each share by.
+            option["attrs"]["data-brand"] = instance.brand
+            option["attrs"]["data-code"] = instance.contract.code
             option["attrs"]["data-remaining"] = _clean_number(instance.remaining_kg)
             # The narx in the currency it was AGREED in — the yuk form paints it
             # into a read-only box, and a so'm kelishuv's dollar twin painted there
@@ -1260,9 +1264,11 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
             base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
         self.fields["contract"].label_from_instance = contract_option_label
         if birja and not self.instance.pk:
-            oldest = self.fields["contract"].queryset.first()
-            if oldest is not None:
-                self.initial.setdefault("contract", oldest.pk)
+            # No kelishuv to pick on a new birja truck: the operator names the marka
+            # and the kg, the rows fill oldest kelishuv first (see _line_fields.html),
+            # and the yuk lands on the oldest kelishuv its rows came off — the rest
+            # on linked parts of the same truck (crm.birja.split_by_kelishuv).
+            del self.fields["contract"]
             # A birja purchase is entered once it is already in the ombor — the
             # truck from the exchange is local and short, nobody tracks it on the
             # way — so a new one opens on the arrival holat. Still a choice.
@@ -1388,7 +1394,7 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         widgets = {"contract_line": ContractLineChoiceSelect(attrs={"data-line-source": ""})}
         labels = {"kg": "Yuboriladigan kg", "price": "1 kg narxi"}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, birja_fill=False, **kwargs):
         super().__init__(*args, **kwargs)
         # Read here and nowhere later: _post_clean is about to write None over both,
         # and by then the row would look like it never had a narx of its own.
@@ -1398,6 +1404,13 @@ class ShipmentLineForm(PriceEntryFormMixin, forms.ModelForm):
         base = (ContractLine.objects.select_related("contract")
                 .prefetch_related("shipment_lines")
                 .order_by("contract__code_slug", "contract__code_number", "position", "id"))
+        if birja_fill:
+            # A new birja truck: only the open birja lots, oldest kelishuv first —
+            # the order the kg box fills them in (Kam qoldiq ones take nothing more).
+            base = (base.filter(contract__partner__is_birja=True,
+                                contract__closed_short=False)
+                    .order_by("contract__created", "contract__code_number",
+                              "contract_id", "position", "id"))
         self.fields["contract_line"].queryset = _keep_if(
             base, lambda ln: ln.remaining_kg > 0, self.instance.contract_line_id)
         # Everything needed to pick the right row without leaving the dropdown:
@@ -1516,7 +1529,10 @@ class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
             wanted[line.pk] = (form, line, form.cleaned_data.get("kg") or Decimal("0"))
 
         contracts = {line.contract_id for _, line, _ in wanted.values()}
-        if len(contracts) > 1:
+        # A birja truck may come off several kelishuvlar — the rows are split into
+        # one yuk per kelishuv on save (crm.birja.split_by_kelishuv).
+        all_birja = all(line.contract.is_birja for _, line, _ in wanted.values())
+        if len(contracts) > 1 and not all_birja:
             raise forms.ValidationError(
                 "Bitta yukdagi mahsulotlar bitta kelishuvga tegishli bo'lishi kerak")
 

@@ -258,21 +258,38 @@ inside a view with no control left to leave it by.
       <button type="button" class="leg-expand" data-load="{{ s.pk }}" title="Yo'nalish bosqichlari">&#9656;</button>
       <a class="load-id" href="{% url 'shipment_detail' s.pk %}">#{{ s.pk }}</a>
     </td>
+    {% comment %}
+    A birja truck booked across several kelishuvlar is ONE row: each kelishuv's
+    share on a line of its own (kod · marka, and its kg beside it), the way a sotuv
+    drawn off several lots lists them — see `_collapse_trucks`.
+    {% endcomment %}
     <td>
+      {% if s.truck_group %}
+      {% for yuk in s.truck_group %}
+      <div class="load-partner truck-part"><a href="{% url 'shipment_detail' yuk.pk %}">{{ yuk.contract.code }}</a> · {{ yuk.brand_summary }}</div>
+      {% endfor %}
+      {% else %}
       <div class="load-partner">{{ s.brand_summary }}</div>
+      {% endif %}
       <div class="muted load-sub">{{ s.contract.partner.name }}</div>
     </td>
     <td class="num">
-      {{ s.kg|floatformat:"-3" }}
       {% if s.truck_group %}
-      {# One truck booked across two kelishuvlar: this row is its share here. #}
-      <div class="muted load-sub" title="{% for yuk in s.truck_group %}#{{ yuk.pk }} {{ yuk.contract.code }} · {{ yuk.kg|floatformat:"-3" }} kg{% if not forloop.last %} + {% endif %}{% endfor %}">bitta mashina: {{ s.truck_total|floatformat:"-3" }} kg</div>
+      {% for yuk in s.truck_group %}<div class="truck-part">{{ yuk.kg|floatformat:"-3" }}</div>{% endfor %}
+      <div class="muted load-sub">jami {{ s.truck_total|floatformat:"-3" }}</div>
+      {% else %}
+      {{ s.kg|floatformat:"-3" }}
       {% endif %}
     </td>
     {% if user.is_admin_role %}
     <td class="num">
+      {% if s.truck_group %}
+      <div>{% money_both s.truck_goods s.truck_goods_uzs s.contract.currency %}</div>
+      <div class="muted load-sub">{{ s.truck_lines }} mahsulot</div>
+      {% else %}
       <div>{% money_both s.goods_value s.goods_value_uzs s.contract.currency %}</div>
       <div class="muted load-sub">{{ s.lines.all|length }} mahsulot</div>
+      {% endif %}
     </td>
     {% endif %}
     {% comment %}
@@ -307,12 +324,19 @@ inside a view with no control left to leave it by.
     </td>
     {% if user.is_admin_role %}
     <td class="num load-expense">
+      {% if s.truck_group %}
+      {% if s.truck_expense_count %}
+        <div>{% money_both s.truck_expenses s.truck_expenses_uzs %}</div>
+        <div class="muted load-sub">{{ s.truck_expense_count }} ta</div>
+      {% else %}<span class="muted">—</span>{% endif %}
+      {% else %}
       {% with n=s.expenses.all|length %}
       {% if n %}
         <div>{% money_both s.expenses_total s.expenses_total_uzs %}</div>
         <div class="muted load-sub">{{ n }} ta</div>
       {% else %}<span class="muted">—</span>{% endif %}
       {% endwith %}
+      {% endif %}
     </td>
     {% endif %}
     {% if customs %}
