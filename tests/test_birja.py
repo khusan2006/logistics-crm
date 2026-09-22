@@ -45,12 +45,11 @@ def _first_birja_status():
     return ShipmentStatus.for_kind(birja=True).first()
 
 
-def _post_birja_shipment(client, brand="LLDPE", kg="400", **extra):
-    """A birja truck as the form takes one: the marka and the kg, no kelishuv — the
-    rule picks that (crm.birja; tests/test_birja_fifo.py)."""
-    data = {"status": _first_birja_status().pk, "sent": "2026-07-05",
-            "eta": "2026-07-20", "transport": "01A111AA", "note": "",
-            **line_data({"brand": brand, "kg": kg})}
+def _post_birja_shipment(client, contract, **extra):
+    row = {"contract_line": contract.lines.first().pk, "kg": extra.pop("kg", "400")}
+    data = {"contract": contract.pk, "status": _first_birja_status().pk,
+            "sent": "2026-07-05", "eta": "2026-07-20", "transport": "01A111AA",
+            "note": "", **line_data(row)}
     data.update(extra)
     return client.post("/birja/yuklar/new/", data)
 
@@ -431,23 +430,18 @@ def test_a_new_kelishuv_defaults_to_som(admin_client):
 
 def test_creating_a_yuk_routes_it_from_the_birja(admin_client):
     contract = _birja_contract()
-    assert _post_birja_shipment(admin_client).status_code == 302
+    assert _post_birja_shipment(admin_client, contract).status_code == 302
     shipment = Shipment.objects.get()
-    assert shipment.is_birja and shipment.contract == contract
+    assert shipment.is_birja
     assert shipment.origin == "Birja"
     assert shipment.destination == "O'zbekiston"
 
 
 def test_a_birja_yuk_cannot_be_loaded_against_an_eron_kelishuv(admin_client):
-    """A birja truck names no kelishuv, so the guard is the marka list: it offers
-    only what birja kelishuvlar still have to send. A marka only an Eron kelishuv
-    holds is refused when posted, not quietly booked onto the hamkor's agreement."""
-    _birja_contract(brand="LLDPE")
-    _hamkor_contract(brand="HDPE")
-    from crm.forms import BirjaTruckFormSet
-    offered = [value for value, _ in BirjaTruckFormSet().brand_choices]
-    assert offered == ["LLDPE"]
-    resp = _post_birja_shipment(admin_client, brand="HDPE")
+    """The kelishuv picker is narrowed to one side, and it is the form field that
+    enforces it — posting the other side's pk is rejected, not quietly accepted."""
+    hamkor = _hamkor_contract()
+    resp = _post_birja_shipment(admin_client, hamkor)
     assert resp.status_code == 200 and not Shipment.objects.exists()
 
 
@@ -573,8 +567,6 @@ def test_the_yuk_form_drops_the_qr_and_bojxonachi_boxes():
     from crm.forms import ShipmentForm
     birja_fields = ShipmentForm(birja=True).fields
     assert "qr_date" not in birja_fields and "customs_agent" not in birja_fields
-    # Nor a kelishuv: which one a birja truck comes off is the rule's to say.
-    assert "contract" not in birja_fields
     hamkor_fields = ShipmentForm(birja=False).fields
     assert "qr_date" in hamkor_fields and "customs_agent" in hamkor_fields
 

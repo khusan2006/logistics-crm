@@ -21,8 +21,6 @@ from .models import (
     customer_balance_by_currency, last_sale_prices_by_customer,
     latest_exchange_rate, _by_currency,
 )
-# `birja` is a flag on half the forms below, so the module goes by another name.
-from . import birja as birja_rule
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
 from .yozuv import marka_kaliti, marka_nomi
 from .templatetags.crm_extras import rate, som, usd
@@ -1237,28 +1235,32 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # departure date fell out of the Oylik hisobot "jo'natilgan" count, but
         # rows imported before this rule must stay editable.
         self.fields["sent"].required = True
+        # A kelishuv with every kg already on the road has nothing left to load, so
+        # it drops off the new-yuk list — but stays when editing its own yuk.
+        #
+        # Narrowed to one side first: a birja yuk can only be loaded against a birja
+        # kelishuv, and offering the Eron ones would let a truck off the exchange be
+        # booked onto a hamkor's agreement — and take its holat chain with it.
+        base = (Contract.objects.select_related("partner")
+                .filter(partner__is_birja=birja)
+                # A mahalliy xarid already carries its one landed yuk — see
+                # `LocalPurchase` — so it is never something to load a truck against.
+                .filter(partner__is_local=False)
+                .prefetch_related("lines__shipment_lines"))
         if birja:
-            # A birja truck is not booked against a kelishuv anybody picks: its kg
-            # come off the oldest one that still has the marka to send, and a truck
-            # bigger than that is split across two (the owner's rule — crm.birja).
-            # Its rows ask for the marka and the kg, and nothing else.
-            del self.fields["contract"]
-        else:
-            # A kelishuv with every kg already on the road has nothing left to load,
-            # so it drops off the new-yuk list — but stays when editing its own yuk.
-            #
-            # Eron kelishuvlar only: offering a birja one would let a hamkor load
-            # onto the exchange's books — and take the birja holat chain with it.
-            base = (Contract.objects.select_related("partner")
-                    .filter(partner__is_birja=False)
-                    # A mahalliy xarid already carries its one landed yuk — see
-                    # `LocalPurchase` — so it is never something to load a truck
-                    # against.
-                    .filter(partner__is_local=False)
-                    .prefetch_related("lines__shipment_lines"))
-            self.fields["contract"].queryset = _keep_if(
-                base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
-            self.fields["contract"].label_from_instance = contract_option_label
+            # Oldest first. The birja hands its kelishuvlar over in the order they
+            # were struck, and the owner wants the next truck to come off the oldest
+            # one with kg still to send (2026-09-22) — so that is also what a new
+            # truck opens on. Only the default moved: the operator still picks —
+            # the owner's call, not automatic.
+            base = base.order_by("created", "code_number", "pk")
+        self.fields["contract"].queryset = _keep_if(
+            base, lambda c: c.remaining_kg > 0, self.instance.contract_id)
+        self.fields["contract"].label_from_instance = contract_option_label
+        if birja and not self.instance.pk:
+            oldest = self.fields["contract"].queryset.first()
+            if oldest is not None:
+                self.initial.setdefault("contract", oldest.pk)
         # Only the holatlar of this yuk's own chain — plus the shared arrival one.
         self.fields["status"].queryset = ShipmentStatus.for_kind(birja)
         self.fields["logist"].empty_label = "Logistsiz"
@@ -1521,100 +1523,6 @@ class BaseShipmentLineFormSet(forms.BaseInlineFormSet):
 ShipmentLineFormSet = forms.inlineformset_factory(
     Shipment, ShipmentLine, form=ShipmentLineForm, formset=BaseShipmentLineFormSet,
     extra=1, min_num=0, can_delete=True)
-
-
-class BirjaTruckLineForm(forms.Form):
-    """One marka on a birja truck: which granula, and how many kg. No kelishuv and no
-    lot — which of those the kg come off is the rule's to say (crm.birja), not the
-    operator's."""
-
-    brand = forms.ChoiceField(label="Marka")
-    kg = forms.DecimalField(label="Yuboriladigan kg", max_digits=12, decimal_places=3)
-
-    def __init__(self, *args, brand_choices=(), **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["brand"].choices = [("", "Markani tanlang")] + list(brand_choices)
-
-    def clean_kg(self):
-        kg = self.cleaned_data.get("kg")
-        if kg is not None and kg <= 0:
-            raise forms.ValidationError("Kg musbat bo'lishi kerak")
-        return kg
-
-
-class BaseBirjaTruckFormSet(forms.BaseFormSet):
-    """A birja truck's marka rows, checked against what the birja kelishuvlar still
-    have to send — and, when a truck already booked is corrected, against what has
-    been sold off it, since a lot cannot give back kg a mijoz has taken."""
-
-    def __init__(self, *args, shipment=None, **kwargs):
-        self.shipment = shipment
-        self.own = birja_rule.truck_kg(shipment) if shipment else {}
-        self.floor = birja_rule.sold_floor(shipment) if shipment else {}
-        self.room, first = {}, {}
-        for line in birja_rule.open_birja_lines():
-            self.room[line.brand] = self.room.get(line.brand, Decimal("0")) + line.remaining_kg
-            first.setdefault(line.brand, line.contract.code)
-        # Each marka says how much the birja still owes of it and which kelishuv the
-        # next truck comes off — the rule, visible at the moment it is applied.
-        self.brand_choices = [
-            (brand, f"{brand} · {birja_rule.kg_text(kg)} kg qolgan · {first[brand]} dan")
-            for brand, kg in self.room.items()]
-        # A marka already on the truck stays choosable once no kelishuv has any of it
-        # left to send — it is on this very truck.
-        self.brand_choices += [(brand, brand) for brand in self.own
-                               if brand not in self.room]
-        if shipment is not None and "initial" not in kwargs:
-            kwargs["initial"] = [{"brand": brand, "kg": kg}
-                                 for brand, kg in self.own.items()]
-        super().__init__(*args, **kwargs)
-
-    def get_form_kwargs(self, index):
-        kwargs = super().get_form_kwargs(index)
-        kwargs["brand_choices"] = self.brand_choices
-        return kwargs
-
-    def _live(self):
-        return [form for form in self.forms
-                if form.cleaned_data and not self._should_delete_form(form)
-                and form.cleaned_data.get("brand")]
-
-    def rows(self):
-        """[(marka, kg)] the truck is to carry."""
-        return [(form.cleaned_data["brand"], form.cleaned_data["kg"])
-                for form in self._live()]
-
-    def clean(self):
-        super().clean()
-        if any(self.errors):
-            return
-        live = self._live()
-        if not live:
-            raise forms.ValidationError("Kamida bitta mahsulot kiritilishi kerak")
-        seen = set()
-        for form in live:
-            brand, kg = form.cleaned_data["brand"], form.cleaned_data["kg"]
-            if brand in seen:
-                form.add_error("brand", "Bu marka ro'yxatda bor")
-                continue
-            seen.add(brand)
-            limit = self.room.get(brand, Decimal("0")) + self.own.get(brand, Decimal("0"))
-            if kg > limit:
-                form.add_error("kg", f"Birja kelishuvlarida bu markadan "
-                                     f"{birja_rule.kg_text(limit)} kg qolgan")
-            floor = self.floor.get(brand, Decimal("0"))
-            if kg < floor:
-                form.add_error("kg", f"Bu yukdan {birja_rule.kg_text(floor)} kg sotilgan — "
-                                     f"undan kam bo'la olmaydi")
-        for brand, floor in self.floor.items():
-            if floor > 0 and brand not in seen:
-                raise forms.ValidationError(
-                    f"{brand}: bu yukdan {birja_rule.kg_text(floor)} kg sotilgan — "
-                    f"uni yukdan olib tashlab bo'lmaydi")
-
-
-BirjaTruckFormSet = forms.formset_factory(
-    BirjaTruckLineForm, formset=BaseBirjaTruckFormSet, extra=1, can_delete=True)
 
 
 class ShipmentExtendForm(forms.Form):

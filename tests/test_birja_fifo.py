@@ -1,24 +1,23 @@
-"""Birja yuklari come off the oldest birja kelishuv — the owner's rule of 2026-09-22.
+"""Birja yuklari go out oldest kelishuv first — the owner's rule of 2026-09-22.
 
-However many kg a birja truck carries, they come off the OLDEST birja kelishuv that
-still has the marka to send, its lots taken in the order they stand on it. A truck
-bigger than what is left there becomes two yuklar, one per kelishuv. Nobody picks a
-kelishuv on the form any more, so these pin what the form does instead — and the
-one-off command that puts the trucks booked by hand before the rule where it would
-have put them.
+The rule is the client's: a birja truck comes off the OLDEST birja kelishuv that
+still has the marka to send. The operator still picks the kelishuv (the owner's
+call — not automatic), so the yuk form only leads with the oldest and opens on it.
+The trucks booked before the rule are put where it would have put them by the
+one-off `manage.py birja_fifo`, pinned below.
 """
 from datetime import date
 from decimal import Decimal
 from io import StringIO
 
 import pytest
-from conftest import line_data, make_shipment
+from conftest import line_data, make_contract, make_shipment
 from django.core.management import call_command
 
 from crm.birja import apply_redistribution, plan_redistribution
 from crm.models import (
-    AuditLog, Contract, ContractLine, Customer, Sale, Shipment, ShipmentExpense,
-    ShipmentStatus, birja_partner,
+    AuditLog, Contract, ContractLine, Customer, Partner, Sale, Shipment,
+    ShipmentExpense, ShipmentStatus, birja_partner,
 )
 
 pytestmark = pytest.mark.django_db
@@ -41,186 +40,65 @@ def _status():
     return ShipmentStatus.for_kind(birja=True).first()
 
 
-def _post(client, *rows, **extra):
-    """A new birja truck through the form: marka/kg rows and nothing else."""
-    data = {"status": _status().pk, "sent": "2026-09-20", "eta": "2026-09-25",
-            "transport": "01 777 AAA", "note": "",
-            **line_data(*({"brand": brand, "kg": kg} for brand, kg in rows))}
-    data.update(extra)
-    return client.post("/birja/yuklar/new/", data)
-
-
 def _booked(contract):
     """[(lot narx, kg)] on the kelishuv's trucks, lot by lot, in lot order."""
     return [(line.price, line.shipped_kg) for line in contract.lines.order_by("position")
             if line.shipped_kg]
 
 
-def _edit(client, shipment, *rows, **extra):
-    shipment.refresh_from_db()
-    data = {"status": shipment.status_id, "sent": str(shipment.sent),
-            "eta": str(shipment.eta or ""), "transport": shipment.transport,
-            "note": shipment.note,
-            **line_data(*({"brand": brand, "kg": kg} for brand, kg in rows),
-                        initial=len({ln.contract_line.brand for ln in shipment.lines.all()}))}
-    data.update(extra)
-    return client.post(f"/shipments/{shipment.pk}/edit/", data)
+# --- the yuk form ------------------------------------------------------------------
+
+def _yuk_form(client, url="/birja/yuklar/new/"):
+    return client.get(url).context["form"]
 
 
-# --- a new truck ---------------------------------------------------------------
-
-def test_a_truck_comes_off_the_oldest_kelishuv_not_the_one_entered_first(admin_client):
-    """Oldest by the kelishuv sanasi: birja-1 here was struck after birja-2."""
-    later = _kelishuv("2026-09-10", ("30000", "1.00"))
-    older = _kelishuv("2026-09-07", ("30000", "1.00"))
-    assert _post(admin_client, (BRAND, "25000")).status_code == 302
-    shipment = Shipment.objects.get()
-    assert shipment.contract == older
-    assert later.shipped_kg == 0
+def test_the_birja_kelishuv_picker_leads_with_the_oldest(admin_client):
+    newest = _kelishuv("2026-09-18", ("30000", "1.00"))
+    oldest = _kelishuv("2026-09-07", ("30000", "1.00"))
+    middle = _kelishuv("2026-09-10", ("30000", "1.00"))
+    picker = _yuk_form(admin_client).fields["contract"].queryset
+    assert list(picker) == [oldest, middle, newest]
 
 
-def test_the_next_truck_takes_what_is_left_before_a_newer_kelishuv(admin_client):
-    older = _kelishuv("2026-09-07", ("30000", "1.00"))
+def test_a_new_birja_truck_opens_on_the_oldest_kelishuv_with_kg_left(admin_client):
+    """A kelishuv already sent in full is off the list, so the next one leads."""
+    sent = _kelishuv("2026-09-04", ("3000", "1.00"))
+    make_shipment(contract_line=sent.lines.get(), kg="3000", status=_status())
+    oldest_open = _kelishuv("2026-09-07", ("30000", "1.00"))
     _kelishuv("2026-09-10", ("30000", "1.00"))
-    _post(admin_client, (BRAND, "20000"))
-    _post(admin_client, (BRAND, "10000"))
-    assert [s.contract for s in Shipment.objects.order_by("pk")] == [older, older]
+    resp = admin_client.get("/birja/yuklar/new/")
+    assert resp.context["form"].initial["contract"] == oldest_open.pk
+    assert f'<option value="{oldest_open.pk}" selected>' in resp.content.decode()
 
 
-def test_a_kelishuv_s_lots_fill_in_the_order_they_stand(admin_client):
-    """Not the cheapest, not the one the operator fancied — the first one on the
-    kelishuv, then the next. One truck reaching across two lots stays one yuk."""
-    contract = _kelishuv("2026-09-07", ("30000", "1.30"), ("30000", "1.20"),
-                         ("30000", "1.10"))
-    _post(admin_client, (BRAND, "40000"))
-    shipment = Shipment.objects.get()
-    assert [(ln.contract_line.price, ln.kg) for ln in shipment.lines.all()] == [
-        (Decimal("1.3000"), Decimal("30000")), (Decimal("1.2000"), Decimal("10000"))]
-    assert _booked(contract) == [(Decimal("1.3000"), Decimal("30000")),
-                                 (Decimal("1.2000"), Decimal("10000"))]
-
-
-def test_a_truck_bigger_than_the_oldest_s_rest_is_split_into_two_yuklar(admin_client):
-    """A yuk belongs to one kelishuv, so the truck becomes two — the same truck on
-    both: holat, sanalar and raqam copied, each half saying what it is part of."""
-    older = _kelishuv("2026-09-04", ("3000", "1.00"))
-    newer = _kelishuv("2026-09-07", ("30000", "1.00"))
-    resp = _post(admin_client, (BRAND, "30000"), note="Tarozi: 30.1 t")
-    assert resp.status_code == 302
-
-    first, second = Shipment.objects.order_by("pk")
-    assert (first.contract, first.kg) == (older, Decimal("3000"))
-    assert (second.contract, second.kg) == (newer, Decimal("27000"))
-    for yuk in (first, second):
-        assert yuk.transport == "01 777 AAA" and yuk.status == _status()
-        assert yuk.sent == date(2026, 9, 20) and yuk.origin == "Birja"
-        assert yuk.note.startswith("Tarozi: 30.1 t\n")
-        assert "Bitta mashina: birja-1 · 3 000 kg + birja-2 · 27 000 kg" in yuk.note
-    assert first.created_at == second.created_at
-
-
-def test_each_half_of_a_split_truck_pays_its_own_kelishuv_s_transport(admin_client):
-    _kelishuv("2026-09-04", ("3000", "1.00"), transport_rate_per_kg=Decimal("100"))
-    _kelishuv("2026-09-07", ("30000", "1.00"), transport_rate_per_kg=Decimal("110"))
-    _post(admin_client, (BRAND, "30000"), status=ShipmentStatus.arrival().pk)
-    rows = sorted((e.shipment.contract.code, e.rate_per_kg, e.amount)
-                  for e in ShipmentExpense.objects.filter(is_auto_transport=True))
-    assert rows == [("birja-1", Decimal("100.0000"), Decimal("300000.00")),
-                    ("birja-2", Decimal("110.0000"), Decimal("2970000.00"))]
-
-
-def test_the_driver_advance_goes_on_one_half_only(admin_client):
-    """It is handed to the driver once, however many kelishuvlar the truck spans."""
-    from crm.models import Logist
-    logist = Logist.objects.create(name="Logist", phone="1")
-    _kelishuv("2026-09-04", ("3000", "1.00"))
+def test_the_operator_can_still_book_a_newer_kelishuv(admin_client):
+    """Only the default moved — the owner's call: not automatic."""
     _kelishuv("2026-09-07", ("30000", "1.00"))
-    _post(admin_client, (BRAND, "30000"), logist=logist.pk, driver_advance="100")
-    advances = ShipmentExpense.objects.filter(is_driver_advance=True)
-    assert advances.count() == 1
-    assert advances.get().shipment == Shipment.objects.order_by("pk").first()
+    newer = _kelishuv("2026-09-10", ("30000", "1.00"))
+    resp = admin_client.post("/birja/yuklar/new/", {
+        "contract": newer.pk, "status": _status().pk, "sent": "2026-09-20",
+        "eta": "2026-09-25", "transport": "01 777 AAA", "note": "",
+        **line_data({"contract_line": newer.lines.get().pk, "kg": "25000"})})
+    assert resp.status_code == 302
+    assert Shipment.objects.get().contract == newer
 
 
-def test_more_than_the_birja_has_left_is_refused_with_the_figure(admin_client):
-    _kelishuv("2026-09-04", ("3000", "1.00"))
-    resp = _post(admin_client, (BRAND, "5000"))
-    assert resp.status_code == 200 and not Shipment.objects.exists()
-    assert "Birja kelishuvlarida bu markadan 3 000 kg qolgan" in resp.content.decode()
+def test_editing_a_birja_truck_keeps_its_own_kelishuv(admin_client):
+    _kelishuv("2026-09-07", ("30000", "1.00"))
+    newer = _kelishuv("2026-09-10", ("30000", "1.00"))
+    truck = make_shipment(contract_line=newer.lines.get(), kg="1000", status=_status())
+    form = _yuk_form(admin_client, f"/shipments/{truck.pk}/edit/")
+    assert form.initial["contract"] == newer.pk
 
 
-def test_a_kelishuv_moved_to_kam_qoldiq_is_passed_over(admin_client):
-    """The operator has said what it still owes is not coming."""
-    short = _kelishuv("2026-09-04", ("30000", "1.00"))
-    Contract.objects.filter(pk=short.pk).update(closed_short=True)
-    next_one = _kelishuv("2026-09-07", ("30000", "1.00"))
-    _post(admin_client, (BRAND, "1000"))
-    assert Shipment.objects.get().contract == next_one
-
-
-def test_the_form_asks_for_the_marka_and_says_where_it_comes_from(admin_client):
-    _kelishuv("2026-09-07", ("30000", "1.00"), ("7000", "1.00"))
-    _kelishuv("2026-09-04", ("5000", "1.00"), brand="2102")
-    html = admin_client.get("/birja/yuklar/new/").content.decode()
-    assert 'name="contract"' not in html
-    assert "и 1561 · 37 000 kg qolgan · birja-1 dan" in html
-    assert "2102 · 5 000 kg qolgan · birja-2 dan" in html
-    assert "eng eski birja kelishuvidan olinadi" in html
-
-
-def test_the_eron_form_still_names_its_kelishuv(admin_client):
-    html = admin_client.get("/shipments/new/").content.decode()
-    assert 'name="contract"' in html
-
-
-# --- correcting a truck already booked -------------------------------------------
-
-def test_more_kg_on_a_truck_stay_on_its_own_kelishuv(admin_client):
-    """A correction does not move a truck: even with an older kelishuv now free, the
-    extra kg join the kelishuv the truck is already on."""
-    older = _kelishuv("2026-09-04", ("10000", "1.00"))
-    newer = _kelishuv("2026-09-07", ("30000", "1.00"))
-    _post(admin_client, (BRAND, "10000"))
-    _post(admin_client, (BRAND, "20000"))
-    truck = Shipment.objects.get(contract=newer)
-    Shipment.objects.get(contract=older).delete()      # birja-1 has room again
-    assert _edit(admin_client, truck, (BRAND, "25000")).status_code == 302
-    truck.refresh_from_db()
-    assert (truck.contract, truck.kg) == (newer, Decimal("25000"))
-
-
-def test_more_kg_than_its_own_kelishuv_holds_are_split_off(admin_client):
-    first = _kelishuv("2026-09-04", ("20000", "1.00"))
-    second = _kelishuv("2026-09-07", ("30000", "1.00"))
-    _post(admin_client, (BRAND, "20000"))
-    truck = Shipment.objects.get()
-    assert _edit(admin_client, truck, (BRAND, "21000")).status_code == 302
-    truck.refresh_from_db()
-    split = Shipment.objects.exclude(pk=truck.pk).get()
-    assert (truck.contract, truck.kg) == (first, Decimal("20000"))
-    assert (split.contract, split.kg) == (second, Decimal("1000"))
-    assert "Bitta mashina: birja-1 · 20 000 kg + birja-2 · 1 000 kg" in split.note
-
-
-def test_fewer_kg_come_off_the_last_lot(admin_client):
-    contract = _kelishuv("2026-09-04", ("30000", "1.30"), ("30000", "1.20"))
-    _post(admin_client, (BRAND, "40000"))
-    truck = Shipment.objects.get()
-    _edit(admin_client, truck, (BRAND, "35000"))
-    assert _booked(contract) == [(Decimal("1.3000"), Decimal("30000")),
-                                 (Decimal("1.2000"), Decimal("5000"))]
-
-
-def test_a_truck_cannot_go_below_what_has_been_sold_off_it(admin_client, admin_user):
-    _kelishuv("2026-09-04", ("30000", "1.00"))
-    _post(admin_client, (BRAND, "20000"), status=ShipmentStatus.arrival().pk)
-    truck = Shipment.objects.get()
-    customer = Customer.objects.create(name="Mijoz", phone="1", address="T")
-    Sale.objects.create(customer=customer, line=truck.lines.get(), kg=Decimal("15000"),
-                        price=Decimal("2.00"), created_by=admin_user)
-    resp = _edit(admin_client, truck, (BRAND, "10000"))
-    assert resp.status_code == 200
-    assert "Bu yukdan 15 000 kg sotilgan" in resp.content.decode()
-    assert truck.kg == Decimal("20000")
+def test_the_eron_picker_is_left_as_it_was(admin_client):
+    """Newest first and nothing chosen — the rule is the birja's alone."""
+    pars = Partner.objects.create(name="Pars", phone="1", city="Tehron")
+    older = make_contract(partner=pars, brand="2102", created="2026-07-01")
+    newer = make_contract(partner=pars, brand="7000F", created="2026-08-01")
+    form = _yuk_form(admin_client, "/shipments/new/")
+    assert list(form.fields["contract"].queryset) == [newer, older]
+    assert "contract" not in form.initial
 
 
 # --- putting the trucks booked by hand where the rule says ------------------------
