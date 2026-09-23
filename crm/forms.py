@@ -797,8 +797,9 @@ class LocalPurchaseForm(forms.Form):
     `purchase` is the row being corrected. Once anything has been sold off its lot,
     the marka and the sana are frozen — a sotuv was placed against that marka, in
     that day's FIFO order — and the kg cannot drop below what has left the shelf.
-    The valyuta freezes once a to'lov is on it, the rule `contract_locked` keeps for
-    every kelishuv.
+    The valyuta freezes once a to'lov is made on it through the hamkor to'lov form,
+    the rule `contract_locked` keeps for every kelishuv — but not for Hozir to'landi,
+    which this form rewrites in whatever valyuta it saves.
 
     Editing opens the same form as Yangi xarid, filled in — Hozir to'landi included,
     showing the to'lov it wrote (`LocalPurchase.spot_payment`), so correcting it
@@ -851,17 +852,22 @@ class LocalPurchaseForm(forms.Form):
         })
         spot = purchase.spot_payment
         if spot is not None:
-            self.initial["paid_now"] = spot.amount_uzs if contract.is_som else spot.amount
+            # The figure as it was TYPED, in the to'lov's own valyuta. The two agree
+            # unless the xarid's valyuta was picked wrong — and then the typed figure
+            # is the one that is right once the valyuta is corrected.
+            self.initial["paid_now"] = spot.amount_uzs if spot.is_som else spot.amount
+        later = list(contract.supplier_payments.exclude(pk=purchase.spot_payment_id))
         self.paid_since = sum(
-            (p.amount_uzs if contract.is_som else p.amount
-             for p in contract.supplier_payments.exclude(pk=purchase.spot_payment_id)),
+            (p.amount_uzs if contract.is_som else p.amount for p in later),
             Decimal("0"))
         self.gone_kg = lot.kg - lot.available_kg
         if lot.sale_lots.exists():
             for name in ("created", "brand"):
                 self.fields[name].disabled = True
                 self.fields[name].help_text = "Bu xariddan sotuv qilingan — o'zgartirilmaydi"
-        if contract.supplier_payments.exists():
+        # Only a to'lov made through the hamkor form pins the valyuta. Hozir to'landi
+        # does not: it is this form's own box, rewritten in the new valyuta on save.
+        if later:
             self.fields["currency"].disabled = True
             self.fields["currency"].help_text = (
                 "To'lov qilingan xaridning valyutasi o'zgartirilmaydi")

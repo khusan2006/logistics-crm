@@ -254,6 +254,41 @@ def test_hozir_tolandi_leaves_room_for_the_tolovlar_made_since(admin_client):
                  paid_now="800").status_code == 302
 
 
+def test_a_wrong_valyuta_can_be_corrected_while_only_hozir_tolandi_is_paid(admin_client):
+    # Typed in so'm figures with Dollar left selected: 17 000 "dollars" a kg.
+    _post(admin_client, kg="1910", price="17000", paid_now="32470000")
+    purchase = LocalPurchase.objects.get()
+    form = admin_client.get(f"/mahalliy-xaridlar/{purchase.pk}/edit/").context["form"]
+    assert not form.fields["currency"].disabled
+    assert _edit(admin_client, purchase, kg="1910", price="17000", currency="uzs",
+                 paid_now="32470000").status_code == 302
+    purchase = LocalPurchase.objects.get()
+    assert purchase.contract.currency == "uzs"
+    assert purchase.line.price_uzs == Decimal("17000")
+    payment = SupplierPayment.objects.get()
+    assert (payment.currency, payment.amount_uzs) == ("uzs", Decimal("32470000"))
+    assert purchase.contract.payable_left_own == Decimal("0")
+
+
+def test_the_spot_tolov_shows_as_typed_even_under_the_wrong_valyuta(admin_client):
+    _post(admin_client, kg="1910", price="17000", paid_now="1000")
+    purchase = LocalPurchase.objects.get()
+    SupplierPayment.objects.filter(pk=purchase.spot_payment_id).update(
+        currency="uzs", amount_uzs=Decimal("32470000"))
+    form = admin_client.get(f"/mahalliy-xaridlar/{purchase.pk}/edit/").context["form"]
+    assert Decimal(form["paid_now"].value()) == Decimal("32470000")
+
+
+def test_a_later_tolov_still_pins_the_valyuta(admin_client):
+    _post(admin_client, kg="1000", price="2")
+    purchase = LocalPurchase.objects.get()
+    SupplierPayment.objects.create(
+        contract=purchase.contract, contract_line=purchase.line, currency="usd",
+        amount=Decimal("100"), amount_uzs=Decimal("0"), exchange_rate=Decimal("12000"))
+    form = admin_client.get(f"/mahalliy-xaridlar/{purchase.pk}/edit/").context["form"]
+    assert form.fields["currency"].disabled
+
+
 def test_resaving_the_edit_form_untouched_moves_nothing(admin_client):
     _post(admin_client, currency="uzs", kg="1000", price="16500", paid_now="5000000")
     purchase = LocalPurchase.objects.get()
