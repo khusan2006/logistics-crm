@@ -32,7 +32,8 @@ def _post(client, **overrides):
 
 def _edit(client, purchase, **overrides):
     data = {"created": "2026-09-10", "brand": "LLDPE", "kg": "5000", "currency": "usd",
-            "price": "1.10", "seller_name": "", "seller_phone": "", "note": ""}
+            "price": "1.10", "paid_now": "", "seller_name": "", "seller_phone": "",
+            "note": ""}
     data.update(overrides)
     return client.post(f"/mahalliy-xaridlar/{purchase.pk}/edit/", data)
 
@@ -199,6 +200,68 @@ def test_an_edit_cannot_take_kg_below_what_was_sold(admin_client):
     purchase = LocalPurchase.objects.get()
     assert _edit(admin_client, purchase, kg="3000").status_code == 200
     assert LocalPurchase.objects.get().lot.kg == Decimal("5000")
+
+
+def test_the_edit_form_is_the_create_form_filled_in(admin_client):
+    _post(admin_client, kg="1000", price="2", paid_now="500")
+    purchase = LocalPurchase.objects.get()
+    form = admin_client.get(f"/mahalliy-xaridlar/{purchase.pk}/edit/").context["form"]
+    create = admin_client.get("/mahalliy-xaridlar/new/").context["form"]
+    assert list(form.fields) == list(create.fields)
+    assert Decimal(form["paid_now"].value()) == Decimal("500")
+
+
+def test_an_edit_corrects_the_spot_tolov_rather_than_adding_one(admin_client):
+    _post(admin_client, kg="1000", price="2", paid_now="500")
+    purchase = LocalPurchase.objects.get()
+    assert _edit(admin_client, purchase, kg="1000", price="2",
+                 paid_now="800").status_code == 302
+    payment = SupplierPayment.objects.get()
+    assert payment.amount == Decimal("800")
+    assert LocalPurchase.objects.get().spot_payment == payment
+
+
+def test_emptying_hozir_tolandi_turns_the_purchase_into_nasiya(admin_client):
+    _post(admin_client, kg="1000", price="2", paid_now="500")
+    purchase = LocalPurchase.objects.get()
+    assert _edit(admin_client, purchase, kg="1000", price="2").status_code == 302
+    assert not SupplierPayment.objects.exists()
+    assert LocalPurchase.objects.get().contract.payable_left_own == Decimal("2000")
+
+
+def test_hozir_tolandi_can_be_added_on_an_edit(admin_client):
+    _post(admin_client, kg="1000", price="2")
+    purchase = LocalPurchase.objects.get()
+    assert _edit(admin_client, purchase, kg="1000", price="2",
+                 paid_now="300").status_code == 302
+    assert LocalPurchase.objects.get().spot_payment.amount == Decimal("300")
+
+
+def test_hozir_tolandi_leaves_room_for_the_tolovlar_made_since(admin_client):
+    _post(admin_client, kg="1000", price="2", paid_now="500")
+    purchase = LocalPurchase.objects.get()
+    SupplierPayment.objects.create(
+        contract=purchase.contract, contract_line=purchase.line, currency="usd",
+        amount=Decimal("1200"), amount_uzs=Decimal("0"), exchange_rate=Decimal("12000"))
+    assert _edit(admin_client, purchase, kg="1000", price="2",
+                 paid_now="900").status_code == 200
+    assert LocalPurchase.objects.get().spot_payment.amount == Decimal("500")
+    assert _edit(admin_client, purchase, kg="1000", price="2",
+                 paid_now="800").status_code == 302
+
+
+def test_resaving_the_edit_form_untouched_moves_nothing(admin_client):
+    _post(admin_client, currency="uzs", kg="1000", price="16500", paid_now="5000000")
+    purchase = LocalPurchase.objects.get()
+    url = f"/mahalliy-xaridlar/{purchase.pk}/edit/"
+    for _ in range(2):
+        form = admin_client.get(url).context["form"]
+        shown = {name: form[name].value() for name in form.fields}
+        body = {k: "" if v is None else str(v) for k, v in shown.items()}
+        assert admin_client.post(url, body).status_code == 302
+    payment = SupplierPayment.objects.get()
+    assert payment.amount_uzs == Decimal("5000000")
+    assert LocalPurchase.objects.get().line.price_uzs == Decimal("16500")
 
 
 def test_delete_takes_the_purchase_and_its_tolov_away(admin_client):

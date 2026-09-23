@@ -2386,6 +2386,14 @@ class LocalPurchase(models.Model):
                                     related_name="local_purchase", verbose_name="Yuk")
     seller_name = models.CharField("Sotuvchi", max_length=200, blank=True)
     seller_phone = models.CharField("Sotuvchi telefoni", max_length=30, blank=True)
+    # The to'lov typed into "Hozir to'landi" — what the edit form shows back in that
+    # box and rewrites when it changes. A link rather than a match on the izoh: the
+    # to'lov is an ordinary hamkor to'lovi and its izoh can be edited on its own page.
+    # Null on nasiya, and when that to'lov was deleted from the hamkor to'lovlar list.
+    spot_payment = models.OneToOneField(
+        "SupplierPayment", on_delete=models.SET_NULL, null=True, blank=True,
+        editable=False, related_name="local_purchase",
+        verbose_name="Xarid paytidagi to'lov")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="local_purchases",
                                    verbose_name="Kim kiritdi")

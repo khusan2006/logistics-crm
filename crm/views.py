@@ -1151,16 +1151,27 @@ def _save_local_purchase(form, user, purchase=None):
         purchase = LocalPurchase(contract=contract, shipment=shipment, created_by=user)
     purchase.seller_name = data["seller_name"]
     purchase.seller_phone = data["seller_phone"]
-    purchase.save()
 
+    # Hozir to'landi is one to'lov, kept in step with the box on every save: written
+    # the first time a summa is typed, corrected when it changes, and gone when the
+    # box is emptied — the purchase turned out to be nasiya after all.
     paid = data.get("paid_now")
+    spot = purchase.spot_payment
     if paid:
         amount, amount_uzs = convert_pair(paid, contract.currency, rate)
-        SupplierPayment.objects.create(
-            contract=contract, contract_line=line, date=contract.created,
-            currency=contract.currency, amount=amount, amount_uzs=amount_uzs,
-            exchange_rate=rate, method=PayMethod.CASH,
-            note="Xarid paytida to'landi", created_by=user)
+        if spot is None:
+            spot = SupplierPayment(
+                contract=contract, contract_line=line, method=PayMethod.CASH,
+                note="Xarid paytida to'landi", created_by=user)
+        spot.date = contract.created
+        spot.currency, spot.exchange_rate = contract.currency, rate
+        spot.amount, spot.amount_uzs = amount, amount_uzs
+        spot.save()
+        purchase.spot_payment = spot
+    elif spot is not None:
+        purchase.spot_payment = None
+        spot.delete()
+    purchase.save()
     # The narx or kg may have moved what the purchase costs, which is the ceiling its
     # to'lovlar are placed against — same reason `shipment_create` places them again.
     reconcile_supplier_allocations(contract)

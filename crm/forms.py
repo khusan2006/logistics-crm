@@ -798,8 +798,12 @@ class LocalPurchaseForm(forms.Form):
     the marka and the sana are frozen — a sotuv was placed against that marka, in
     that day's FIFO order — and the kg cannot drop below what has left the shelf.
     The valyuta freezes once a to'lov is on it, the rule `contract_locked` keeps for
-    every kelishuv. Hozir to'landi is asked only when creating; money paid later goes
-    through the hamkor to'lov form like any other."""
+    every kelishuv.
+
+    Editing opens the same form as Yangi xarid, filled in — Hozir to'landi included,
+    showing the to'lov it wrote (`LocalPurchase.spot_payment`), so correcting it
+    rewrites that to'lov rather than adding a second. Money paid later still goes
+    through the hamkor to'lov form like any other, and counts against the ceiling."""
 
     created = forms.DateField(label="Sana", widget=date_widget())
     brand = forms.CharField(
@@ -831,6 +835,9 @@ class LocalPurchaseForm(forms.Form):
             _group_thousands(self.fields[name])
         #: kg that are no longer on the lot's shelf — the floor an edit may not cross.
         self.gone_kg = Decimal("0")
+        #: To'lovlar made later through the hamkor form, in the purchase's valyuta —
+        #: Hozir to'landi may only fill what they left of the price.
+        self.paid_since = Decimal("0")
         if purchase is None:
             self.fields["created"].initial = timezone.localdate
             return
@@ -842,7 +849,13 @@ class LocalPurchaseForm(forms.Form):
             "seller_name": purchase.seller_name, "seller_phone": purchase.seller_phone,
             "note": contract.note,
         })
-        del self.fields["paid_now"]
+        spot = purchase.spot_payment
+        if spot is not None:
+            self.initial["paid_now"] = spot.amount_uzs if contract.is_som else spot.amount
+        self.paid_since = sum(
+            (p.amount_uzs if contract.is_som else p.amount
+             for p in contract.supplier_payments.exclude(pk=purchase.spot_payment_id)),
+            Decimal("0"))
         self.gone_kg = lot.kg - lot.available_kg
         if lot.sale_lots.exists():
             for name in ("created", "brand"):
@@ -883,9 +896,11 @@ class LocalPurchaseForm(forms.Form):
         kg, price, paid = cleaned.get("kg"), cleaned.get("price"), cleaned.get("paid_now")
         if kg and price and paid:
             total = (kg * price).quantize(Decimal("0.01"))
-            if paid > total:
+            if paid > total - self.paid_since:
                 self.add_error("paid_now", f"Xarid summasidan ({_clean_number(total)}) "
-                                           "ko'p bo'lmaydi")
+                                           "ko'p bo'lmaydi"
+                               + (f" — keyin {_clean_number(self.paid_since)} to'langan"
+                                  if self.paid_since else ""))
         return cleaned
 
 
