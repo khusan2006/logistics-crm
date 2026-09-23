@@ -3067,6 +3067,65 @@
     else { document.addEventListener('DOMContentLoaded', function () { enhance(); }); }
   })();
 
+  // An empty sana box opens on THIS month and year the moment it is clicked, so
+  // the operator types the day alone instead of the whole date. A date input holds
+  // a whole date or nothing — there is no half-filled state to render — so today's
+  // date is written in, and the browser's own segment order decides where the
+  // caret lands.
+  //
+  // It is taken back out again if nothing is typed: these boxes include the ones
+  // that MEAN something by being empty (kutilgan sana, to'lov muddati, the day a
+  // kod is to be handed over), and a date left behind by a stray click would read
+  // as a promise somebody made. Only a box this wrote is ever cleared.
+  (function () {
+    var MINE = 'dateSeeded';
+
+    function today() {
+      var now = new Date();
+      // Local, not toISOString(): that one converts to UTC, which in Tashkent
+      // (+05:00) is still yesterday until five in the morning.
+      return now.getFullYear() + '-' +
+        String(now.getMonth() + 1).padStart(2, '0') + '-' +
+        String(now.getDate()).padStart(2, '0');
+    }
+    function seedable(el) {
+      return el && el.matches && el.matches('input[type=date]') &&
+        !el.disabled && !el.readOnly && !el.value;
+    }
+    document.addEventListener('focusin', function (e) {
+      var el = e.target;
+      if (!seedable(el)) { return; }
+      el.value = today();
+      el.dataset[MINE] = '1';
+    });
+    document.addEventListener('input', function (e) {
+      // Typed in, or picked out of the calendar: the date is the operator's now
+      // and stays whatever they left it as. Any input event says so — the seed
+      // above writes the value straight and fires none, so one arriving here is
+      // somebody else's.
+      if (e.target.dataset && e.target.dataset[MINE] === '1') {
+        delete e.target.dataset[MINE];
+      }
+    });
+    document.addEventListener('focusout', function (e) {
+      var el = e.target;
+      if (!el.dataset || el.dataset[MINE] !== '1') { return; }
+      delete el.dataset[MINE];
+      el.value = '';
+    });
+    // Saved straight from the box — Enter, or a click on Saqlash that the blur
+    // above has not run for yet. An untyped seed must not travel with the form.
+    document.addEventListener('submit', function (e) {
+      if (!e.target.querySelectorAll) { return; }
+      e.target.querySelectorAll('input[type=date]').forEach(function (el) {
+        if (el.dataset[MINE] === '1') {
+          delete el.dataset[MINE];
+          el.value = '';
+        }
+      });
+    }, true);
+  })();
+
   // Grab-and-drag a table that is wider than its box. On a laptop with no
   // horizontal wheel the only way sideways was the scrollbar at the bottom of a
   // long table, which means scrolling down to reach it and losing the rows you
