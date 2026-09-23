@@ -890,6 +890,10 @@
       if (dot !== -1) { s = s.slice(0, dot + 1) + s.slice(dot + 1).replace(/\./g, ''); }
       return s;
     }
+    // Shared, because a form is READ in two places now: the submit handler below
+    // strips the grouping before the POST, and the birja plan preview has to send
+    // the server exactly what that POST would carry — "30 000" is not a number.
+    window.moneyNumeric = toNumeric;
     function format(value) {
       var s = toNumeric(value);
       if (s === '' || s === '.') { return s; }
@@ -1637,7 +1641,13 @@
         var seq = 0;
         function refresh() {
           var mine = ++seq;
-          var data = new URLSearchParams(new FormData(form)).toString();
+          var data = new URLSearchParams(new FormData(form));
+          // The grouped boxes go as plain numbers, the way the submit handler
+          // sends them — a form the server reads as invalid previews nothing.
+          form.querySelectorAll('input[data-money][name]').forEach(function (el) {
+            data.set(el.name, window.moneyNumeric(el.value));
+          });
+          data = data.toString();
           fetch(box.getAttribute('data-plan-preview') + '?' + data,
                 { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(function (r) { return r.ok ? r.text() : ''; })
