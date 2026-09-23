@@ -918,3 +918,17 @@ def test_both_birja_defaults_can_still_be_switched_off(admin_client):
     assert not ctx["show_all"]
     page = admin_client.get("/birja/yuklar/").content.decode()
     assert "all=0" in page and "sort=0" in page       # the ways back out
+
+
+def test_the_narx_box_opens_labelled_in_the_currency_the_picker_shows(admin_client):
+    """A new birja kelishuv opens on so'm, so the narx label must not say USD —
+    base.html retitles it only when the picker is CHANGED, and it is not touched
+    on a form the operator agrees with."""
+    # The label as DRAWN — base.html carries the same words in a comment too.
+    som = "<span>1 kg narxi (so&#x27;m)</span>"
+    dollar = "<span>1 kg narxi (USD)</span>"
+    page = admin_client.get("/birja/kelishuvlar/new/").content.decode()
+    assert som in page, "the birja narx box still calls itself something else"
+    assert dollar not in page
+    eron = admin_client.get("/contracts/new/").content.decode()
+    assert dollar in eron and som not in eron

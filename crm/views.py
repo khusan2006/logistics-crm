@@ -1404,7 +1404,7 @@ def birja_shift_preview(request, pk=None):
     form = ContractForm(request.GET, instance=contract, birja=True)
     lines = ContractLineFormSet(
         request.GET, instance=contract, birja=True,
-        form_kwargs={"currency": contract_currency(request.GET, contract)})
+        form_kwargs={"currency": contract_currency(request.GET, contract, birja=True)})
     if not (form.is_valid() and lines.is_valid()):
         return render(request, "crm/_birja_shift.html", {"plan": None})
 
@@ -1444,7 +1444,8 @@ def contract_create(request, birja=False):
     # validated. See `BaseContractLineFormSet`.
     lines = ContractLineFormSet(
         request.POST or None, birja=birja,
-        form_kwargs={"currency": contract_currency(request.POST or None)})
+        form_kwargs={"currency": contract_currency(request.POST or None,
+                                                    birja=birja)})
     title = "Yangi birja kelishuv" if birja else "Yangi kelishuv"
     if request.method == "POST":
         if form.is_valid() and lines.is_valid():

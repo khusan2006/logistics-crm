@@ -654,7 +654,7 @@ def contract_locked(contract):
         contract.supplier_payments.exists() or contract.shipments.exists()))
 
 
-def contract_currency(data, instance=None):
+def contract_currency(data, instance=None, birja=False):
     """Which currency the Mahsulot rows are being typed in, read BEFORE the header
     form has been validated.
 
@@ -669,7 +669,11 @@ def contract_currency(data, instance=None):
         return submitted
     if instance is not None and instance.pk:
         return instance.currency
-    return Currency.USD
+    # A new kelishuv, nothing posted yet: the same currency the picker opens on, so
+    # the narx label above the box agrees with it. A birja purchase is struck in
+    # so'm (see ContractForm) — the label said USD over a So'm picker until the
+    # operator touched the picker, and base.html only retitles on a change.
+    return Currency.UZS if birja else Currency.USD
 
 
 def _clean_percent(percent):

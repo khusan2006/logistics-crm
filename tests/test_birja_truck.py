@@ -355,5 +355,8 @@ def test_a_half_typed_kelishuv_previews_nothing_rather_than_arguing(admin_client
 def test_the_form_carries_the_preview_box(admin_client):
     page = admin_client.get("/birja/kelishuvlar/new/").content.decode()
     assert 'data-plan-preview="/birja/kelishuvlar/reja/"' in page
-    eron = admin_client.get("/kelishuvlar/new/").content.decode()
-    assert "data-plan-preview" not in eron
+    eron = admin_client.get("/contracts/new/")
+    assert eron.status_code == 200
+    # The Eron form carries no plan box — the attribute with a url on it, since the
+    # selector itself is in base.html's script on every page.
+    assert 'data-plan-preview="/' not in eron.content.decode()
