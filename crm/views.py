@@ -11,7 +11,7 @@ from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Exists, F, Max, OuterRef, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
-from django.http import Http404, JsonResponse, QueryDict
+from django.http import Http404, HttpResponse, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.defaultfilters import floatformat
 from django.template.loader import render_to_string
@@ -1345,6 +1345,90 @@ def contract_list_url(birja):
     return reverse("birja_contract_list" if birja else "contract_list")
 
 
+def _redistribute_birja(request):
+    """Put every birja truck back where the rule says after a birja kelishuv was
+    added or changed.
+
+    A kelishuv struck earlier but entered later lands in the MIDDLE of the order,
+    and the trucks that went out after it were booked on whatever was open at the
+    time — so they belong on it now. Nothing is asked: the order is the owner's
+    rule, and the form showed what would move before it was saved (see
+    `birja_shift_preview`). Returns the moves, or [] when there was nothing to do.
+
+    A plan that cannot be carried out is reported and NOTHING is moved: those are
+    the cases a person has to look at (a truck carrying two markalar, kg that fit
+    nowhere), and half a redistribution is worse than none."""
+    plan = birja_rule.plan_redistribution()
+    if plan.problems:
+        messages.warning(request, "Yuklar qayta taqsimlanmadi: "
+                                  + "; ".join(plan.problems))
+        return []
+    if not plan.moves:
+        return []
+    done = birja_rule.apply_redistribution(plan)
+    for move, yuklar in done:
+        target = " + ".join(f"{yuk.contract.code} · {birja_rule.kg_text(yuk.kg)} kg"
+                            for yuk in yuklar)
+        AuditLog.record(
+            request.user, AuditLog.Action.UPDATE, "Yuk", move.shipment.pk,
+            f"Birja tartibi: {move.brand} {move.now.code} → {target}"[:255])
+    return done
+
+
+def _redistribution_message(done):
+    """The flash after a kelishuv moved trucks: which yuk went where."""
+    where = "; ".join(
+        f"#{move.shipment.pk} {move.now.code} → "
+        + " + ".join(f"{yuk.contract.code} · {birja_rule.kg_text(yuk.kg)} kg"
+                     for yuk in yuklar)
+        for move, yuklar in done)
+    return f"{len(done)} ta yuk qayta taqsimlandi: {where}"
+
+
+@role_required(User.Role.ADMIN)
+def birja_shift_preview(request, pk=None):
+    """What saving THIS birja kelishuv would move, drawn under the form while it is
+    being filled in.
+
+    A dry run of the real thing rather than a second calculation of it: the posted
+    kelishuv is saved, the redistribution planned against it, the page rendered —
+    and then the whole lot is rolled back. So what the preview promises is what
+    saving does, down to the kg.
+
+    Whatever the form says is read the way the form itself reads it (same form,
+    same formset), and anything that does not validate simply shows nothing —
+    the operator is mid-typing, not wrong."""
+    contract = get_object_or_404(Contract, pk=pk) if pk else None
+    if contract is not None and not contract.is_birja:
+        raise Http404
+    form = ContractForm(request.GET, instance=contract, birja=True)
+    lines = ContractLineFormSet(
+        request.GET, instance=contract, birja=True,
+        form_kwargs={"currency": contract_currency(request.GET, contract)})
+    if not (form.is_valid() and lines.is_valid()):
+        return render(request, "crm/_birja_shift.html", {"plan": None})
+
+    html = None
+    try:
+        with transaction.atomic():
+            saved = form.save(commit=False)
+            if saved.partner_id is None:
+                saved.partner = birja_partner()
+            saved.created_by = request.user
+            saved.save()
+            _save_lines(lines, saved)
+            plan = birja_rule.plan_redistribution()
+            # Rendered INSIDE the dry run: every kod and kg on the page belongs to
+            # rows that are about to be rolled back, and reading them afterwards
+            # would be reading a kelishuv that no longer exists.
+            html = render(request, "crm/_birja_shift.html",
+                          {"plan": plan, "contract": saved}).content
+            raise _Rollback
+    except _Rollback:
+        pass
+    return HttpResponse(html)
+
+
 @role_required(User.Role.ADMIN)
 def contract_create(request, birja=False):
     """A new kelishuv. `birja=True` opens the same form for a purchase made on the
@@ -1376,7 +1460,12 @@ def contract_create(request, birja=False):
                 f"Yangi {'birja ' if birja else ''}kelishuv: "
                 f"{contract.code} · {contract.brand_summary}",
             )
-            messages.success(request, "Kelishuv qo'shildi")
+            # A birja kelishuv entered after the trucks that belong on it lands in
+            # the middle of the order — so the trucks go where the rule says. What
+            # moves was shown under the form before it was saved.
+            done = _redistribute_birja(request) if birja else []
+            messages.success(request, "Kelishuv qo'shildi"
+                             + (f" — {_redistribution_message(done)}" if done else ""))
             return form_success(request, contract_list_url(birja))
         return _contract_form_response(request, form, lines, title, invalid=True)
     return _contract_form_response(request, form, lines, title)
@@ -1385,8 +1474,14 @@ def contract_create(request, birja=False):
 def _contract_form_response(request, form, lines, title, invalid=False):
     # Nechta mashina used to be a lone box rendered after the rows (`lines_after`);
     # it is a column of the rows themselves now, so there is nothing left to append.
-    return form_response(request, form, title, invalid=invalid,
-                         extra_context={"lines": lines, "lines_legend": "Mahsulotlar"})
+    extra = {"lines": lines, "lines_legend": "Mahsulotlar"}
+    if form.birja:
+        # What saving this kelishuv would move, live under the form — the trucks
+        # that belong on it once it takes its place in the order.
+        extra["plan_preview_url"] = (
+            reverse("birja_shift_preview_edit", args=[form.instance.pk])
+            if form.instance.pk else reverse("birja_shift_preview"))
+    return form_response(request, form, title, invalid=invalid, extra_context=extra)
 
 
 @role_required(User.Role.ADMIN)
@@ -1421,7 +1516,11 @@ def contract_edit(request, pk):
                 request.user, AuditLog.Action.UPDATE, "Kelishuv", contract.pk,
                 f"Kelishuv tahrirlandi: {contract.code} · {contract.brand_summary}",
             )
-            messages.success(request, "Kelishuv yangilandi")
+            # A birja kelishuv whose sana or kg moved changes which trucks belong
+            # on it — see `_redistribute_birja` and the preview under the form.
+            done = _redistribute_birja(request) if birja else []
+            messages.success(request, "Kelishuv yangilandi"
+                             + (f" — {_redistribution_message(done)}" if done else ""))
             return form_reload(request, contract_list_url(birja))
         return _contract_form_response(request, form, lines, title, invalid=True)
     return _contract_form_response(request, form, lines, title)

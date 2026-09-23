@@ -13,6 +13,10 @@
   from a dry run as the kg is typed, so what shifts is on screen before Saqlash is
   pressed rather than in a message afterwards.
   {% endcomment %}
+  {% if plan_preview_url %}
+  {# What saving this birja kelishuv moves — see crm/_birja_shift.html. #}
+  <div data-plan-preview="{{ plan_preview_url }}"></div>
+  {% endif %}
   {% if shift_preview_url %}
   <div data-shift-preview="{{ shift_preview_url }}"></div>
   {% endif %}

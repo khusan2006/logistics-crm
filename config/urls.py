@@ -38,6 +38,12 @@ urlpatterns = [
          name="birja_contract_create"),
     path("birja/kelishuvlar/export.xlsx", crm_views.contract_list_export,
          {"birja": True}, name="birja_contract_list_export"),
+    # What saving a birja kelishuv would move, drawn live under its form. Two
+    # routes for the one view: a kelishuv being created has no pk yet.
+    path("birja/kelishuvlar/reja/", crm_views.birja_shift_preview,
+         name="birja_shift_preview"),
+    path("birja/kelishuvlar/<int:pk>/reja/", crm_views.birja_shift_preview,
+         name="birja_shift_preview_edit"),
     path("birja/yuklar/", crm_views.shipment_list, {"birja": True},
          name="birja_shipment_list"),
     path("birja/yuklar/new/", crm_views.shipment_create, {"birja": True},

@@ -272,3 +272,88 @@ def test_a_row_a_mijoz_bought_from_cannot_leave_the_truck(admin_client):
     assert "kg sotilgan" in resp.content.decode()
     part_row.refresh_from_db()
     assert part_row.kg == Decimal("5000.000")
+
+
+# --- a kelishuv entered after the trucks that belong on it ---------------------------
+
+def _new_kelishuv_post(created, kg="30000", price="1.00", brand=BRAND):
+    return {"currency": "usd", "created": created, "note": "",
+            **line_data({"brand": brand, "kg": kg, "price": price})}
+
+
+def test_a_kelishuv_struck_earlier_pulls_the_trucks_booked_after_it(admin_client):
+    """The order is what decides, not the order things were typed in: a kelishuv
+    dated before the open one takes the trucks that went out after that date."""
+    later = _kelishuv("2026-09-10", ("30000", "1.10"))
+    truck = make_shipment(contract_line=later.lines.get(), kg="20000",
+                          status=ShipmentStatus.arrival(), sent="2026-09-12",
+                          arrived="2026-09-12")
+    resp = admin_client.post("/birja/kelishuvlar/new/",
+                             _new_kelishuv_post("2026-09-07"))
+    assert resp.status_code == 302
+    earlier = Contract.objects.exclude(pk=later.pk).get()
+    truck.refresh_from_db()
+    assert truck.contract == earlier                      # moved onto the older one
+    assert later.lines.get().shipped_kg == 0
+
+
+def test_the_flash_names_every_yuk_that_moved(admin_client):
+    later = _kelishuv("2026-09-10", ("30000", "1.10"))
+    truck = make_shipment(contract_line=later.lines.get(), kg="20000",
+                          status=ShipmentStatus.arrival(), sent="2026-09-12",
+                          arrived="2026-09-12")
+    resp = admin_client.post("/birja/kelishuvlar/new/",
+                             _new_kelishuv_post("2026-09-07"), follow=True)
+    said = " ".join(str(m) for m in resp.context["messages"])
+    assert f"#{truck.pk}" in said and "qayta taqsimlandi" in said
+
+
+def test_a_kelishuv_that_changes_nothing_moves_nothing(admin_client):
+    """A kelishuv struck after the trucks went out leaves them where they are."""
+    open_one = _kelishuv("2026-09-07", ("30000", "1.00"))
+    truck = make_shipment(contract_line=open_one.lines.get(), kg="20000",
+                          status=ShipmentStatus.arrival(), sent="2026-09-08",
+                          arrived="2026-09-08")
+    resp = admin_client.post("/birja/kelishuvlar/new/",
+                             _new_kelishuv_post("2026-09-20"), follow=True)
+    truck.refresh_from_db()
+    assert truck.contract == open_one
+    assert "qayta taqsimlandi" not in " ".join(str(m) for m in resp.context["messages"])
+
+
+def test_the_preview_says_what_saving_would_move_and_writes_nothing(admin_client):
+    later = _kelishuv("2026-09-10", ("30000", "1.10"))
+    truck = make_shipment(contract_line=later.lines.get(), kg="20000",
+                          status=ShipmentStatus.arrival(), sent="2026-09-12",
+                          arrived="2026-09-12")
+    resp = admin_client.get("/birja/kelishuvlar/reja/",
+                            _new_kelishuv_post("2026-09-07"))
+    page = resp.content.decode()
+    assert f"#{truck.pk}" in page and "1 ta yuk qayta taqsimlanadi" in page
+    # A dry run: the kelishuv it planned against is gone again, and so is the move.
+    assert Contract.objects.count() == 1
+    truck.refresh_from_db()
+    assert truck.contract == later
+
+
+def test_the_preview_of_a_kelishuv_that_moves_nothing_is_empty(admin_client):
+    open_one = _kelishuv("2026-09-07", ("30000", "1.00"))
+    make_shipment(contract_line=open_one.lines.get(), kg="20000",
+                  status=ShipmentStatus.arrival(), sent="2026-09-08",
+                  arrived="2026-09-08")
+    page = admin_client.get("/birja/kelishuvlar/reja/",
+                            _new_kelishuv_post("2026-09-20")).content.decode()
+    assert "qayta taqsimlanadi" not in page
+
+
+def test_a_half_typed_kelishuv_previews_nothing_rather_than_arguing(admin_client):
+    page = admin_client.get("/birja/kelishuvlar/reja/",
+                            {"currency": "usd", "created": ""}).content.decode()
+    assert page.strip() == ""
+
+
+def test_the_form_carries_the_preview_box(admin_client):
+    page = admin_client.get("/birja/kelishuvlar/new/").content.decode()
+    assert 'data-plan-preview="/birja/kelishuvlar/reja/"' in page
+    eron = admin_client.get("/kelishuvlar/new/").content.decode()
+    assert "data-plan-preview" not in eron

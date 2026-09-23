@@ -1620,6 +1620,43 @@
     enhance(document);
   })();
 
+  // Birja redistribution preview ([data-plan-preview]): a birja kelishuv struck
+  // earlier but entered later takes its place in the ORDER, and the trucks booked
+  // after it belong on it. Saving does that either way; this is the operator seeing
+  // which yuklar move first. The whole form is sent, because the sana, the markalar
+  // and the kg all decide the answer — and it is the same form the server will
+  // later save, so the preview cannot disagree with the result.
+  (function () {
+    function enhance(root) {
+      (root || document).querySelectorAll('[data-plan-preview]').forEach(function (box) {
+        if (box.dataset.planReady) { return; }
+        box.dataset.planReady = '1';
+        var form = box.closest('form');
+        if (!form) { return; }
+        var timer = null;
+        var seq = 0;
+        function refresh() {
+          var mine = ++seq;
+          var data = new URLSearchParams(new FormData(form)).toString();
+          fetch(box.getAttribute('data-plan-preview') + '?' + data,
+                { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (html) {
+              // A slower earlier request must not overwrite a newer answer.
+              if (mine === seq) { box.innerHTML = html; }
+            })
+            .catch(function () { /* preview is advisory — never block the form */ });
+        }
+        function later() { clearTimeout(timer); timer = setTimeout(refresh, 400); }
+        form.addEventListener('input', later);
+        form.addEventListener('change', later);
+        refresh();
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
   // FIFO shift preview ([data-shift-preview]): correcting an old sotuv's kg empties
   // its lot sooner and pushes every sotuv behind it onto different lots. The server
   // dry-runs that and renders the result here while the kg is being typed, so the
