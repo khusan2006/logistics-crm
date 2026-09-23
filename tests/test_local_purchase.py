@@ -13,7 +13,7 @@ import pytest
 from conftest import line_data, supplier_payment_rows
 
 from crm.models import (
-    Contract, Customer, LocalPurchase, Sale, Shipment, ShipmentStatus, SupplierPayment,
+    AuditLog, Contract, Customer, LocalPurchase, Sale, Shipment, ShipmentStatus, SupplierPayment,
     brand_on_hand_kg, local_partner,
 )
 
@@ -219,6 +219,10 @@ def test_an_edit_corrects_the_spot_tolov_rather_than_adding_one(admin_client):
     payment = SupplierPayment.objects.get()
     assert payment.amount == Decimal("800")
     assert LocalPurchase.objects.get().spot_payment == payment
+    assert LocalPurchase.objects.get().contract.payable_left_own == Decimal("1200")
+    assert "hozir to'landi" in AuditLog.objects.latest("pk").summary
+    _edit(admin_client, purchase, kg="1000", price="2", paid_now="300")
+    assert LocalPurchase.objects.get().contract.payable_left_own == Decimal("1700")
 
 
 def test_emptying_hozir_tolandi_turns_the_purchase_into_nasiya(admin_client):

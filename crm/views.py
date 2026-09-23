@@ -1256,12 +1256,29 @@ def local_purchase_edit(request, pk):
     title = "Xaridni tahrirlash"
     if request.method == "POST":
         if form.is_valid():
+            # Hozir to'landi is a kassa movement: a change to it goes in the Tarix line,
+            # or a to'lov resized or deleted from here would leave no trace.
+            was_paid = form.initial.get("paid_now")
             with transaction.atomic():
                 _save_local_purchase(form, request.user, purchase)
+            paid = form.cleaned_data.get("paid_now") or None
+            currency = purchase.contract.currency
+            if was_paid is None and paid is None:
+                paid_note = ""
+            elif was_paid is None:
+                paid_note = f" · hozir to'landi {money_in(paid, currency)} qo'shildi"
+            elif paid is None:
+                paid_note = f" · hozir to'landi {money_in(was_paid, currency)} o'chirildi"
+            elif paid != was_paid:
+                paid_note = (f" · hozir to'landi {money_in(was_paid, currency)} → "
+                             f"{money_in(paid, currency)}")
+            else:
+                paid_note = ""
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Mahalliy xarid", purchase.pk,
                 f"Mahalliy xarid tahrirlandi: {purchase.contract.code} · "
-                f"{form.cleaned_data['brand']} · {_kg(form.cleaned_data['kg'])} kg")
+                f"{form.cleaned_data['brand']} · {_kg(form.cleaned_data['kg'])} kg"
+                + paid_note)
             messages.success(request, "Xarid yangilandi")
             return form_reload(request, reverse("local_purchase_list"))
         return form_response(request, form, title, invalid=True)
