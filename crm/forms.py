@@ -4,9 +4,11 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django import forms
 from django.db.models import Prefetch, Q
+from django.template.loader import render_to_string
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.utils.functional import cached_property
+from django.utils.safestring import mark_safe
 
 from .models import (
     LEGACY_RATE, Contract, ContractExpense, ContractLine, Currency, Customer,
@@ -24,6 +26,7 @@ from .models import (
 # `birja` is a flag on half the forms below, so the module goes by another name.
 from . import birja as birja_rule
 from .formatting import normalize_container, phone_intl_widget, validate_intl_phone
+from .geo import LocationError, resolve_location
 from .yozuv import marka_kaliti, marka_nomi
 from .templatetags.crm_extras import rate, som, usd
 
@@ -476,6 +479,32 @@ class PartnerForm(forms.ModelForm):
         return validate_intl_phone(self.cleaned_data.get("phone"))
 
 
+class LocationPickerWidget(forms.TextInput):
+    """The joylashuv box with its map, "here" and search around it.
+
+    It posts one text field: coordinates or a pasted link. The page's own script
+    (static/js/geo.js) only ever writes "lat, lng" into that box — the server reads
+    the box, so a phone with no JavaScript, or a map that failed to load, still
+    saves whatever was typed."""
+
+    template_name = "crm/widgets/location_picker.html"
+
+    def __init__(self, attrs=None):
+        super().__init__({"autocomplete": "off", "inputmode": "url",
+                          "placeholder": "Havola yoki koordinata",
+                          **(attrs or {})})
+
+    def get_context(self, name, value, attrs):
+        context = super().get_context(name, value, attrs)
+        context["parse_url"] = reverse_lazy("geo_parse")
+        return context
+
+    def render(self, name, value, attrs=None, renderer=None):
+        # Through the project's template engine rather than the form renderer, which
+        # does not look in templates/.
+        return render_to_string(self.template_name, self.get_context(name, value, attrs))
+
+
 class CustomerForm(forms.ModelForm):
     """A mijoz, and optionally the money they have already handed over.
 
@@ -495,13 +524,21 @@ class CustomerForm(forms.ModelForm):
         label="Avans valyutasi", choices=Currency.choices, initial=Currency.USD,
         required=False)
 
+    location = forms.CharField(
+        label="Joylashuv", required=False, max_length=2000,
+        # The map names are marked lotin: in kiril mode "Google" reads "Гоогле".
+        help_text=mark_safe("<span data-lotin>Google Maps, Yandex, 2GIS</span> havolasi "
+                            "yoki koordinata — qaysi biri qulay bo'lsa."),
+        widget=LocationPickerWidget())
+
     class Meta:
         model = Customer
-        fields = ["name", "phone", "address", "note"]
+        fields = ["name", "phone", "address", "location", "note"]
         widgets = {"note": forms.Textarea(attrs={"rows": 3}), "phone": phone_intl_widget()}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["location"].initial = self.instance.coordinates
         # Only when creating. Editing a mijoz is not the place to book money — the
         # To'lov button beside them already is, and it records a date and a usul.
         if self.instance.pk:
@@ -510,6 +547,19 @@ class CustomerForm(forms.ModelForm):
 
     def clean_phone(self):
         return validate_intl_phone(self.cleaned_data.get("phone"))
+
+    def clean_location(self):
+        """Whatever was pasted, read down to a point — or None for an empty box,
+        which is how a joylashuv is taken off a mijoz."""
+        try:
+            return resolve_location(self.cleaned_data.get("location"))
+        except LocationError as err:
+            raise forms.ValidationError(str(err)) from err
+
+    def save(self, commit=True):
+        point = self.cleaned_data.get("location")
+        self.instance.latitude, self.instance.longitude = point or (None, None)
+        return super().save(commit)
 
     def opening_payment(self, customer, user=None):
         """The avans as a saved CustomerPayment, or None when nothing was typed.

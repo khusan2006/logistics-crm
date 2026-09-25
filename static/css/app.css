@@ -3671,3 +3671,123 @@ form.stacked .lineset-field--fee_bearer label {
     font-size: 16px;
   }
 }
+
+/* Joylashuv — the picker on the mijoz form (crm/widgets/location_picker.html) and
+   the map + Ulashish on the joylashuv modal (_customer_location_body.html). The
+   picker is built of spans because the form draws each field inside a <p>. */
+.geo-picker, .geo-panel, .geo-map, .geo-status, .geo-hint { display: block; }
+/* The picker hides and shows its own parts with [hidden]; every `display` rule
+   below would otherwise beat it. */
+.geo-picker [hidden], .geo-map[hidden] { display: none !important; }
+
+.geo-input { display: flex; gap: 6px; align-items: center; }
+.geo-input input { flex: 1; min-width: 0; }
+.geo-icon-btn {
+  flex: none; display: grid; place-items: center; width: 38px; height: 38px;
+  border-radius: var(--r-sm); border: 1px solid var(--border-strong);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.geo-icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+.geo-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+/* Equal halves when they fit, a full-width row each when they do not. */
+.geo-actions .btn { flex: 1 1 auto; justify-content: center; }
+
+.geo-status { margin-top: 6px; font-size: 13px; color: var(--text-muted); }
+.geo-status:empty { display: none; }
+.geo-status.is-ok { color: var(--success); }
+.geo-status.is-error { color: var(--danger); }
+
+.geo-panel { margin-top: 10px; }
+.geo-mapwrap {
+  display: block; position: relative; border: 1px solid var(--border);
+  border-radius: var(--r); overflow: hidden; background: var(--surface-hover);
+}
+.geo-mapwrap .geo-map { height: 320px; z-index: 0; }
+
+/* Search floats over the map's top edge rather than taking a row of its own. */
+.geo-search {
+  position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1001;
+  display: flex; align-items: center; gap: 4px; padding: 0 4px 0 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-lg);
+}
+.geo-search-ico { flex: none; color: var(--text-faint); }
+.geo-picker .geo-search input[type=text] {
+  flex: 1; min-width: 0; width: auto; max-width: none; height: 38px; margin: 0;
+  padding: 0 4px; border: 0; background: transparent; box-shadow: none;
+}
+.geo-picker .geo-search input[type=text]:focus { outline: none; }
+.geo-search-go {
+  flex: none; height: 30px; padding: 0 12px; border: 0; border-radius: var(--r-sm);
+  background: var(--accent); color: var(--on-accent); font: inherit; font-size: 13px;
+  font-weight: 600; cursor: pointer;
+}
+.geo-search-go:hover { background: var(--accent-hover); }
+.geo-results {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 1002;
+  display: block; max-height: 220px; overflow-y: auto; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-lg);
+  font-size: 13px; color: var(--text-muted);
+}
+.geo-results:not(:has(button)) { padding: 10px 12px; }
+.geo-result {
+  display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left;
+  padding: 7px 9px; border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.geo-result strong { font-weight: 600; }
+.geo-result span { color: var(--text-muted); font-size: 12px; }
+.geo-result:hover, .geo-result:focus-visible { background: var(--surface-hover); outline: none; }
+
+/* "Hozirgi joylashuvim" on the map, sitting on top of the zoom buttons and drawn
+   like them so the three read as one set of controls. */
+.geo-locate {
+  position: absolute; right: 10px; bottom: 86px; z-index: 1001;
+  display: grid; place-items: center; width: 34px; height: 34px;
+  border: 2px solid rgba(0, 0, 0, 0.2); background-clip: padding-box;
+  border-radius: 4px; background-color: #fff; color: #333; cursor: pointer;
+}
+.geo-locate:hover { background-color: #f4f4f4; }
+.is-busy svg { animation: geo-spin 0.9s linear infinite; }
+@keyframes geo-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .is-busy svg { animation: none; } .is-busy { opacity: 0.6; } }
+
+.geo-place {
+  display: flex; align-items: flex-start; gap: 7px; margin-top: 8px;
+  font-size: 14px; color: var(--text); line-height: 1.35;
+}
+.geo-place > svg { flex: none; margin-top: 1px; color: var(--accent); }
+.geo-place-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.geo-source {
+  flex: none; padding: 1px 8px; border-radius: var(--r-pill);
+  background: var(--accent-soft); color: var(--accent); font-size: 12px; white-space: nowrap;
+}
+.geo-source:empty { display: none; }
+.geo-hint { margin-top: 4px; font-size: 12px; color: var(--text-faint); }
+
+@media (max-width: 640px) {
+  /* A thumb needs room to drag a pin: most of the screen, not a letterbox. */
+  .geo-mapwrap .geo-map { height: 55vh; min-height: 280px; max-height: 460px; }
+}
+
+.geo-map {
+  height: 280px; border-radius: var(--r-sm);
+  border: 1px solid var(--border); overflow: hidden; z-index: 0;
+}
+.geo-mapwrap .geo-map { border: 0; border-radius: 0; }
+.geo-view .geo-map { margin-top: 0; }
+.geo-facts {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px;
+  margin: 12px 0; font-size: 14px;
+}
+.geo-facts dt { color: var(--text-muted); }
+.geo-facts dd { margin: 0; overflow-wrap: anywhere; }
+.geo-share { display: flex; flex-direction: column; gap: 8px; }
+.geo-share-main { justify-content: center; }
+.geo-share-main[hidden] { display: none; }
+.geo-share-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.geo-share-row .btn { flex: 1 1 auto; justify-content: center; }
+/* The pin beside a mijoz's Manzil that opens the joylashuv modal. */
+.geo-pin { display: inline-flex; vertical-align: -3px; margin-left: 4px; color: var(--accent); }
+.geo-pin svg { width: 16px; height: 16px; }

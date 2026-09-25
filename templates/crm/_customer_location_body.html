@@ -1,0 +1,35 @@
+{% load crm_extras %}
+{% comment %}
+A mijoz's joylashuv and the ways of passing it on. Ulashish is the phone's own
+share sheet — Telegram, WhatsApp, SMS, whatever is installed — and only appears
+where the browser has one. The named buttons below it are there regardless:
+Telegram's in-app browser on Android has no share sheet, and on a computer the
+operator usually wants one app and not a menu.
+{% endcomment %}
+<div class="geo-view">
+  <div class="geo-map" data-lotin data-geo-view data-lat="{{ customer.latitude|stringformat:'f' }}" data-lng="{{ customer.longitude|stringformat:'f' }}"></div>
+
+  <dl class="geo-facts">
+    {% if customer.address %}<dt>Manzil</dt><dd>{{ customer.address|lotin }}</dd>{% endif %}
+    {% if customer.phone %}<dt>Telefon</dt><dd>{{ customer.phone|lotin }}</dd>{% endif %}
+    <dt>Koordinata</dt><dd><code>{{ customer.coordinates }}</code></dd>
+  </dl>
+
+  <div class="geo-share" data-geo-share data-share-title="{{ customer.name }}" data-share-text="{{ share_text }}" data-share-url="{{ customer.google_maps_url }}">
+    <button type="button" class="btn geo-share-main" data-share-native hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      Ulashish
+    </button>
+    <div class="geo-share-row">
+      <a class="btn btn-ghost btn-sm" href="{{ telegram_url }}" target="_blank" rel="noopener"><span data-lotin>Telegram</span></a>
+      <a class="btn btn-ghost btn-sm" href="{{ whatsapp_url }}" target="_blank" rel="noopener"><span data-lotin>WhatsApp</span></a>
+      <a class="btn btn-ghost btn-sm" href="{{ sms_url }}">SMS</a>
+      <button type="button" class="btn btn-ghost btn-sm" data-share-copy>Nusxa olish</button>
+    </div>
+    <div class="geo-share-row" title="Xaritada ochish">
+      <a class="btn btn-ghost btn-sm" href="{{ customer.google_maps_url }}" target="_blank" rel="noopener"><span data-lotin>Google Maps</span> ↗</a>
+      <a class="btn btn-ghost btn-sm" href="{{ customer.yandex_maps_url }}" target="_blank" rel="noopener"><span data-lotin>Yandex Maps</span> ↗</a>
+    </div>
+    <span class="geo-status" data-share-status role="status" aria-live="polite"></span>
+  </div>
+</div>

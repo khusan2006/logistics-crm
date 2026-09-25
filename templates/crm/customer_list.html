@@ -30,7 +30,10 @@
       <a href="{% url 'debt_customer' c.pk %}">{{ c.name|lotin }}</a>
     </td>
     <td>{{ c.phone|lotin|default:"—" }}</td>
-    <td>{{ c.address|lotin|default:"—" }}</td>
+    <td>
+      {{ c.address|lotin|default:"—" }}
+      {% if c.has_location %}<a class="geo-pin" href="{% url 'customer_location' c.pk %}" data-modal title="Joylashuv va ulashish" aria-label="Joylashuv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></a>{% endif %}
+    </td>
     <td>{% if c.last_sale %}{{ c.last_sale|date:"d.m.Y" }}{% else %}<span class="muted">—</span>{% endif %}</td>
     <td>{% if c.last_payment %}{{ c.last_payment|date:"d.m.Y" }}{% else %}<span class="muted">—</span>{% endif %}</td>
     <td class="cell-balance">

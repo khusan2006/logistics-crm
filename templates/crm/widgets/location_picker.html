@@ -1,0 +1,54 @@
+{% comment %}
+The joylashuv box and the ways of filling it — the map, the phone's own GPS, or a
+pasted link. Everything here is drawn by the server; static/js/geo.js wires it up
+on page load and on modal:loaded, since a <script> inside a modal never runs.
+
+Two states. With no point yet: the box and two buttons, map folded away. With a
+point: the map opens by itself as the preview, with the place's name under it —
+so the operator sees WHERE, not just two numbers.
+{% endcomment %}
+<span class="geo-picker" data-geo-picker data-parse-url="{{ parse_url }}">
+  <span class="geo-input">
+    <input type="{{ widget.type }}" name="{{ widget.name }}"{% if widget.value != None %} value="{{ widget.value|stringformat:'s' }}"{% endif %}{% for name, value in widget.attrs.items %}{% if value is not False %} {{ name }}{% if value is not True %}="{{ value|stringformat:'s' }}"{% endif %}{% endif %}{% endfor %}>
+    <button type="button" class="geo-icon-btn" data-geo-paste hidden title="Havolani qo'yish" aria-label="Havolani qo'yish">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+    </button>
+    <button type="button" class="geo-icon-btn" data-geo-clear hidden title="Tozalash" aria-label="Joylashuvni tozalash">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>
+  </span>
+
+  <span class="geo-actions" data-geo-actions>
+    <button type="button" class="btn btn-ghost btn-sm" data-geo-open>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+      Xaritadan tanlash
+    </button>
+    <button type="button" class="btn btn-ghost btn-sm" data-geo-here>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/></svg>
+      Hozirgi joylashuvim
+    </button>
+  </span>
+
+  <span class="geo-panel" data-geo-panel hidden>
+    <span class="geo-mapwrap">
+      <span class="geo-map" data-lotin data-geo-map></span>
+      <span class="geo-search">
+        <svg class="geo-search-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" enterkeyhint="search" data-geo-q placeholder="Joy yoki manzilni qidirish…" autocomplete="off" aria-label="Xaritada qidirish">
+        <button type="button" class="geo-search-go" data-geo-search>Qidirish</button>
+        <span class="geo-results" data-geo-results hidden></span>
+      </span>
+      <button type="button" class="geo-locate" data-geo-here title="Hozirgi joylashuvim" aria-label="Hozirgi joylashuvim">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/></svg>
+      </button>
+    </span>
+    <span class="geo-place" data-geo-place hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span class="geo-place-text" data-geo-place-text></span>
+      <span class="geo-source" data-geo-source></span>
+    </span>
+    <span class="geo-hint" data-geo-hint></span>
+  </span>
+
+  <span class="geo-status" data-geo-status role="status" aria-live="polite"></span>
+</span>

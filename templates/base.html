@@ -38,6 +38,10 @@
     })();
   </script>
   <script src="{% static_v 'js/yozuv.js' %}"></script>
+  {# Joylashuv picker + Ulashish. Leaflet itself is fetched by it, and only on a page with a map. #}
+  <script src="{% static_v 'js/geo.js' %}" defer
+          data-leaflet-js="{% static_v 'vendor/leaflet/leaflet.js' %}"
+          data-leaflet-css="{% static_v 'vendor/leaflet/leaflet.css' %}"></script>
   <link rel="stylesheet" href="{% static_v 'css/app.css' %}">
 </head>
 <body>

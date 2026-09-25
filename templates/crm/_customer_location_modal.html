@@ -1,0 +1,15 @@
+{% load crm_extras %}
+<div class="modal-head">
+  <h2>Joylashuv · {{ customer.name|lotin }}</h2>
+  <button type="button" class="modal-x" data-modal-close aria-label="Yopish">&times;</button>
+</div>
+
+{# .modal-confirm for its padding — a modal has none of its own. #}
+<div class="modal-confirm">
+  {% include "crm/_customer_location_body.html" %}
+
+  <div class="modal-actions">
+    <a class="btn btn-ghost" href="{% url 'customer_edit' customer.pk %}" data-modal>Tahrirlash</a>
+    <button type="button" class="btn btn-ghost" data-modal-close>Yopish</button>
+  </div>
+</div>

@@ -2,7 +2,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import date as _date, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
 
 from django.contrib import messages
@@ -27,6 +27,7 @@ from accounts.models import User
 from . import birja as birja_rule
 from .exports import KG, PERCENT, xlsx_book_response, xlsx_response
 from .fifo import apply_plan, blockers, replay, weighted_cost
+from .geo import LocationError, resolve_location
 from .templatetags.crm_extras import money_in, som, usd
 from .forms import (
     ContractForm, ContractLineFormSet, CustomerAvansForm, CustomerForm, LocalPurchaseForm,
@@ -818,6 +819,53 @@ def customer_avans(request, pk):
             return form_reload(request, reverse("customer_list"))
         return form_response(request, form, f"Avans · {customer.name}", invalid=True)
     return form_response(request, form, f"Avans · {customer.name}")
+
+
+@role_required(User.Role.ADMIN)
+def customer_location(request, pk):
+    """The mijoz's joylashuv on a map, with every way of passing it on.
+
+    The share text is built here once, so the native Ulashish sheet and the
+    Telegram / WhatsApp / SMS fallbacks all send the same words."""
+    customer = get_object_or_404(Customer, pk=pk)
+    if not customer.has_location:
+        raise Http404("Mijozning joylashuvi kiritilmagan")
+    lines = [customer.name]
+    if customer.address:
+        lines.append(customer.address)
+    if customer.phone:
+        lines.append(customer.phone)
+    links = [f"Google: {customer.google_maps_url}", f"Yandex: {customer.yandex_maps_url}"]
+    share_text = "\n".join(lines + links)
+    template = ("crm/_customer_location_modal.html" if is_ajax(request)
+                else "crm/customer_location.html")
+    return render(request, template, {
+        "customer": customer, "title": f"Joylashuv · {customer.name}",
+        "share_text": share_text,
+        # Telegram's share page takes the link apart from the words and shows it
+        # first, so the Google link goes in `url` and the rest in `text`.
+        "telegram_url": "https://t.me/share/url?" + urlencode({
+            "url": customer.google_maps_url, "text": "\n".join(lines + links[1:])}, quote_via=quote),
+        "whatsapp_url": "https://wa.me/?" + urlencode({"text": share_text}, quote_via=quote),
+        # `?&body=` rather than `?body=`: the one form both iOS and Android read.
+        "sms_url": "sms:?&" + urlencode({"body": share_text}, quote_via=quote),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def geo_parse(request):
+    """The point in a pasted link or coordinates, as JSON — so the picker can show
+    the pin before the form is saved. The form reads the box again on save; this
+    is only the preview."""
+    try:
+        point = resolve_location(request.GET.get("q", ""))
+    except LocationError as err:
+        return JsonResponse({"error": str(err)}, status=400)
+    if point is None:
+        return JsonResponse({"error": "Bo'sh"}, status=400)
+    lat, lng = point
+    return JsonResponse({"lat": float(lat), "lng": float(lng),
+                         "text": f"{lat.normalize():f}, {lng.normalize():f}"})
 
 
 @role_required(User.Role.ADMIN)

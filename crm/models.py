@@ -620,6 +620,12 @@ class Customer(models.Model):
     name = models.CharField("Ismi", max_length=200)
     phone = models.CharField("Telefon", max_length=30, blank=True)
     address = models.CharField("Manzil", max_length=300, blank=True)
+    # Where the mijoz actually is, beside the Manzil they describe it as. Both or
+    # neither — CustomerForm only ever writes the pair together.
+    latitude = models.DecimalField("Kenglik", max_digits=9, decimal_places=6,
+                                   null=True, blank=True)
+    longitude = models.DecimalField("Uzunlik", max_digits=9, decimal_places=6,
+                                    null=True, blank=True)
     note = models.TextField("Izoh", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -627,6 +633,32 @@ class Customer(models.Model):
         ordering = ["name"]
         verbose_name = "Mijoz"
         verbose_name_plural = "Mijozlar"
+
+    @property
+    def has_location(self):
+        return self.latitude is not None and self.longitude is not None
+
+    @property
+    def _lat(self):
+        return f"{self.latitude.normalize():f}"  # 41.300000 → "41.3", as everywhere
+
+    @property
+    def _lng(self):
+        return f"{self.longitude.normalize():f}"
+
+    @property
+    def coordinates(self):
+        """"41.311081, 69.240562" — the form every map app accepts pasted back."""
+        return f"{self._lat}, {self._lng}" if self.has_location else ""
+
+    @property
+    def google_maps_url(self):
+        return f"https://www.google.com/maps?q={self._lat},{self._lng}"
+
+    @property
+    def yandex_maps_url(self):
+        # Yandex writes the point longitude first.
+        return f"https://yandex.uz/maps/?pt={self._lng},{self._lat}&z=17&l=map"
 
     @property
     def sales_total(self):

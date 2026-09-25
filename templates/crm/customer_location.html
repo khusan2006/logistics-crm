@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% comment %}
+The non-AJAX fallback for the joylashuv modal — opened in a new tab, or with JS
+off. Same body; only the chrome differs.
+{% endcomment %}
+{% block title %}{{ title }} · GranulaLog{% endblock %}
+{% block topbar_title %}Joylashuv · {{ customer.name|lotin }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 720px;">
+  {% include "crm/_customer_location_body.html" %}
+  <div class="modal-actions">
+    <a class="btn btn-ghost" href="{% url 'debt_customer' customer.pk %}">Mijoz sahifasi</a>
+  </div>
+</div>
+{% endblock %}
