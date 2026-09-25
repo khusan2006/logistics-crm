@@ -118,13 +118,24 @@ def _from_url(url):
     query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
     path = unquote(parsed.path)
 
-    if _host_is(host, "yandex.uz", "yandex.ru", "yandex.com", "yandex.kz", "yandex.by"):
+    if (_host_is(host, "yandex.uz", "yandex.ru", "yandex.com", "yandex.kz", "yandex.by")
+            or parsed.scheme in ("yandexnavi", "yandexmaps")):
         # The pin before the map centre: `ll` is only where the map was scrolled to.
-        for key in ("whatshere[point]", "pt", "ll"):
+        for key in ("whatshere[point]", "pt"):
             point = _pair(query.get(key), lng_first=True)
             if point:
                 return point
-        return None
+        # A route (Navigator's "share", or Maps' "Marshrut"): the stops run from~to,
+        # and the mijoz is where it ENDS — the start is only where the sender stood.
+        # Unlike every other Yandex parameter, rtext writes latitude first.
+        stops = [s for s in (query.get("rtext") or "").split("~") if s.strip()]
+        if stops:
+            point = _pair(stops[-1])
+            if point:
+                return point
+        if "lat_to" in query and "lon_to" in query:
+            return _point(query["lat_to"], query["lon_to"])
+        return _pair(query.get("ll"), lng_first=True)
 
     if _host_is(host, "2gis.uz", "2gis.ru", "2gis.kz", "2gis.com"):
         point = _pair(query.get("m"), lng_first=True)
@@ -172,7 +183,7 @@ def parse_location(text):
     if not text:
         return None
     # A link is often shared with a line of text before it ("Мы здесь: https://…").
-    link = re.search(r"(?:https?://|geo:)\S+", text, re.IGNORECASE)
+    link = re.search(r"(?:https?://|yandex(?:navi|maps)://|geo:)\S+", text, re.IGNORECASE)
     if link:
         found = link.group(0)
         if found.lower().startswith("geo:"):

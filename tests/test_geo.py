@@ -92,3 +92,20 @@ def test_resolve_empty_is_none_and_garbage_raises():
     assert geo.resolve_location("  ") is None
     with pytest.raises(geo.LocationError):
         geo.resolve_location("Chilonzor 5-kvartal")
+
+
+@pytest.mark.parametrize("text, expected", [
+    # A route: the start is where the sender stood, the client is where it ends.
+    ("https://yandex.com/navi?rtext=41.262539,69.213128~41.262545,69.213117&rtt=auto",
+     (Decimal("41.262545"), Decimal("69.213117"))),
+    ("https://yandex.uz/maps/?rtext=~41.311081%2C69.240562&rtt=auto",
+     (LAT, LNG)),
+    ("https://yandex.uz/maps/?rtext=41.1,69.1~41.2,69.2~41.311081,69.240562",
+     (LAT, LNG)),
+    ("yandexnavi://build_route_on_map?lat_to=41.311081&lon_to=69.240562",
+     (LAT, LNG)),
+    ("https://yandex.ru/navi/?whatshere%5Bpoint%5D=69.240562%2C41.311081",
+     (LAT, LNG)),
+])
+def test_parse_yandex_routes_take_the_destination(text, expected):
+    assert geo.parse_location(text) == expected
