@@ -2877,6 +2877,8 @@ ul.errorlist li::before { content: "⚠ "; }
 .qa-toggle { margin-top: 6px; }
 .qa-panel { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; padding: 10px; background: var(--surface-2); border-radius: 10px; }
 .qa-panel input { flex: 1 1 140px; min-width: 120px; }
+/* display:flex above beats the [hidden] attribute — the panel stays shut until + is pressed */
+.qa-panel[hidden] { display: none; }
 .qa-msg { flex-basis: 100%; font-size: 12px; }
 
 /* Kelishuv group header rows on the Yuklar table */
