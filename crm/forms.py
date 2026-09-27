@@ -3016,8 +3016,14 @@ class SupplierPaymentTargetForm(forms.Form):
         # birja to'lovlar page should not have to find their one counterparty in
         # among the hamkor ones. Left as None (the plain /supplier-payments/new/
         # URL) it offers everything, which is what it has always done.
+        #
+        # The hamkor side ("0") keeps the mahalliy xaridlar: their nasiya was always
+        # paid from this picker, and dropping them would be a new rule, not a split.
+        if birja:
+            base = base.filter(partner__is_birja=True, partner__is_local=False)
+        elif birja is not None:
+            base = base.filter(partner__is_birja=False)
         if birja is not None:
-            base = base.filter(partner__is_birja=birja, partner__is_local=False)
             self.initial.setdefault("birja", "1" if birja else "0")
         self.fields["contract"].queryset = _keep_if(base, lambda c: c.payable_left_own > 0)
         self.fields["contract"].label_from_instance = (
