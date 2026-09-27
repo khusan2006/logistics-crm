@@ -3378,8 +3378,12 @@ def shipment_create(request, birja=False):
                         # load was until now. A birja truck starts at the exchange and
                         # never leaves the country.
                         shipment.origin = "Birja"
+                    # A birja form asks for the kelish sanasi itself; the one typed
+                    # wins over today. Off the arrival holat there is no arrival yet.
                     if shipment.status.is_arrival:
-                        shipment.arrived = timezone.localdate()
+                        shipment.arrived = shipment.arrived or timezone.localdate()
+                    else:
+                        shipment.arrived = None
                     shipment.save()
                     _save_lines(lines, shipment)
                     parts = _spill_birja(shipment)

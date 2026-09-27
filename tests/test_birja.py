@@ -598,8 +598,10 @@ def test_editing_a_birja_yuk_keeps_its_own_holat():
 def test_a_birja_yuk_posted_on_the_arrival_holat_lands_today(admin_client):
     from django.utils import timezone
     contract = _birja_contract()
-    assert _post_birja_shipment(admin_client, contract, sent=str(timezone.localdate()),
-                                eta="", status=ShipmentStatus.arrival().pk
+    # The form opens with today in the Kelish sanasi box; that is what it posts.
+    today = str(timezone.localdate())
+    assert _post_birja_shipment(admin_client, contract, sent=today, arrived=today,
+                                status=ShipmentStatus.arrival().pk
                                 ).status_code == 302
     shipment = Shipment.objects.get()
     assert shipment.arrived == timezone.localdate() and shipment.logist is None
@@ -936,3 +938,20 @@ def test_the_narx_box_opens_labelled_in_the_currency_the_picker_shows(admin_clie
     assert dollar not in page
     eron = admin_client.get("/contracts/new/").content.decode()
     assert dollar in eron and som not in eron
+
+
+def test_a_birja_yuk_asks_the_kelish_sanasi_not_a_taxminiy_one(admin_client):
+    """A birja yuk is entered once it is already in the ombor, so the form asks
+    when it CAME, and that date is what the yuk keeps — not today's."""
+    contract = _birja_contract()
+    fields = admin_client.get("/birja/yuklar/new/").context["form"].fields
+    assert "eta" not in fields
+    assert fields["arrived"].label == "Kelish sanasi"
+    arrival = ShipmentStatus.arrival()
+    resp = _post_birja_shipment(admin_client, contract, status=arrival.pk,
+                                arrived="2026-07-06")
+    assert resp.status_code == 302
+    assert str(Shipment.objects.get(contract=contract).arrived) == "2026-07-06"
+    # The Eron form is untouched: a taxminiy kelish, and no arrival date yet.
+    eron = admin_client.get("/shipments/new/").context["form"].fields
+    assert "eta" in eron and "arrived" not in eron

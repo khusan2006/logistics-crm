@@ -1391,7 +1391,15 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # Required-ness is decided in `_clean_arrived` against the SUBMITTED holat,
         # not here: a yuk being moved back onto the road must not be blocked by a date
         # that is about to be cleared.
-        if not (self.instance.pk and self.instance.arrived):
+        if birja:
+            # A birja yuk is entered once it is already in the ombor (see the
+            # arrival holat above), so a taxminiy kelish is a guess about a day that
+            # has passed. The real date is asked instead, from the very first save.
+            del self.fields["eta"]
+            self.fields["arrived"].label = "Kelish sanasi"
+            if not self.instance.pk:
+                self.initial.setdefault("arrived", timezone.localdate())
+        elif not (self.instance.pk and self.instance.arrived):
             self.fields.pop("arrived")
         if "driver_advance" in self.fields:
             _group_thousands(self.fields["driver_advance"])

@@ -98,7 +98,7 @@ def test_typing_the_kg_fills_the_rows_oldest_kelishuv_first(page, live_server, w
         page.screenshot(path=os.environ["E2E_SHOT"], full_page=True)
 
     page.fill("[name=sent]", "2026-09-20")
-    page.fill("[name=eta]", "2026-09-25")
+    page.fill("[name=arrived]", "2026-09-21")
     page.click("form.stacked button[type=submit]")
     page.wait_for_load_state("networkidle")
     truck = Shipment.objects.filter(truck__isnull=True).latest("pk")
