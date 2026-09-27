@@ -890,6 +890,10 @@ def test_the_new_tolov_modal_opens_on_the_side_it_was_opened_from(admin_client):
     offered = admin_client.get(
         "/supplier-payments/new/?birja=1").context["form"].fields["contract"]
     assert [c.pk for c in offered.queryset] == [birja.pk]
+    # Opened off the hamkor page, the birja kelishuvlar stay out of it.
+    offered = admin_client.get(
+        "/supplier-payments/new/?birja=0").context["form"].fields["contract"]
+    assert [c.pk for c in offered.queryset] == [hamkor.pk]
     # And the plain link keeps offering everything, as it always has.
     offered = admin_client.get(
         "/supplier-payments/new/").context["form"].fields["contract"]

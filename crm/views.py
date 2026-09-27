@@ -1864,11 +1864,11 @@ def supplier_payment_create(request):
     # should not have to find their one counterparty among every hamkor kelishuv
     # that still owes money. The deep link from a kelishuv row works either way —
     # that kelishuv is in whichever list it belongs to.
-    # True only when the flag is actually there. Absent it stays None and the picker
+    # "1" is the birja page, "0" the hamkor one. Absent it stays None and the picker
     # offers everything — including a mahalliy xarid's nasiya, which is paid through
     # this same modal and would silently drop off a list narrowed to "not birja".
-    birja = True if (request.GET.get("birja") == "1"
-                     or request.POST.get("birja") == "1") else None
+    flag = request.POST.get("birja") or request.GET.get("birja")
+    birja = {"1": True, "0": False}.get(flag)
     target = SupplierPaymentTargetForm(request.POST or None, initial=initial,
                                        birja=birja)
     # Read straight off POST rather than from cleaned_data: the rows have to be BUILT
