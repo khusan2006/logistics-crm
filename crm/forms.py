@@ -4135,7 +4135,8 @@ class ContractExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Fo
     #: A turkum recorded more than once has no single figure to show, so its box
     #: stays empty and additive and the rows are edited from the jadval above —
     #: which is why this modal keeps that jadval while the yuk's grid does not.
-    contract = forms.ModelChoiceField(queryset=Contract.objects.all(),
+    contract = forms.ModelChoiceField(queryset=Contract.objects.filter(partner__is_birja=True),
+                                      error_messages={"invalid_choice": "Kelishuv xarajatlari faqat birja kelishuvlari uchun"},
                                       widget=forms.HiddenInput)
     date = forms.DateField(label="Sana", widget=date_widget(),
                            initial=timezone.localdate)

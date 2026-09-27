@@ -76,7 +76,11 @@ so changing a select keeps it (see crm/_daterange.html).
     <th>Kelishilgan kg</th>
     {% if user.is_admin_role %}
     <th>Narx</th>
+    {% if birja %}
     <th title="Kelishilgan narx ustiga kelishuv xarajatlari, vositachi ulushi va birja transporti — 1 kg uchun. Yukning bojxonasi bunga kirmaydi, u yuk yetib kelgach ma'lum bo'ladi.">Xarajat bilan</th>
+    {% else %}
+    <th title="Kelishilgan narx ustiga vositachi ulushi — 1 kg uchun, to'liq aniqlikda. Yukning bojxonasi va yo'l xarajatlari bunga kirmaydi, ular yukning o'zida.">Xarajat bilan</th>
+    {% endif %}
     <th>Jami</th>
     {% endif %}
     <th title="Har bir marka bo'yicha yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
@@ -189,10 +193,18 @@ so changing a select keeps it (see crm/_daterange.html).
       agreement. It lives on the row because a kelishuv has no detail page of its
       own, next to the to'lov for the same reason: both are money against THIS
       kelishuv.
+
+      Birja only: a broker, a per-kg transport and the side costs are how the
+      exchange is bought. An Eron kelishuv has none of them — its road costs are
+      the yuk's own xarajatlar — so the button stays off that list
+      (contract_expense_create refuses it too). The Xarajat bilan column stays: on
+      Eron it is the narx plus the vositachi cut, at full $/kg precision.
       {% endcomment %}
+      {% if birja %}
       <a class="icon-action" href="{% url 'contract_expense_create' %}?contract={{ c.pk }}" data-modal title="Xarajatlar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
       </a>
+      {% endif %}
       {% comment %}
       Kam qoldiq: offered only while less than 250 kg is still to come
       (Contract.can_close_short), and swapped for the way back once moved.

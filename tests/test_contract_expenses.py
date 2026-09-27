@@ -560,3 +560,29 @@ def test_the_modal_draws_the_grid(birja_valued, admin_client):
     assert 'name="amount_broker"' in html
     assert 'name="amount_transport"' in html
     assert 'name="amount_other"' in html
+
+
+# --- birja only -----------------------------------------------------------------
+
+def test_the_eron_list_offers_no_kelishuv_xarajatlar(contract, admin_client):
+    """Kelishuv xarajatlari were built for the birja: an Eron kelishuv's road costs
+    are its yuklar's own, so the button is not drawn there. The Xarajat bilan column
+    stays on both — on Eron it is the narx plus the vositachi cut, unrounded."""
+    from crm.models import birja_partner
+    birja = Contract.objects.create(partner=birja_partner(), created="2026-07-01")
+    ContractLine.objects.create(contract=birja, brand="LLDPE", kg=KG, price=PRICE)
+    eron = admin_client.get("/contracts/").content.decode()
+    assert "/contract-expenses/new/" not in eron
+    page = admin_client.get("/birja/kelishuvlar/").content.decode()
+    assert f"/contract-expenses/new/?contract={birja.pk}" in page
+    assert "Xarajat bilan" in page
+
+
+def test_an_eron_kelishuv_cannot_be_given_one(contract, admin_client):
+    """Not just hidden: a hand-typed URL is refused on save, and nothing is written."""
+    resp = admin_client.post("/contract-expenses/new/", {
+        "contract": contract.pk, "date": "2026-07-10", "currency": "usd",
+        "method": "cash", "exchange_rate": "12000", "fee_percent": "0",
+        "amount_other": "150"})
+    assert resp.status_code == 200
+    assert not ContractExpense.objects.exists()

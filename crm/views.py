@@ -4086,9 +4086,11 @@ def contract_expense_create(request):
     and where each row's own sana and izoh are read."""
     asked = (request.POST.get("contract") if request.method == "POST"
              else request.GET.get("contract")) or ""
+    # Birja kelishuvlar only — see the Xarajatlar button in contract_list.html.
     contract = (Contract.objects.select_related("partner")
                 .prefetch_related("lines", "expenses")
-                .filter(pk=asked).first() if asked.isdigit() else None)
+                .filter(pk=asked, partner__is_birja=True).first()
+                if asked.isdigit() else None)
     form = ContractExpenseGridForm(request.POST or None,
                                    initial={"contract": asked}, contract=contract)
     title = "Kelishuv xarajatlari"
