@@ -321,3 +321,10 @@ def page_url(context, number, param="page"):
     query = context["request"].GET.copy()
     query[param] = number
     return f"?{query.urlencode()}"
+
+
+@register.filter
+def bron_item(bron, brand):
+    """A bron's row for one marka — its narx there — on the pages that list brons
+    under one marka (the ombor, a marka's own page). None if it names no such marka."""
+    return bron.item_for(brand) if bron is not None else None

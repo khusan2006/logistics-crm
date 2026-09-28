@@ -35,12 +35,14 @@ from django.test import Client
 
 from accounts.models import User
 from crm.models import (
+    ReservationItem,
     AuditLog, Currency, Customer, CustomerPayment, Logist, LogistPayment, Partner,
     Reservation, Return, ReturnBatch, ReturnSettlement, Sale, ShipmentExpense, ShipmentLeg, ShipmentStatus,
     SupplierPayment, fifo_lots, stock_value, transit_value,
 )
 
-from conftest import PASSWORD, make_contract, make_shipment, supplier_payment_rows
+from conftest import (PASSWORD, make_bron, make_contract, make_shipment,
+                      supplier_payment_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +86,7 @@ def world(db, admin_user):
         batch=return_batch, route=ReturnSettlement.Route.CASH, amount=Decimal("15"),
         exchange_rate=Decimal("12000"), due_date=date(2026, 3, 10),
         created_by=admin_user)
-    reservation = Reservation.objects.create(
-        customer=customer, brand="LLDPE", kg=Decimal("50"), created_by=admin_user)
+    reservation = make_bron(customer, "LLDPE", kg="50", created_by=admin_user)
     customer_payment = CustomerPayment.objects.create(
         customer=customer, amount=Decimal("200"), exchange_rate=Decimal("12000"),
         created_by=admin_user)
@@ -159,11 +160,14 @@ def _money_snapshot():
             (ShipmentExpense, ("amount", "amount_uzs")),
             (Sale, ("price", "price_uzs")),
             (Return, ("price", "price_uzs")),
-            (Reservation, ("price", "price_uzs")),
+            (Reservation, ("kg",)),
     ):
         for row in model.objects.all():
             snap[(model.__name__, row.pk)] = tuple(
                 [getattr(row, f) for f in fields] + [row.currency, row.exchange_rate])
+    # A bron's narx lives on its markalar.
+    for item in ReservationItem.objects.all():
+        snap[("ReservationItem", item.pk)] = (item.brand, item.price, item.price_uzs)
     snap["stock_value"] = stock_value()
     snap["transit_value"] = transit_value()
     return snap

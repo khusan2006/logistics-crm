@@ -16,7 +16,7 @@ from decimal import Decimal
 from io import StringIO
 
 import pytest
-from conftest import make_contract, make_lot
+from conftest import make_contract, make_lot, make_bron
 from crm.forms import ContractLineForm
 from crm.yozuv import marka_kaliti, marka_nomi
 from crm.models import ContractLine, Customer, Partner, Reservation, Sale
@@ -179,8 +179,7 @@ class TestMergingThePairAlreadyEntered:
         drawn down by the sotuvlar it should have been serving all along."""
         lot, _kiril = self._both_markalar(admin_client)
         mijoz = _customer()
-        bron = Reservation.objects.create(customer=mijoz, brand="и 1561",
-                                          kg=Decimal("150000"), price=Decimal("1.5"))
+        bron = make_bron(mijoz, "и 1561", kg="150000", price="1.5")
         for kg in ("7000", "3000"):
             Sale.objects.create(customer=mijoz, line=lot, kg=Decimal(kg),
                                 price=Decimal("1.5"), date="2026-09-08")
@@ -189,15 +188,14 @@ class TestMergingThePairAlreadyEntered:
         call_command("merge_brand", "и 1561", into="i 1561", apply=True, stdout=StringIO())
 
         bron.refresh_from_db()
-        assert bron.brand == "i 1561"
+        assert bron.brands == ["i 1561"]
         assert bron.fulfilled_kg == Decimal("10000.000")
         assert bron.remaining_kg == Decimal("140000.000")
 
     def test_somebody_elses_sotuv_is_left_alone(self, admin_client, db):
         lot, _kiril = self._both_markalar(admin_client)
         holder, walk_in = _customer(), _customer("Faxriddin oka")
-        bron = Reservation.objects.create(customer=holder, brand="и 1561",
-                                          kg=Decimal("150000"), price=Decimal("1.5"))
+        bron = make_bron(holder, "и 1561", kg="150000", price="1.5")
         Sale.objects.create(customer=walk_in, line=lot, kg=Decimal("5000"),
                             price=Decimal("1.5"), date="2026-09-08")
         call_command("merge_brand", "и 1561", into="i 1561", apply=True, stdout=StringIO())
@@ -211,8 +209,7 @@ class TestMergingThePairAlreadyEntered:
         mijoz = _customer()
         Sale.objects.create(customer=mijoz, line=lot, kg=Decimal("7000"),
                             price=Decimal("1.5"), date="2026-09-01")
-        bron = Reservation.objects.create(customer=mijoz, brand="и 1561",
-                                          kg=Decimal("150000"), price=Decimal("1.5"))
+        bron = make_bron(mijoz, "и 1561", kg="150000", price="1.5")
         call_command("merge_brand", "и 1561", into="i 1561", apply=True, stdout=StringIO())
         bron.refresh_from_db()
         assert bron.fulfilled_kg == Decimal("0.000")

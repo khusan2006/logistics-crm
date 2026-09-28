@@ -2459,6 +2459,12 @@ class Reservation(MoneyEntry):
     lot here — pinning a bron to a lot would mean the mijoz waits for one specific
     truck while the same granula sits in the ombor from another kelishuv.
 
+    And not always of ONE marka: some granula are interchangeable, and a mijoz who
+    books 20 000 kg of "A or B" takes whichever lands first. The markalar are the
+    bron's `items`, all equal, each with its own narx; the kg is one figure for the
+    whole bron. A sotuv of any of them draws the same `remaining_kg` down, so 12 000
+    of A and then 8 000 of B serve it in full.
+
     A bron reserves nothing physically. It does not hold kg back from an ordinary
     sotuv and it does not block another bron: the granula goes to whoever the
     operator hands it to. The `created_at` order is shown as a queue position so it
@@ -2469,8 +2475,13 @@ class Reservation(MoneyEntry):
     purpose. Either way the bron stays open for the rest.
 
     The agreed narx carries its currency into the sotuv, so a bron struck in so'm
-    becomes a so'm sotuv rather than silently turning into dollars."""
+    becomes a so'm sotuv rather than silently turning into dollars. One currency per
+    bron, as one sotuv is one currency: the narxlar differ per marka, the valyuta
+    and kurs do not."""
 
+    # The narx lives on the items now. MoneyEntry's save() backstop reads these by
+    # name and does nothing when they are absent — which they are, deliberately:
+    # a `price` property here would be written to by that backstop.
     money_fields = ("price", "price_uzs")
 
     class Status(models.TextChoices):
@@ -2485,15 +2496,10 @@ class Reservation(MoneyEntry):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="reservations", verbose_name="Mijoz")
-    brand = models.CharField("Marka", max_length=120, db_index=True)
     kg = models.DecimalField("Bron qilingan kg", max_digits=12, decimal_places=3)
     fulfilled_kg = models.DecimalField(
         "Berilgan kg", max_digits=12, decimal_places=3, default=0,
         help_text="Sotuvga aylantirilgan qismi — qolgani navbatda turadi")
-    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
-                                null=True, blank=True)
-    price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
-                                    decimal_places=2, null=True, blank=True)
     status = models.CharField("Holat", max_length=10, choices=Status.choices,
                               default=Status.ACTIVE)
     note = models.CharField("Izoh", max_length=255, blank=True)
@@ -2519,34 +2525,113 @@ class Reservation(MoneyEntry):
         return self.status == self.Status.ACTIVE and self.remaining_kg > 0
 
     @property
-    def price_own(self):
-        """The agreed narx in the currency it was agreed in — what the sotuv form
-        has to be handed when this bron is served, because the narx box there is
-        read as whichever currency the Valyuta picker says.
+    def item_list(self):
+        """The markalar in the order they were typed. `.all()` so a prefetch is
+        used — every list that shows brons prefetches `items`."""
+        return list(self.items.all())
 
-        None while the narx is still open, same as `total`."""
+    @property
+    def brands(self):
+        return [item.brand for item in self.item_list]
+
+    @property
+    def brand_label(self):
+        """"A / B / C" — the bron's markalar as one line of text, for the places
+        that have room for a name and not a list (an izoh, a help text, Excel)."""
+        return " / ".join(self.brands)
+
+    @property
+    def is_multi(self):
+        return len(self.item_list) > 1
+
+    def item_for(self, brand):
+        """This bron's row for one marka — None if the marka is not one of its."""
+        return next((item for item in self.item_list if item.brand == brand), None)
+
+    @property
+    def value_price(self):
+        """The narx the kg still owed are valued at, in the bron's own currency — or
+        None when any marka's narx is not agreed yet.
+
+        With several markalar at different narxlar, which one the mijoz ends up
+        taking is not known until they take it. The HIGHEST is used: the avans a bron
+        speaks for is then never reported as covering more than it might have to.
+        An unagreed narx makes the whole value unknown rather than quietly valuing
+        the bron at the markalar that happen to be priced."""
+        prices = [item.price_own for item in self.item_list]
+        if not prices or any(price is None for price in prices):
+            return None
+        return max(prices)
+
+    @property
+    def totals(self):
+        """[(usd, uzs)] — what the bron is worth at its narxlar: one pair when they
+        all agree, the cheapest and dearest when they do not, [] while any narx is
+        still open. None rather than 0 is the old rule — a bron may be struck
+        before the price is, and "kelishilmagan" must not read as a free bron."""
+        items = self.item_list
+        if not items or any(item.price is None for item in items):
+            return []
+        pairs = sorted({((self.kg * item.price).quantize(Decimal("0.01")),
+                         (self.kg * item.price_uzs).quantize(Decimal("0.01"))
+                         if item.price_uzs is not None else None)
+                        for item in items},
+                       key=lambda pair: own_side(self, *pair) or Decimal("0"))
+        return [pairs[0]] if len(pairs) == 1 else [pairs[0], pairs[-1]]
+
+    def __str__(self):
+        return f"Bron #{self.pk} · {self.customer} · {self.brand_label} · {self.kg} kg"
+
+
+class ReservationItem(models.Model):
+    """One marka a bron may be served with, and the narx agreed for it.
+
+    Every item of a bron is equal — there is no main marka with backups. The kg is
+    not here: it is the bron's, shared by all its markalar. The narx is optional,
+    the same as it always was on a bron, and it is kept in both currencies at the
+    bron's own kurs."""
+
+    reservation = models.ForeignKey(Reservation, on_delete=models.CASCADE,
+                                    related_name="items", verbose_name="Bron")
+    brand = models.CharField("Marka", max_length=120, db_index=True)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
+                                null=True, blank=True)
+    price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
+                                    decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        ordering = ["pk"]
+        verbose_name = "Bron markasi"
+        verbose_name_plural = "Bron markalari"
+        constraints = [
+            models.UniqueConstraint(fields=["reservation", "brand"],
+                                    name="reservation_item_unique_brand"),
+        ]
+
+    @property
+    def price_own(self):
+        """The agreed narx in the currency the bron was agreed in — what the sotuv
+        form is handed when this marka is served. None while it is still open."""
         if self.price is None:
             return None
-        return own_side(self, self.price, self.price_uzs)
+        return own_side(self.reservation, self.price, self.price_uzs)
 
     @property
     def total(self):
-        """What the bron is worth at the agreed narx — None while the narx is still
-        open, which is a real state here: a bron may be struck before the price is.
-        None rather than 0 so the screen can say "kelishilmagan" instead of showing
-        a free reservation."""
+        """The whole bron's kg at THIS marka's narx — what it comes to if the mijoz
+        is served with this one. None while the narx is open."""
         if self.price is None:
             return None
-        return (self.kg * self.price).quantize(Decimal("0.01"))
+        return (self.reservation.kg * self.price).quantize(Decimal("0.01"))
 
     @property
     def total_uzs(self):
         if self.price_uzs is None:
             return None
-        return (self.kg * self.price_uzs).quantize(Decimal("0.01"))
+        return (self.reservation.kg * self.price_uzs).quantize(Decimal("0.01"))
 
     def __str__(self):
-        return f"Bron #{self.pk} · {self.customer} · {self.brand} · {self.kg} kg"
+        return f"{self.brand} (bron #{self.reservation_id})"
 
 
 # ── Pozitsiya: what the cash figure means ────────────────────────────────────────
@@ -2831,6 +2916,8 @@ def bron_advance_holds(reservations):
 
     A bron whose narx is not agreed yet holds nothing and is short nothing — what it
     is worth is not known, and a figure invented here would read as an agreed one.
+    One of several markalar is valued at the dearest of their narxlar — see
+    `Reservation.value_price`.
 
     Computed over each mijoz's WHOLE open queue rather than the rows handed in, so
     filtering the list cannot change what a bron is holding."""
@@ -2841,7 +2928,7 @@ def bron_advance_holds(reservations):
     holds = {}
     queues = Reservation.objects.filter(
         customer_id__in=customers, status=Reservation.Status.ACTIVE
-    ).select_related("customer").order_by("created_at", "pk")
+    ).select_related("customer").prefetch_related("items").order_by("created_at", "pk")
     by_customer = defaultdict(list)
     for bron in queues:
         by_customer[bron.customer_id].append(bron)
@@ -2860,7 +2947,7 @@ def bron_advance_holds(reservations):
             (payment.currency, unspent_payment_amount(payment))
             for payment in payments[customer_id]))
         for bron in queue:
-            price = bron.price_own
+            price = bron.value_price
             if price is None or bron.remaining_kg <= 0:
                 if bron.pk in wanted:
                     holds[bron.pk] = {"held": None, "short": None,
@@ -3136,20 +3223,27 @@ def bron_queue(brand=None):
     actually agreed on the phone.
 
     One list, not one per marka, so the caller can see the whole board; pass a
-    marka to narrow it. Ordering is `created_at` then pk: two brons taken in the
-    same second still have a defined order, and it is the one entered first."""
+    marka to narrow it. A bron of several markalar stands in the queue of each of
+    them, at the place its `created_at` gives it. Ordering is `created_at` then pk:
+    two brons taken in the same second still have a defined order, and it is the
+    one entered first."""
     qs = (Reservation.objects
           .filter(status=Reservation.Status.ACTIVE)
           .select_related("customer")
+          .prefetch_related("items")
           .order_by("created_at", "pk"))
     if brand is not None:
-        qs = qs.filter(brand=brand)
+        qs = qs.filter(items__brand=brand).distinct()
     return [r for r in qs if r.remaining_kg > 0]
 
 
 def brand_reserved_kg(brand):
     """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
     a bron half filled from an earlier truck only reports the half still owed.
+
+    A bron of several markalar counts in full under each of them: which one it will
+    be served with is not known yet, so the figures of two such markalar add up to
+    more than was promised — the screens say so where it happens.
 
     Reported, never enforced: this figure tells the operator who is waiting on the
     granula, and nothing more. It is not subtracted from what a sotuv may take —
@@ -3238,8 +3332,8 @@ def fifo_lots(brand):
 
 
 def bron_countable_sales(bron):
-    """The mijoz's sotuvlar of this bron's marka that no bron has counted yet, newest
-    first — what Bronlar offers to count into it by hand.
+    """The mijoz's sotuvlar of any of this bron's markalar that no bron has counted
+    yet, newest first — what Bronlar offers to count into it by hand.
 
     The sotuv form can only draw on a bron that is already there, so a sotuv typed in
     first and its bron second leaves the bron at its full kg. Which of these sotuvlar
@@ -3247,13 +3341,14 @@ def bron_countable_sales(bron):
     them."""
     return (Sale.objects
             .filter(customer_id=bron.customer_id, reservation__isnull=True,
-                    line__contract_line__brand=bron.brand)
+                    line__contract_line__brand__in=bron.brands)
             .select_related("line__contract_line")
             .order_by("-date", "-pk"))
 
 
 def draw_down_bron(sale, served_id=None):
-    """Take a sotuv out of its OWN mijoz's bron for that marka. Returns the kg drawn.
+    """Take a sotuv out of its OWN mijoz's bron for that marka — a bron naming it
+    among its markalar. Returns the kg drawn.
 
     A bron is a promise of kg of one marka to one mijoz. When that mijoz is served,
     the promise is smaller — however the granula reached them. Only the Brondan
@@ -3361,7 +3456,8 @@ def brand_stock_costed():
     # last thing that still made pricing the shelf cost more as the shelf filled.
     reserved_by_brand = defaultdict(Decimal)
     for bron in bron_queue():
-        reserved_by_brand[bron.brand] += bron.remaining_kg
+        for brand in bron.brands:
+            reserved_by_brand[brand] += bron.remaining_kg
     rows = []
     for b in sorted(on_hand):
         reserved = reserved_by_brand[b]

@@ -40,8 +40,8 @@ search never drops the way the list was already narrowed.
   <tr>
     <th class="sticky-col">Mijoz</th>
     <th>Sana</th>
-    <th>Marka</th>
-    <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi">Navbat</th>
+    <th title="Bir nechta marka — bir-birining o'rnini bosadi, qaysi biri berilsa ham bron kg'sidan ayiriladi">Marka</th>
+    <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi. Bir nechta markali bron har markaning navbatida turadi">Navbat</th>
     <th>Bron qilingan kg</th>
     <th>Narx</th>
     <th title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Jami</th>
@@ -71,26 +71,32 @@ search never drops the way the list was already narrowed.
       <a href="{% url 'debt_customer' g.customer.pk %}">{{ g.customer.name|lotin }}</a>
     </td>
     <td>{{ g.date|date:"d.m.Y" }}</td>
-    <td>{% for r in g.items %}<div class="cell-line">{{ r.brand }}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{{ m.item.brand }}</div>{% endfor %}</div>{% endfor %}</td>
     <td>
       {% for r in g.items %}
-      <div class="cell-line">
-        {% if r.queue_pos %}
-          <span class="qpos{% if r.queue_pos == 1 %} qpos--first{% endif %}">{{ r.queue_pos }}</span>
+      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
+        {% for m in r.marka_rows %}
+        <div class="marka-line">
+        {% if m.queue_pos %}
+          <span class="qpos{% if m.queue_pos == 1 %} qpos--first{% endif %}">{{ m.queue_pos }}</span>
         {% else %}<span class="muted">—</span>{% endif %}
+        </div>
+        {% endfor %}
       </div>
       {% endfor %}
     </td>
-    <td>{% for r in g.items %}<div class="cell-line">{{ r.kg|floatformat:"-3" }}</div>{% endfor %}</td>
-    <td>{% for r in g.items %}<div class="cell-line">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{{ r.kg|floatformat:"-3" }}{% if r.is_multi %}<div class="muted load-sub">{{ r.item_list|length }} marka uchun umumiy</div>{% endif %}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{% if m.item.price %}{% rate m.item.price m.item.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</div>{% endfor %}</td>
     {% comment %}
     Jami is per bron rather than per group, and printed in the currency that bron was
     struck in — a mijoz may book one marka in so'm and the next in dollars on the same
     day, and one summa over the two would need a kurs neither was agreed at. It is
-    None while the narx is still open, which is a real state: a bron may be struck
-    before the price is.
+    empty while any narx is still open, which is a real state: a bron may be struck
+    before the price is. A bron of several markalar at different narxlar shows the
+    cheapest and the dearest it could come to — which one it ends up as is decided by
+    what the mijoz takes. See `Reservation.totals`.
     {% endcomment %}
-    <td>{% for r in g.items %}<div class="cell-line">{% if r.total %}{% money r.total r.total_uzs r.currency %}{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for t in r.totals %}{% if not forloop.first %} – {% endif %}{% money t.0 t.1 r.currency %}{% empty %}<span class="muted">—</span>{% endfor %}</div>{% endfor %}</td>
     {% comment %}
     Qolgan as a badge, the way Kelishuvlar draws its own Qolgan kg: sariq while the
     mijoz is still owed granula, yashil once the promise is served out. The figure
@@ -102,7 +108,7 @@ search never drops the way the list was already narrowed.
     {% endcomment %}
     <td>
       {% for r in g.items %}
-      <div class="cell-line">
+      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
         <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
         {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
       </div>
@@ -119,11 +125,11 @@ search never drops the way the list was already narrowed.
     Held oldest bron first, and only ever within one currency: see
     `bron_advance_holds`.
     {% endcomment %}
-    <td>{% for r in g.items %}<div class="cell-line">{% if r.avans_held %}<span class="avans">{% money_in r.avans_held r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
-    <td>{% for r in g.items %}<div class="cell-line">{% if r.avans_short %}<span class="late">{% money_in r.avans_short r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_held %}<span class="avans">{% money_in r.avans_held r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
+    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_short %}<span class="late">{% money_in r.avans_short r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
     <td>
       {% for r in g.items %}
-      <div class="cell-line">
+      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
         {% if r.status == "active" %}
           {% if r.servable_kg > 0 %}
             <span class="badge badge-ok">Berish mumkin</span>
@@ -142,17 +148,18 @@ search never drops the way the list was already narrowed.
     </td>
     <td class="row-actions">
       {% for r in g.items %}
-      <div class="cell-line">
+      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
       {% if r.is_open %}
         {% comment %}
         Handing the granula over is a sotuv, so it goes through the sotuv form —
-        prefilled with this mijoz and marka. There used to be a one-click Berish
+        prefilled with this mijoz and marka — of a bron with several markalar, the one
+        with the most on the shelf, at its own narx. There used to be a one-click Berish
         here that created the sale outright; it was removed because a stray click
         handed goods over and put a mijoz in debt with nothing asked, and undoing
         that means deleting every FIFO slice it wrote. The form makes the same act
         deliberate, and carries the sana, to'lov muddati and izoh it never had.
         {% endcomment %}
-        <a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;brand={{ r.brand|urlencode }}&amp;currency={{ r.currency }}{% if r.price_own %}&amp;price={{ r.price_own|unlocalize }}{% endif %}" data-modal title="To'liq sotuv">
+        <a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;brand={{ r.serve_item.brand|urlencode }}&amp;currency={{ r.currency }}{% if r.serve_item.price_own %}&amp;price={{ r.serve_item.price_own|unlocalize }}{% endif %}" data-modal title="To'liq sotuv">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
         </a>
         {% comment %}

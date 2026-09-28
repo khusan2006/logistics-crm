@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from conftest import payment_rows
+from conftest import payment_rows, make_bron
 from crm.templatetags.crm_extras import NBSP
 
 from crm.models import (
@@ -261,8 +261,8 @@ def test_bron_row_has_payment_action(admin_client, db):
     from crm.models import Reservation
 
     customer = _customer()
-    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("1000"),
-                               currency="uzs", status=Reservation.Status.ACTIVE)
+    make_bron(customer, "LLDPE", kg="1000", currency="uzs",
+              status=Reservation.Status.ACTIVE)
     html = admin_client.get("/reservations/").content.decode()
     assert f"/customer-payments/new/?customer={customer.pk}&amp;currency=uzs" in html
 

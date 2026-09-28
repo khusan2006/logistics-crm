@@ -3227,6 +3227,16 @@ form.stacked .lineset-field[hidden] { display: none; }
   align-items: flex-start;
 }
 .bron-table .cell-line + .cell-line { margin-top: 0; }
+/* A bron of several markalar is one line per marka in the columns that list them
+   (Marka, Navbat, Narx) — so every cell of that bron is that many lines tall, set
+   from the template as --lines, and the brons below still line up across columns. */
+.bron-table .cell-line { min-height: calc(43px * var(--lines, 1)); }
+.bron-table .marka-line {
+  min-height: 43px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 /* The icons of ONE bron stay side by side; the stacking is between the brons.
    `.row-actions > * + *` would otherwise push each line 6px right of the last. */
 .bron-table .row-actions .cell-line { flex-direction: row; align-items: center; }

@@ -5,7 +5,7 @@ from decimal import Decimal
 from io import BytesIO
 
 import openpyxl
-from conftest import line_data
+from conftest import bron_data, line_data, make_bron
 from django.utils import timezone
 from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
@@ -53,10 +53,10 @@ def _reserve(admin_client, brand, customer, kg="5000", price="", currency="usd",
              exchange_rate="12000"):
     """A bron is taken against a MARKA — no lot, because whichever kelishuv's truck
     lands first with that granula fills it."""
-    return admin_client.post("/reservations/new/", {
+    return admin_client.post("/reservations/new/", bron_data({
         "customer": customer.pk, "brand": brand, "kg": kg, "currency": currency,
         "price": price, "exchange_rate": exchange_rate, "note": "",
-    })
+    }))
 
 
 def _convert(admin_client, reservation, price=None, kg=None):
@@ -73,21 +73,22 @@ def _convert(admin_client, reservation, price=None, kg=None):
     from crm.models import brand_on_hand_kg
 
     reservation.refresh_from_db()
+    item = reservation.item_list[0]
     give = kg if kg is not None else min(reservation.remaining_kg,
-                                         brand_on_hand_kg(reservation.brand))
+                                         brand_on_hand_kg(item.brand))
     if price is not None:
         narx = price
     elif reservation.is_som:
-        narx = reservation.price_uzs      # typed in the row's own currency
+        narx = item.price_uzs      # typed in the row's own currency
     else:
-        narx = reservation.price
+        narx = item.price
     return admin_client.post("/sales/new/", {
         "customer": reservation.customer_id,
         "currency": reservation.currency,
         "exchange_rate": str(reservation.exchange_rate),
         "date": "2026-07-20", "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
-        **line_data({"brand": reservation.brand, "kg": str(give),
+        **line_data({"brand": item.brand, "kg": str(give),
                      "price": "" if narx is None else str(narx)}),
     })
 
@@ -99,7 +100,7 @@ class TestBronIsAgainstAMarka:
         resp = _reserve(admin_client, "HDPE", _customer(), kg="40000")
         assert resp.status_code == 302
         bron = Reservation.objects.get()
-        assert bron.brand == "HDPE"
+        assert bron.brands == ["HDPE"]
         assert bron.kg == Decimal("40000.000")
         assert bron.remaining_kg == Decimal("40000.000")
         assert not hasattr(bron, "line")
@@ -421,10 +422,10 @@ class TestEditAndDelete:
         customer = _customer()
         _reserve(admin_client, "LLDPE", customer, kg="5000")
         r = Reservation.objects.get()
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "3000",
             "currency": "usd", "price": "1.25", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("3000.000")
@@ -435,10 +436,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         _convert(admin_client, r)                       # 12 000 kg handed over
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "5000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 200                  # invalid, re-rendered
         r.refresh_from_db()
         assert r.kg == Decimal("20000.000")
@@ -452,10 +453,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         _convert(admin_client, r)                       # 12 000 kg handed over
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("12000.000")
@@ -471,20 +472,20 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         _convert(admin_client, r)                       # 12 000 kg handed over
-        admin_client.post(f"/reservations/{r.pk}/edit/", {
+        admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         r.refresh_from_db()
         assert r.status == Reservation.Status.CONVERTED
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
             "currency": "usd", "price": "2.50", "exchange_rate": "12000",
             "note": "narx to'g'rilandi",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
-        assert r.price == Decimal("2.5000")
+        assert r.items.get().price == Decimal("2.5000")
         assert r.note == "narx to'g'rilandi"
 
     def test_raising_a_converted_bron_reopens_it(self, admin_client, db):
@@ -497,10 +498,10 @@ class TestEditAndDelete:
         _convert(admin_client, r)                       # served in full
         r.refresh_from_db()
         assert r.status == Reservation.Status.CONVERTED
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "18000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.status == Reservation.Status.ACTIVE
@@ -515,10 +516,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         admin_client.post(f"/reservations/{r.pk}/close/", {})
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "18000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("18000.000")
@@ -530,10 +531,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="5000")
         r = Reservation.objects.get()
         admin_client.post(f"/reservations/{r.pk}/cancel/", {})
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "3000",
             "currency": "usd", "price": "", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("5000.000")
@@ -587,9 +588,9 @@ class TestPermissions:
         customer = _customer()
         assert translator_client.get("/reservations/").status_code == 403
         assert translator_client.get("/reservations/new/").status_code == 403
-        assert translator_client.post("/reservations/new/", {
+        assert translator_client.post("/reservations/new/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "100", "note": "",
-        }).status_code == 403
+        })).status_code == 403
 
     def test_translator_cannot_edit_or_delete(self, translator_client, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -650,7 +651,7 @@ class TestBronlarReadsLikeKelishuvlar:
         groups = admin_client.get("/reservations/").context["groups"]
         assert len(groups) == 1
         assert groups[0]["customer"] == mijoz
-        assert sorted(r.brand for r in groups[0]["items"]) == ["HDPE", "LLDPE"]
+        assert sorted(r.brand_label for r in groups[0]["items"]) == ["HDPE", "LLDPE"]
 
     def test_another_mijoz_is_another_row(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -682,8 +683,7 @@ class TestBronlarReadsLikeKelishuvlar:
         for n in range(21):
             mijoz = _customer(f"Mijoz {n:02d}")
             for brand in ("LLDPE", "HDPE"):
-                Reservation.objects.create(customer=mijoz, brand=brand,
-                                           kg=Decimal("10"), price=Decimal("2"))
+                make_bron(mijoz, brand, kg="10", price="2")
         page = admin_client.get("/reservations/?sort=customer").context["page"]
         assert page.paginator.num_pages == 2
         assert len(page.object_list) == 20
@@ -725,7 +725,7 @@ class TestBronlarReadsLikeKelishuvlar:
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="17000",
                  currency="uzs")
-        assert Reservation.objects.get().total_uzs == Decimal("85000000.00")
+        assert Reservation.objects.get().totals[0][1] == Decimal("85000000.00")
         html = _plain(admin_client.get("/reservations/").content.decode())
         assert "85 000 000 so'm" in html
         assert "$7 083" not in html
@@ -733,7 +733,7 @@ class TestBronlarReadsLikeKelishuvlar:
     def test_jami_is_kelishilmagan_until_a_narx_is_agreed(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
-        assert Reservation.objects.get().total is None
+        assert Reservation.objects.get().totals == []
         assert "kelishilmagan" in admin_client.get("/reservations/").content.decode()
 
     def test_the_four_selects_live_in_the_filtrlar_panel(self, admin_client, db):
@@ -786,15 +786,15 @@ class TestReservationTotal:
     def test_total_is_none_until_a_narx_is_agreed(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
-        assert Reservation.objects.get().total is None
+        assert Reservation.objects.get().totals == []
         assert "kelishilmagan" in admin_client.get("/reservations/").content.decode()
 
     def test_total_is_kg_times_narx_in_both_currencies(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="1.50")
         r = Reservation.objects.get()
-        assert r.total == Decimal("7500.00")
-        assert r.total_uzs == Decimal("90000000.00")   # 5000 × 1.50 × 12000
+        assert r.totals == [(Decimal("7500.00"),
+                             Decimal("90000000.00"))]   # 5000 × 1.50 × 12000
 
 
 class TestAnOrdinarySotuvDrawsTheBronDown:
@@ -804,8 +804,7 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
     while its holder bought 24 000 kg of it over the counter."""
 
     def _bron(self, customer, brand="LLDPE", kg="6000"):
-        return Reservation.objects.create(
-            customer=customer, brand=brand, kg=Decimal(kg), price=Decimal("1.50"))
+        return make_bron(customer, brand, kg=kg, price="1.50")
 
     def _sell(self, client, customer, brand, kg):
         return client.post("/sales/new/", {

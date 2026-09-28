@@ -15,7 +15,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import line_data
+from conftest import bron_data, line_data
 
 from crm.models import (
     Contract, ContractLine, Currency, Customer, CustomerPayment, Partner,
@@ -45,10 +45,15 @@ def _arrived_lot(kg="10000", brand="LLDPE", partner_name="Pars",
 
 def _reserve(client, brand, customer, kg="5000", price="", currency="usd",
              exchange_rate="12000", note=""):
-    return client.post("/reservations/new/", {
+    return client.post("/reservations/new/", bron_data({
         "customer": customer.pk, "brand": brand, "kg": kg, "currency": currency,
         "price": price, "exchange_rate": exchange_rate, "note": note,
-    })
+    }))
+
+
+def _item(reservation):
+    """The one marka of a one-marka bron — where its narx lives now."""
+    return reservation.items.get()
 
 
 def _edit_payload(reservation, **overrides):
@@ -56,10 +61,10 @@ def _edit_payload(reservation, **overrides):
     form renders, not the values a test wishes were there."""
     data = {
         "customer": reservation.customer_id,
-        "brand": reservation.brand,
+        "brand": _item(reservation).brand,
         "kg": str(reservation.kg),
         "currency": reservation.currency,
-        "price": "" if reservation.price is None else str(reservation.price),
+        "price": "" if _item(reservation).price is None else str(_item(reservation).price),
         "exchange_rate": str(reservation.exchange_rate),
         "note": reservation.note,
     }
@@ -69,7 +74,7 @@ def _edit_payload(reservation, **overrides):
 
 def _edit(client, reservation, **overrides):
     return client.post(f"/reservations/{reservation.pk}/edit/",
-                       _edit_payload(reservation, **overrides))
+                       bron_data(_edit_payload(reservation, **overrides), reservation))
 
 
 def _convert(client, reservation, price=None, kg=None):
@@ -80,13 +85,13 @@ def _convert(client, reservation, price=None, kg=None):
 
     reservation.refresh_from_db()
     give = kg if kg is not None else min(reservation.remaining_kg,
-                                         brand_on_hand_kg(reservation.brand))
+                                         brand_on_hand_kg(_item(reservation).brand))
     if price is not None:
         narx = price
     elif reservation.is_som:
-        narx = reservation.price_uzs
+        narx = _item(reservation).price_uzs
     else:
-        narx = reservation.price
+        narx = _item(reservation).price
     return client.post("/sales/new/", {
         "customer": reservation.customer_id,
         "currency": reservation.currency,
@@ -94,7 +99,7 @@ def _convert(client, reservation, price=None, kg=None):
         "date": "2026-07-20", "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
         # The marka and its narx are a Mahsulot ROW now.
-        **line_data({"brand": reservation.brand, "kg": str(give),
+        **line_data({"brand": _item(reservation).brand, "kg": str(give),
                      "price": "" if narx is None else str(narx)}),
     })
 
@@ -102,7 +107,7 @@ def _convert(client, reservation, price=None, kg=None):
 def _money(reservation):
     """The four facts that must never move on their own."""
     return (reservation.currency, reservation.exchange_rate,
-            reservation.price, reservation.price_uzs)
+            _item(reservation).price, _item(reservation).price_uzs)
 
 
 def _rendered_value(html, name):
@@ -124,8 +129,8 @@ def test_usd_bron_keeps_the_typed_dollar_narx_exact(admin_client, db):
              price="1.2345", currency="usd", exchange_rate="12650")
     bron = Reservation.objects.get()
     assert bron.currency == "usd"
-    assert bron.price == Decimal("1.2345")                 # typed, untouched
-    assert bron.price_uzs == Decimal("15616.43")           # 1.2345 × 12650, HALF_UP
+    assert _item(bron).price == Decimal("1.2345")                 # typed, untouched
+    assert _item(bron).price_uzs == Decimal("15616.43")           # 1.2345 × 12650, HALF_UP
 
 
 def test_uzs_bron_keeps_the_typed_som_narx_exact(admin_client, db):
@@ -136,8 +141,8 @@ def test_uzs_bron_keeps_the_typed_som_narx_exact(admin_client, db):
              price="18000", currency="uzs", exchange_rate="12650")
     bron = Reservation.objects.get()
     assert bron.currency == "uzs"
-    assert bron.price_uzs == Decimal("18000.00")           # typed, untouched
-    assert bron.price == Decimal("1.4229")                 # 18000/12650 at 4dp
+    assert _item(bron).price_uzs == Decimal("18000.00")           # typed, untouched
+    assert _item(bron).price == Decimal("1.4229")                 # 18000/12650 at 4dp
 
 
 def test_the_narx_quantum_is_four_decimals_not_two(admin_client, db):
@@ -146,8 +151,8 @@ def test_the_narx_quantum_is_four_decimals_not_two(admin_client, db):
     _reserve(admin_client, "LLDPE", _customer(), kg="5000",
              price="1", currency="uzs", exchange_rate="12000")
     bron = Reservation.objects.get()
-    assert bron.price == Decimal("0.0001")                 # 1/12000 → HALF_UP at 4dp
-    assert bron.price_uzs == Decimal("1.00")
+    assert _item(bron).price == Decimal("0.0001")                 # 1/12000 → HALF_UP at 4dp
+    assert _item(bron).price_uzs == Decimal("1.00")
 
 
 def test_a_tiny_kurs_still_round_trips(admin_client, db):
@@ -155,8 +160,8 @@ def test_a_tiny_kurs_still_round_trips(admin_client, db):
     _reserve(admin_client, "LLDPE", _customer(), kg="1000",
              price="100", currency="uzs", exchange_rate="0.01")
     bron = Reservation.objects.get()
-    assert bron.price_uzs == Decimal("100.00")
-    assert bron.price == Decimal("10000.0000")
+    assert _item(bron).price_uzs == Decimal("100.00")
+    assert _item(bron).price == Decimal("10000.0000")
 
 
 def test_a_huge_kurs_still_round_trips(admin_client, db):
@@ -164,8 +169,8 @@ def test_a_huge_kurs_still_round_trips(admin_client, db):
     _reserve(admin_client, "LLDPE", _customer(), kg="1000",
              price="1.0000", currency="usd", exchange_rate="99999999.99")
     bron = Reservation.objects.get()
-    assert bron.price == Decimal("1.0000")
-    assert bron.price_uzs == Decimal("99999999.99")
+    assert _item(bron).price == Decimal("1.0000")
+    assert _item(bron).price_uzs == Decimal("99999999.99")
 
 
 # =============================================================================
@@ -181,8 +186,8 @@ def test_a_som_bron_saves_as_som_and_the_som_column_holds_the_typed_figure(
     assert bron.currency == Currency.UZS
     assert bron.is_som is True
     # NOT the USD reading of 20000 (which would be 20000 dollars → 250 000 000 so'm)
-    assert bron.price_uzs == Decimal("20000.00")
-    assert bron.total_uzs == Decimal("100000000.00")       # 5000 × 20 000
+    assert _item(bron).price_uzs == Decimal("20000.00")
+    assert _item(bron).total_uzs == Decimal("100000000.00")       # 5000 × 20 000
 
 
 def test_the_edit_form_comes_back_bound_to_som(admin_client, db):
@@ -208,7 +213,7 @@ def test_the_edit_form_shows_the_som_narx_that_was_typed(admin_client, db):
              price="20000", currency="uzs", exchange_rate="12500")
     bron = Reservation.objects.get()
     html = admin_client.get(f"/reservations/{bron.pk}/edit/").content.decode()
-    assert Decimal(_rendered_value(html, "price")) == Decimal("20000.00")
+    assert Decimal(_rendered_value(html, "items-0-price")) == Decimal("20000.00")
 
 
 def test_a_usd_bron_stays_usd_through_an_edit(admin_client, db):
@@ -219,8 +224,8 @@ def test_a_usd_bron_stays_usd_through_an_edit(admin_client, db):
     _edit(admin_client, bron, note="izoh")
     bron.refresh_from_db()
     assert bron.currency == Currency.USD
-    assert bron.price == Decimal("2.5000")
-    assert bron.price_uzs == Decimal("30000.00")
+    assert _item(bron).price == Decimal("2.5000")
+    assert _item(bron).price_uzs == Decimal("30000.00")
 
 
 def test_switching_the_currency_on_an_edit_reinterprets_the_typed_narx(
@@ -235,8 +240,8 @@ def test_switching_the_currency_on_an_edit_reinterprets_the_typed_narx(
     assert resp.status_code == 302
     bron.refresh_from_db()
     assert bron.currency == Currency.UZS
-    assert bron.price_uzs == Decimal("24000.00")
-    assert bron.price == Decimal("2.0000")
+    assert _item(bron).price_uzs == Decimal("24000.00")
+    assert _item(bron).price == Decimal("2.0000")
 
 
 # =============================================================================
@@ -281,14 +286,14 @@ def test_resaving_a_som_bron_unchanged_moves_nothing_twice(admin_client, db):
     for round_no in (1, 2):
         html = admin_client.get(f"/reservations/{bron.pk}/edit/").content.decode()
         # post back exactly what the screen offered — the operator touched nothing
-        admin_client.post(f"/reservations/{bron.pk}/edit/", {
-            "customer": bron.customer_id, "brand": bron.brand,
+        admin_client.post(f"/reservations/{bron.pk}/edit/", bron_data({
+            "customer": bron.customer_id, "brand": _item(bron).brand,
             "kg": _rendered_value(html, "kg") or str(bron.kg),
             "currency": "uzs",
-            "price": _rendered_value(html, "price"),
+            "price": _rendered_value(html, "items-0-price"),
             "exchange_rate": _rendered_value(html, "exchange_rate"),
             "note": bron.note,
-        })
+        }, bron))
         bron.refresh_from_db()
         assert _money(bron) == before, f"money drifted on no-op save #{round_no}"
 
@@ -302,10 +307,10 @@ def test_editing_the_kg_of_a_som_bron_does_not_touch_the_narx_columns(
              price="20000", currency="uzs", exchange_rate="12500")
     bron = Reservation.objects.get()
     before = _money(bron)
-    resp = admin_client.post(f"/reservations/{bron.pk}/edit/", {
-        "customer": bron.customer_id, "brand": bron.brand, "kg": "6000",
+    resp = admin_client.post(f"/reservations/{bron.pk}/edit/", bron_data({
+        "customer": bron.customer_id, "brand": _item(bron).brand, "kg": "6000",
         "currency": "uzs", "price": "20000", "exchange_rate": "12500", "note": "",
-    })
+    }, bron))
     assert resp.status_code == 302
     bron.refresh_from_db()
     assert bron.kg == Decimal("6000.000")
@@ -316,12 +321,12 @@ def test_a_priceless_bron_resaves_without_growing_a_narx(admin_client, db):
     _arrived_lot()
     _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="")
     bron = Reservation.objects.get()
-    assert bron.price is None and bron.price_uzs is None
+    assert _item(bron).price is None and _item(bron).price_uzs is None
     for _ in range(2):
         assert _edit(admin_client, bron).status_code == 302
         bron.refresh_from_db()
-        assert bron.price is None and bron.price_uzs is None
-        assert bron.total is None and bron.total_uzs is None
+        assert _item(bron).price is None and _item(bron).price_uzs is None
+        assert _item(bron).total is None and _item(bron).total_uzs is None
 
 
 # =============================================================================
@@ -350,13 +355,13 @@ def test_a_priceless_bron_keeps_the_default_kurs_when_the_field_is_absent(
     """The kurs is genuinely optional on an unpriced bron, so an omitted field falls
     back to the model default rather than erroring."""
     _arrived_lot()
-    resp = admin_client.post("/reservations/new/", {
+    resp = admin_client.post("/reservations/new/", bron_data({
         "customer": _customer().pk, "brand": "LLDPE", "kg": "5000",
         "currency": "usd", "price": "", "note": "",
-    })
+    }))
     assert resp.status_code == 302
     bron = Reservation.objects.get()
-    assert bron.price is None
+    assert _item(bron).price is None
     assert bron.exchange_rate == Decimal("12000.00")
 
 
@@ -376,7 +381,7 @@ def test_a_priceless_bron_needs_no_kurs(admin_client, db):
                     price="", exchange_rate="")
     assert resp.status_code == 302, resp.content.decode()[:600]
     bron = Reservation.objects.get()
-    assert bron.price is None
+    assert _item(bron).price is None
 
 
 @pytest.mark.xfail(reason="BUG: MoneyEntryFormMixin.clean() returns early when the "
@@ -418,17 +423,17 @@ def test_the_agreed_narx_is_carried_onto_the_handover_form(admin_client, db):
     _reserve(admin_client, "LLDPE", customer, kg="5000",
              price="18000", currency="uzs", exchange_rate="12650")
     bron = Reservation.objects.get()
-    assert bron.price_own == Decimal("18000.00")
+    assert _item(bron).price_own == Decimal("18000.00")
 
     # the link the Bronlar row renders
     html = admin_client.get("/reservations/").content.decode()
-    assert f"price={bron.price_own}" in html
+    assert f"price={_item(bron).price_own}" in html
     assert "currency=uzs" in html
 
     # and opening it puts the agreed figures in the boxes
     resp = admin_client.get(
         f"/sales/new/?customer={customer.pk}&brand=LLDPE"
-        f"&currency=uzs&price={bron.price_own}")
+        f"&currency=uzs&price={_item(bron).price_own}")
     assert resp.context["form"].initial["currency"] == "uzs"
     # The marka and its agreed narx prefill the first Mahsulot row.
     row = resp.context["lines"].forms[0].initial
@@ -528,7 +533,7 @@ def test_the_narx_typed_at_handover_sticks_to_the_bron(admin_client, db):
     bron = Reservation.objects.get()
     _convert(admin_client, bron, price="2.0000")           # 3 000 kg handed over
     bron.refresh_from_db()
-    assert bron.price == Decimal("2.0000"), "the agreed narx was not recorded"
+    assert _item(bron).price == Decimal("2.0000"), "the agreed narx was not recorded"
     # and the rest of the bron cannot then be sold at a different narx by accident
     _arrived_lot(kg="2000", partner_name="Keyingi", arrived="2026-07-20")
     _convert(admin_client, bron, price="1.0000")
@@ -612,8 +617,8 @@ def test_the_sotuv_slices_add_back_up_to_the_bron_total_in_both_currencies(
     sales = list(Sale.objects.all())
     assert len(sales) == 2
     assert sum(s.kg for s in sales) == bron.kg
-    assert sum(s.total for s in sales) == bron.total
-    assert sum(s.total_uzs for s in sales) == bron.total_uzs
+    assert sum(s.total for s in sales) == _item(bron).total
+    assert sum(s.total_uzs for s in sales) == _item(bron).total_uzs
 
 
 def test_a_som_bron_totals_the_same_across_slices(admin_client, db):
@@ -625,7 +630,7 @@ def test_a_som_bron_totals_the_same_across_slices(admin_client, db):
     _convert(admin_client, bron)
     bron.refresh_from_db()
     sales = list(Sale.objects.all())
-    assert sum(s.total_uzs for s in sales) == bron.total_uzs == Decimal("90000000.00")
+    assert sum(s.total_uzs for s in sales) == _item(bron).total_uzs == Decimal("90000000.00")
 
 
 def test_a_mijoz_balance_sums_brons_of_mixed_currency_and_mixed_kurs(

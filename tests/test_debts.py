@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from conftest import payment_rows
+from conftest import payment_rows, make_bron
 from crm.templatetags.crm_extras import NBSP
 
 from crm.models import (
@@ -275,8 +275,7 @@ def test_the_history_carries_all_four_kinds_of_event_newest_first(admin_client, 
                                    amount=Decimal("300.00"), method="cash")
     Return.objects.create(sale=sale, kg=Decimal("100"), price=Decimal("1.00"),
                           date="2026-07-14")
-    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("500"),
-                               price=Decimal("1.20"))
+    make_bron(customer, "LLDPE", kg="500", price="1.20")
 
     rows = _history(admin_client, customer)
     labels = [r[1] for r in rows]
@@ -312,7 +311,7 @@ def test_a_bron_with_no_narx_agreed_says_so_rather_than_inventing_one(admin_clie
     from crm.models import Reservation
 
     customer = _customer()
-    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("500"))
+    make_bron(customer, "LLDPE", kg="500")
     row = _history(admin_client, customer)[0]
     assert row[3] == "kelishilmagan"
 

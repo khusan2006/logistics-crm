@@ -14,6 +14,7 @@ from crm.models import (
     Currency, Customer, CustomerPayment, Reservation, Sale,
     apply_customer_advance, bron_advance_holds, customer_balance_by_currency,
 )
+from conftest import make_bron
 from tests.test_reservations import _arrived_lot, _customer
 
 
@@ -29,10 +30,9 @@ def _bron(customer, brand="LLDPE", kg="10000", price="1.42",
           currency=Currency.USD, fulfilled="0"):
     usd = Decimal(price) if currency == Currency.USD else Decimal(price) / 12000
     uzs = Decimal(price) * 12000 if currency == Currency.USD else Decimal(price)
-    return Reservation.objects.create(
-        customer=customer, brand=brand, kg=Decimal(kg),
-        fulfilled_kg=Decimal(fulfilled), price=usd, price_uzs=uzs,
-        currency=currency, status=Reservation.Status.ACTIVE)
+    return make_bron(customer, brand, kg=kg, price=usd, price_uzs=uzs,
+                     fulfilled_kg=Decimal(fulfilled), currency=currency,
+                     status=Reservation.Status.ACTIVE)
 
 
 def _hold(bron):
@@ -105,9 +105,7 @@ def test_a_bron_with_no_agreed_narx_holds_nothing(db):
     not known, and a figure invented here would read as an agreed one."""
     customer = _customer()
     _payment(customer, "10000")
-    bron = Reservation.objects.create(
-        customer=customer, brand="LLDPE", kg=Decimal("1000"),
-        status=Reservation.Status.ACTIVE)
+    bron = make_bron(customer, "LLDPE", kg="1000", status=Reservation.Status.ACTIVE)
 
     hold = _hold(bron)
     assert hold["held"] is None and hold["short"] is None

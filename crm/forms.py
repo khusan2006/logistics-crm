@@ -15,7 +15,7 @@ from .models import (
     sync_contract_birja_transport,
     CustomerPayment, CustomsAgent, CustomsPayment, Kapital, KapitalKind,
     Konvertatsiya, Logist, LogistPayment, OtherExpense, Partner,
-    FeeBearer, PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
+    FeeBearer, PayMethod, Reservation, ReservationItem, Return, ReturnBatch, ReturnSettlement,
     Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, SupplierPayment,
     arrived_lots, brand_on_hand_kg, brand_stock_costed, bron_brands,
@@ -402,9 +402,10 @@ class BronDrawFormMixin:
         # from it is noise on every ordinary sotuv. One query, walked in Python
         # because `is_open` reads remaining_kg, which is not a column.
         brons = {}
-        for bron in Reservation.objects.filter(status=Reservation.Status.ACTIVE):
+        for bron in (Reservation.objects.filter(status=Reservation.Status.ACTIVE)
+                     .prefetch_related("items")):
             if bron.remaining_kg > 0:
-                brons.setdefault(bron.customer_id, set()).add(bron.brand)
+                brons.setdefault(bron.customer_id, set()).update(bron.brands)
         picker = self.fields["customer"]
         widget = CustomerFactsSelect(attrs=dict(picker.widget.attrs))
         widget.choices = picker.widget.choices     # keeps the field's queryset
@@ -2371,28 +2372,43 @@ class SaleLotForm(BronDrawFormMixin, InheritedRateMixin,
         return cleaned
 
 
-class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
-    """A bron is taken against a MARKA, not a lot: whichever kelishuv's truck lands
-    first with that granula fills it. So the choice list is every marka still coming
-    on a kelishuv plus everything already in the ombor — deliberately including
-    markalar with zero stock today, since booking ahead is the point.
+def _bron_brand_choices():
+    """Every marka a bron may name, labelled with what the ombor holds of it.
+
+    Deliberately including markalar with zero stock today — booking ahead is the
+    point. See `bron_brands` for where the list comes from."""
+    stock = {row["brand"]: row for row in brand_stock_costed()}
+    choices = []
+    for brand in bron_brands():
+        row = stock.get(brand)
+        if row:
+            hint = f"omborda {_clean_number(row['on_hand'])} kg"
+            if row["reserved"]:
+                hint += f", {_clean_number(row['reserved'])} kg bronlangan"
+        else:
+            hint = "hozircha omborda yo'q — kelganda beriladi"
+        choices.append((brand, f"{brand} · {hint}"))
+    return choices
+
+
+class ReservationForm(forms.ModelForm):
+    """The bron itself: who, how many kg, and in what currency. WHICH markalar live
+    in `ReservationItemFormSet` beside it — a bron may name several interchangeable
+    granula, each at its own narx, and the kg here is one figure shared by all of
+    them.
 
     There is no kg ceiling here, and none against what is already bronned either.
     Reserving 40 000 kg against a kelishuv that has not shipped yet is normal
     business, and since a bron holds nothing back, two mijoz booking the same kg is
-    a fact the operator settles at hand-over rather than an error to refuse now."""
+    a fact the operator settles at hand-over rather than an error to refuse now.
 
-    #: the narx is optional on a bron — the price can be agreed later
-    allow_blank = True
-
-    brand = forms.ChoiceField(
-        label="Marka",
-        # Kept in its own alphabet — see the note on SaleLineForm.brand.
-        widget=forms.Select(attrs={"data-lotin": ""}))
+    The kurs is only needed when some marka has a narx — the narx is optional on a
+    bron, the price can be agreed later — so it is checked by the view against the
+    rows rather than required here (`require_rate`)."""
 
     class Meta:
         model = Reservation
-        fields = ["customer", "brand", "kg", "currency", "price", "exchange_rate", "note"]
+        fields = ["customer", "kg", "currency", "exchange_rate", "note"]
         widgets = {
             "note": forms.Textarea(attrs={"rows": 2}),
             # The same mijoz picker the sotuv forms carry, for the same reason: the
@@ -2406,23 +2422,15 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _customer_phone_field(self.fields["customer"])
-        stock = {row["brand"]: row for row in brand_stock_costed()}
-        choices = []
-        for brand in bron_brands():
-            row = stock.get(brand)
-            if row:
-                hint = f"omborda {_clean_number(row['on_hand'])} kg"
-                if row["reserved"]:
-                    hint += f", {_clean_number(row['reserved'])} kg bronlangan"
-            else:
-                hint = "hozircha omborda yo'q — kelganda beriladi"
-            choices.append((brand, f"{brand} · {hint}"))
-        self.fields["brand"].choices = choices
-        # An existing bron keeps its marka even if that marka has since dropped off
-        # the list, so editing one never silently rewrites what was reserved.
-        if self.instance.pk and self.instance.brand not in dict(choices):
-            self.fields["brand"].choices = [
-                (self.instance.brand, self.instance.brand)] + choices
+        self.fields["kg"].label = "Bron qilingan kg (jami)"
+        self.fields["kg"].help_text = ("Bir nechta marka tanlansa ham kg bitta — "
+                                       "qaysi markadan berilsa ham shundan ayiriladi")
+        self.fields["currency"].widget.attrs["data-money-currency"] = ""
+        rate = self.fields["exchange_rate"]
+        rate.widget.attrs["data-money-rate"] = ""
+        rate.required = False
+        _group_thousands(rate)
+        _group_thousands(self.fields["kg"])
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
@@ -2433,6 +2441,111 @@ class ReservationForm(PriceEntryFormMixin, forms.ModelForm):
                 f"Allaqachon {_clean_number(self.instance.fulfilled_kg)} kg berilgan — "
                 "bundan kam qilib bo'lmaydi")
         return kg
+
+    def require_rate(self):
+        """The kurs, refused when missing — called only when some marka has a narx
+        to convert. Returns None (with the error on the form) when it is missing."""
+        rate = self.cleaned_data.get("exchange_rate") or Decimal("0")
+        if rate <= 0:
+            self.add_error("exchange_rate", "Dollar kursini kiriting")
+            return None
+        return rate
+
+
+class ReservationItemForm(forms.ModelForm):
+    """One marka of a bron, and its narx in the bron's currency.
+
+    The narx box is read as whichever currency the bron's Valyuta says, and the view
+    converts it at the bron's kurs once the header has validated — the row cannot do
+    it itself, it does not know the header's figures until both are clean."""
+
+    brand = forms.ChoiceField(
+        label="Marka",
+        # Kept in its own alphabet — see the note on SaleLineForm.brand.
+        widget=forms.Select(attrs={"data-lotin": ""}))
+
+    class Meta:
+        model = ReservationItem
+        fields = ["brand", "price"]
+        widgets = {
+            "price": forms.NumberInput(attrs={"step": "0.0001", "placeholder": "kelishilmagan",
+                                              "data-currency-label": "1 kg narxi"}),
+        }
+
+    def __init__(self, *args, brand_choices=None, currency=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = list(brand_choices if brand_choices is not None
+                       else _bron_brand_choices())
+        # An existing marka stays on the list even if it has since dropped off it,
+        # so editing a bron never silently rewrites what was reserved.
+        if self.instance.pk and self.instance.brand not in dict(choices):
+            choices = [(self.instance.brand, self.instance.brand)] + choices
+        # A blank first option, so a spare row nobody touched posts nothing and is
+        # skipped — a select with no blank posts its first marka and looks typed.
+        self.fields["brand"].choices = [("", "— marka tanlang —")] + choices
+        currency = currency or Currency.USD
+        price = self.fields["price"]
+        price.required = False
+        price.label = f"1 kg narxi ({currency_suffix(currency)})"
+        _group_thousands(price)
+        if currency == Currency.UZS:
+            price.widget.attrs.update({"step": "1"})
+            # The typed box is the so'm figure on a so'm bron — see
+            # MoneyEntryFormMixin._seed_typed_side for the bug this avoids.
+            if self.instance.pk and self.instance.price_uzs is not None:
+                self.initial["price"] = self.instance.price_uzs
+
+    def clean_price(self):
+        price = self.cleaned_data.get("price")
+        if price is not None and price <= 0:
+            raise forms.ValidationError("Narx musbat bo'lishi kerak")
+        return price
+
+
+class BaseReservationItemFormSet(forms.BaseInlineFormSet):
+    """At least one marka, and no marka twice — read through `marka_kaliti`, the
+    same key every other marka comparison uses."""
+
+    @cached_property
+    def brand_choices(self):
+        """The markalar list, priced once for the whole formset rather than once
+        per row plus the "+ Marka qo'shish" template."""
+        return _bron_brand_choices()
+
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        kwargs["brand_choices"] = self.brand_choices
+        return kwargs
+
+    def rows(self):
+        """The rows that mean something — a marka picked and not struck out."""
+        return [f for f in self.forms
+                if f.cleaned_data and not f.cleaned_data.get("DELETE")
+                and f.cleaned_data.get("brand")]
+
+    def validate_unique(self):
+        """Left to `clean` below. Django's own check reads the one-marka-once
+        constraint as an exact string match and answers it with a generic line
+        about "takroriy qiymatlar"; `clean` compares through `marka_kaliti` and
+        puts the message on the row that repeats."""
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        seen = set()
+        for form in self.rows():
+            key = marka_kaliti(form.cleaned_data["brand"])
+            if key in seen:
+                form.add_error("brand", "Bu marka ro'yxatda bor")
+            seen.add(key)
+        if not self.rows():
+            raise forms.ValidationError("Kamida bitta marka tanlanishi kerak")
+
+
+ReservationItemFormSet = forms.inlineformset_factory(
+    Reservation, ReservationItem, form=ReservationItemForm,
+    formset=BaseReservationItemFormSet, extra=1, min_num=0, can_delete=True)
 
 
 class CountableSaleField(forms.ModelMultipleChoiceField):
@@ -2466,7 +2579,7 @@ class ReservationSalesForm(forms.Form):
         self.reservation = reservation
         field = self.fields["sales"]
         field.queryset = bron_countable_sales(reservation)
-        field.help_text = (f"{reservation.customer.name} · {reservation.brand} · bronda "
+        field.help_text = (f"{reservation.customer.name} · {reservation.brand_label} · bronda "
                            f"{_clean_number(reservation.remaining_kg)} kg qolgan")
 
     def clean_sales(self):

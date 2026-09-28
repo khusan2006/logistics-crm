@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 
-from conftest import return_rows
+from conftest import bron_data, return_rows
 
 from crm.models import (
     Contract, ContractLine, Currency, Customer, Partner, Reservation, Return, Sale,
@@ -115,10 +115,10 @@ def _give_back(client, sale, kg="100", date="2026-07-19", settle="advance",
 
 def _reserve(client, brand, customer, kg="500", price="", rate="12000",
              currency=USD):
-    resp = client.post("/reservations/new/", {
+    resp = client.post("/reservations/new/", bron_data({
         "customer": customer.pk, "brand": brand, "kg": str(kg),
         "currency": currency, "price": price, "exchange_rate": rate, "note": "",
-    })
+    }))
     assert resp.status_code == 302, resp.content.decode()[:800]
     return Reservation.objects.order_by("-pk").first()
 

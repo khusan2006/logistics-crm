@@ -259,11 +259,11 @@ class Command(BaseCommand):
         line = contracts["c2"].lines.first()
         if line is None:
             return
-        Reservation.objects.get_or_create(
-            customer=customers["gulnora"], brand=line.brand,
-            defaults={
-                "kg": Decimal("2000"), "price": Decimal("1.40"),
-                "status": Reservation.Status.ACTIVE,
-                "note": "Demo bron", "created_by": admin,
-            },
-        )
+        if Reservation.objects.filter(customer=customers["gulnora"],
+                                      items__brand=line.brand).exists():
+            return
+        bron = Reservation.objects.create(
+            customer=customers["gulnora"], kg=Decimal("2000"),
+            status=Reservation.Status.ACTIVE, note="Demo bron", created_by=admin)
+        bron.items.create(brand=line.brand, price=Decimal("1.40"),
+                          price_uzs=bron.in_som(Decimal("1.40")))

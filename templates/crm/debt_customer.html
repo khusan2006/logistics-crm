@@ -43,10 +43,10 @@ a rate nobody agreed.
   </tr>
   {% for b in brons %}
   <tr>
-    <td class="sticky-col">{{ b.brand }}</td>
+    <td class="sticky-col">{% for it in b.item_list %}<div>{{ it.brand }}</div>{% endfor %}</td>
     <td>{{ b.remaining_kg|floatformat:"-3" }}</td>
-    <td>{% if b.price %}{% rate b.price b.price_uzs b.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
-    <td>{% if b.total %}{% money b.total b.total_uzs b.currency %}{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td>{% for it in b.item_list %}<div>{% if it.price %}{% rate it.price it.price_uzs b.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</td>
+    <td>{% for t in b.totals %}{% if not forloop.first %} – {% endif %}{% money t.0 t.1 b.currency %}{% empty %}<span class="muted">—</span>{% endfor %}</td>
     <td>{% if b.avans_held %}<span class="avans">{% money_in b.avans_held b.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
     <td>{% if b.avans_short %}<span class="late">{% money_in b.avans_short b.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
   </tr>

@@ -104,12 +104,15 @@ adding it up by hand.
     {% for r in brons %}
     <tr>
       <td><span class="qpos{% if forloop.first %} qpos--first{% endif %}">{{ forloop.counter }}</span></td>
-      <td>{{ r.customer.name|lotin }}</td>
+      <td>{{ r.customer.name|lotin }}
+        {% if r.is_multi %}<div class="muted">umumiy: {{ r.brand_label }}</div>{% endif %}</td>
       <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
       <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
         {% if r.fulfilled_kg %}<div class="muted">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>
       {% if user.is_admin_role %}
-      <td class="num">{% if r.price %}{% rate r.price r.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+      {% with it=r|bron_item:brand %}
+      <td class="num">{% if it.price %}{% rate it.price it.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+      {% endwith %}
       {% endif %}
     </tr>
     {% endfor %}

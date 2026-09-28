@@ -34,6 +34,7 @@ from .forms import (
     CustomerPaymentForm,
     contract_currency,
     CustomerPaymentFormSet, CustomerPaymentTargetForm, PartnerForm, ReservationForm,
+    ReservationItemFormSet,
     ReservationSalesForm,
     ReturnBatchForm, ReturnSettlementEditForm, ReturnSettlementPayForm,
     parse_return_rows, returns_without,
@@ -3024,7 +3025,10 @@ def _ombor_groups(request):
     # list, not one per marka".
     queue_by_brand = {}
     for bron in bron_queue():
-        queue_by_brand.setdefault(bron.brand, []).append(bron)
+        # A bron of several markalar is listed under each of them, in full: which
+        # one it will be served with is not known yet. The row says so.
+        for brand in bron.brands:
+            queue_by_brand.setdefault(brand, []).append(bron)
     for g in groups:
         # A finished lot is history: it holds nothing, cannot be sold from, and after
         # a few months of arrivals it is most of the list. The kg it moved are still
@@ -3050,10 +3054,6 @@ def _ombor_groups(request):
         g["brons"] = queue_by_brand.get(g["brand"], [])
         g["reserved"] = sum((r.remaining_kg for r in g["brons"]), Decimal("0"))
         g["short"] = max(g["reserved"] - g["on_hand"], Decimal("0"))
-        for bron in g["brons"]:
-            # Every open bron can be served, not just the first — and each one only
-            # up to what is still owed on it or still on the shelf.
-            bron.servable_kg = min(bron.remaining_kg, g["on_hand"])
 
     return groups, q
 
@@ -3852,7 +3852,7 @@ def shipment_set_status(request, pk):
         # carrying a marka somebody is waiting for — not brons "belonging" to this
         # truck, which no longer exist.
         markalar = {line.brand for line in shipment.lines.all()}
-        brons = sum(1 for b in bron_queue() if b.brand in markalar)
+        brons = sum(1 for b in bron_queue() if markalar & set(b.brands))
     bron_url = f"{reverse('reservation_list')}?status=active&lot=ready"
 
     if is_ajax(request):
@@ -5379,13 +5379,14 @@ RESERVATION_STATUS_LABELS = [
 RESERVATION_SORTS = [
     # Navbat first: who asked for each marka and in what order is the thing the
     # screen exists to show, so it is the default unless you ask for another sort.
-    ("queue", "Navbat bo'yicha", lambda r: (r.brand, r.created_at, r.pk), False),
+    ("queue", "Navbat bo'yicha",
+     lambda r: (r.brands[0] if r.brands else "", r.created_at, r.pk), False),
     ("-created", "Sana — yangi avval", lambda r: (r.created_at, r.pk), True),
     ("created", "Sana — eski avval", lambda r: (r.created_at, r.pk), False),
     ("customer", "Mijoz — A-Z", lambda r: (r.customer.name.casefold(), r.pk), False),
     ("-kg", "Kg — kattadan", lambda r: (r.kg, r.pk), True),
     ("-total", "Jami — kattadan",
-     lambda r: (r.kg * (r.price or Decimal("0")), r.pk), True),
+     lambda r: (r.kg * (r.value_price or Decimal("0")), r.pk), True),
 ]
 RESERVATION_SORT_DEFAULT = "queue"
 
@@ -5409,11 +5410,12 @@ def _filter_reservations(request):
     if sort not in {key for key, *_ in RESERVATION_SORTS}:
         sort = RESERVATION_SORT_DEFAULT
 
-    reservations = Reservation.objects.select_related("customer")
+    reservations = (Reservation.objects.select_related("customer")
+                    .prefetch_related("items"))
     if q:
         reservations = reservations.filter(
-            Q(customer__name__icontains=q) | Q(brand__icontains=q)
-            | Q(note__icontains=q))
+            Q(customer__name__icontains=q) | Q(items__brand__icontains=q)
+            | Q(note__icontains=q)).distinct()
     if customer_id.isdigit():
         reservations = reservations.filter(customer_id=int(customer_id))
     # When the bron was struck. `created_at` is a timestamp rather than a date, so the
@@ -5426,25 +5428,45 @@ def _filter_reservations(request):
         reservations = reservations.filter(created_at__date__lte=date_to)
 
     rows = list(reservations)
-    # What is on the shelf for that marka right now, plus the position in the
-    # booking order. Stock is the only thing that decides whether a bron can be
-    # filled today; the position is shown so the operator can see who asked first,
-    # and a bron behind another is still servable. Computed once per marka rather
-    # than per row: the walk is the same for every bron of a marka.
-    shelf, queues = {}, {}
-    for brand in {r.brand for r in rows}:
-        shelf[brand] = brand_on_hand_kg(brand)
-        queues[brand] = [b.pk for b in bron_queue(brand)]
+    # What is on the shelf for each marka right now, plus the position in each
+    # marka's booking order. Stock is the only thing that decides whether a bron can
+    # be filled today; the position is shown so the operator can see who asked
+    # first, and a bron behind another is still servable. Computed once per marka
+    # rather than per row: the walk is the same for every bron of a marka.
+    brands = {brand for r in rows for brand in r.brands}
+    shelf = {brand: brand_on_hand_kg(brand) for brand in brands}
+    queues = defaultdict(list)
+    for bron in bron_queue():
+        for brand in bron.brands:
+            queues[brand].append(bron)
     for row in rows:
-        order = queues.get(row.brand, [])
-        row.queue_pos = order.index(row.pk) + 1 if row.pk in order else None
-        row.brand_on_hand = shelf.get(row.brand, Decimal("0"))
+        # One entry per marka, in the bron's own order: where it stands in that
+        # marka's queue and what of that marka is on the shelf.
+        row.marka_rows = []
+        for item in row.item_list:
+            order = [b.pk for b in queues.get(item.brand, [])]
+            pos = order.index(row.pk) + 1 if row.pk in order else None
+            row.marka_rows.append({
+                "item": item, "queue_pos": pos,
+                "on_hand": shelf.get(item.brand, Decimal("0")),
+                "ahead_of": queues[item.brand][0] if pos and pos > 1 else None})
+        places = [m["queue_pos"] for m in row.marka_rows if m["queue_pos"]]
+        row.queue_pos = min(places) if places else None
+        # Substitutes are different granula on different shelves, so what can be
+        # handed over today is the sum across them.
+        row.brand_on_hand = sum((m["on_hand"] for m in row.marka_rows), Decimal("0"))
         row.servable_kg = (min(row.remaining_kg, row.brand_on_hand)
                            if row.is_open else Decimal("0"))
-        # Only who is ahead in the booking order — a label, not a block.
-        row.ahead_of = (
-            Reservation.objects.filter(pk=order[0]).select_related("customer").first()
-            if row.queue_pos and row.queue_pos > 1 else None)
+        # The marka the Sotuv shortcut opens on: the one with the most on the shelf,
+        # which is the one the mijoz is most likely to be handed. The first marka
+        # on a tie — or on an empty shelf, where there is nothing to pick between.
+        row.serve_item = max(row.marka_rows, key=lambda m: m["on_hand"],
+                             default={"item": None})["item"]
+        # Only who is ahead in the booking order — a label, not a block. Read off
+        # the marka where this bron stands best.
+        best = min((m for m in row.marka_rows if m["queue_pos"]),
+                   key=lambda m: m["queue_pos"], default=None)
+        row.ahead_of = best["ahead_of"] if best else None
     if lot == "ready":
         rows = [r for r in rows if r.servable_kg > 0]
     elif lot == "waiting":
@@ -5502,8 +5524,8 @@ def _with_bron_holds(reservations):
 
 
 def _with_countable_sales(reservations):
-    """Each open bron marked with whether its mijoz has a sotuv of its marka that no
-    bron has counted — the rows Bronlar offers to count one into. The batch twin of
+    """Each open bron marked with whether its mijoz has a sotuv of one of its markalar
+    that no bron has counted — the rows Bronlar offers to count one into. The batch twin of
     `bron_countable_sales`: one query for the whole list instead of one per bron."""
     open_ones = [bron for bron in reservations if bron.is_open]
     pairs = set()
@@ -5511,11 +5533,13 @@ def _with_countable_sales(reservations):
         pairs = set(Sale.objects
                     .filter(reservation__isnull=True,
                             customer_id__in={bron.customer_id for bron in open_ones},
-                            line__contract_line__brand__in={bron.brand for bron in open_ones})
+                            line__contract_line__brand__in={
+                                brand for bron in open_ones for brand in bron.brands})
                     .values_list("customer_id", "line__contract_line__brand")
                     .distinct())
     for bron in reservations:
-        bron.countable_sales = bron.is_open and (bron.customer_id, bron.brand) in pairs
+        bron.countable_sales = bron.is_open and any(
+            (bron.customer_id, brand) in pairs for brand in bron.brands)
     return reservations
 
 
@@ -5567,6 +5591,58 @@ def reservation_list(request):
     })
 
 
+def _bron_items_formset(request, instance=None, initial=None):
+    """The Markalar rows of a bron form. Their narx label follows the bron's
+    valyuta — what was posted, else what the bron was struck in."""
+    data = request.POST if request.method == "POST" else None
+    currency = (data or {}).get("currency") or (
+        instance.currency if instance is not None else Currency.USD)
+    return ReservationItemFormSet(data, instance=instance or Reservation(),
+                                  prefix="items", initial=initial,
+                                  form_kwargs={"currency": currency})
+
+
+def _price_bron_items(form, items):
+    """Convert each marka's typed narx at the bron's valyuta and kurs, onto the
+    row. False — with the error on the form — when a narx was typed and no kurs.
+
+    Done here rather than in the row form because the row does not know the
+    header's figures: both have to be clean first."""
+    currency = form.cleaned_data["currency"]
+    rate = None
+    for row in items.rows():
+        typed = row.cleaned_data.get("price")
+        if typed is None:
+            row.instance.price = row.instance.price_uzs = None
+            continue
+        if rate is None:
+            rate = form.require_rate()
+            if rate is None:
+                return False
+        row.instance.price, row.instance.price_uzs = convert_pair(
+            typed, currency, rate, "0.0001")
+    return True
+
+
+def _save_bron_items(items, reservation):
+    """Persist the Markalar rows onto `reservation` — deletions first, so a marka
+    struck out and picked again on another row does not trip the one-marka-once
+    constraint."""
+    items.instance = reservation
+    rows = items.save(commit=False)
+    for item in items.deleted_objects:
+        item.delete()
+    for item in rows:
+        item.reservation = reservation
+        item.save()
+
+
+def _bron_form_response(request, form, items, title, invalid=False):
+    return form_response(request, form, title, invalid=invalid, extra_context={
+        "lines": items, "lines_legend": "Markalar",
+        "lines_add_label": "+ Marka qo'shish"})
+
+
 @role_required(User.Role.ADMIN)
 def reservation_create(request):
     initial = {}
@@ -5576,20 +5652,25 @@ def reservation_create(request):
     customer_id = request.GET.get("customer")
     if customer_id and customer_id.isdigit():
         initial["customer"] = int(customer_id)
+    brand = (request.GET.get("brand") or "").strip()
     form = ReservationForm(request.POST or None, initial=initial)
+    items = _bron_items_formset(request, initial=[{"brand": brand}] if brand else None)
     if request.method == "POST":
-        if form.is_valid():
-            reservation = form.save(commit=False)
-            reservation.created_by = request.user
-            reservation.save()
+        if form.is_valid() and items.is_valid() and _price_bron_items(form, items):
+            with transaction.atomic():
+                reservation = form.save(commit=False)
+                reservation.created_by = request.user
+                reservation.save()
+                _save_bron_items(items, reservation)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Bron", reservation.pk,
-                f"Yangi bron: {reservation.kg} kg · {reservation.customer.name}",
+                (f"Yangi bron: {reservation.kg} kg · {reservation.brand_label} · "
+                 f"{reservation.customer.name}")[:255],
             )
             messages.success(request, "Bron qo'shildi")
             return form_success(request, reverse("reservation_list"))
-        return form_response(request, form, "Yangi bron", invalid=True)
-    return form_response(request, form, "Yangi bron")
+        return _bron_form_response(request, form, items, "Yangi bron", invalid=True)
+    return _bron_form_response(request, form, items, "Yangi bron")
 
 
 @role_required(User.Role.ADMIN)
@@ -5610,9 +5691,10 @@ def reservation_edit(request, pk):
         messages.error(request, "Bekor qilingan bronni tahrirlash mumkin emas")
         return form_reload(request, reverse("reservation_list"))
     form = ReservationForm(request.POST or None, instance=reservation)
+    items = _bron_items_formset(request, instance=reservation)
     title = "Bronni tahrirlash"
     if request.method == "POST":
-        if form.is_valid():
+        if form.is_valid() and items.is_valid() and _price_bron_items(form, items):
             reservation = form.save(commit=False)
             # Lowered to exactly what was already handed over: nothing is owed any
             # more, so it ends served — the same end `draw_down_bron` gives a bron
@@ -5631,15 +5713,18 @@ def reservation_edit(request, pk):
                 # arithmetic, and only the operator can say the mijoz wants the
                 # rest after all — the row still offers Tahrirlash for the figures.
                 reservation.status = Reservation.Status.ACTIVE
-            reservation.save()
+            with transaction.atomic():
+                reservation.save()
+                _save_bron_items(items, reservation)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Bron", reservation.pk,
-                f"Bron tahrirlandi: {reservation.kg} kg · {reservation.customer.name}",
+                (f"Bron tahrirlandi: {reservation.kg} kg · {reservation.brand_label} · "
+                 f"{reservation.customer.name}")[:255],
             )
             messages.success(request, "Bron yangilandi")
             return form_reload(request, reverse("reservation_list"))
-        return form_response(request, form, title, invalid=True)
-    return form_response(request, form, title)
+        return _bron_form_response(request, form, items, title, invalid=True)
+    return _bron_form_response(request, form, items, title)
 
 
 @role_required(User.Role.ADMIN)
@@ -6602,12 +6687,16 @@ def _customer_history(customer):
                        else f"{settlement.due_date} kuni qaytariladi"),
             "total": settlement.amount, "total_uzs": settlement.amount_uzs,
             "currency": settlement.currency})
-    for bron in customer.reservations.all():
+    for bron in customer.reservations.prefetch_related("items"):
+        # The narx column carries one figure, so a bron of several markalar at
+        # different narxlar leaves it empty; its markalar are named in the detail.
+        prices = {(item.price, item.price_uzs) for item in bron.item_list}
+        price, price_uzs = prices.pop() if len(prices) == 1 else (None, None)
         events.append({
             "date": bron.created_at.date(), "kind": "bron",
             "label": f"Bron · {bron.get_status_display()}",
-            "detail": f"{bron.brand} · {_kg(bron.kg)} kg",
-            "total": bron.price, "total_uzs": bron.price_uzs,
+            "detail": f"{bron.brand_label} · {_kg(bron.kg)} kg",
+            "total": price, "total_uzs": price_uzs,
             "currency": bron.currency, "per_kg": True})
     # Newest first, and a stable tie-break so two events on one day do not swap
     # places between page loads.
@@ -6664,6 +6753,7 @@ def debt_customer(request, pk):
     brons = _with_bron_holds([
         bron for bron in customer.reservations.filter(
             status=Reservation.Status.ACTIVE).select_related("customer")
+        .prefetch_related("items")
         .order_by("created_at", "pk") if bron.remaining_kg > 0])
     history, f = _filter_customer_history(request, customer)
     return render(request, "crm/debt_customer.html", {
@@ -8029,17 +8119,38 @@ def _contracts_table(contracts, include_money=True):
 def _reservations_table(reservations):
     """One row per bron. Kg and Qolgan are the two figures the screen leads with, and
     Jami is kg × narx in both columns — the file carries both currencies because a
-    workbook is read away from the page that knew which one the bron was struck in."""
+    workbook is read away from the page that knew which one the bron was struck in.
+
+    A bron of several markalar names them all in Marka. The Narx and Jami columns are
+    numbers, so they are filled only when its markalar share one narx; otherwise they
+    stay empty and "Markalar narxi" spells each one out."""
     headers = ["Sana", "Mijoz", "Marka", "Navbat", "Kg", "Berilgan kg", "Qolgan kg",
                "Valyuta", "Kurs", "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
-               "Holat", "Izoh"]
-    rows = (
-        [timezone.localtime(r.created_at).date(), r.customer.name, r.brand,
-         r.queue_pos, r.kg, r.fulfilled_kg, r.remaining_kg,
-         r.get_currency_display(), r.exchange_rate, r.price, r.price_uzs,
-         r.total, r.total_uzs, r.get_status_display(), r.note]
-        for r in reservations
-    )
+               "Markalar narxi", "Holat", "Izoh"]
+
+    def one_price(r):
+        prices = {(item.price, item.price_uzs) for item in r.item_list}
+        return prices.pop() if len(prices) == 1 else (None, None)
+
+    def spelled(r):
+        if not r.is_multi:
+            return ""
+        return "; ".join(
+            f"{item.brand}: " + (f"{item.price_own.normalize():f}"
+                                 if item.price_own is not None else "kelishilmagan")
+            for item in r.item_list)
+
+    def row(r):
+        price, price_uzs = one_price(r)
+        total = (r.kg * price).quantize(Decimal("0.01")) if price is not None else None
+        total_uzs = ((r.kg * price_uzs).quantize(Decimal("0.01"))
+                     if price_uzs is not None else None)
+        return [timezone.localtime(r.created_at).date(), r.customer.name, r.brand_label,
+                r.queue_pos, r.kg, r.fulfilled_kg, r.remaining_kg,
+                r.get_currency_display(), r.exchange_rate, price, price_uzs,
+                total, total_uzs, spelled(r), r.get_status_display(), r.note]
+
+    rows = (row(r) for r in reservations)
     return headers, rows, {"Kg": KG, "Berilgan kg": KG, "Qolgan kg": KG,
                            "Navbat": "0", "Kurs": "#,##0"}
 
