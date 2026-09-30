@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load crm_extras %}
-{% block title %}Bron #{{ bron.pk }} · GranulaLog{% endblock %}
-{% block topbar_title %}Bron #{{ bron.pk }}{% endblock %}
+{% block title %}Bron {{ bron.code }} · GranulaLog{% endblock %}
+{% block topbar_title %}Bron {{ bron.code }}{% endblock %}
 {% block content %}
 
 <div class="card">
@@ -40,6 +40,10 @@
     <div class="stat">
       <div class="muted">Qolgan kg</div>
       <div><span class="badge {% if bron.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ bron.remaining_kg|floatformat:"-3" }}</span></div>
+    </div>
+    <div class="stat">
+      <div class="muted">Qolgan to'lov</div>
+      <div>{% with owed=bron.unpaid_given %}{% if owed is None %}<span class="muted">—</span>{% else %}<span class="badge {% if owed > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money_in owed bron.currency %}</span>{% endif %}{% endwith %}</div>
     </div>
   </div>
   {% if bron.note %}<p class="muted" style="margin-top: 14px;">{{ bron.note }}</p>{% endif %}

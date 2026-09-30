@@ -22,7 +22,7 @@
     {% if bron_draws %}
     <div class="stat">
       <div class="muted">Bron</div>
-      <div>{% for d in bron_draws %}<a href="{% url 'reservation_detail' d.reservation_id %}">#{{ d.reservation_id }}</a> · {{ d.kg|floatformat:"-3" }} kg{% if not forloop.last %}<br>{% endif %}{% endfor %}</div>
+      <div>{% for d in bron_draws %}<a href="{% url 'reservation_detail' d.reservation_id %}">{{ d.reservation.code }}</a> · {{ d.kg|floatformat:"-3" }} kg{% if not forloop.last %}<br>{% endif %}{% endfor %}</div>
     </div>
     {% endif %}
     <div class="stat">

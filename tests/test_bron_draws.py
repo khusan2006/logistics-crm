@@ -88,3 +88,36 @@ class TestBackfill:
         Reservation.objects.filter(pk=bron.pk).update(fulfilled_kg=Decimal("100"))
         with pytest.raises(RuntimeError, match=f"{bron.pk}"):
             backfill_draws(Reservation, ReservationItem, ReservationDraw, Sale)
+
+
+class TestCodes:
+    def test_numbered_per_mijoz_and_never_reused(self, db):
+        komoliddin, other = _customer("Komoliddin sintafon"), _customer("Mak Plast")
+        first = make_bron(komoliddin)
+        make_bron(other)
+        second = make_bron(komoliddin)
+        assert (first.code, second.code) == ("komoliddin-sintafon-1", "komoliddin-sintafon-2")
+        second.delete()
+        assert make_bron(komoliddin).code == "komoliddin-sintafon-3"
+
+    def test_an_edit_keeps_the_code(self, db):
+        bron = make_bron(_customer("Mak Plast"))
+        bron.note = "tel qildi"
+        bron.save()
+        bron.refresh_from_db()
+        assert bron.code == "mak-plast-1"
+
+
+class TestQolganTolov:
+    def test_only_the_share_given_here_is_owed_here(self, admin_client, db):
+        """24 100 kg at $1.50, 3 000 into the older bron and 21 100 into the newer:
+        unpaid, the newer bron is owed 21 100 × 1.50."""
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        assert newer.unpaid_given is None
+        _sell(admin_client, customer, "LLDPE", "24100", price="1.50")
+        newer = Reservation.objects.get(pk=newer.pk)
+        assert newer.unpaid_given == Decimal("31650.00")
+        older = Reservation.objects.get(pk=older.pk)
+        assert older.unpaid_given == Decimal("4500.00")

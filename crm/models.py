@@ -20,6 +20,12 @@ def partner_code_slug(name):
     return slugify(name, allow_unicode=True) or "hamkor"
 
 
+def customer_code_slug(name):
+    """The name half of a bron code — komoliddin-sintafon-3 — made the way a kelishuv
+    code's is from its hamkor."""
+    return slugify(name, allow_unicode=True) or "mijoz"
+
+
 class PayMethod(models.TextChoices):
     CASH = "cash", "Naqd"
     CARD = "card", "Karta"
@@ -627,12 +633,29 @@ class Customer(models.Model):
     longitude = models.DecimalField("Uzunlik", max_digits=9, decimal_places=6,
                                     null=True, blank=True)
     note = models.TextField("Izoh", blank=True)
+    # Bron codes, numbered per mijoz the way kelishuv codes are per hamkor — see
+    # `Partner.code_counter` for why the high-water mark lives here and only climbs.
+    code_slug = models.CharField(max_length=200, db_index=True, editable=False)
+    code_counter = models.PositiveIntegerField(default=0, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["name"]
         verbose_name = "Mijoz"
         verbose_name_plural = "Mijozlar"
+
+    def save(self, *args, **kwargs):
+        self.code_slug = customer_code_slug(self.name)
+        if (fields := kwargs.get("update_fields")) is not None:
+            kwargs["update_fields"] = {*fields, "code_slug"}
+        elif self.pk:
+            # Reservation.save() bumps code_counter with a targeted UPDATE — the same
+            # stale-instance guard `Partner.save` carries.
+            stored = Customer.objects.filter(pk=self.pk).values_list(
+                "code_counter", flat=True).first()
+            if stored is not None:
+                self.code_counter = max(self.code_counter, stored)
+        return super().save(*args, **kwargs)
 
     @property
     def has_location(self):
@@ -2506,12 +2529,76 @@ class Reservation(MoneyEntry):
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="reservations",
                                    verbose_name="Kim kiritdi")
+    # The code the operator reads — komoliddin-sintafon-3 — the mijoz's name and
+    # their bron number, split the way `Contract.code_slug` / `code_number` are.
+    code_slug = models.CharField(max_length=200, db_index=True, editable=False)
+    code_number = models.PositiveIntegerField(editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
         verbose_name = "Bron"
         verbose_name_plural = "Bronlar"
+        constraints = [models.UniqueConstraint(fields=["code_slug", "code_number"],
+                                               name="unique_reservation_code")]
+
+    @property
+    def code(self):
+        return f"{self.code_slug}-{self.code_number}"
+
+    def _next_code_number(self, slug):
+        """One past the highest number this mijoz — or anyone sharing their slug —
+        has been issued; see `Contract._next_code_number`."""
+        top = Customer.objects.filter(
+            models.Q(code_slug=slug) | models.Q(pk=self.customer_id)
+        ).aggregate(top=Max("code_counter"))["top"]
+        return (top or 0) + 1
+
+    def save(self, *args, **kwargs):
+        """Stamps the code once, as `Contract.save` does: re-issued only when the bron
+        is moved to another mijoz, and retried when two saves race for a number."""
+        if self.pk:
+            was = (Reservation.objects.filter(pk=self.pk)
+                   .values_list("customer_id", flat=True).first())
+            needs_code = was is not None and was != self.customer_id
+        else:
+            needs_code = True
+        if not needs_code:
+            return super().save(*args, **kwargs)
+        for attempt in range(5):
+            slug = customer_code_slug(self.customer.name)
+            self.code_slug, self.code_number = slug, self._next_code_number(slug)
+            if (fields := kwargs.get("update_fields")) is not None:
+                kwargs["update_fields"] = {*fields, "code_slug", "code_number"}
+            try:
+                with transaction.atomic():
+                    result = super().save(*args, **kwargs)
+                    Customer.objects.filter(pk=self.customer_id,
+                                            code_counter__lt=self.code_number
+                                            ).update(code_counter=self.code_number)
+                    return result
+            except IntegrityError:
+                if attempt == 4:
+                    raise
+                kwargs.pop("force_insert", None)
+
+    @property
+    def unpaid_given(self):
+        """Qolgan to'lov, in the bron's own currency: what the mijoz still owes for
+        the kg already given out of this bron. A sotuv that gave only part of its kg
+        here brings that part of its qarz. None when nothing is given yet.
+
+        Reads `draws` and each sotuv's `returns` and `allocations` — the list
+        prefetches them."""
+        draws = list(self.draws.all())
+        if not draws:
+            return None
+        owed = Decimal("0")
+        for draw in draws:
+            sale = draw.sale
+            unpaid = own_side(self, sale.remaining, sale.remaining_uzs)
+            owed += unpaid * draw.kg / sale.kg
+        return owed.quantize(Decimal("0.01"))
 
     @property
     def remaining_kg(self):

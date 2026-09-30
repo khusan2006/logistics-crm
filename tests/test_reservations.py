@@ -637,57 +637,37 @@ class TestReservationList:
 
 
 class TestBronlarReadsLikeKelishuvlar:
-    """The list wears the Kelishuvlar shape: one row per booking with its markalar
-    stacked inside it, Qolgan as a badge that says whether anything is left, a Jami
+    """The list wears the Kelishuvlar shape: one row per bron led by its code, its
+    markalar stacked inside it, Qolgan as a badge that says whether anything is left, a Jami
     column, and the toolbar every other ro'yxat has — davr, Filtrlash, Excel."""
 
-    def test_one_mijoz_on_one_kun_is_one_row(self, admin_client, db):
-        """Two markalar booked together are one booking, not two table rows."""
+    def test_one_row_per_bron_led_by_its_code(self, admin_client, db):
+        """Each bron is its own row, as each kelishuv is, and its first cell is its
+        code — the mijoz's name and their bron number — linking to the bron's page."""
         _arrived_lot(kg="10000", brand="LLDPE")
         _in_transit_lot(kg="5000", brand="HDPE")
         mijoz = _customer("Mak Plast")
         _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
         _reserve(admin_client, "HDPE", mijoz, kg="2000", price="2.00")
-        groups = admin_client.get("/reservations/").context["groups"]
-        assert len(groups) == 1
-        assert groups[0]["customer"] == mijoz
-        assert sorted(r.brand_label for r in groups[0]["items"]) == ["HDPE", "LLDPE"]
+        resp = admin_client.get("/reservations/?sort=created")
+        assert [r.code for r in resp.context["rows"]] == ["mak-plast-1", "mak-plast-2"]
+        first = Reservation.objects.get(code_number=1)
+        assert f'href="/reservations/{first.pk}/">mak-plast-1</a>' in resp.content.decode()
 
-    def test_another_mijoz_is_another_row(self, admin_client, db):
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
-        _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="1000", price="2.00")
-        groups = admin_client.get("/reservations/").context["groups"]
-        assert [g["customer"].name for g in groups] == ["Bir", "Ikki"]
-        assert [len(g["items"]) for g in groups] == [1, 1]
-
-    def test_a_different_kun_is_a_different_row(self, admin_client, db):
-        """The group is the BOOKING — what was put down on one day — so the same
-        mijoz coming back next week starts a row of their own."""
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _in_transit_lot(kg="5000", brand="HDPE")
-        mijoz = _customer("Mak Plast")
-        _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
-        _reserve(admin_client, "HDPE", mijoz, kg="1000", price="2.00")
-        old = Reservation.objects.order_by("pk").first()
-        Reservation.objects.filter(pk=old.pk).update(
-            created_at=timezone.now() - timedelta(days=7))
-        groups = admin_client.get("/reservations/").context["groups"]
-        assert [len(g["items"]) for g in groups] == [1, 1]
-        assert len({g["date"] for g in groups}) == 2
-
-    def test_the_page_never_splits_a_booking_across_two_pages(self, admin_client, db):
-        """Paginated by GROUP: 20 bookings to a page, not 20 bronlar — half a mijoz's
-        day at the foot of one page and half at the head of the next is the thing
-        grouping exists to prevent."""
+    def test_paginated_by_bron(self, admin_client, db):
         for n in range(21):
-            mijoz = _customer(f"Mijoz {n:02d}")
-            for brand in ("LLDPE", "HDPE"):
-                make_bron(mijoz, brand, kg="10", price="2")
+            make_bron(_customer(f"Mijoz {n:02d}"), "LLDPE", kg="10", price="2")
         page = admin_client.get("/reservations/?sort=customer").context["page"]
         assert page.paginator.num_pages == 2
         assert len(page.object_list) == 20
-        assert all(len(g["items"]) == 2 for g in page.object_list)
+
+    def test_a_code_is_searchable(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        mijoz = _customer("Mak Plast")
+        _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
+        _reserve(admin_client, "LLDPE", mijoz, kg="3000", price="2.00")
+        rows = admin_client.get("/reservations/?q=mak-plast-2").context["rows"]
+        assert [r.kg for r in rows] == [Decimal("3000.000")]
 
     def test_the_columns_stand_in_kelishuvlar_order(self, admin_client, db):
         """Marka, then what was agreed, at what narx, for how much, and what of it is
@@ -703,8 +683,8 @@ class TestBronlarReadsLikeKelishuvlar:
         page = _plain(admin_client.get("/reservations/").content.decode())
         header = page[page.index("<table"):page.index("</tr>")]
         assert re.findall(r">([^<>]+)</th>", header) == [
-            "Mijoz", "Sana", "Marka", "Navbat", "Bron qilingan kg", "Narx", "Jami",
-            "Qolgan kg", "Avansdan band", "Yetishmayapti", "Holat"]
+            "Kod", "Sana", "Marka", "Navbat", "Bron qilingan kg", "Narx", "Jami",
+            "Qolgan kg", "Qolgan to'lov", "Avansdan band", "Yetishmayapti", "Holat"]
 
     def test_qolgan_is_a_badge_that_says_whether_anything_is_left(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -1226,11 +1206,12 @@ def test_the_bron_row_offers_a_full_sotuv_prefilled(admin_client, db):
     assert f"/sales/new/?customer={customer.pk}&amp;brand=LLDPE" in html
 
 
-def test_the_bron_row_links_the_name_to_that_mijoz_page(admin_client, db):
+def test_the_bron_page_links_the_name_to_that_mijoz_page(admin_client, db):
     _arrived_lot(kg="10000", brand="LLDPE")
     customer = _customer()
     _reserve(admin_client, "LLDPE", customer, kg="6000")
-    html = admin_client.get("/reservations/").content.decode()
+    bron = Reservation.objects.get()
+    html = admin_client.get(f"/reservations/{bron.pk}/").content.decode()
     # The ism is in its own `data-lotin` span — the operator's text, which the
     # transliterator leaves alone (see test_yozuv) — so the link wraps the span.
     assert (f'href="/debts/{customer.pk}/"><span data-lotin>{customer.name}</span></a>'

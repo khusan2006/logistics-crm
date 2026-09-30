@@ -5328,7 +5328,7 @@ def sale_detail(request, pk):
     group = sale.group_sales
     return render(request, "crm/sale_detail.html", {
         "sale": sale, "group": group,
-        "bron_draws": list(sale.bron_draws.all()),
+        "bron_draws": list(sale.bron_draws.select_related("reservation")),
         "group_kg": sum((s.kg for s in group), Decimal("0")),
         "group_total": sum((s.total for s in group), Decimal("0")),
         "group_total_uzs": sum((s.total_uzs for s in group), Decimal("0")),
@@ -5384,6 +5384,7 @@ RESERVATION_SORTS = [
      lambda r: (r.brands[0] if r.brands else "", r.created_at, r.pk), False),
     ("-created", "Sana — yangi avval", lambda r: (r.created_at, r.pk), True),
     ("created", "Sana — eski avval", lambda r: (r.created_at, r.pk), False),
+    ("code", "Kod — A-Z", lambda r: (r.code_slug, r.code_number), False),
     ("customer", "Mijoz — A-Z", lambda r: (r.customer.name.casefold(), r.pk), False),
     ("-kg", "Kg — kattadan", lambda r: (r.kg, r.pk), True),
     ("-total", "Jami — kattadan",
@@ -5411,12 +5412,18 @@ def _filter_reservations(request):
     if sort not in {key for key, *_ in RESERVATION_SORTS}:
         sort = RESERVATION_SORT_DEFAULT
 
+    # The draws with their sotuvlar' returns and allocations are what Qolgan to'lov
+    # reads — see `Reservation.unpaid_given`.
     reservations = (Reservation.objects.select_related("customer")
-                    .prefetch_related("items"))
+                    .prefetch_related("items", "draws__sale__returns",
+                                      "draws__sale__allocations"))
     if q:
+        # The bron's code as a kelishuv's is searched: komoliddin-sintafon-3 pins one
+        # bron, a bare 3 finds every mijoz's third.
         reservations = reservations.filter(
             Q(customer__name__icontains=q) | Q(items__brand__icontains=q)
-            | Q(note__icontains=q)).distinct()
+            | Q(note__icontains=q) | Q(code_slug__icontains=q)
+            | _contract_code_filter(q)).distinct()
     if customer_id.isdigit():
         reservations = reservations.filter(customer_id=int(customer_id))
     # When the bron was struck. `created_at` is a timestamp rather than a date, so the
@@ -5488,30 +5495,6 @@ def _filter_reservations(request):
                   "date_from": date_from, "date_to": date_to}
 
 
-def _reservation_groups(rows):
-    """Bronlar in the shape Kelishuvlar draws: one row per mijoz and sana, with that
-    day's markalar stacked line by line inside it.
-
-    A bron has no parent record the way a kelishuv has its lines, so the group is the
-    BOOKING — everything one mijoz put down on one day. That is the unit the operator
-    made, and splitting it over three table rows repeated the name and the sana twice
-    for nothing.
-
-    Order still follows Saralash: a group takes the place of its best-placed bron, so
-    the sort decides where it lands and grouping only pulls that mijoz's other markalar
-    of the same day up beside it. `rows` must already be sorted."""
-    groups, index = [], {}
-    for row in rows:
-        key = (row.customer_id, timezone.localtime(row.created_at).date())
-        group = index.get(key)
-        if group is None:
-            group = {"customer": row.customer, "date": key[1], "items": []}
-            index[key] = group
-            groups.append(group)
-        group["items"].append(row)
-    return groups
-
-
 def _with_bron_holds(reservations):
     """Each bron carrying what it speaks for out of its mijoz's avans, for the
     templates. Nothing is written — see `bron_advance_holds` for why a bron holds
@@ -5551,14 +5534,13 @@ def reservation_list(request):
     other ro'yxat answers "what is this list showing" with. They rode in the search
     row as four selects, which on a narrow screen wrapped into a wall above the table.
 
-    The page is paginated by GROUP rather than by bron, so a mijoz's markalar of one
-    day are never split across a page boundary. `rows` is that same page flattened
-    back to bronlar, for anything that wants them one by one."""
+    One row per bron, led by its code — the way Kelishuvlar lists a kelishuv. The
+    code already opens with the mijoz's name, as a kelishuv's does with its hamkor's,
+    so there is no separate Mijoz column; the bron's own page links to the mijoz."""
     rows, f = _filter_reservations(request)
-    groups = _reservation_groups(rows)
     _with_bron_holds(rows)
     _with_countable_sales(rows)
-    page = Paginator(groups, 20).get_page(request.GET.get("page"))
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
     # Holat defaults to Faol and Saralash to Navbat, so standing on either draws no
     # chip — a chip means "this list is narrower than it normally is".
     panel = [
@@ -5580,8 +5562,7 @@ def reservation_list(request):
     return render(request, "crm/reservation_list.html", {
         "export_url": reverse("reservation_list_export"),
         "filters": _filter_panel(request, panel),
-        "page": page, "groups": page.object_list,
-        "rows": [r for g in page.object_list for r in g["items"]],
+        "page": page, "rows": page.object_list,
         "q": f["q"], "customer_id": f["customer_id"], "status": f["status"],
         "lot": f["lot"], "status_tabs": f["status_tabs"], "sort": f["sort"],
         "sort_options": [(key, label) for key, label, *_ in RESERVATION_SORTS],
@@ -5602,7 +5583,8 @@ def reservation_detail(request, pk):
     question "where did this bron's berilgan kg come from"."""
     bron = get_object_or_404(
         Reservation.objects.select_related("customer", "created_by")
-        .prefetch_related("items"), pk=pk)
+        .prefetch_related("items", "draws__sale__returns", "draws__sale__allocations"),
+        pk=pk)
     draws = list(bron.draws
                  .select_related("sale__line__contract_line", "sale__line__shipment")
                  .order_by("sale__date", "sale__pk"))
@@ -8145,9 +8127,10 @@ def _reservations_table(reservations):
 
     A bron of several markalar names them all in Marka. The Narx and Jami columns are
     numbers, so they are filled only when its markalar share one narx; otherwise they
-    stay empty and "Markalar narxi" spells each one out."""
-    headers = ["Sana", "Mijoz", "Marka", "Navbat", "Kg", "Berilgan kg", "Qolgan kg",
-               "Valyuta", "Kurs", "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
+    stay empty and "Markalar narxi" spells each one out. Qolgan to'lov is in the
+    bron's own valyuta, the column beside it — see `Reservation.unpaid_given`."""
+    headers = ["Kod", "Sana", "Mijoz", "Marka", "Navbat", "Kg", "Berilgan kg", "Qolgan kg",
+               "Qolgan to'lov", "Valyuta", "Kurs", "Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
                "Markalar narxi", "Holat", "Izoh"]
 
     def one_price(r):
@@ -8167,9 +8150,9 @@ def _reservations_table(reservations):
         total = (r.kg * price).quantize(Decimal("0.01")) if price is not None else None
         total_uzs = ((r.kg * price_uzs).quantize(Decimal("0.01"))
                      if price_uzs is not None else None)
-        return [timezone.localtime(r.created_at).date(), r.customer.name, r.brand_label,
-                r.queue_pos, r.kg, r.fulfilled_kg, r.remaining_kg,
-                r.get_currency_display(), r.exchange_rate, price, price_uzs,
+        return [r.code, timezone.localtime(r.created_at).date(), r.customer.name,
+                r.brand_label, r.queue_pos, r.kg, r.fulfilled_kg, r.remaining_kg,
+                r.unpaid_given, r.get_currency_display(), r.exchange_rate, price, price_uzs,
                 total, total_uzs, spelled(r), r.get_status_display(), r.note]
 
     rows = (row(r) for r in reservations)

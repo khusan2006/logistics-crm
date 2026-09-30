@@ -38,7 +38,7 @@ search never drops the way the list was already narrowed.
 <div class="table-wrap">
 <table class="bron-table">
   <tr>
-    <th class="sticky-col">Mijoz</th>
+    <th class="sticky-col">Kod</th>
     <th>Sana</th>
     <th title="Bir nechta marka — bir-birining o'rnini bosadi, qaysi biri berilsa ham bron kg'sidan ayiriladi">Marka</th>
     <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi. Bir nechta markali bron har markaning navbatida turadi">Navbat</th>
@@ -46,34 +46,30 @@ search never drops the way the list was already narrowed.
     <th>Narx</th>
     <th title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Jami</th>
     <th title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan kg</th>
+    <th title="Shu brondan berilgan kg uchun mijoz hali to'lamagan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
     <th title="Shu bron uchun mijozning avansidan band qilingan summa — pul hali sarflanmagan, mijoz qarzdor emas">Avansdan band</th>
     <th title="Tovar bugun to'liq berilsa mijoz qancha qarzdor bo'lardi">Yetishmayapti</th>
     <th>Holat</th>
     <th></th>
   </tr>
   {% comment %}
-  One row per mijoz and sana, its markalar stacked line by line inside the columns —
-  the Kelishuvlar shape (`_reservation_groups` builds the groups). A bron has no
-  parent record the way a kelishuv has its lines, so the group is the BOOKING: what
-  one mijoz put down on one day. Mijoz and Sana are the group's own, and centre
-  themselves against the stack; everything from Marka rightwards is per bron and
-  stays aligned row-for-row, the actions included.
+  One row per bron, in whatever order Saralash asked for — the Kelishuvlar shape, and
+  the same column order as far as the two share columns: what was agreed, at what
+  narx, for how much, and what of it is still outstanding in kg and in money. A bron
+  of several markalar stacks them line by line inside Marka, Navbat and Narx.
   {% endcomment %}
-  {% for g in groups %}
+  {% for r in rows %}
   <tr>
     {% comment %}
-    The name opens the mijoz's own page, where Mijoz tarixi lists their bronlar
-    alongside everything else they have done — the question "what else has this
-    person booked" is a question about them, not about this one row. Tahrirlash is
-    the pencil in the actions.
+    The kod opens the bron's own page — its markalar and only the sotuvlar counted
+    into it — and that page links on to the mijoz. Tahrirlash is the pencil.
     {% endcomment %}
     <td class="sticky-col">
-      <a href="{% url 'debt_customer' g.customer.pk %}">{{ g.customer.name|lotin }}</a>
+      <a href="{% url 'reservation_detail' r.pk %}">{{ r.code }}</a>
     </td>
-    <td>{{ g.date|date:"d.m.Y" }}</td>
-    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{{ m.item.brand }}</div>{% endfor %}</div>{% endfor %}</td>
+    <td>{{ r.created_at|date:"d.m.Y" }}</td>
+    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{{ m.item.brand }}</div>{% endfor %}</div></td>
     <td>
-      {% for r in g.items %}
       <div class="cell-line" style="--lines: {{ r.item_list|length }}">
         {% for m in r.marka_rows %}
         <div class="marka-line">
@@ -83,52 +79,52 @@ search never drops the way the list was already narrowed.
         </div>
         {% endfor %}
       </div>
-      {% endfor %}
     </td>
-    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{{ r.kg|floatformat:"-3" }}{% if r.is_multi %}<div class="muted load-sub">{{ r.item_list|length }} marka uchun umumiy</div>{% endif %}</div>{% endfor %}</td>
-    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{% if m.item.price %}{% rate m.item.price m.item.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</div>{% endfor %}</td>
+    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{{ r.kg|floatformat:"-3" }}{% if r.is_multi %}<div class="muted load-sub">{{ r.item_list|length }} marka uchun umumiy</div>{% endif %}</div></td>
+    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{% if m.item.price %}{% rate m.item.price m.item.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</div></td>
     {% comment %}
-    Jami is per bron rather than per group, and printed in the currency that bron was
-    struck in — a mijoz may book one marka in so'm and the next in dollars on the same
-    day, and one summa over the two would need a kurs neither was agreed at. It is
-    empty while any narx is still open, which is a real state: a bron may be struck
-    before the price is. A bron of several markalar at different narxlar shows the
-    cheapest and the dearest it could come to — which one it ends up as is decided by
-    what the mijoz takes. See `Reservation.totals`.
+    Jami is printed in the currency the bron was struck in. It is empty while any
+    narx is still open, which is a real state: a bron may be struck before the price
+    is. A bron of several markalar at different narxlar shows the cheapest and the
+    dearest it could come to — which one it ends up as is decided by what the mijoz
+    takes. See `Reservation.totals`.
     {% endcomment %}
-    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for t in r.totals %}{% if not forloop.first %} – {% endif %}{% money t.0 t.1 r.currency %}{% empty %}<span class="muted">—</span>{% endfor %}</div>{% endfor %}</td>
+    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for t in r.totals %}{% if not forloop.first %} – {% endif %}{% money t.0 t.1 r.currency %}{% empty %}<span class="muted">—</span>{% endfor %}</div></td>
     {% comment %}
-    Qolgan as a badge, the way Kelishuvlar draws its own Qolgan kg: sariq while the
-    mijoz is still owed granula, yashil once the promise is served out. The figure
-    was plain text, which said the same thing but made the reader compare it against
-    Bron qilingan kg to find out whether anything was left. It sits where the
-    kelishuv's own Qolgan kg sits — after Jami — so the two lists are read the
-    same way round: what was agreed, at what narx, for how much, and what of it
-    is still outstanding.
+    Qolgan kg as a badge, the way Kelishuvlar draws its own: sariq while the mijoz is
+    still owed granula, yashil once the promise is served out.
     {% endcomment %}
     <td>
-      {% for r in g.items %}
       <div class="cell-line" style="--lines: {{ r.item_list|length }}">
         <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
         {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
       </div>
-      {% endfor %}
     </td>
     {% comment %}
-    The money side of Qolgan kg, so it stands right after it — Jami and Qolgan kg
-    keep the Kelishuvlar order side by side, and these two answer the question that
-    order ends on: of what is still outstanding, how much has the mijoz already put
-    down. Avansdan band is what the bron speaks for out of the avans, Yetishmayapti
-    what it would still be short if the granula went out today; both are read off
-    the kg still owed, not the kg booked. A bron takes NO money and makes nobody a
-    qarzdor — nothing has been handed over — so neither figure moves the balans.
-    Held oldest bron first, and only ever within one currency: see
-    `bron_advance_holds`.
+    Qolgan to'lov: what the mijoz still owes for the kg ALREADY given out of this
+    bron, in its own currency — the money side of what has happened, as the
+    kelishuv's Qolgan to'lov is. Nothing given yet, nothing to owe: a dash, not a
+    green zero that would read as "paid". See `Reservation.unpaid_given`.
     {% endcomment %}
-    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_held %}<span class="avans">{% money_in r.avans_held r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
-    <td>{% for r in g.items %}<div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_short %}<span class="late">{% money_in r.avans_short r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div>{% endfor %}</td>
     <td>
-      {% for r in g.items %}
+      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
+        {% with owed=r.unpaid_given %}
+        {% if owed is None %}<span class="muted">—</span>
+        {% else %}<span class="badge {% if owed > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money_in owed r.currency %}</span>{% endif %}
+        {% endwith %}
+      </div>
+    </td>
+    {% comment %}
+    Of what is still outstanding, how much the mijoz has already put down.
+    Avansdan band is what the bron speaks for out of the avans, Yetishmayapti what
+    it would still be short if the granula went out today; both are read off the kg
+    still owed, not the kg booked. A bron takes NO money and makes nobody a qarzdor —
+    nothing has been handed over — so neither figure moves the balans. Held oldest
+    bron first, and only ever within one currency: see `bron_advance_holds`.
+    {% endcomment %}
+    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_held %}<span class="avans">{% money_in r.avans_held r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div></td>
+    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_short %}<span class="late">{% money_in r.avans_short r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div></td>
+    <td>
       <div class="cell-line" style="--lines: {{ r.item_list|length }}">
         {% if r.status == "active" %}
           {% if r.servable_kg > 0 %}
@@ -144,17 +140,9 @@ search never drops the way the list was already narrowed.
           {% if r.remaining_kg %}<div class="muted load-sub">{{ r.remaining_kg|floatformat:"-3" }} kg qaytarildi</div>{% endif %}
         {% else %}<span class="muted">Bekor qilindi</span>{% endif %}
       </div>
-      {% endfor %}
     </td>
     <td class="row-actions">
-      {% for r in g.items %}
       <div class="cell-line" style="--lines: {{ r.item_list|length }}">
-        {% comment %}
-        The bron's own page: its markalar and only the sotuvlar counted into it.
-        {% endcomment %}
-        <a class="icon-action" href="{% url 'reservation_detail' r.pk %}" title="Batafsil">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-        </a>
       {% if r.is_open %}
         {% comment %}
         Handing the granula over is a sotuv, so it goes through the sotuv form —
@@ -229,7 +217,6 @@ search never drops the way the list was already narrowed.
         {% endif %}
       {% endif %}
       </div>
-      {% endfor %}
     </td>
   </tr>
   {% endfor %}
