@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Bron #{{ bron.pk }} · GranulaLog{% endblock %}
+{% block topbar_title %}Bron #{{ bron.pk }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <a class="btn btn-ghost" href="{% url 'reservation_list' %}">&larr; Bronlar ro'yxatiga</a>
+    {% if bron.status != "cancelled" %}
+    <a class="btn" href="{% url 'reservation_edit' bron.pk %}" data-modal>Tahrirlash</a>
+    {% endif %}
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="muted">Mijoz</div>
+      <div><a href="{% url 'debt_customer' bron.customer_id %}">{{ bron.customer.name|lotin }}</a></div>
+    </div>
+    <div class="stat">
+      <div class="muted">Sana</div>
+      <div>{{ bron.created_at|date:"d.m.Y" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Holat</div>
+      <div>
+        {% if bron.status == "active" %}<span class="badge badge-warning">Faol</span>
+        {% elif bron.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
+        {% else %}<span class="badge">{{ bron.get_status_display }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="muted">Bron qilingan kg</div>
+      <div>{{ bron.kg|floatformat:"-3" }}{% if bron.is_multi %} <span class="muted">· {{ bron.item_list|length }} marka uchun umumiy</span>{% endif %}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Berilgan kg</div>
+      <div>{{ bron.fulfilled_kg|floatformat:"-3" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Qolgan kg</div>
+      <div><span class="badge {% if bron.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ bron.remaining_kg|floatformat:"-3" }}</span></div>
+    </div>
+  </div>
+  {% if bron.note %}<p class="muted" style="margin-top: 14px;">{{ bron.note }}</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin-top: 0;">Markalar</h3>
+  <div class="table-wrap">
+    <table>
+      <tr><th>Marka</th><th>Narx</th></tr>
+      {% for item in bron.item_list %}
+      <tr>
+        <td>{{ item.brand }}</td>
+        <td>{% if item.price %}{% rate item.price item.price_uzs bron.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+{% comment %}
+Only the sotuvlar counted into THIS bron. A sotuv bigger than what the bron still
+owed gave only part of itself here and the rest to the mijoz's next bron, so both
+figures are shown: Sotuv kg is what the mijoz took, Bronga hisoblangan is the share
+of it that this bron's Berilgan kg is made of.
+{% endcomment %}
+<div class="card">
+  <h3 style="margin-top: 0;">Sotuvlar <span class="muted" style="font-weight: 400; font-size: 13px;">· {{ draws|length }} ta</span></h3>
+  {% if draws %}
+  <div class="table-wrap">
+    <table>
+      <tr><th>Sana</th><th>Sotuv</th><th>Marka</th><th>Sotuv kg</th><th title="Shu sotuvning shu bronga hisoblangan qismi">Bronga hisoblangan kg</th></tr>
+      {% for d in draws %}
+      <tr>
+        <td>{{ d.sale.date|date:"d.m.Y" }}</td>
+        <td><a href="{% url 'sale_detail' d.sale_id %}">#{{ d.sale_id }}</a></td>
+        <td>{{ d.sale.line.brand }}</td>
+        <td>{{ d.sale.kg|floatformat:"-3" }}</td>
+        <td>{{ d.kg|floatformat:"-3" }}</td>
+      </tr>
+      {% endfor %}
+      <tr>
+        <td class="muted">Jami</td>
+        <td></td>
+        <td></td>
+        <td><strong>{{ sold_kg|floatformat:"-3" }}</strong></td>
+        <td><strong>{{ drawn_kg|floatformat:"-3" }}</strong></td>
+      </tr>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Bu bronga hali sotuv hisoblanmagan.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

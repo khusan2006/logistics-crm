@@ -5328,6 +5328,7 @@ def sale_detail(request, pk):
     group = sale.group_sales
     return render(request, "crm/sale_detail.html", {
         "sale": sale, "group": group,
+        "bron_draws": list(sale.bron_draws.all()),
         "group_kg": sum((s.kg for s in group), Decimal("0")),
         "group_total": sum((s.total for s in group), Decimal("0")),
         "group_total_uzs": sum((s.total_uzs for s in group), Decimal("0")),
@@ -5588,6 +5589,27 @@ def reservation_list(request):
         "date_from": f["date_from"], "date_to": f["date_to"],
         "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
         "has_filters": bool(f["customer_id"] or f["lot"] or f["status"] != "active"),
+    })
+
+
+@role_required(User.Role.ADMIN)
+def reservation_detail(request, pk):
+    """One bron and only what belongs to it: its markalar, how much is given and
+    still owed, and the sotuvlar counted into it — each with how many of its kg
+    went here, since a sotuv that spilled across two brons gave each only a part.
+
+    The mijoz's page lists every sotuv they ever made; this answers the narrower
+    question "where did this bron's berilgan kg come from"."""
+    bron = get_object_or_404(
+        Reservation.objects.select_related("customer", "created_by")
+        .prefetch_related("items"), pk=pk)
+    draws = list(bron.draws
+                 .select_related("sale__line__contract_line", "sale__line__shipment")
+                 .order_by("sale__date", "sale__pk"))
+    return render(request, "crm/reservation_detail.html", {
+        "bron": bron, "draws": draws,
+        "drawn_kg": sum((d.kg for d in draws), Decimal("0")),
+        "sold_kg": sum((d.sale.kg for d in draws), Decimal("0")),
     })
 
 

@@ -171,6 +171,7 @@ urlpatterns = [
     path("sales/<int:pk>/", crm_views.sale_detail, name="sale_detail"),
     path("reservations/", crm_views.reservation_list, name="reservation_list"),
     path("reservations/new/", crm_views.reservation_create, name="reservation_create"),
+    path("reservations/<int:pk>/", crm_views.reservation_detail, name="reservation_detail"),
     path("reservations/<int:pk>/edit/", crm_views.reservation_edit, name="reservation_edit"),
     path("reservations/<int:pk>/delete/", crm_views.reservation_delete, name="reservation_delete"),
     path("reservations/<int:pk>/cancel/", crm_views.reservation_cancel, name="reservation_cancel"),

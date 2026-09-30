@@ -149,6 +149,12 @@ search never drops the way the list was already narrowed.
     <td class="row-actions">
       {% for r in g.items %}
       <div class="cell-line" style="--lines: {{ r.item_list|length }}">
+        {% comment %}
+        The bron's own page: its markalar and only the sotuvlar counted into it.
+        {% endcomment %}
+        <a class="icon-action" href="{% url 'reservation_detail' r.pk %}" title="Batafsil">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </a>
       {% if r.is_open %}
         {% comment %}
         Handing the granula over is a sotuv, so it goes through the sotuv form —

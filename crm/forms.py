@@ -2565,9 +2565,9 @@ class ReservationSalesForm(forms.Form):
     """Which of the mijoz's earlier sotuvlar this bron covered — see
     `bron_countable_sales` for what is on offer and why nothing comes pre-ticked.
 
-    Refused when the ticked kg outgrow what the bron still owes. A sotuv only partly
-    drawn from a bron is one `release_bron` cannot give back exactly — it returns the
-    whole sotuv's kg — so the bron's kg has to be raised first instead."""
+    Refused when the ticked kg outgrow what the bron still owes: counting a sotuv
+    in by hand says the whole of it went against this promise, so the bron's kg has
+    to be raised first instead."""
 
     sales = CountableSaleField(
         label="Sotuvlar", queryset=Sale.objects.none(),

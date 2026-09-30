@@ -2634,6 +2634,37 @@ class ReservationItem(models.Model):
         return f"{self.brand} (bron #{self.reservation_id})"
 
 
+class ReservationDraw(models.Model):
+    """How many kg of one sotuv were counted into one bron.
+
+    A sotuv bigger than what its mijoz's oldest bron still owes spills into the next
+    one: 24 100 kg of 2102 репак closed bron #6 with 2 700 and put 21 400 into bron
+    #9. `Sale.reservation` names only the first bron it touched, so the 21 400 were
+    written onto #9 with nothing recording where they came from — the bron page could
+    not list the sotuv, and deleting it gave all 24 100 back to #6.
+
+    One row per (sotuv, bron) pair, written by `draw_down_bron` and removed by
+    `release_bron`. The sum of a bron's rows is its `fulfilled_kg`."""
+
+    reservation = models.ForeignKey(Reservation, on_delete=models.CASCADE,
+                                    related_name="draws", verbose_name="Bron")
+    sale = models.ForeignKey("Sale", on_delete=models.CASCADE,
+                             related_name="bron_draws", verbose_name="Sotuv")
+    kg = models.DecimalField("Bronga hisoblangan kg", max_digits=12, decimal_places=3)
+
+    class Meta:
+        ordering = ["pk"]
+        verbose_name = "Brondan berilgan"
+        verbose_name_plural = "Brondan berilganlar"
+        constraints = [
+            models.UniqueConstraint(fields=["reservation", "sale"],
+                                    name="reservation_draw_unique_sale"),
+        ]
+
+    def __str__(self):
+        return f"sotuv #{self.sale_id} → bron #{self.reservation_id}: {self.kg} kg"
+
+
 # ── Pozitsiya: what the cash figure means ────────────────────────────────────────
 #
 # The kassa on its own answers "how much money moved", which is not the same as
@@ -3396,8 +3427,10 @@ def draw_down_bron(sale, served_id=None):
         if bron.remaining_kg <= 0:
             bron.status = Reservation.Status.CONVERTED
         bron.save(update_fields=["fulfilled_kg", "status"])
-        # Linked to the FIRST bron it touched, so the sotuv can say which promise it
-        # went against and `release_bron` knows where to put the kg back.
+        # Every bron it touched gets its own row with its own kg, so the bron page
+        # can list this sotuv and `release_bron` puts each share back where it
+        # came from. The link on the sotuv names only the FIRST bron.
+        ReservationDraw.objects.create(reservation=bron, sale=sale, kg=take)
         if sale.reservation_id is None:
             sale.reservation = bron
             sale.save(update_fields=["reservation"])
@@ -3406,28 +3439,32 @@ def draw_down_bron(sale, served_id=None):
     return drawn
 
 
-def release_bron(sale, kg=None):
-    """Give a sotuv's kg back to the bron it was drawn from — for an edit or a
+def release_bron(sale):
+    """Give a sotuv's kg back to every bron it was drawn from — for an edit or a
     delete. Returns the kg released.
 
-    `kg` is what the sotuv took, when the instance no longer says so: a bound form
-    writes the posted kg onto the instance at `is_valid()`, before the edit is
-    saved. Releasing that NEW kg and drawing it again moved the bron by nothing —
-    bron #5 missed 4 000 kg when a 3 000 kg sotuv was corrected to 7 000.
+    What goes back is what the `ReservationDraw` rows say was taken, bron by bron —
+    not the sotuv's kg. Those differ twice over: a sotuv that spilled across two
+    brons took only part of itself from each, and a bound form has already written
+    the posted kg onto the instance by the time an edit releases (bron #5 missed
+    4 000 kg when a 3 000 kg sotuv was corrected to 7 000 and the NEW kg went back).
 
     A bron closed by the sotuv reopens: the promise is unkept again, and a bron
-    that stayed CONVERTED would go on reading as served while the mijoz waits."""
-    bron = sale.reservation
-    if bron is None:
-        return Decimal("0")
-    give = min(sale.kg if kg is None else kg, bron.fulfilled_kg)
-    if give <= 0:
-        return Decimal("0")
-    bron.fulfilled_kg -= give
-    if bron.status == Reservation.Status.CONVERTED and bron.remaining_kg > 0:
-        bron.status = Reservation.Status.ACTIVE
-    bron.save(update_fields=["fulfilled_kg", "status"])
-    return give
+    that stayed CONVERTED would go on reading as served while the mijoz waits.
+
+    The rows are deleted, so a sotuv drawn down again after an edit starts clean."""
+    given = Decimal("0")
+    for draw in sale.bron_draws.select_related("reservation"):
+        bron = draw.reservation
+        give = min(draw.kg, bron.fulfilled_kg)
+        if give > 0:
+            bron.fulfilled_kg -= give
+            if bron.status == Reservation.Status.CONVERTED and bron.remaining_kg > 0:
+                bron.status = Reservation.Status.ACTIVE
+            bron.save(update_fields=["fulfilled_kg", "status"])
+            given += give
+        draw.delete()
+    return given
 
 
 def brand_stock_costed():

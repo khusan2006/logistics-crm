@@ -19,10 +19,10 @@
       <div class="muted">Lot</div>
       <div>#{{ sale.line.shipment_id }} · {{ sale.line.brand }}{% if sale.reys %}<span class="reys-no" title="{{ sale.reys }}-reys">{{ sale.reys }}</span>{% endif %}</div>
     </div>
-    {% if sale.reservation_id %}
+    {% if bron_draws %}
     <div class="stat">
       <div class="muted">Bron</div>
-      <div>#{{ sale.reservation_id }}</div>
+      <div>{% for d in bron_draws %}<a href="{% url 'reservation_detail' d.reservation_id %}">#{{ d.reservation_id }}</a> · {{ d.kg|floatformat:"-3" }} kg{% if not forloop.last %}<br>{% endif %}{% endfor %}</div>
     </div>
     {% endif %}
     <div class="stat">
