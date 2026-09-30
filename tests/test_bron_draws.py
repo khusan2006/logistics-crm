@@ -7,6 +7,8 @@ and deleting the sotuv gave all 24 100 back to #6.
 import importlib
 from decimal import Decimal
 
+import pytest
+
 from conftest import make_bron
 from crm.models import Reservation, ReservationDraw, ReservationItem, Sale
 from tests.test_bron_markalar import _sell
@@ -84,9 +86,5 @@ class TestBackfill:
     def test_stops_when_a_bron_cannot_be_explained(self, db):
         bron = make_bron(_customer(), kg="5000")
         Reservation.objects.filter(pk=bron.pk).update(fulfilled_kg=Decimal("100"))
-        try:
+        with pytest.raises(RuntimeError, match=f"{bron.pk}"):
             backfill_draws(Reservation, ReservationItem, ReservationDraw, Sale)
-        except RuntimeError as error:
-            assert str(bron.pk) in str(error)
-        else:
-            raise AssertionError("an unexplained bron must stop the migration")
