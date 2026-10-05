@@ -5418,9 +5418,12 @@ def _filter_reservations(request):
 
     # The draws with their sotuvlar' returns and allocations are what Qolgan to'lov
     # reads — see `Reservation.unpaid_given`.
-    reservations = (Reservation.objects.select_related("customer")
+    # The draws' sotuv lots too: a row's panel lists the sotuvlar counted into it,
+    # each with its marka.
+    reservations = (Reservation.objects.select_related("customer", "created_by")
                     .prefetch_related("items", "draws__sale__returns",
-                                      "draws__sale__allocations"))
+                                      "draws__sale__allocations",
+                                      "draws__sale__line__contract_line"))
     if q:
         # The bron's code as a kelishuv's is searched: komoliddin-sintafon-3 pins one
         # bron, a bare 3 finds every mijoz's third.
@@ -5479,6 +5482,14 @@ def _filter_reservations(request):
         best = min((m for m in row.marka_rows if m["queue_pos"]),
                    key=lambda m: m["queue_pos"], default=None)
         row.ahead_of = best["ahead_of"] if best else None
+    # The Berish pills beside the holat tabs, counted before either narrows the
+    # list — the way Yuklar counts Kechikkan — so they say what pressing would give.
+    lot_tabs = [
+        {"key": "ready", "label": "Berish mumkin",
+         "count": sum(1 for r in rows if r.servable_kg > 0)},
+        {"key": "waiting", "label": "Mol kutilmoqda",
+         "count": sum(1 for r in rows if r.is_open and r.servable_kg <= 0)},
+    ]
     if lot == "ready":
         rows = [r for r in rows if r.servable_kg > 0]
     elif lot == "waiting":
@@ -5495,7 +5506,7 @@ def _filter_reservations(request):
     _, _, sort_key, sort_reverse = next(e for e in RESERVATION_SORTS if e[0] == sort)
     rows.sort(key=sort_key, reverse=sort_reverse)
     return rows, {"q": q, "customer_id": customer_id, "lot": lot, "status": status,
-                  "sort": sort, "status_tabs": status_tabs,
+                  "sort": sort, "status_tabs": status_tabs, "lot_tabs": lot_tabs,
                   "date_from": date_from, "date_to": date_to}
 
 
@@ -5531,34 +5542,51 @@ def _with_countable_sales(reservations):
     return reservations
 
 
+def _bron_groups(rows):
+    """The page's brons under one band per mijoz, the way Yuklar bands its yuklar
+    under their kelishuv: bands in the order their first bron comes in, so the
+    Saralash order still decides what is on top, and each band carrying the kg its
+    brons promise, have given and still owe."""
+    groups, index = [], {}
+    for bron in rows:
+        group = index.get(bron.customer_id)
+        if group is None:
+            group = index[bron.customer_id] = {
+                "customer": bron.customer, "rows": [], "kg": Decimal("0"),
+                "given": Decimal("0"), "left": Decimal("0")}
+            groups.append(group)
+        group["rows"].append(bron)
+        group["kg"] += bron.kg
+        group["given"] += bron.fulfilled_kg
+        # What is still owed, so a closed or cancelled bron's unserved kg — which
+        # nobody is waiting for any more — do not count as left.
+        if bron.is_open:
+            group["left"] += bron.remaining_kg
+    return groups
+
+
 @role_required(User.Role.ADMIN)
 def reservation_list(request):
-    """Bronlar, kelishuvlar-style: one search box, a Filtrlar panel carrying mijoz /
-    holat / berish / saralash, a davr bar and an Excel button — the same row every
-    other ro'yxat answers "what is this list showing" with. They rode in the search
-    row as four selects, which on a narrow screen wrapped into a wall above the table.
+    """Bronlar, Yuklar-style — the screen the operators find easiest to work in.
 
-    One row per bron, led by its code — the way Kelishuvlar lists a kelishuv. The
-    code already opens with the mijoz's name, as a kelishuv's does with its hamkor's,
-    so there is no separate Mijoz column; the bron's own page links to the mijoz."""
+    Holat and Berish are tabs with counts above the table, as Yuklar's holat tabs
+    and its Kechikkan pill are; the Filtrlar panel keeps only Mijoz and Saralash.
+    The brons sit under a band per mijoz, as yuklar do under their kelishuv, and
+    each row opens with ▸ into a panel: the bron's facts as cards and the sotuvlar
+    counted into it. The bron's own page is still one click away from the panel.
+
+    Holat and Berish are links rather than Yuklar's in-page buttons: the list is
+    paginated, so filtering only the rows already sent would miss the other pages."""
     rows, f = _filter_reservations(request)
     _with_bron_holds(rows)
     _with_countable_sales(rows)
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
-    # Holat defaults to Faol and Saralash to Navbat, so standing on either draws no
-    # chip — a chip means "this list is narrower than it normally is".
+    # Saralash defaults to Navbat, so standing on it draws no chip — a chip means
+    # "this list is narrower than it normally is".
     panel = [
         {"name": "customer", "label": "Mijoz", "value": f["customer_id"],
          "combobox": True, "lotin": True,
          "options": [("", "Hammasi")] + [(c.pk, c.name) for c in Customer.objects.all()]},
-        # The holat options carry their faceted counts — "what would picking this give
-        # me" — which is a question the chip is not asking, hence `chip_options`.
-        {"name": "status", "label": "Holat", "value": f["status"], "default": "active",
-         "options": [(t["key"], f"{t['label']} ({t['count']})") for t in f["status_tabs"]],
-         "chip_options": [(t["key"], t["label"]) for t in f["status_tabs"]]},
-        {"name": "lot", "label": "Berish", "value": f["lot"],
-         "options": [("", "Hammasi"), ("ready", "Berish mumkin"),
-                     ("waiting", "Navbatda kutmoqda")]},
         {"name": "sort", "label": "Saralash", "value": f["sort"],
          "default": RESERVATION_SORT_DEFAULT,
          "options": [(key, label) for key, label, *_ in RESERVATION_SORTS]},
@@ -5567,10 +5595,13 @@ def reservation_list(request):
         "export_url": reverse("reservation_list_export"),
         "filters": _filter_panel(request, panel),
         "page": page, "rows": page.object_list,
+        "groups": _bron_groups(page.object_list),
         "q": f["q"], "customer_id": f["customer_id"], "status": f["status"],
-        "lot": f["lot"], "status_tabs": f["status_tabs"], "sort": f["sort"],
-        "sort_options": [(key, label) for key, label, *_ in RESERVATION_SORTS],
-        "customers": Customer.objects.all(),
+        "lot": f["lot"], "sort": f["sort"],
+        # Hammasi is the holat everything else is counted out of — it is the tab
+        # bar's way back rather than a tab of its own, as on Yuklar.
+        "status_tabs": [t for t in f["status_tabs"] if t["key"]],
+        "lot_tabs": f["lot_tabs"],
         "date_from": f["date_from"], "date_to": f["date_to"],
         "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
         "has_filters": bool(f["customer_id"] or f["lot"] or f["status"] != "active"),

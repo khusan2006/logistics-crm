@@ -2786,6 +2786,14 @@ ul.errorlist li::before { content: "⚠ "; }
 .load-row--birja td.load-toggle::before { background: var(--border); }
 .load-row--birja.is-overdue td.load-toggle::before { background: var(--flag-late); }
 
+/* Bronlar borrows the Yuklar table, and its left bar says the bron's state instead
+   of a QR kod: yashil — omborda bor, bugun berish mumkin; sariq — mol kutilmoqda;
+   kulrang — tugagan (sotuvga aylangan, tugatilgan, bekor qilingan). */
+.bron-row.is-ready td.load-toggle::before { background: var(--flag-qr); }
+.bron-row.is-waiting td.load-toggle::before { background: var(--flag-noqr); }
+.bron-row.is-done td.load-toggle::before { background: var(--border); }
+.bron-row .load-partner .qpos { margin-left: 4px; }
+
 /* A load whose planned QR day has passed keeps the yellow "no kod" bar — it IS
    still no kod — but pulses it. A third colour would read as a third state and
    compete with the red kechikkan half beside it; motion says "overdue" without

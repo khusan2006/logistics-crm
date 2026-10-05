@@ -636,14 +636,14 @@ class TestReservationList:
             f"/reservations/{Reservation.objects.order_by('pk').first().pk}/cancel/", {})
         tabs = {t["key"]: t["count"]
                 for t in admin_client.get("/reservations/").context["status_tabs"]}
-        assert tabs == {"active": 1, "converted": 0, "closed": 0,
-                        "cancelled": 1, "": 2}
+        # No Hammasi tab: pressing the active tab is the way back to every bron.
+        assert tabs == {"active": 1, "converted": 0, "closed": 0, "cancelled": 1}
 
 
 class TestBronlarReadsLikeKelishuvlar:
-    """The list wears the Kelishuvlar shape: one row per bron led by its code, its
-    markalar stacked inside it, Qolgan as a badge that says whether anything is left, a Jami
-    column, and the toolbar every other ro'yxat has — davr, Filtrlash, Excel."""
+    """One row per bron led by its code, its markalar stacked inside it, Qolgan as a
+    badge that says whether anything is left, and the toolbar every other ro'yxat has
+    — davr, Filtrlash, Excel. Laid out as Yuklar is: see TestBronlarReadsLikeYuklar."""
 
     def test_one_row_per_bron_led_by_its_code(self, admin_client, db):
         """Each bron is its own row, as each kelishuv is, and its first cell is its
@@ -673,22 +673,17 @@ class TestBronlarReadsLikeKelishuvlar:
         rows = admin_client.get("/reservations/?q=mak-plast-2").context["rows"]
         assert [r.kg for r in rows] == [Decimal("3000.000")]
 
-    def test_the_columns_stand_in_kelishuvlar_order(self, admin_client, db):
-        """Marka, then what was agreed, at what narx, for how much, and what of it is
-        still outstanding — the order Kelishuvlar reads in, so the two lists do not ask
-        the reader to change gear between them. Qolgan kg sits AFTER Jami, not between
-        Kg and Narx.
-
-        The avans pair comes after Qolgan kg rather than between it and Jami: it is the
-        money side of what is still outstanding (read off the kg still owed), so it
-        continues the sentence instead of interrupting it."""
+    def test_the_columns_stand_in_yuklar_order(self, admin_client, db):
+        """Yuklar's order: the row's id, Marka (narx and navbat under each marka), Kg,
+        Qiymati, Holat — then what is still outstanding in kg and in money, and the
+        avans, with the sana last as Yuklar ends on Kelish."""
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="1000", price="2.00")
         page = _plain(admin_client.get("/reservations/").content.decode())
         header = page[page.index("<table"):page.index("</tr>")]
         assert re.findall(r">([^<>]+)</th>", header) == [
-            "Kod", "Sana", "Marka", "Navbat", "Bron qilingan kg", "Narx", "Jami",
-            "Qolgan kg", "Qolgan to'lov", "Avansdan band", "Yetishmayapti", "Holat"]
+            "Bron", "Marka", "Kg", "Qiymati", "Holat", "Qolgan kg", "Qolgan to'lov",
+            "Avans", "Sana"]
 
     def test_qolgan_is_a_badge_that_says_whether_anything_is_left(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -720,21 +715,12 @@ class TestBronlarReadsLikeKelishuvlar:
         assert Reservation.objects.get().totals == []
         assert "kelishilmagan" in admin_client.get("/reservations/").content.decode()
 
-    def test_the_four_selects_live_in_the_filtrlar_panel(self, admin_client, db):
+    def test_mijoz_and_saralash_live_in_the_filtrlar_panel(self, admin_client, db):
+        """Holat and Berish are tabs above the table now; the panel keeps the rest."""
         filters = admin_client.get("/reservations/").context["filters"]
-        assert [f["name"] for f in filters["fields"]] == [
-            "customer", "status", "lot", "sort"]
-        # Faol and Navbat are where the page opens, so standing on them is not a
-        # filter and draws no chip.
+        assert [f["name"] for f in filters["fields"]] == ["customer", "sort"]
+        # Navbat is where the page opens, so standing on it draws no chip.
         assert filters["count"] == 0
-
-    def test_a_narrowed_list_says_so_as_a_chip(self, admin_client, db):
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _reserve(admin_client, "LLDPE", _customer("Mak Plast"), kg="1000")
-        filters = admin_client.get("/reservations/?lot=ready").context["filters"]
-        assert filters["count"] == 1
-        assert filters["chips"][0]["label"] == "Berish"
-        assert filters["chips"][0]["value"] == "Berish mumkin"
 
     def test_the_davr_narrows_the_list(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -1222,3 +1208,45 @@ def test_the_bron_page_links_the_name_to_that_mijoz_page(admin_client, db):
     # transliterator leaves alone (see test_yozuv) — so the link wraps the span.
     assert (f'href="/debts/{customer.pk}/"><span data-lotin>{customer.name}</span></a>'
             in html)
+
+
+class TestBronlarReadsLikeYuklar:
+    """The operators find Yuklar the easiest screen to work in, so Bronlar is laid
+    out the same way: holat tabs with counts, a band per mijoz, and a ▸ that opens
+    each bron in place."""
+
+    def test_holat_and_berish_are_tabs_and_the_pressed_one_clears_itself(
+            self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="1000")
+        html = admin_client.get("/reservations/?lot=ready").content.decode()
+        tab = re.search(r'<a class="status-tab[^"]*is-active"\s+href="([^"]*)"[^>]*>'
+                        r'Berish mumkin', html)
+        assert tab is not None
+        assert "lot=" not in tab.group(1)          # pressing it again clears it
+        assert admin_client.get("/reservations/?lot=ready").context["lot_tabs"] == [
+            {"key": "ready", "label": "Berish mumkin", "count": 1},
+            {"key": "waiting", "label": "Mol kutilmoqda", "count": 0}]
+
+    def test_brons_sit_under_a_band_per_mijoz(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        mak, ali = _customer("Mak Plast"), _customer("Ali")
+        _reserve(admin_client, "LLDPE", mak, kg="1000")
+        _reserve(admin_client, "LLDPE", ali, kg="2000")
+        _reserve(admin_client, "LLDPE", mak, kg="3000")
+        groups = admin_client.get("/reservations/?sort=created").context["groups"]
+        assert [(g["customer"].name, [r.kg for r in g["rows"]], g["left"])
+                for g in groups] == [
+            ("Mak Plast", [Decimal("1000.000"), Decimal("3000.000")], Decimal("4000.000")),
+            ("Ali", [Decimal("2000.000")], Decimal("2000.000"))]
+
+    def test_the_panel_lists_the_sotuvlar_counted_into_the_bron(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="5000")
+        bron = Reservation.objects.get()
+        _sell(admin_client, "LLDPE", customer, kg="2000")
+        sale = Sale.objects.get()
+        html = admin_client.get("/reservations/").content.decode()
+        panel = html[html.index(f'class="legs-detail bron-detail" data-bron="{bron.pk}"'):]
+        assert f'href="/sales/{sale.pk}/">#{sale.pk}</a>' in panel

@@ -6,15 +6,13 @@
 {% block content %}
 
 {% comment %}
-The same one row as Kelishuvlar: the search box on the left, and on the right the
-‹ davr › bar, the Filtrlash button and Excel (crm/_daterange.html pulls in all
-three). Mijoz / Holat / Berish / Saralash used to ride in this row as four selects,
-which on a narrow screen wrapped into a wall above the table and left no room for
-the search box they were meant to refine; they live in the Filtrlar panel now
-(crm/_filter_panel.html) and the active ones say so as chips.
+Built the way Yuklar is, because the operators find that screen the easiest to work
+in: the search row, holat tabs with counts under it, a band per mijoz as Yuklar has
+one per kelishuv, and a ▸ on every row that opens the bron in place.
 
-The form carries the davr and every panel filter as hidden fields, so typing a
-search never drops the way the list was already narrowed.
+The search form carries the davr and every filter as hidden fields, so typing a
+search never drops the way the list was already narrowed. Mijoz and Saralash stay in
+the Filtrlar panel (crm/_filter_panel.html, pulled in by crm/_daterange.html).
 {% endcomment %}
 <div class="listbar">
   <form method="get" class="searchbar" role="search" data-live-search data-autosubmit>
@@ -26,7 +24,7 @@ search never drops the way the list was already narrowed.
       {% if q %}<a href="{% querystring q=None page=None %}" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
     </div>
     {% if customer_id %}<input type="hidden" name="customer" value="{{ customer_id }}">{% endif %}
-    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {% if status != "active" %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
     {% if lot %}<input type="hidden" name="lot" value="{{ lot }}">{% endif %}
     {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
     <noscript><button type="submit" class="btn btn-sm">Qidirish</button></noscript>
@@ -34,141 +32,155 @@ search never drops the way the list was already narrowed.
   {% include "crm/_daterange.html" %}
 </div>
 
-{% if page.object_list %}
+{% comment %}
+Holat tabs, then the Berish pills — Yuklar's holat tabs and its Kechikkan pill.
+Pressing the active tab clears it, as on Yuklar: an empty `status=` is Hammasi,
+which is the way back to every bron. Links rather than buttons, because the list is
+paginated and the rows of the other pages are not on this one to filter.
+{% endcomment %}
+<div class="status-tabs" role="tablist">
+  {% for t in status_tabs %}
+  <a class="status-tab status-tab--link{% if t.key == status %} is-active{% endif %}"
+     href="{% if t.key == status %}{% querystring status='' page=None %}{% else %}{% querystring status=t.key page=None %}{% endif %}"
+     {% if t.key == status %}title="Saralashni bekor qilish — barcha bronlar"{% endif %}>{{ t.label }} <span class="status-tab-count">{{ t.count }}</span></a>
+  {% endfor %}
+  {% for t in lot_tabs %}
+  <a class="status-tab status-tab--link{% if t.key == 'waiting' %} status-tab--danger{% endif %}{% if t.key == lot %} is-active{% endif %}"
+     href="{% if t.key == lot %}{% querystring lot=None page=None %}{% else %}{% querystring lot=t.key page=None %}{% endif %}"
+     title="{% if t.key == lot %}Saralashni bekor qilish{% elif t.key == 'ready' %}Omborda markasi bor — bugun berish mumkin{% else %}Omborda markasi yo'q — mol kelishi kutilmoqda{% endif %}">{{ t.label }} <span class="status-tab-count">{{ t.count }}</span></a>
+  {% endfor %}
+</div>
+
+{% if groups %}
 <div class="table-wrap">
-<table class="bron-table">
+<table class="loads-table bron-list">
   <tr>
-    <th class="sticky-col">Kod</th>
-    <th>Sana</th>
+    <th class="sticky-col">Bron</th>
     <th title="Bir nechta marka — bir-birining o'rnini bosadi, qaysi biri berilsa ham bron kg'sidan ayiriladi">Marka</th>
-    <th title="Shu markani kim oldin bron qilgan — faqat ma'lumot uchun, berishni to'smaydi. Bir nechta markali bron har markaning navbatida turadi">Navbat</th>
-    <th>Bron qilingan kg</th>
-    <th>Narx</th>
-    <th title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Jami</th>
-    <th title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan kg</th>
-    <th title="Shu brondan berilgan kg uchun mijoz hali to'lamagan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
-    <th title="Shu bron uchun mijozning avansidan band qilingan summa — pul hali sarflanmagan, mijoz qarzdor emas">Avansdan band</th>
-    <th title="Tovar bugun to'liq berilsa mijoz qancha qarzdor bo'lardi">Yetishmayapti</th>
+    <th class="num">Kg</th>
+    <th class="num" title="Bron qilingan kg × kelishilgan narx, bron qaysi valyutada kelishilgan bo'lsa o'shanda">Qiymati</th>
     <th>Holat</th>
+    <th class="num" title="Hali berilmagan qismi — yashil bo'lsa to'liq berilgan">Qolgan kg</th>
+    <th class="num" title="Shu brondan berilgan kg uchun mijoz hali to'lamagan summa — yashil bo'lsa to'liq to'langan">Qolgan to'lov</th>
+    <th class="num" title="Shu bron uchun mijozning avansidan band qilingan summa, va tovar bugun to'liq berilsa yetishmaydigan qismi">Avans</th>
+    <th>Sana</th>
     <th></th>
   </tr>
+  {% for g in groups %}
   {% comment %}
-  One row per bron, in whatever order Saralash asked for — the Kelishuvlar shape, and
-  the same column order as far as the two share columns: what was agreed, at what
-  narx, for how much, and what of it is still outstanding in kg and in money. A bron
-  of several markalar stacks them line by line inside Marka, Navbat and Narx.
+  The mijoz band, in Yuklar's kelishuv band: who, how many brons, and a bar of the
+  kg given against the kg promised across them.
   {% endcomment %}
-  {% for r in rows %}
-  <tr>
-    {% comment %}
-    The kod opens the bron's own page — its markalar and only the sotuvlar counted
-    into it — and that page links on to the mijoz. Tahrirlash is the pencil.
-    {% endcomment %}
-    <td class="sticky-col">
-      <a href="{% url 'reservation_detail' r.pk %}">{{ r.code }}</a>
-    </td>
-    <td>{{ r.created_at|date:"d.m.Y" }}</td>
-    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{{ m.item.brand }}</div>{% endfor %}</div></td>
-    <td>
-      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
-        {% for m in r.marka_rows %}
-        <div class="marka-line">
-        {% if m.queue_pos %}
-          <span class="qpos{% if m.queue_pos == 1 %} qpos--first{% endif %}">{{ m.queue_pos }}</span>
-        {% else %}<span class="muted">—</span>{% endif %}
-        </div>
-        {% endfor %}
+  <tr class="kelishuv-row">
+    <td colspan="10">
+      <div class="kelishuv-head">
+        <a class="kelishuv-title" href="{% url 'debt_customer' g.customer.pk %}">{{ g.customer.name|lotin }}</a>
+        <span class="kelishuv-count">{{ g.rows|length }} bron</span>
+        {% if g.kg %}
+        <span class="kelishuv-progress" title="Berilgan / bron qilingan kg">
+          <span class="kelishuv-progress-fill" style="width: {% widthratio g.given g.kg 100 %}%"></span>
+          <span class="kelishuv-progress-text">{% widthratio g.given g.kg 100 %}%</span>
+        </span>
+        {% endif %}
+        <span class="kelishuv-meta muted">{{ g.given|floatformat:"-3" }} / {{ g.kg|floatformat:"-3" }} kg berilgan{% if g.left %} · {{ g.left|floatformat:"-3" }} kg qolgan{% endif %}</span>
       </div>
     </td>
-    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{{ r.kg|floatformat:"-3" }}{% if r.is_multi %}<div class="muted load-sub">{{ r.item_list|length }} marka uchun umumiy</div>{% endif %}</div></td>
-    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for m in r.marka_rows %}<div class="marka-line">{% if m.item.price %}{% rate m.item.price m.item.price_uzs r.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</div>{% endfor %}</div></td>
-    {% comment %}
-    Jami is printed in the currency the bron was struck in. It is empty while any
-    narx is still open, which is a real state: a bron may be struck before the price
-    is. A bron of several markalar at different narxlar shows the cheapest and the
-    dearest it could come to — which one it ends up as is decided by what the mijoz
-    takes. See `Reservation.totals`.
-    {% endcomment %}
-    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% for t in r.totals %}{% if not forloop.first %} – {% endif %}{% money t.0 t.1 r.currency %}{% empty %}<span class="muted">—</span>{% endfor %}</div></td>
-    {% comment %}
-    Qolgan kg as a badge, the way Kelishuvlar draws its own: sariq while the mijoz is
-    still owed granula, yashil once the promise is served out.
-    {% endcomment %}
+  </tr>
+  {% for r in g.rows %}
+  {% comment %}
+  The left edge is the bron's state, as a yuk's is its QR kod: yashil — omborda bor,
+  bugun berish mumkin; sariq — mol kutilmoqda; kulrang — tugagan.
+  {% endcomment %}
+  <tr class="load-row bron-row{% if r.is_open and r.servable_kg > 0 %} is-ready{% elif r.is_open %} is-waiting{% else %} is-done{% endif %}">
+    <td class="sticky-col load-toggle bron-toggle" data-bron="{{ r.pk }}" title="Bronni ochish">
+      <button type="button" class="leg-expand" data-bron="{{ r.pk }}" title="Bronni ochish">&#9656;</button>
+      <a class="load-id" href="{% url 'reservation_detail' r.pk %}">{{ r.code }}</a>
+    </td>
     <td>
-      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
-        <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
-        {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
-      </div>
+      {% for m in r.marka_rows %}
+      <div class="load-partner">{{ m.item.brand }}{% if m.queue_pos %} <span class="qpos{% if m.queue_pos == 1 %} qpos--first{% endif %}" title="Shu markaning navbatidagi o'rni — faqat ma'lumot uchun, berishni to'smaydi">{{ m.queue_pos }}</span>{% endif %}</div>
+      <div class="muted load-sub">{% if m.item.price %}{% rate m.item.price m.item.price_uzs r.currency %}{% else %}narx kelishilmagan{% endif %}</div>
+      {% endfor %}
+    </td>
+    <td class="num">
+      {{ r.kg|floatformat:"-3" }}
+      {% if r.is_multi %}<div class="muted load-sub">{{ r.item_list|length }} marka uchun umumiy</div>{% endif %}
     </td>
     {% comment %}
-    Qolgan to'lov: what the mijoz still owes for the kg ALREADY given out of this
-    bron, in its own currency — the money side of what has happened, as the
-    kelishuv's Qolgan to'lov is. Nothing given yet, nothing to owe: a dash, not a
-    green zero that would read as "paid". See `Reservation.unpaid_given`.
+    Jami in the currency the bron was struck in. Empty while any narx is open — a
+    bron may be struck before its price is; cheapest – dearest when its markalar
+    differ. See `Reservation.totals`.
     {% endcomment %}
+    <td class="num">
+      {% for t in r.totals %}<div>{% money t.0 t.1 r.currency %}</div>{% empty %}<span class="muted">—</span>{% endfor %}
+      {% if r.totals|length > 1 %}<div class="muted load-sub">markaga qarab</div>{% endif %}
+    </td>
     <td>
-      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
-        {% with owed=r.unpaid_given %}
-        {% if owed is None %}<span class="muted">—</span>
-        {% else %}<span class="badge {% if owed > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money_in owed r.currency %}</span>{% endif %}
-        {% endwith %}
-      </div>
+      {% if r.status == "active" %}
+        {% if r.servable_kg > 0 %}
+          <span class="badge badge-ok">Berish mumkin</span>
+          <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name|lotin }}{% endif %}</div>
+        {% else %}
+          <span class="badge badge-warning">Mol kutilmoqda</span>
+          <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>
+        {% endif %}
+      {% elif r.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
+      {% elif r.status == "closed" %}
+        <span class="badge">Tugatildi</span>
+        {% if r.remaining_kg %}<div class="muted load-sub">{{ r.remaining_kg|floatformat:"-3" }} kg qaytarildi</div>{% endif %}
+      {% else %}<span class="badge">Bekor qilindi</span>{% endif %}
+    </td>
+    <td class="num">
+      <span class="badge {% if r.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ r.remaining_kg|floatformat:"-3" }}</span>
+      {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}
     </td>
     {% comment %}
-    Of what is still outstanding, how much the mijoz has already put down.
-    Avansdan band is what the bron speaks for out of the avans, Yetishmayapti what
-    it would still be short if the granula went out today; both are read off the kg
-    still owed, not the kg booked. A bron takes NO money and makes nobody a qarzdor —
-    nothing has been handed over — so neither figure moves the balans. Held oldest
-    bron first, and only ever within one currency: see `bron_advance_holds`.
+    What the mijoz still owes for the kg ALREADY given out of this bron. Nothing given
+    yet, nothing to owe: a dash, not a green zero that would read as "paid". See
+    `Reservation.unpaid_given`.
     {% endcomment %}
-    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_held %}<span class="avans">{% money_in r.avans_held r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div></td>
-    <td><div class="cell-line" style="--lines: {{ r.item_list|length }}">{% if r.avans_short %}<span class="late">{% money_in r.avans_short r.currency %}</span>{% else %}<span class="muted">—</span>{% endif %}</div></td>
+    <td class="num">
+      {% with owed=r.unpaid_given %}
+      {% if owed is None %}<span class="muted">—</span>
+      {% else %}<span class="badge {% if owed > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money_in owed r.currency %}</span>{% endif %}
+      {% endwith %}
+    </td>
+    {% comment %}
+    Avansdan band over Yetishmayapti: what the bron speaks for out of the mijoz's
+    avans, and what it would still be short if the granula went out today. A bron
+    takes NO money and makes nobody a qarzdor — see `bron_advance_holds`.
+    {% endcomment %}
+    <td class="num">
+      {% if r.avans_held %}<div class="avans">{% money_in r.avans_held r.currency %}</div>{% endif %}
+      {% if r.avans_short %}<div class="late load-sub">{% money_in r.avans_short r.currency %} yetishmayapti</div>{% endif %}
+      {% if not r.avans_held and not r.avans_short %}<span class="muted">—</span>{% endif %}
+    </td>
     <td>
-      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
-        {% if r.status == "active" %}
-          {% if r.servable_kg > 0 %}
-            <span class="badge badge-ok">Berish mumkin</span>
-            <div class="muted load-sub">{{ r.servable_kg|floatformat:"-3" }} kg tayyor{% if r.ahead_of %} · oldin {{ r.ahead_of.customer.name|lotin }} bron qilgan{% endif %}</div>
-          {% else %}
-            <span class="badge badge-warning">Mol kutilmoqda</span>
-            <div class="muted load-sub">omborda {{ r.brand_on_hand|floatformat:"-3" }} kg</div>
-          {% endif %}
-        {% elif r.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
-        {% elif r.status == "closed" %}
-          <span class="badge badge-ok">Tugatildi</span>
-          {% if r.remaining_kg %}<div class="muted load-sub">{{ r.remaining_kg|floatformat:"-3" }} kg qaytarildi</div>{% endif %}
-        {% else %}<span class="muted">Bekor qilindi</span>{% endif %}
-      </div>
+      <div>{{ r.created_at|date:"d.m.Y" }}</div>
+      {% if r.note %}<div class="muted load-sub" title="{{ r.note }}">{{ r.note|truncatechars:24 }}</div>{% endif %}
     </td>
     <td class="row-actions">
-      <div class="cell-line" style="--lines: {{ r.item_list|length }}">
       {% if r.is_open %}
         {% comment %}
         Handing the granula over is a sotuv, so it goes through the sotuv form —
-        prefilled with this mijoz and marka — of a bron with several markalar, the one
-        with the most on the shelf, at its own narx. There used to be a one-click Berish
-        here that created the sale outright; it was removed because a stray click
-        handed goods over and put a mijoz in debt with nothing asked, and undoing
-        that means deleting every FIFO slice it wrote. The form makes the same act
-        deliberate, and carries the sana, to'lov muddati and izoh it never had.
+        prefilled with this mijoz, this bron and, of several markalar, the one with
+        the most on the shelf at its own narx. The form makes the hand-over
+        deliberate: a one-click Berish used to put a mijoz in debt on a stray click.
         {% endcomment %}
         <a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;bron={{ r.pk }}&amp;brand={{ r.serve_item.brand|urlencode }}&amp;currency={{ r.currency }}{% if r.serve_item.price_own %}&amp;price={{ r.serve_item.price_own|unlocalize }}{% endif %}" data-modal title="To'liq sotuv">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
         </a>
         {% comment %}
-        To'lov from this bron's mijoz, opened in the bron's valyuta. An ordinary to'lov:
-        it settles the mijoz's oldest qarz first and whatever is left stands as avans,
-        which Avansdan band then shows against their brons, oldest first — see
-        `bron_advance_holds`. Nothing ties the money to this one bron.
+        An ordinary to'lov from this bron's mijoz, in the bron's valyuta: it settles
+        their oldest qarz first and the rest stands as avans. Nothing ties it to this
+        one bron.
         {% endcomment %}
         <a class="icon-action" href="{% url 'customer_payment_create' %}?customer={{ r.customer_id }}&amp;currency={{ r.currency }}" data-modal title="To'lov">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
         </a>
         {% comment %}
-        A sotuv typed in before this bron was opened was never drawn from it — the
-        sotuv form only draws on a bron that already exists. Offered only while the
-        mijoz has a sotuv of this marka that no bron has counted.
+        A sotuv typed in before this bron existed was never drawn from it. Offered only
+        while the mijoz has a sotuv of this marka that no bron has counted.
         {% endcomment %}
         {% if r.countable_sales %}
         <a class="icon-action" href="{% url 'reservation_count_sales' r.pk %}" data-modal title="Oldingi sotuvni bronga hisoblash">
@@ -193,32 +205,98 @@ search never drops the way the list was already narrowed.
         </a>
       {% else %}
         {% comment %}
-        A tugallangan bron — sotuvga aylangan yoki tugatilgan — keeps Tahrirlash.
-        The row carried a bare dash here, which was right while the view refused
-        the edit; it is not right now that a bron closes itself the moment its kg
-        are lowered to what was already given, because a digit mistyped in THAT
-        edit has no other way back. The sotuv behind it is untouched either way.
-        Bekor qilingan is the one that stays uneditable, and only shows O'chirish.
+        A tugallangan bron keeps Tahrirlash — a bron closes itself the moment its kg
+        are lowered to what was already given, and a digit mistyped in THAT edit has
+        no other way back. Bekor qilingan stays uneditable. No O'chirish on a
+        sotuvga aylangan bron: its sotuv points back here and the view refuses it.
         {% endcomment %}
         {% if r.status != "cancelled" %}
         <a class="icon-action act-edit" href="{% url 'reservation_edit' r.pk %}" data-modal title="Tahrirlash">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </a>
         {% endif %}
-        {% comment %}
-        No O'chirish on a sotuvga aylangan bron: its sotuv points back here
-        (SET_NULL), so the view refuses it — offering the button would only lead
-        to that refusal. Tugatildi and Bekor qilindi hold nothing and may go.
-        {% endcomment %}
         {% if r.status != "converted" %}
         <a class="icon-action act-delete" href="{% url 'reservation_delete' r.pk %}" data-modal title="O'chirish">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         </a>
         {% endif %}
       {% endif %}
+    </td>
+  </tr>
+  {% comment %}
+  The bron opened in place, as a yuk opens on Yuklar: its facts as cards, then the
+  sotuvlar counted into it — each with Sotuv kg beside Bronga hisoblangan kg, since
+  a sotuv bigger than what the bron still owed gave only part of itself here.
+  {% endcomment %}
+  <tr class="legs-detail bron-detail" data-bron="{{ r.pk }}" hidden>
+    <td colspan="10">
+      <div class="legs-inline">
+        <div class="load-panel-head">
+          <strong>Bron {{ r.code }}</strong>
+          <span class="muted">{{ r.brand_label }} · {{ r.customer.name|lotin }}</span>
+          <a class="btn btn-ghost btn-sm" style="margin-left:auto;" href="{% url 'reservation_detail' r.pk %}">To'liq sahifa &rarr;</a>
+        </div>
+        <div class="load-facts">
+          <div class="lf">
+            <span class="lf-label">Mijoz</span>
+            <span class="lf-value"><a href="{% url 'debt_customer' r.customer_id %}">{{ r.customer.name|lotin }}</a></span>
+          </div>
+          <div class="lf">
+            <span class="lf-label">Bron qilingan</span>
+            <span class="lf-value">{{ r.created_at|date:"d.m.Y" }}</span>
+            {% if r.created_by %}<span class="lf-sub">{{ r.created_by.get_full_name|default:r.created_by.username }}</span>{% endif %}
+          </div>
+          <div class="lf">
+            <span class="lf-label">Bron kg</span>
+            <span class="lf-value">{{ r.kg|floatformat:"-3" }}</span>
+            {% if r.is_multi %}<span class="lf-sub">{{ r.item_list|length }} marka uchun umumiy</span>{% endif %}
+          </div>
+          <div class="lf">
+            <span class="lf-label">Berilgan</span>
+            <span class="lf-value">{{ r.fulfilled_kg|floatformat:"-3" }} kg</span>
+            <span class="lf-sub">qolgan {{ r.remaining_kg|floatformat:"-3" }} kg</span>
+          </div>
+          {% for m in r.marka_rows %}
+          <div class="lf{% if forloop.first %} lf--accent{% endif %}">
+            <span class="lf-label">{{ m.item.brand }}</span>
+            <span class="lf-value">{% if m.item.price %}{% rate m.item.price m.item.price_uzs r.currency %}{% else %}narx kelishilmagan{% endif %}</span>
+            <span class="lf-sub">omborda {{ m.on_hand|floatformat:"-3" }} kg{% if m.queue_pos %} · navbatda {{ m.queue_pos }}-o'rin{% endif %}</span>
+          </div>
+          {% endfor %}
+          {% if r.avans_held or r.avans_short %}
+          <div class="lf">
+            <span class="lf-label">Avansdan band</span>
+            <span class="lf-value">{% if r.avans_held %}{% money_in r.avans_held r.currency %}{% else %}—{% endif %}</span>
+            {% if r.avans_short %}<span class="lf-sub lf-sub--warn">{% money_in r.avans_short r.currency %} yetishmayapti</span>{% endif %}
+          </div>
+          {% endif %}
+          {% if r.note %}<div class="lf lf--wide"><span class="lf-label">Izoh</span><span class="lf-value">{{ r.note }}</span></div>{% endif %}
+        </div>
+        <div class="legs-inline-head">
+          <strong>Brondan berilgan sotuvlar</strong>
+          <span class="muted">{{ r.draws.all|length }} ta</span>
+        </div>
+        {% if r.draws.all %}
+        <table class="legs-inline-table">
+          <tr><th>Sana</th><th>Sotuv</th><th>Marka</th><th class="num">Narx</th><th class="num">Sotuv kg</th><th class="num" title="Shu sotuvning shu bronga hisoblangan qismi">Bronga hisoblangan</th></tr>
+          {% for d in r.draws.all %}
+          <tr>
+            <td>{{ d.sale.date|date:"d.m.Y" }}</td>
+            <td><a href="{% url 'sale_detail' d.sale_id %}">#{{ d.sale_id }}</a></td>
+            <td>{{ d.sale.line.brand }}</td>
+            <td class="num">{% rate d.sale.price d.sale.price_uzs d.sale.currency %}</td>
+            <td class="num">{{ d.sale.kg|floatformat:"-3" }}</td>
+            <td class="num">{{ d.kg|floatformat:"-3" }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p class="muted">Bu bronga hali sotuv hisoblanmagan.</p>
+        {% endif %}
       </div>
     </td>
   </tr>
+  {% endfor %}
   {% endfor %}
 </table>
 </div>
@@ -226,5 +304,41 @@ search never drops the way the list was already narrowed.
 {% else %}
 <p class="muted">Bronlar topilmadi{% if q %} (“{{ q }}” bo'yicha){% endif %}{% if has_filters %} — tanlangan filtrlar bo'yicha{% endif %}.</p>
 {% endif %}
+
+<script>
+// The bron panel, opened from the caret — the same control and behaviour as Yuklar:
+// the whole Bron cell is the hit area, and the panel is a hidden row under it.
+(function () {
+  function sizePanels() {
+    var wrap = document.querySelector('.table-wrap');
+    if (!wrap) { return; }
+    // Pinned to the VISIBLE width of the horizontally scrolling table; left to
+    // itself the panel would run off past the scroll edge.
+    document.querySelectorAll('.bron-detail .legs-inline').forEach(function (panel) {
+      panel.style.width = wrap.clientWidth + 'px';
+    });
+  }
+  window.addEventListener('resize', sizePanels);
+  sizePanels();
+
+  function toggle(bronId) {
+    var detail = document.querySelector('.bron-detail[data-bron="' + bronId + '"]');
+    var btn = document.querySelector('.leg-expand[data-bron="' + bronId + '"]');
+    if (!detail || !btn) { return; }
+    var willOpen = detail.hidden;
+    sizePanels();
+    detail.hidden = !willOpen;
+    btn.classList.toggle('is-open', willOpen);
+    btn.closest('tr').classList.toggle('is-expanded', willOpen);
+  }
+
+  document.querySelectorAll('.bron-toggle').forEach(function (cell) {
+    cell.addEventListener('click', function (e) {
+      if (e.target.closest('a')) { return; }   // the kod link keeps its own job
+      toggle(cell.getAttribute('data-bron'));
+    });
+  });
+})();
+</script>
 
 {% endblock %}
