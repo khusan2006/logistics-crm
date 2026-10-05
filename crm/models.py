@@ -2590,15 +2590,30 @@ class Reservation(MoneyEntry):
 
         Reads `draws` and each sotuv's `returns` and `allocations` — the list
         prefetches them."""
+        given = self._given_money()
+        return None if given is None else given[0]
+
+    @property
+    def value_given(self):
+        """What the kg already given out of this bron come to, in its own currency —
+        the whole of which `unpaid_given` is the unpaid part. None when nothing is
+        given yet."""
+        given = self._given_money()
+        return None if given is None else given[1]
+
+    def _given_money(self):
+        """(owed, value) of the kg given out of this bron, each sotuv bringing the
+        share of itself that was counted here."""
         draws = list(self.draws.all())
         if not draws:
             return None
-        owed = Decimal("0")
+        owed = value = Decimal("0")
         for draw in draws:
             sale = draw.sale
-            unpaid = own_side(self, sale.remaining, sale.remaining_uzs)
-            owed += unpaid * draw.kg / sale.kg
-        return owed.quantize(Decimal("0.01"))
+            share = draw.kg / sale.kg
+            owed += own_side(self, sale.remaining, sale.remaining_uzs) * share
+            value += own_side(self, sale.net_total, sale.net_total_uzs) * share
+        return owed.quantize(Decimal("0.01")), value.quantize(Decimal("0.01"))
 
     @property
     def remaining_kg(self):

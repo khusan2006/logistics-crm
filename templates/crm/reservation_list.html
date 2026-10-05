@@ -68,8 +68,9 @@ paginated and the rows of the other pages are not on this one to filter.
   </tr>
   {% for g in groups %}
   {% comment %}
-  The mijoz band, in Yuklar's kelishuv band: who, how many brons, and a bar of the
-  kg given against the kg promised across them.
+  The mijoz band, in Yuklar's kelishuv band: who, how many brons, a bar of the kg
+  given against the kg promised across them, and of the money for the kg given, how
+  much is paid — in each currency the mijoz's brons are in.
   {% endcomment %}
   <tr class="kelishuv-row">
     <td colspan="10">
@@ -82,7 +83,7 @@ paginated and the rows of the other pages are not on this one to filter.
           <span class="kelishuv-progress-text">{% widthratio g.given g.kg 100 %}%</span>
         </span>
         {% endif %}
-        <span class="kelishuv-meta muted">{{ g.given|floatformat:"-3" }} / {{ g.kg|floatformat:"-3" }} kg berilgan{% if g.left %} · {{ g.left|floatformat:"-3" }} kg qolgan{% endif %}</span>
+        <span class="kelishuv-meta muted">{{ g.given|floatformat:"-3" }} / {{ g.kg|floatformat:"-3" }} kg berilgan{% for currency, paid, total in g.money %} · {% money_in paid currency %} / {% money_in total currency %} to'langan{% endfor %}</span>
       </div>
     </td>
   </tr>

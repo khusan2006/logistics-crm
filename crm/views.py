@@ -5546,22 +5546,27 @@ def _bron_groups(rows):
     """The page's brons under one band per mijoz, the way Yuklar bands its yuklar
     under their kelishuv: bands in the order their first bron comes in, so the
     Saralash order still decides what is on top, and each band carrying the kg its
-    brons promise, have given and still owe."""
+    brons promise and have given, and how much of the money for the given kg is
+    paid — per currency, since a mijoz may have a dollar bron and a so'm one."""
     groups, index = [], {}
     for bron in rows:
         group = index.get(bron.customer_id)
         if group is None:
             group = index[bron.customer_id] = {
                 "customer": bron.customer, "rows": [], "kg": Decimal("0"),
-                "given": Decimal("0"), "left": Decimal("0")}
+                "given": Decimal("0"), "money": {}}
             groups.append(group)
         group["rows"].append(bron)
         group["kg"] += bron.kg
         group["given"] += bron.fulfilled_kg
-        # What is still owed, so a closed or cancelled bron's unserved kg — which
-        # nobody is waiting for any more — do not count as left.
-        if bron.is_open:
-            group["left"] += bron.remaining_kg
+        value = bron.value_given
+        if value is not None:
+            paid, total = group["money"].get(bron.currency, (Decimal("0"), Decimal("0")))
+            group["money"][bron.currency] = (paid + value - bron.unpaid_given,
+                                             total + value)
+    for group in groups:
+        group["money"] = [(currency, paid, total)
+                          for currency, (paid, total) in group["money"].items()]
     return groups
 
 

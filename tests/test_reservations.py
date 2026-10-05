@@ -8,7 +8,7 @@ import openpyxl
 from conftest import bron_data, line_data, make_bron
 from django.utils import timezone
 from crm.models import (
-    Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
+    Contract, ContractLine, Customer, CustomerPayment, apply_customer_advance, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
 )
 
 # Sotuvlar are dated today: a bron only counts a sotuv dated on or after the day
@@ -1235,10 +1235,23 @@ class TestBronlarReadsLikeYuklar:
         _reserve(admin_client, "LLDPE", ali, kg="2000")
         _reserve(admin_client, "LLDPE", mak, kg="3000")
         groups = admin_client.get("/reservations/?sort=created").context["groups"]
-        assert [(g["customer"].name, [r.kg for r in g["rows"]], g["left"])
-                for g in groups] == [
-            ("Mak Plast", [Decimal("1000.000"), Decimal("3000.000")], Decimal("4000.000")),
-            ("Ali", [Decimal("2000.000")], Decimal("2000.000"))]
+        assert [(g["customer"].name, [r.kg for r in g["rows"]]) for g in groups] == [
+            ("Mak Plast", [Decimal("1000.000"), Decimal("3000.000")]),
+            ("Ali", [Decimal("2000.000")])]
+
+    def test_the_band_says_how_much_of_the_given_kg_is_paid(self, admin_client, db):
+        """2 000 kg given at 1.50 is $3 000; a $1 000 to'lov leaves it 1 000 / 3 000."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="5000")
+        _sell(admin_client, "LLDPE", customer, kg="2000", price="1.50")
+        CustomerPayment.objects.create(customer=customer, amount=Decimal("1000"),
+                                       currency="usd", date=TODAY)
+        apply_customer_advance(Sale.objects.get())
+        resp = admin_client.get("/reservations/")
+        assert resp.context["groups"][0]["money"] == [
+            ("usd", Decimal("1000.00"), Decimal("3000.00"))]
+        assert "$1 000 / $3 000 to'langan" in _plain(resp.content.decode())
 
     def test_the_panel_lists_the_sotuvlar_counted_into_the_bron(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
