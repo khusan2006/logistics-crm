@@ -7,10 +7,12 @@ and deleting the sotuv gave all 24 100 back to #6.
 import importlib
 from datetime import timedelta
 from decimal import Decimal
+from io import StringIO
 
 import pytest
 
 from conftest import line_data, make_bron
+from django.core.management import call_command
 from django.utils import timezone
 from crm.models import Reservation, ReservationDraw, ReservationItem, Sale
 from tests.test_bron_markalar import _sell
@@ -181,3 +183,29 @@ class TestTheSotuvButtonOfOneBron:
         page = admin_client.get(f"/sales/new/?customer={customer.pk}&bron={bron.pk}"
                                 ).content.decode()
         assert f'name="bron" value="{bron.pk}"' in page
+
+
+class TestRebronByDate:
+    """The repair for sotuvlar already counted into a bron struck after their sana."""
+
+    def test_moves_a_late_typed_sotuv_out_of_the_newer_bron(self, admin_user):
+        lot = _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="75000", price="1.40")
+        yesterday = timezone.localdate() - timedelta(days=1)
+        sale = Sale.objects.create(customer=customer, line=lot, kg=Decimal("5000"),
+                                   price=Decimal("1.42"), date=yesterday,
+                                   reservation=bron)
+        ReservationDraw.objects.create(reservation=bron, sale=sale, kg=Decimal("5000"))
+        Reservation.objects.filter(pk=bron.pk).update(fulfilled_kg=Decimal("5000"))
+
+        call_command("rebron_by_date", stdout=StringIO())
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("5000.000")      # dry run writes nothing
+
+        call_command("rebron_by_date", apply=True, user=admin_user.username,
+                     stdout=StringIO())
+        bron.refresh_from_db()
+        sale.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert sale.reservation is None and sale.price == Decimal("1.4200")
