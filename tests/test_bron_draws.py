@@ -5,11 +5,13 @@ the sotuv named only #6: bron #9's berilgan kg came from nowhere anybody could s
 and deleting the sotuv gave all 24 100 back to #6.
 """
 import importlib
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 
-from conftest import make_bron
+from conftest import line_data, make_bron
+from django.utils import timezone
 from crm.models import Reservation, ReservationDraw, ReservationItem, Sale
 from tests.test_bron_markalar import _sell
 from tests.test_reservations import _arrived_lot, _customer
@@ -121,3 +123,61 @@ class TestQolganTolov:
         assert newer.unpaid_given == Decimal("31650.00")
         older = Reservation.objects.get(pk=older.pk)
         assert older.unpaid_given == Decimal("4500.00")
+
+
+class TestASotuvDatedBeforeTheBron:
+    """Komoliddin's 28-sentabr delivery at 1.42, typed in eight minutes after his
+    29-sentabr bron at 1.40 was struck, went into that bron with 21 400 kg it had
+    nothing to do with."""
+
+    def _post(self, client, customer, date, kg="5000", price="1.42", **extra):
+        return client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": date, "draw_from_bron_asked": "1", "draw_from_bron": "on",
+            **extra, **line_data({"brand": "LLDPE", "kg": kg, "price": price})})
+
+    def test_is_not_counted_into_it(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="75000", price="1.40")
+        yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+        self._post(admin_client, customer, yesterday)
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0")
+        assert Sale.objects.get().reservation is None
+
+    def test_one_dated_the_same_day_is(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="75000", price="1.40")
+        self._post(admin_client, customer, timezone.localdate().isoformat())
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("5000.000")
+
+
+class TestTheSotuvButtonOfOneBron:
+    """Two brons of one marka at 1.50 and 1.60: the button on the 1.60 one fills in
+    1.60, and the kg have to come off that bron, not the oldest."""
+
+    def test_serves_that_bron(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older = make_bron(customer, brand="LLDPE", kg="10000", price="1.50")
+        newer = make_bron(customer, brand="LLDPE", kg="10000", price="1.60")
+        page = admin_client.get("/reservations/").content.decode()
+        assert f"bron={newer.pk}&amp;" in page
+        TestASotuvDatedBeforeTheBron()._post(
+            admin_client, customer, timezone.localdate().isoformat(),
+            kg="10000", price="1.60", bron=str(newer.pk))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        assert newer.fulfilled_kg == Decimal("10000.000")
+        assert newer.status == Reservation.Status.CONVERTED
+        assert older.fulfilled_kg == Decimal("0")
+
+    def test_the_form_carries_it(self, admin_client, db):
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="10000", price="1.60")
+        page = admin_client.get(f"/sales/new/?customer={customer.pk}&bron={bron.pk}"
+                                ).content.decode()
+        assert f'name="bron" value="{bron.pk}"' in page

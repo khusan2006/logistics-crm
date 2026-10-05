@@ -3464,6 +3464,20 @@ def bron_countable_sales(bron):
             .order_by("-date", "-pk"))
 
 
+def bron_postdates(bron, sale):
+    """True when the bron was struck after this sotuv — entered after it, or opened
+    on a later day than the sotuv's sana — so the sotuv cannot have served it.
+
+    The sana matters as much as the moment of entry: a delivery typed in late is
+    entered after every bron on the board. Komoliddin's 28-sentabr sotuv at 1.42,
+    typed in eight minutes after his 29-sentabr bron at 1.40 was struck, went into
+    that bron with 21 400 kg it had nothing to do with. The same day counts as
+    before: a bron and its first delivery are often struck on one day."""
+    if sale.created_at and bron.created_at > sale.created_at:
+        return True
+    return timezone.localdate(bron.created_at) > sale.date
+
+
 def draw_down_bron(sale, served_id=None):
     """Take a sotuv out of its OWN mijoz's bron for that marka — a bron naming it
     among its markalar. Returns the kg drawn.
@@ -3482,8 +3496,9 @@ def draw_down_bron(sale, served_id=None):
     promise and this sotuv does not settle it. A sotuv that already came FROM a
     bron is left alone — `reservation_convert` has booked it.
 
-    And only brons that already EXISTED when the sotuv was entered: a promise made
-    afterwards is not one this sotuv can have served. Live that costs nothing, since
+    And only brons that already EXISTED when the sotuv was entered and on its sana
+    — see `bron_postdates`: a promise made afterwards is not one this sotuv can
+    have served. Live that costs nothing, since
     a sotuv being saved now is younger than every bron on the board. It matters when
     past sales are replayed — `merge_brand` does exactly that after two names for one
     marka are joined — where without it a fresh bron would be eaten by sales that
@@ -3506,8 +3521,7 @@ def draw_down_bron(sale, served_id=None):
             break
         if bron.customer_id != sale.customer_id:
             continue
-        if (bron.pk != served_id and sale.created_at
-                and bron.created_at > sale.created_at):
+        if bron.pk != served_id and bron_postdates(bron, sale):
             continue
         take = min(bron.remaining_kg, remaining)
         bron.fulfilled_kg += take

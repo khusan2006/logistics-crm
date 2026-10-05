@@ -12,6 +12,7 @@ file — that box is the only place a marka is typed. (It used to refuse an exac
 lookalike instead, and let `7000 Repak` through as a new marka; see the class below.) `merge_brand` joins the pair already entered, and
 replays the sotuvlar the split hid from the bron.
 """
+from datetime import datetime
 from decimal import Decimal
 from io import StringIO
 
@@ -21,6 +22,7 @@ from crm.forms import ContractLineForm
 from crm.yozuv import marka_kaliti, marka_nomi
 from crm.models import ContractLine, Customer, Partner, Reservation, Sale
 from django.core.management import CommandError, call_command
+from django.utils import timezone
 
 
 def _customer(name="Mak Plast"):
@@ -180,6 +182,10 @@ class TestMergingThePairAlreadyEntered:
         lot, _kiril = self._both_markalar(admin_client)
         mijoz = _customer()
         bron = make_bron(mijoz, "и 1561", kg="150000", price="1.5")
+        # Struck before the sotuvlar it should have been serving — they are dated
+        # 8-sentabr, and a bron only counts sotuvlar from its own day on.
+        Reservation.objects.filter(pk=bron.pk).update(
+            created_at=timezone.make_aware(datetime(2026, 9, 1, 9, 0)))
         for kg in ("7000", "3000"):
             Sale.objects.create(customer=mijoz, line=lot, kg=Decimal(kg),
                                 price=Decimal("1.5"), date="2026-09-08")

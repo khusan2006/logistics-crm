@@ -190,7 +190,7 @@
               marka. The old Berish created the sale outright, so a stray click put
               a mijoz in debt with nothing asked.
               {% endcomment %}
-              {% with it=r|bron_item:g.brand %}<a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;brand={{ g.brand|urlencode }}&amp;currency={{ r.currency }}{% if it.price_own %}&amp;price={{ it.price_own|unlocalize }}{% endif %}" data-modal title="Sotuv">{% endwith %}
+              {% with it=r|bron_item:g.brand %}<a class="icon-action" href="{% url 'sale_create' %}?customer={{ r.customer_id }}&amp;bron={{ r.pk }}&amp;brand={{ g.brand|urlencode }}&amp;currency={{ r.currency }}{% if it.price_own %}&amp;price={{ it.price_own|unlocalize }}{% endif %}" data-modal title="Sotuv">{% endwith %}
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
               </a>
               <a class="icon-action" href="{% url 'reservation_cancel' r.pk %}" data-modal title="Bronni bekor qilish">

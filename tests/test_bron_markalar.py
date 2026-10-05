@@ -10,6 +10,11 @@ from conftest import bron_data, line_data, make_bron
 from crm.models import (Currency, CustomerPayment, Reservation, Sale, bron_advance_holds,
                         bron_queue, brand_reserved_kg, brand_stock_costed)
 from tests.test_reservations import _arrived_lot, _arrived_lot_for, _customer, _in_transit_lot
+from django.utils import timezone
+
+# Sotuvlar are dated today: a bron only counts a sotuv dated on or after the day
+# it was struck (`bron_postdates`), and the brons here are struck today.
+TODAY = timezone.localdate().isoformat()
 
 
 def _reserve(client, customer, brands, prices, kg="20000", currency="usd"):
@@ -21,7 +26,7 @@ def _reserve(client, customer, brands, prices, kg="20000", currency="usd"):
 def _sell(client, customer, brand, kg, price="1.50"):
     return client.post("/sales/new/", {
         "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
-        "date": "2026-07-20",
+        "date": TODAY,
         **line_data({"brand": brand, "kg": kg, "price": price})})
 
 

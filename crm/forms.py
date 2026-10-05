@@ -2315,7 +2315,15 @@ class SaleCreateForm(BronDrawFormMixin, SaleHeaderForm):
     """The header as it is TYPED: the same fields, plus the Brondan ushlansin
     question, which only a new sotuv asks. An edit never re-asks it — whether a
     sotuv came out of a bron is decided when it is entered and survives every
-    correction, exactly as `sale_edit` already treats it."""
+    correction, exactly as `sale_edit` already treats it.
+
+    `bron` is the bron whose Sotuv button opened the form. It rides in a hidden
+    field because the modal posts to a bare path, and the sotuv is counted into
+    THAT bron first: with two brons of one marka at different narxlar, the button
+    on the newer one fills in its narx, and the kg have to come off it too rather
+    than off the oldest."""
+
+    bron = forms.IntegerField(required=False, widget=forms.HiddenInput())
 
 
 class SaleGroupEditForm(SaleHeaderForm):

@@ -11,6 +11,10 @@ from crm.models import (
     Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
 )
 
+# Sotuvlar are dated today: a bron only counts a sotuv dated on or after the day
+# it was struck (`bron_postdates`), and the brons here are struck today.
+TODAY = timezone.localdate().isoformat()
+
 
 def _customer(name="Alisher Mebel"):
     return Customer.objects.create(name=name, phone="1", address="Toshkent")
@@ -86,7 +90,7 @@ def _convert(admin_client, reservation, price=None, kg=None):
         "customer": reservation.customer_id,
         "currency": reservation.currency,
         "exchange_rate": str(reservation.exchange_rate),
-        "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "date": TODAY, "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
         **line_data({"brand": item.brand, "kg": str(give),
                      "price": "" if narx is None else str(narx)}),
@@ -301,7 +305,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "customer": _customer("Kelgan mijoz").pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         assert resp.status_code == 302
@@ -315,7 +319,7 @@ class TestBronsDoNotBlockOrdinarySales:
         admin_client.post("/sales/new/", {
             "customer": _customer("Kelgan mijoz").pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         bron = Reservation.objects.get()
@@ -332,7 +336,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "lot": lot.pk, "customer": _customer("Kelgan mijoz").pk, "kg": "10000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
         })
         assert resp.status_code == 302
         assert Sale.objects.get().kg == Decimal("10000.000")
@@ -345,7 +349,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "customer": holder.pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         assert resp.status_code == 302
@@ -357,7 +361,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "customer": _customer("Kelgan mijoz").pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24001", "price": "2.00"}),
         })
         assert resp.status_code == 200          # re-rendered, invalid
@@ -789,7 +793,7 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
     def _sell(self, client, customer, brand, kg):
         return client.post("/sales/new/", {
             "customer": customer.pk,
-            "currency": "usd", "exchange_rate": "12000", "date": "2026-07-20",
+            "currency": "usd", "exchange_rate": "12000", "date": TODAY,
             **line_data({"brand": brand, "kg": kg, "price": "1.50"})})
 
     def test_selling_to_the_holder_shrinks_their_bron(self, admin_client, db):
@@ -870,7 +874,7 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         corrected sotuv is read back by its kg rather than by a pk."""
         return client.post(f"/sales/{sale.pk}/edit/", {
             "customer": sale.customer_id, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": sale.line.brand, "kg": kg, "price": "1.50"},
                         initial=1)})
 
@@ -912,7 +916,7 @@ def _sell(admin_client, brand, customer, kg="2000", price="1.50", **extra):
     """The Yangi sotuv form as the browser posts it — the box ticked unless a test
     says otherwise, because that is how it renders."""
     data = {"customer": customer.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             "draw_from_bron_asked": "1", "draw_from_bron": "on",
             **line_data({"brand": brand, "kg": kg, "price": price})}
     data.update(extra)
@@ -956,7 +960,7 @@ class TestBronDrawIsAsked:
         customer = _customer()
         _reserve(admin_client, "LLDPE", customer, kg="6000")
         resp = admin_client.post("/sales/new/", {
-            "customer": customer.pk, "currency": "usd", "date": "2026-07-20",
+            "customer": customer.pk, "currency": "usd", "date": TODAY,
             "debt_deadline": "", "note": "",          # no box, no twin
             **line_data({"brand": "LLDPE", "kg": "2000", "price": "1.50"})})
         assert resp.status_code == 302
@@ -973,7 +977,7 @@ class TestBronDrawIsAsked:
 
         admin_client.post(f"/sales/{sale.pk}/edit/", {
             "customer": customer.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2500", "price": "1.50"},
                         initial=1)})
         corrected = Sale.objects.get()
@@ -997,7 +1001,7 @@ class TestBronDrawIsAsked:
         # Only the mijoz changes — the kg and the narx stay exactly as typed.
         admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
             "customer": other.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
                         initial=1)})
 
@@ -1021,7 +1025,7 @@ class TestBronDrawIsAsked:
 
         admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
             "customer": second.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
                         initial=1)})
 
@@ -1121,7 +1125,7 @@ class TestCountingAnEarlierSotuvIntoABron:
 
         admin_client.post(f"/sales/{sale.pk}/edit/", {
             "customer": customer.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
                         initial=1)})
         corrected = Sale.objects.get()
@@ -1202,8 +1206,10 @@ def test_the_bron_row_offers_a_full_sotuv_prefilled(admin_client, db):
     _arrived_lot(kg="10000", brand="LLDPE")
     customer = _customer()
     _reserve(admin_client, "LLDPE", customer, kg="6000")
+    bron = Reservation.objects.get()
     html = admin_client.get("/reservations/").content.decode()
-    assert f"/sales/new/?customer={customer.pk}&amp;brand=LLDPE" in html
+    assert (f"/sales/new/?customer={customer.pk}&amp;bron={bron.pk}&amp;brand=LLDPE"
+            in html)
 
 
 def test_the_bron_page_links_the_name_to_that_mijoz_page(admin_client, db):

@@ -4640,6 +4640,10 @@ def sale_create(request):
             row["price"] = Decimal(price)
         except (ArithmeticError, ValueError):
             pass
+    # ...and the bron itself, so the kg come off the one whose button was pressed.
+    bron_id = request.GET.get("bron")
+    if bron_id and bron_id.isdigit():
+        initial["bron"] = int(bron_id)
     form = SaleCreateForm(request.POST or None, initial=initial)
     # The marka and its narx are a ROW now, so a shortcut that named one prefills the
     # first row rather than the header.
@@ -4697,7 +4701,7 @@ def sale_create(request):
                         # so the bron falls by exactly what was sold. Unticked, the
                         # sotuv is something else they bought and the booking stands.
                         if data.get("draw_from_bron"):
-                            draw_down_bron(sale)
+                            draw_down_bron(sale, served_id=data.get("bron"))
                     sold.append(f"{take_from['kg']} kg {take_from['brand']}"
                                 + (f" ({reys}-reys)" if reys else ""))
             AuditLog.record(

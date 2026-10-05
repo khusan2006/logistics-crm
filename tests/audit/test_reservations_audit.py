@@ -22,6 +22,11 @@ from crm.models import (
     Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus, brand_on_hand_kg,
     brand_reserved_kg,
 )
+from django.utils import timezone
+
+# Sotuvlar are dated today: a bron only counts a sotuv dated on or after the day
+# it was struck (`bron_postdates`), and the brons here are struck today.
+TODAY = timezone.localdate().isoformat()
 
 
 # --- arrangement helpers (same shapes as tests/test_reservations.py) ----------
@@ -96,7 +101,7 @@ def _convert(client, reservation, price=None, kg=None):
         "customer": reservation.customer_id,
         "currency": reservation.currency,
         "exchange_rate": str(reservation.exchange_rate),
-        "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "date": TODAY, "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
         # The marka and its narx are a Mahsulot ROW now.
         **line_data({"brand": _item(reservation).brand, "kg": str(give),
