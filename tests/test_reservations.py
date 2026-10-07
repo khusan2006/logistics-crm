@@ -636,8 +636,8 @@ class TestReservationList:
             f"/reservations/{Reservation.objects.order_by('pk').first().pk}/cancel/", {})
         tabs = {t["key"]: t["count"]
                 for t in admin_client.get("/reservations/").context["status_tabs"]}
-        # No Hammasi tab: pressing the active tab is the way back to every bron.
-        assert tabs == {"active": 1, "converted": 0, "closed": 0, "cancelled": 1}
+        assert tabs == {"": 2, "active": 1, "converted": 0, "closed": 0,
+                        "cancelled": 1}
 
 
 class TestBronlarReadsLikeKelishuvlar:

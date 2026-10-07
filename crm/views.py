@@ -5603,9 +5603,9 @@ def reservation_list(request):
         "groups": _bron_groups(page.object_list),
         "q": f["q"], "customer_id": f["customer_id"], "status": f["status"],
         "lot": f["lot"], "sort": f["sort"],
-        # Hammasi is the holat everything else is counted out of — it is the tab
-        # bar's way back rather than a tab of its own, as on Yuklar.
-        "status_tabs": [t for t in f["status_tabs"] if t["key"]],
+        # Hammasi leads the bar: every bron, whatever its holat.
+        "status_tabs": ([t for t in f["status_tabs"] if not t["key"]]
+                        + [t for t in f["status_tabs"] if t["key"]]),
         "lot_tabs": f["lot_tabs"],
         "date_from": f["date_from"], "date_to": f["date_to"],
         "daterange": _daterange_bar(request, f["date_from"], f["date_to"]),
