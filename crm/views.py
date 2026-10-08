@@ -361,6 +361,8 @@ def dashboard(request):
     if not request.user.is_admin_role:
         # Everyone lands on the first page their role can actually open. A skladchi
         # sent to Yuklar would meet a 403 on login, since that page is not theirs.
+        if request.user.is_tarozichi:
+            return redirect("tarozi_test")
         return redirect("ombor" if request.user.is_skladchi else "shipment_list")
     # `legs` for the kechikkan table: it names the transport carrying the load NOW,
     # which is the active leg's, and reading that per row is a query per row.
@@ -7363,7 +7365,7 @@ def _ledger_blocks(rows):
     return blocks
 
 
-@role_required(User.Role.ADMIN)
+@role_required(User.Role.ADMIN, User.Role.TAROZICHI)
 def tarozi_test(request):
     """Tarozi sinovi: a bench for reading a weighing scale from the browser before
     any form depends on it. Everything happens in static/js/tarozi.js — the page

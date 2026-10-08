@@ -69,9 +69,18 @@
 
       {% comment %}
       Nothing in Logistika is a skladchi's: they answer for what is on the shelf,
-      not for what is on the road or what it was bought for.
+      not for what is on the road or what it was bought for. Nor a tarozichi's, who
+      has the scale bench and nothing else.
       {% endcomment %}
-      {% if not user.is_skladchi %}
+      {% if user.is_tarozichi %}
+      <div class="nav-group">
+        <a class="nav-item {% if url_name == 'tarozi_test' %}active{% endif %}" href="{% url 'tarozi_test' %}">
+          <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 21h14"/><path d="M3 7h18"/><path d="M6 7l-3 7a3 3 0 0 0 6 0z"/><path d="M18 7l-3 7a3 3 0 0 0 6 0z"/></svg></span>
+          <span>Tarozi sinovi</span>
+        </a>
+      </div>
+      {% endif %}
+      {% if not user.is_skladchi and not user.is_tarozichi %}
       <div class="nav-group">
         <div class="nav-group-label">Logistika</div>
         {% if user.is_admin_role %}
