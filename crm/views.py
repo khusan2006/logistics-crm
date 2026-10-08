@@ -7364,6 +7364,17 @@ def _ledger_blocks(rows):
 
 
 @role_required(User.Role.ADMIN)
+def tarozi_test(request):
+    """Tarozi sinovi: a bench for reading a weighing scale from the browser before
+    any form depends on it. Everything happens in static/js/tarozi.js — the page
+    opens the scale over Web Serial (USB receiver or paired Bluetooth Classic) or
+    Web Bluetooth (BLE), shows the raw bytes as text and hex, and tries the common
+    indicator formats on them. Nothing is saved: it is used on a call with the
+    tarozi ustasi to learn what the scale sends."""
+    return render(request, "crm/tarozi_test.html")
+
+
+@role_required(User.Role.ADMIN)
 def kassa(request):
     """The till: a current-state card (what is in the kassa, split by naqd / karta /
     bank), two Excel-like ledgers side by side — Kirim (mijoz to'lovlari + kapital)

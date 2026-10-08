@@ -204,6 +204,7 @@ urlpatterns = [
     path("debts/<int:pk>/tarix.xlsx", crm_views.debt_customer_history_export,
          name="debt_customer_history_export"),
     path("kassa/", crm_views.kassa, name="kassa"),
+    path("tarozi/test/", crm_views.tarozi_test, name="tarozi_test"),
     path("reports/", crm_views.reports, name="reports"),
     path("reports/export/contracts.xlsx", crm_views.export_contracts, name="export_contracts"),
     path("reports/export/supplier-payments.xlsx", crm_views.export_supplier_payments,

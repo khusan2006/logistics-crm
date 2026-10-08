@@ -3811,3 +3811,79 @@ form.stacked .lineset-field--fee_bearer label {
 /* The pin beside a mijoz's Manzil that opens the joylashuv modal. */
 .geo-pin { display: inline-flex; vertical-align: -3px; margin-left: 4px; color: var(--accent); }
 .geo-pin svg { width: 16px; height: 16px; }
+
+/* ---- Tarozi sinovi ------------------------------------------------------------
+   The scale bench (crm/tarozi_test.html, static/js/tarozi.js): setup on the left,
+   the decoded weight on the right, the raw byte log full width underneath. */
+/* .btn sets display, which would otherwise beat the hidden attribute. */
+.tz [hidden] { display: none !important; }
+.tz-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+@media (max-width: 1000px) { .tz-grid { grid-template-columns: 1fr; } }
+.tz-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.tz-tab {
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text);
+  border-radius: var(--r-sm); padding: 7px 12px; font: inherit; font-size: 13px;
+  font-weight: 600; cursor: pointer;
+}
+.tz-tab:hover { background: var(--surface-hover); }
+.tz-tab.is-on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.tz-hint { color: var(--text-muted); font-size: 13px; margin: 0 0 12px; line-height: 1.5; }
+.tz-list { color: var(--text-muted); font-size: 13px; line-height: 1.6; padding-left: 20px; }
+.tz-opt { color: var(--text-faint); font-weight: 400; font-size: 12px; }
+.tz-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; margin-bottom: 12px; }
+.tz-fields label, .tz-pane > label, .tz-demo label, .tz-send label {
+  display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text-muted);
+}
+.tz-fields .tz-wide, .tz-wide { grid-column: 1 / -1; }
+.tz-fields .tz-check, .tz-check {
+  flex-direction: row; align-items: center; gap: 6px; font-weight: 500; color: var(--text);
+}
+.tz-pane input[type=text], .tz-pane select, .tz-pane textarea,
+.tz-result input, .tz-result select { width: 100%; max-width: none; }
+.tz input[type=checkbox] { width: auto; }
+.tz-pane textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; margin-bottom: 10px; }
+.tz-row { display: flex; gap: 8px; align-items: center; }
+.tz-row input { flex: 1; min-width: 0; }
+.tz-row select { width: auto; flex: 0 0 auto; }
+.tz-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.tz-actions select { width: auto; }
+.tz-send { border-top: 1px solid var(--border); padding-top: 12px; }
+
+.tz-status {
+  font-size: 13px; font-weight: 600; color: var(--text-muted); background: var(--surface-2);
+  border-radius: var(--r-sm); padding: 7px 10px; margin-bottom: 14px; overflow-wrap: anywhere;
+}
+.tz-status--ok { background: var(--success-soft); color: var(--success); }
+.tz-status--warn { background: var(--warning-soft); color: var(--warning); }
+.tz-status--bad { background: var(--danger-soft); color: var(--danger); }
+.tz-weight { font-size: 44px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tz-weight small { font-size: 16px; color: var(--text-muted); font-weight: 600; }
+.tz-pill {
+  display: inline-block; margin: 8px 0 14px; padding: 3px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; background: var(--surface-2); color: var(--text-muted);
+}
+.tz-pill--ok { background: var(--success-soft); color: var(--success); }
+.tz-pill--wait { background: var(--warning-soft); color: var(--warning); }
+.tz-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; margin: 0 0 16px; }
+.tz-facts dt { color: var(--text-muted); }
+.tz-facts dd { margin: 0; overflow-wrap: anywhere; }
+.tz-facts code, .tz-hint code { font-size: 12px; }
+.tz-demo { border-top: 1px solid var(--border); padding-top: 12px; }
+
+.tz-loghead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.tz-logbtns { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tz-log {
+  height: 340px; overflow: auto; background: var(--surface-2); border-radius: var(--r-sm);
+  padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+}
+.tz-logrow { display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 2px 0; border-bottom: 1px solid var(--border); }
+.tz-logrow--note { grid-template-columns: 150px minmax(0, 1fr); color: var(--text-muted); }
+.tz-logrow--tx .tz-t { color: var(--violet); }
+.tz-logrow--manual .tz-t { color: var(--accent); }
+.tz-t { color: var(--text-faint); white-space: nowrap; }
+.tz-hex, .tz-vis, .tz-note { overflow-wrap: anywhere; }
+.tz-empty { color: var(--text-faint); padding: 8px 0; }
+@media (max-width: 700px) {
+  .tz-logrow { grid-template-columns: 1fr; gap: 0; }
+  .tz-logrow--note { grid-template-columns: 1fr; }
+}

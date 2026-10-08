@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Tarozi sinovi · GranulaLog{% endblock %}
+{% block topbar_title %}Tarozi sinovi{% endblock %}
+{% block content %}
+{% comment %}
+A bench for reading a scale, used on a call with the tarozi ustasi: pick how the
+scale reaches this computer, fill in what he says, and watch what arrives. All of it
+runs in static/js/tarozi.js; nothing here is posted or saved (the settings stay in
+this browser only).
+
+`data-lotin` on the whole bench: it is full of things that must reach the screen
+exactly as the scale sent them — "ST,GS", hex, CH340, None/Even/Odd — and the
+kiril pass would rewrite every one of them.
+{% endcomment %}
+<div class="tz" data-tarozi data-lotin>
+  <div class="tz-support flash flash-warn" data-tz-support hidden></div>
+
+  <div class="tz-grid">
+    <section class="card tz-setup">
+      <div class="tz-tabs" role="tablist">
+        <button type="button" class="tz-tab is-on" data-tz-tab="serial">USB / Bluetooth (COM)</button>
+        <button type="button" class="tz-tab" data-tz-tab="ble">Bluetooth LE</button>
+        <button type="button" class="tz-tab" data-tz-tab="manual">Qo'lda / klaviatura</button>
+        <button type="button" class="tz-tab" data-tz-tab="tcp">Wi-Fi / TCP</button>
+      </div>
+
+      {# ---- Serial: USB receiver, RS232 adapter, paired Bluetooth Classic (SPP) ---- #}
+      <div class="tz-pane" data-tz-pane="serial">
+        <p class="tz-hint">USB qabul qilgich, RS232 kabel yoki Bluetooth Classic (SPP). Bluetooth bo'lsa, avval kompyuterning Bluetooth sozlamalarida tarozini ulang (PIN odatda 1234 yoki 0000). Hercules ochiq bo'lsa — yoping.</p>
+        <div class="tz-fields">
+          <label>Baud rate
+            <select data-tz-set="baud">
+              <option>600</option><option>1200</option><option>2400</option><option>4800</option>
+              <option selected>9600</option><option>19200</option><option>38400</option>
+              <option>57600</option><option>115200</option>
+            </select>
+          </label>
+          <label>Data bits
+            <select data-tz-set="dataBits"><option>7</option><option selected>8</option></select>
+          </label>
+          <label>Parity
+            <select data-tz-set="parity">
+              <option value="none" selected>None</option><option value="even">Even</option><option value="odd">Odd</option>
+            </select>
+          </label>
+          <label>Stop bits
+            <select data-tz-set="stopBits"><option selected>1</option><option>2</option></select>
+          </label>
+          <label>Flow control
+            <select data-tz-set="flowControl">
+              <option value="none" selected>None</option><option value="hardware">Hardware (RTS/CTS)</option>
+            </select>
+          </label>
+          <label class="tz-wide">Bluetooth service UUID <span class="tz-opt">(ixtiyoriy, oddiy SPP uchun bo'sh qoldiring)</span>
+            <input type="text" data-tz-set="btService" placeholder="masalan 00001101-0000-1000-8000-00805f9b34fb">
+          </label>
+        </div>
+        <div class="tz-actions">
+          <button type="button" class="btn" data-tz-connect="serial">Portni tanlash va ulash</button>
+          <button type="button" class="btn btn-ghost" data-tz-disconnect hidden>Uzish</button>
+        </div>
+        <div class="tz-send" data-tz-send hidden>
+          <label class="tz-wide">Taroziga buyruq yuborish <span class="tz-opt">(faqat "buyruq rejimi"dagi tarozilar uchun)</span>
+            <span class="tz-row">
+              <input type="text" data-tz-send-text placeholder="masalan R yoki \x02AB03\x03">
+              <select data-tz-send-mode>
+                <option value="text">Matn</option><option value="hex">Hex</option>
+              </select>
+              <select data-tz-send-end>
+                <option value="">Oxiri: hech narsa</option><option value="\r">+ CR</option>
+                <option value="\r\n">+ CR LF</option><option value="\n">+ LF</option>
+              </select>
+              <button type="button" class="btn btn-ghost" data-tz-send-go>Yuborish</button>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      {# ---- Bluetooth Low Energy ---- #}
+      <div class="tz-pane" data-tz-pane="ble" hidden>
+        <p class="tz-hint">BLE modullar (HM-10, JDY…) COM port yaratmaydi. Service va characteristic UUID kerak — tarozi ustasidan so'rang yoki telefonda "nRF Connect" ilovasida ko'ring.</p>
+        <div class="tz-fields">
+          <label class="tz-wide">Tayyor variant
+            <select data-tz-ble-preset>
+              <option value="ffe0|ffe1">HM-10 / JDY (FFE0 / FFE1)</option>
+              <option value="6e400001-b5a3-f393-e0a9-e50e24dcca9e|6e400003-b5a3-f393-e0a9-e50e24dcca9e">Nordic UART (6E400001 / 6E400003)</option>
+              <option value="fff0|fff1">FFF0 / FFF1</option>
+              <option value="">Boshqa — o'zim yozaman</option>
+            </select>
+          </label>
+          <label class="tz-wide">Service UUID
+            <input type="text" data-tz-set="bleService" value="ffe0">
+          </label>
+          <label class="tz-wide">Characteristic UUID <span class="tz-opt">(bo'sh bo'lsa — birinchi "notify" topiladi)</span>
+            <input type="text" data-tz-set="bleChar" value="ffe1">
+          </label>
+        </div>
+        <div class="tz-actions">
+          <button type="button" class="btn" data-tz-connect="ble">Qurilmani tanlash va ulash</button>
+          <button type="button" class="btn btn-ghost" data-tz-disconnect hidden>Uzish</button>
+        </div>
+      </div>
+
+      {# ---- Manual: paste what Hercules showed, or let a keyboard-mode receiver type ---- #}
+      <div class="tz-pane" data-tz-pane="manual" hidden>
+        <p class="tz-hint"><b>Klaviatura rejimi:</b> pastdagi maydonni bosing va tarozida "Print" tugmasini bosing — qabul qilgich vaznni o'zi yozsa, shu yerda paydo bo'ladi.</p>
+        <label class="tz-wide">Klaviatura maydoni
+          <input type="text" data-tz-wedge placeholder="Shu yerni bosing, keyin tarozida Print">
+        </label>
+        <p class="tz-hint"><b>Qo'lda:</b> Hercules yoki boshqa joydan ko'chirilgan ma'lumotni qo'ying. Matnda <code>\r</code>, <code>\n</code>, <code>\x02</code> yozish mumkin.</p>
+        <textarea data-tz-paste rows="5" placeholder="ST,GS,+0012450kg\r\n   yoki hex:  02 2B 30 31 32 34 35 30 30 31 39 03"></textarea>
+        <div class="tz-actions">
+          <select data-tz-paste-mode>
+            <option value="text">Matn</option><option value="hex">Hex</option>
+          </select>
+          <button type="button" class="btn" data-tz-paste-go>Tahlil qilish</button>
+        </div>
+      </div>
+
+      {# ---- TCP/UDP: a browser cannot open these ---- #}
+      <div class="tz-pane" data-tz-pane="tcp" hidden>
+        <p class="tz-hint">Brauzer xavfsizlik sababli to'g'ridan-to'g'ri <b>TCP/UDP</b> (IP va port) ga ulana olmaydi. Agar Hercules'da <b>TCP Client / TCP Server / UDP</b> tabi ochiq bo'lsa:</p>
+        <ol class="tz-list">
+          <li>Hercules'dagi IP manzil va portni yozib oling.</li>
+          <li>Kelayotgan ma'lumotni nusxa olib, <b>Qo'lda</b> tabiga qo'ying — format shu yerda aniqlanadi.</li>
+          <li>Doimiy ishlash uchun shu kompyuterga kichik dastur (bridge) o'rnatiladi — u ma'lumotni CRMga uzatadi.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card tz-result">
+      <div class="tz-status" data-tz-status>Ulanmagan</div>
+      <div class="tz-weight"><span data-tz-weight>—</span> <small data-tz-unit>kg</small></div>
+      <div class="tz-pill" data-tz-stable>—</div>
+      <dl class="tz-facts">
+        <dt>Format</dt><dd data-tz-format>—</dd>
+        <dt>Tarozi belgisi</dt><dd data-tz-flag>—</dd>
+        <dt>Ketma-ket bir xil</dt><dd data-tz-repeat>0</dd>
+        <dt>Kadrlar</dt><dd><span data-tz-frames>0</span> · xato: <span data-tz-bad>0</span></dd>
+        <dt>Baytlar</dt><dd data-tz-bytes>0</dd>
+        <dt>Oxirgi kadr</dt><dd><code data-tz-last>—</code></dd>
+      </dl>
+
+      <div class="tz-fields">
+        <label>Kadrga ajratish
+          <select data-tz-set="framing">
+            <option value="auto" selected>Avto</option>
+            <option value="line">Qator oxiri (CR / LF)</option>
+            <option value="stxetx">STX … ETX (02 … 03)</option>
+            <option value="start">Belgidan boshlanadi</option>
+            <option value="fixed">Belgilangan uzunlik</option>
+            <option value="chunk">Har kelgan bo'lak</option>
+          </select>
+        </label>
+        <label>Format
+          <select data-tz-set="decoder">
+            <option value="auto" selected>Avto</option>
+            <option value="text">ST/US,GS/NT matn (Keli va b.)</option>
+            <option value="a9">Yaohua A9 (STX, XOR)</option>
+            <option value="a12">Teskari raqamlar (= …, A12)</option>
+            <option value="number">Istalgan son</option>
+          </select>
+        </label>
+        <label>Boshlanish belgisi
+          <input type="text" data-tz-set="startChar" value="=" maxlength="4">
+        </label>
+        <label>Kadr uzunligi
+          <input type="number" data-tz-set="fixedLen" value="12" min="1" max="256">
+        </label>
+        <label>Barqaror = ketma-ket
+          <input type="number" data-tz-set="stableCount" value="5" min="1" max="100">
+        </label>
+        <label class="tz-check"><input type="checkbox" data-tz-set="reverse"> Raqamlarni teskari o'qish</label>
+      </div>
+
+      <div class="tz-demo">
+        <label class="tz-wide">CRM maydoni (namuna) — kg
+          <span class="tz-row">
+            <input type="text" data-tz-demo readonly placeholder="Barqaror vazn shu yerga tushadi">
+            <button type="button" class="btn btn-green" data-tz-take>⚖ Tarozidan olish</button>
+          </span>
+        </label>
+      </div>
+    </section>
+  </div>
+
+  <section class="card tz-logcard">
+    <div class="tz-loghead">
+      <strong>Kelgan ma'lumot</strong>
+      <span class="tz-opt">vaqt · hex · matn (ko'rinmas belgilar [STX], [CR], [LF] ko'rinishida)</span>
+      <span class="tz-logbtns">
+        <label class="tz-check"><input type="checkbox" data-tz-pause> To'xtatish</label>
+        <button type="button" class="btn btn-ghost btn-sm" data-tz-copy>Nusxa olish</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-tz-download>Yuklab olish (.txt)</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-tz-clear>Tozalash</button>
+      </span>
+    </div>
+    <div class="tz-log" data-tz-log><div class="tz-empty">Hali hech narsa kelmadi.</div></div>
+  </section>
+</div>
+<script src="{% static_v 'js/tarozi.js' %}"></script>
+{% endblock %}
