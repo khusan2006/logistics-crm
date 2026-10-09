@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import DecimalField, Max, Q, Sum
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 from django.utils.text import slugify
 
 MONEY = DecimalField(max_digits=14, decimal_places=2)   # USD
@@ -5844,3 +5845,43 @@ class ShipmentLeg(models.Model):
 
     def __str__(self):
         return f"{self.from_location} → {self.to_location}"
+
+
+def _scale_device_id():
+    """The secret a scale's converter sends first on connecting. Fixed length and a
+    prefix no weight line starts with, so one ID can never be the start of another
+    and the receiver can match it on the raw bytes before any line ending."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "TRZ-" + get_random_string(20, alphabet)
+
+
+class Scale(models.Model):
+    """A weighing scale that reports over the network: its RS232 output goes into a
+    serial-to-Ethernet converter (USR-TCP232-410S and the like) set to TCP Client,
+    which connects to `manage.py tarozi_listen` and sends `device_id` first.
+
+    The `last_*` fields are the latest reading only — the receiver writes them when
+    the weight or its stability changes (and refreshes `last_seen` at most once a
+    second); nothing here is a history. The kg a form takes from a scale is still
+    typed into that form's own field, so a reading never becomes a record by itself."""
+
+    name = models.CharField("Nomi", max_length=60)
+    device_id = models.CharField("Device ID", max_length=40, unique=True,
+                                 default=_scale_device_id, editable=False)
+    is_active = models.BooleanField("Faol", default=True)
+    online = models.BooleanField("Ulangan", default=False, editable=False)
+    peer = models.CharField("Manzil", max_length=64, blank=True, editable=False)
+    last_raw = models.CharField("Oxirgi qator", max_length=128, blank=True, editable=False)
+    last_kg = models.DecimalField("Oxirgi vazn", max_digits=12, decimal_places=3,
+                                  null=True, blank=True, editable=False)
+    last_stable = models.BooleanField("Barqaror", default=False, editable=False)
+    last_seen = models.DateTimeField("Oxirgi ma'lumot", null=True, blank=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        verbose_name = "Tarozi"
+        verbose_name_plural = "Tarozilar"
+
+    def __str__(self):
+        return self.name

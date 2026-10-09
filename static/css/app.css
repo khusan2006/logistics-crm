@@ -3910,3 +3910,17 @@ form.stacked .lineset-field--fee_bearer label {
   .tz-sinfo { grid-column: 2 / -1; }
   .tz-sbtns { grid-column: 1 / -1; justify-content: flex-end; }
 }
+/* Network scales: the same row as a COM port, with the Device ID to copy. */
+.tz-netadd { margin-bottom: 12px; max-width: 520px; }
+.tz-netrow { grid-template-columns: 12px minmax(0, 1fr) auto auto auto; row-gap: 2px; cursor: default; }
+.tz-netrow .tz-sinfo { grid-column: 2 / -1; grid-row: 2; }
+.tz-netname { font-weight: 600; overflow-wrap: anywhere; }
+.tz-netid { display: inline-flex; gap: 6px; align-items: center; }
+.tz-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+  background: var(--surface-2); border-radius: 5px; padding: 2px 6px; }
+.tz-howto { margin-top: 12px; font-size: 13px; }
+.tz-howto summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+@media (max-width: 700px) {
+  .tz-netrow { grid-template-columns: 12px minmax(0, 1fr) auto auto; }
+  .tz-netrow .tz-netid { grid-column: 2 / -1; grid-row: 3; }
+}

@@ -5,6 +5,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
 
+from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
@@ -58,7 +59,7 @@ from .models import (
     OtherExpense, Partner,
     PaymentAllocation,
     PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
-    Sale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
+    Sale, Scale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
     SupplierPayment, allocate_customer_payment,
     apply_customer_advance, arrived_lots, brand_on_hand_kg, brand_reserved_kg,
@@ -7372,8 +7373,51 @@ def tarozi_test(request):
     opens the scale over Web Serial (USB receiver or paired Bluetooth Classic) or
     Web Bluetooth (BLE), shows the raw bytes as text and hex, and tries the common
     indicator formats on them. Nothing is saved: it is used on a call with the
-    tarozi ustasi to learn what the scale sends."""
-    return render(request, "crm/tarozi_test.html")
+    tarozi ustasi to learn what the scale sends.
+
+    Below it sits the network side: the Scale rows `manage.py tarozi_listen` fills
+    from converters on the internet, read live through `tarozi_scales`."""
+    return render(request, "crm/tarozi_test.html", {
+        "tarozi_addr": settings.TAROZI_PUBLIC_ADDR})
+
+
+def _scale_json(scale, now):
+    return {
+        "id": scale.pk, "name": scale.name, "device_id": scale.device_id,
+        "online": scale.online, "peer": scale.peer, "raw": scale.last_raw,
+        "kg": None if scale.last_kg is None else str(scale.last_kg.normalize()),
+        "stable": scale.last_stable,
+        "ago": None if scale.last_seen is None else int((now - scale.last_seen).total_seconds()),
+    }
+
+
+@role_required(User.Role.ADMIN, User.Role.TAROZICHI)
+def tarozi_scales(request):
+    """Every network scale and its latest reading, polled by the Tarozi sinovi page.
+    `ago` is how many seconds old the reading is — a form taking a weight will
+    refuse one that is not fresh, so the page shows it too."""
+    now = timezone.now()
+    return JsonResponse({"scales": [_scale_json(s, now) for s in Scale.objects.all()]})
+
+
+@require_POST
+@role_required(User.Role.ADMIN, User.Role.TAROZICHI)
+def tarozi_scale_create(request):
+    """A new network scale: a name, and a Device ID generated for its converter."""
+    name = (request.POST.get("name") or "").strip()[:60]
+    if not name:
+        return JsonResponse({"error": "Tarozi nomini kiriting"}, status=400)
+    scale = Scale.objects.create(name=name)
+    return JsonResponse(_scale_json(scale, timezone.now()), status=201)
+
+
+@require_POST
+@role_required(User.Role.ADMIN, User.Role.TAROZICHI)
+def tarozi_scale_delete(request, pk):
+    """Removing a scale retires its Device ID: the receiver drops that converter on
+    its next reading and refuses it from then on."""
+    get_object_or_404(Scale, pk=pk).delete()
+    return JsonResponse({"ok": True})
 
 
 @role_required(User.Role.ADMIN)

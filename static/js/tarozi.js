@@ -924,8 +924,138 @@
     renderActive();
   }
 
+  // ---- network scales: what the TCP receiver on the server is getting ------------
+  //
+  // Polled, not pushed: one small JSON every 1.5 s (every 10 s while the tab is
+  // hidden) is all a bench needs, and it reads exactly what a form taking a weight
+  // will read.
+  var POLL_MS = 1500;
+  var POLL_HIDDEN_MS = 10000;
+
+  function initNet(el) {
+    var listEl = el.querySelector("[data-tz-net-list]");
+    var form = el.querySelector("[data-tz-net-add]");
+    var csrf = form.querySelector("[name=csrfmiddlewaretoken]").value;
+    var rows = {};
+
+    function cell(cls, text) {
+      var c = document.createElement("span");
+      c.className = cls;
+      c.textContent = text;
+      return c;
+    }
+
+    function ago(sec) {
+      if (sec === null) return "hali ma'lumot yo'q";
+      if (sec < 60) return sec + " s oldin";
+      if (sec < 3600) return Math.floor(sec / 60) + " daq oldin";
+      return Math.floor(sec / 3600) + " soat oldin";
+    }
+
+    function buildRow(s) {
+      var row = document.createElement("div");
+      row.className = "tz-srow tz-netrow";
+      row.appendChild(cell("tz-sdot", ""));
+      row.appendChild(cell("tz-netname", ""));
+      var id = document.createElement("span");
+      id.className = "tz-netid";
+      id.appendChild(cell("tz-code", s.device_id));
+      var copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "btn btn-ghost btn-sm";
+      copy.textContent = "Nusxa";
+      copy.addEventListener("click", function () {
+        navigator.clipboard.writeText(s.device_id).then(function () {
+          copy.textContent = "✓";
+          setTimeout(function () { copy.textContent = "Nusxa"; }, 1200);
+        });
+      });
+      id.appendChild(copy);
+      row.appendChild(id);
+      row.appendChild(cell("tz-sinfo", ""));
+      row.appendChild(cell("tz-sweight", ""));
+      var del = document.createElement("button");
+      del.type = "button";
+      del.className = "btn btn-danger btn-sm";
+      del.title = "O'chirish — bu Device ID boshqa qabul qilinmaydi";
+      del.textContent = "✕";
+      del.addEventListener("click", function () {
+        if (!confirm("\"" + s.name + "\" o'chirilsinmi? Uning Device ID si boshqa ishlamaydi.")) return;
+        var body = new FormData();
+        body.append("csrfmiddlewaretoken", csrf);
+        fetch(el.dataset.deleteUrl.replace("/0/", "/" + s.id + "/"), { method: "POST", body: body })
+          .then(function () { poll(); });
+      });
+      var btns = document.createElement("span");
+      btns.className = "tz-sbtns";
+      btns.appendChild(del);
+      row.appendChild(btns);
+      listEl.appendChild(row);
+      return row;
+    }
+
+    function render(scales) {
+      var seen = {};
+      scales.forEach(function (s) {
+        seen[s.id] = true;
+        var row = rows[s.id] || (rows[s.id] = buildRow(s));
+        // Fresh = the receiver heard from it in the last few seconds; a row can say
+        // `online` for a moment after the converter is gone, until the timeout.
+        var fresh = s.online && s.ago !== null && s.ago <= 5;
+        row.querySelector(".tz-sdot").className = "tz-sdot" + (fresh ? " is-on" : "");
+        row.querySelector(".tz-netname").textContent = s.name;
+        row.querySelector(".tz-sinfo").textContent = (s.online ? "ulangan" + (s.peer ? " · " + s.peer : "") : "ulanmagan")
+          + " · " + ago(s.ago) + (s.raw ? " · " + s.raw : "");
+        var w = row.querySelector(".tz-sweight");
+        if (s.kg === null) {
+          w.textContent = "—";
+          w.className = "tz-sweight";
+        } else {
+          w.textContent = fmtKg(parseFloat(s.kg)) + " kg " + (s.stable ? "✓" : "~");
+          w.className = "tz-sweight " + (!fresh ? "" : s.stable ? "is-stable" : "is-moving");
+        }
+      });
+      Object.keys(rows).forEach(function (id) {
+        if (!seen[id]) { rows[id].remove(); delete rows[id]; }
+      });
+      var empty = listEl.querySelector(".tz-empty");
+      if (scales.length && empty) empty.remove();
+      if (!scales.length && !empty) {
+        listEl.insertAdjacentHTML("beforeend", '<div class="tz-empty">Hali tarozi yo\'q. Nom yozib "Tarozi qo\'shish" ni bosing.</div>');
+      }
+    }
+
+    var timer = null;
+    function poll() {
+      clearTimeout(timer);
+      fetch(el.dataset.listUrl, { headers: { Accept: "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (data) { render(data.scales); })
+        .catch(function () { /* next tick tries again */ })
+        // Never stop: a hidden tab only slows down, so the list cannot go stale
+        // because a "visible again" event was missed.
+        .then(function () { timer = setTimeout(poll, document.hidden ? POLL_HIDDEN_MS : POLL_MS); });
+    }
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) poll(); });
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      fetch(el.dataset.createUrl, { method: "POST", body: new FormData(form) })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { alert(res.d.error || "Xato"); return; }
+          form.reset();
+          poll();
+        });
+    });
+
+    poll();
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     var el = document.querySelector("[data-tarozi]");
     if (el) init(el);
+    var net = document.querySelector("[data-tz-net]");
+    if (net) initNet(net);
   });
 })(typeof window !== "undefined" ? window : globalThis);

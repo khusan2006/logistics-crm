@@ -186,9 +186,43 @@ kiril pass would rewrite every one of them.
     </section>
   </div>
 
+  {% comment %}
+  The network side: scales whose converter (USR-TCP232-410S…) connects to the
+  `tarozi_listen` service over the internet. Each gets a Device ID here; the list is
+  polled from `tarozi_scales`, so it shows what the SERVER is receiving right now.
+  {% endcomment %}
+  <section class="card tz-net" data-tz-net
+           data-list-url="{% url 'tarozi_scales' %}" data-create-url="{% url 'tarozi_scale_create' %}"
+           data-delete-url="{% url 'tarozi_scale_delete' 0 %}">
+    <div class="tz-loghead">
+      <strong>Internet orqali tarozilar (TCP server)</strong>
+      <span class="tz-opt">konvertor serverga ulanadi — vazn shu yerda jonli ko'rinadi</span>
+    </div>
+    <p class="tz-hint">Server manzili:
+      {% if tarozi_addr %}<code data-tz-addr>{{ tarozi_addr }}</code>{% else %}<b>hali sozlanmagan</b>{% endif %}
+    </p>
+    <form class="tz-row tz-netadd" data-tz-net-add>
+      {% csrf_token %}
+      <input type="text" name="name" maxlength="60" placeholder="Tarozi nomi, masalan: Ombor 1" required>
+      <button type="submit" class="btn">+ Tarozi qo'shish</button>
+    </form>
+    <div class="tz-sessions" data-tz-net-list><div class="tz-empty">Yuklanmoqda…</div></div>
+    <details class="tz-howto">
+      <summary>Konvertorga (USR-TCP232-410S) nima yoziladi?</summary>
+      <ul class="tz-list">
+        <li><b>Work mode:</b> TCP Client</li>
+        <li><b>Remote server / port:</b> yuqoridagi server manzili (<code>host:port</code> — ikki qismga bo'lib yoziladi)</li>
+        <li><b>Local port:</b> 0</li>
+        <li><b>Device ID / Register packet:</b> "send ID once connection", ID — ro'yxatdagi <code>TRZ-…</code> kodi</li>
+        <li><b>Serial:</b> tarozi bilan bir xil (baud, 8, None, 1)</li>
+        <li><b>IP:</b> DHCP · <b>KeepAlive:</b> yoqilgan · serial heartbeat: o'chirilgan</li>
+      </ul>
+    </details>
+  </section>
+
   <section class="card">
     <div class="tz-loghead">
-      <strong>Tarozilar</strong>
+      <strong>Shu kompyuterdagi tarozilar (COM)</strong>
       <span class="tz-opt">qatorni bosing — katta panel o'sha tarozini ko'rsatadi · ✓ barqaror · ~ o'zgaryapti</span>
     </div>
     <div class="tz-sessions" data-tz-sessions></div>
