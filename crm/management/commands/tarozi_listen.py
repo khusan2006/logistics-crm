@@ -44,9 +44,14 @@ def _update(pk, **fields):
         return Scale.objects.filter(pk=pk).update(**fields)
 
 
-def _active_ids():
+def _active_scales():
+    """The active Device IDs, and the one scale (if any) that takes connections
+    sending no ID at all."""
     connection.close_if_unusable_or_obsolete()
-    return {s.device_id.encode(): s for s in Scale.objects.filter(is_active=True)}
+    scales = list(Scale.objects.filter(is_active=True))
+    ids = {s.device_id.encode(): s for s in scales}
+    open_scale = next((s for s in scales if not s.require_id), None)
+    return ids, open_scale
 
 
 def _all_offline():
@@ -54,7 +59,7 @@ def _all_offline():
 
 
 update = sync_to_async(_update)
-active_ids = sync_to_async(_active_ids)
+active_scales = sync_to_async(_active_scales)
 all_offline = sync_to_async(_all_offline)
 
 
@@ -107,9 +112,11 @@ class Receiver:
     async def authenticate(self, reader, peer):
         """Match the first bytes against the active Device IDs. The converter sends
         the ID raw, with no line ending, and the first weight line may ride in the
-        same packet — so it is a prefix match on bytes, and what follows is kept."""
-        ids = await active_ids()
-        longest = max(map(len, ids), default=0)
+        same packet — so it is a prefix match on bytes, and what follows is kept.
+
+        Bytes that cannot be the start of any ID go to the scale marked "ID shart
+        emas", kept whole as its first data; with no such scale they are refused."""
+        ids, open_scale = await active_scales()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + AUTH_TIMEOUT
         buf = bytearray()
@@ -118,21 +125,28 @@ class Receiver:
                 if buf.startswith(key):
                     del buf[:len(key)]
                     return scale, buf
-            if not ids or len(buf) >= longest:
+            maybe_id = any(key.startswith(bytes(buf)) for key in ids)
+            if buf and not maybe_id:
+                if open_scale is not None:
+                    return open_scale, buf
                 self.log(f"{peer}: rad etildi — Device ID noto'g'ri")
                 return None, None
             remaining = deadline - loop.time()
             if remaining <= 0:
-                self.log(f"{peer}: rad etildi — Device ID kelmadi")
-                return None, None
+                return self._no_id(open_scale, buf, peer)
             try:
                 chunk = await asyncio.wait_for(reader.read(256), remaining)
             except TimeoutError:
-                self.log(f"{peer}: rad etildi — Device ID kelmadi")
-                return None, None
+                return self._no_id(open_scale, buf, peer)
             if not chunk:
                 return None, None
             buf += chunk
+
+    def _no_id(self, open_scale, buf, peer):
+        if open_scale is not None:
+            return open_scale, buf
+        self.log(f"{peer}: rad etildi — Device ID kelmadi")
+        return None, None
 
     async def read_loop(self, scale, reader, buf, peer):
         stability = Stability(STABLE_NEED)

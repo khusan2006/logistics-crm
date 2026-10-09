@@ -7386,7 +7386,7 @@ def _scale_json(scale, now):
         "id": scale.pk, "name": scale.name, "device_id": scale.device_id,
         "online": scale.online, "peer": scale.peer, "raw": scale.last_raw,
         "kg": None if scale.last_kg is None else str(scale.last_kg.normalize()),
-        "stable": scale.last_stable,
+        "stable": scale.last_stable, "require_id": scale.require_id,
         "ago": None if scale.last_seen is None else int((now - scale.last_seen).total_seconds()),
     }
 
@@ -7409,6 +7409,21 @@ def tarozi_scale_create(request):
         return JsonResponse({"error": "Tarozi nomini kiriting"}, status=400)
     scale = Scale.objects.create(name=name)
     return JsonResponse(_scale_json(scale, timezone.now()), status=201)
+
+
+@require_POST
+@role_required(User.Role.ADMIN, User.Role.TAROZICHI)
+def tarozi_scale_open(request, pk):
+    """Toggle "ID shart emas" — whether this scale also takes connections that send
+    no Device ID. Opening one closes every other: a connection without an ID has to
+    belong to exactly one scale. Takes effect on the converter's next connection."""
+    scale = get_object_or_404(Scale, pk=pk)
+    with transaction.atomic():
+        if scale.require_id:
+            Scale.objects.exclude(pk=pk).update(require_id=True)
+        scale.require_id = not scale.require_id
+        scale.save(update_fields=["require_id"])
+    return JsonResponse(_scale_json(scale, timezone.now()))
 
 
 @require_POST

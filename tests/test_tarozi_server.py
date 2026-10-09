@@ -177,3 +177,57 @@ def test_a_retired_scale_is_refused():
         return closed
 
     assert asyncio.run(_with_receiver(scenario)) == b""
+
+
+# ---- "ID shart emas": a converter not sending a Device ID -------------------------
+
+def test_opening_one_scale_closes_the_others(tarozichi_client):
+    a = Scale.objects.create(name="A")
+    b = Scale.objects.create(name="B")
+    assert tarozichi_client.post(f"/tarozi/scales/{a.pk}/open/").json()["require_id"] is False
+    assert tarozichi_client.post(f"/tarozi/scales/{b.pk}/open/").json()["require_id"] is False
+    a.refresh_from_db()
+    assert a.require_id is True
+    assert tarozichi_client.post(f"/tarozi/scales/{b.pk}/open/").json()["require_id"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_converter_without_id_feeds_the_open_scale():
+    Scale.objects.create(name="ID bilan")
+    open_scale = Scale.objects.create(name="ID siz", require_id=False)
+
+    async def scenario(port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        # No ID at all: the very first bytes are already weight lines.
+        writer.write(b"wn001.171kg\r\n" * 6)
+        await writer.drain()
+
+        async def landed():
+            row = await Scale.objects.aget(pk=open_scale.pk)
+            return row.last_kg == Decimal("1.171") and row.last_stable
+        ok = await _wait_for(landed)
+        writer.close()
+        return ok
+
+    assert asyncio.run(_with_receiver(scenario))
+    assert Scale.objects.get(name="ID bilan").last_kg is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_with_an_open_scale_a_real_id_still_goes_to_its_own_scale():
+    own = Scale.objects.create(name="O'zi")
+    Scale.objects.create(name="ID siz", require_id=False)
+
+    async def scenario(port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(own.device_id.encode() + b"wn025.410kg\r\n" * 6)
+        await writer.drain()
+
+        async def landed():
+            return (await Scale.objects.aget(pk=own.pk)).last_kg == Decimal("25.41")
+        ok = await _wait_for(landed)
+        writer.close()
+        return ok
+
+    assert asyncio.run(_with_receiver(scenario))
+    assert Scale.objects.get(name="ID siz").last_kg is None

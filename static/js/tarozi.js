@@ -986,8 +986,19 @@
         fetch(el.dataset.deleteUrl.replace("/0/", "/" + s.id + "/"), { method: "POST", body: body })
           .then(function () { poll(); });
       });
+      // "ID shart emas": this scale also takes a converter that sends no Device ID.
+      var open = document.createElement("button");
+      open.type = "button";
+      open.className = "btn btn-ghost btn-sm tz-open";
+      open.addEventListener("click", function () {
+        var body = new FormData();
+        body.append("csrfmiddlewaretoken", csrf);
+        fetch(el.dataset.openUrl.replace("/0/", "/" + s.id + "/"), { method: "POST", body: body })
+          .then(function () { poll(); });
+      });
       var btns = document.createElement("span");
       btns.className = "tz-sbtns";
+      btns.appendChild(open);
       btns.appendChild(del);
       row.appendChild(btns);
       listEl.appendChild(row);
@@ -1004,7 +1015,16 @@
         var fresh = s.online && s.ago !== null && s.ago <= 5;
         row.querySelector(".tz-sdot").className = "tz-sdot" + (fresh ? " is-on" : "");
         row.querySelector(".tz-netname").textContent = s.name;
-        row.querySelector(".tz-sinfo").textContent = (s.online ? "ulangan" + (s.peer ? " · " + s.peer : "") : "ulanmagan")
+        var open = row.querySelector(".tz-open");
+        open.textContent = s.require_id ? "ID kerak" : "ID shart emas ✓";
+        open.title = s.require_id
+          ? "Faqat Device ID yuborgan konvertor qabul qilinadi. Bosing — ID'siz ham qabul qilinsin."
+          : "ID yubormagan konvertor ham shu taroziga yoziladi. Bosing — yana ID talab qilinsin.";
+        open.classList.toggle("is-on", !s.require_id);
+        // The row's `online` survives a receiver that died without cleaning up;
+        // past the receiver's own idle timeout it cannot really be connected.
+        var linked = s.online && s.ago !== null && s.ago <= 60;
+        row.querySelector(".tz-sinfo").textContent = (linked ? "ulangan" + (s.peer ? " · " + s.peer : "") : "ulanmagan")
           + " · " + ago(s.ago) + (s.raw ? " · " + s.raw : "");
         var w = row.querySelector(".tz-sweight");
         if (s.kg === null) {

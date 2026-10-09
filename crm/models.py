@@ -5869,6 +5869,10 @@ class Scale(models.Model):
     device_id = models.CharField("Device ID", max_length=40, unique=True,
                                  default=_scale_device_id, editable=False)
     is_active = models.BooleanField("Faol", default=True)
+    # Off = this scale also takes connections that send NO Device ID (a converter not
+    # set up for one yet). At most one scale may be open: a connection without an ID
+    # cannot say which scale it is, so there has to be exactly one it can be.
+    require_id = models.BooleanField("Device ID talab qilinadi", default=True)
     online = models.BooleanField("Ulangan", default=False, editable=False)
     peer = models.CharField("Manzil", max_length=64, blank=True, editable=False)
     last_raw = models.CharField("Oxirgi qator", max_length=128, blank=True, editable=False)

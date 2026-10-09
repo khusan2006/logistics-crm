@@ -207,6 +207,8 @@ urlpatterns = [
     path("tarozi/test/", crm_views.tarozi_test, name="tarozi_test"),
     path("tarozi/scales/", crm_views.tarozi_scales, name="tarozi_scales"),
     path("tarozi/scales/new/", crm_views.tarozi_scale_create, name="tarozi_scale_create"),
+    path("tarozi/scales/<int:pk>/open/", crm_views.tarozi_scale_open,
+         name="tarozi_scale_open"),
     path("tarozi/scales/<int:pk>/delete/", crm_views.tarozi_scale_delete,
          name="tarozi_scale_delete"),
     path("reports/", crm_views.reports, name="reports"),

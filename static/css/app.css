@@ -3924,3 +3924,4 @@ form.stacked .lineset-field--fee_bearer label {
   .tz-netrow { grid-template-columns: 12px minmax(0, 1fr) auto auto; }
   .tz-netrow .tz-netid { grid-column: 2 / -1; grid-row: 3; }
 }
+.tz-open.is-on { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
