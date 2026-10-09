@@ -258,20 +258,26 @@
   if (typeof document === "undefined") return;
 
   // ------------------------------------------------------------------ page ----
+  //
+  // Every source of bytes is a SESSION: a serial port (several at once, e.g. scales
+  // on a USB hub), a BLE device, or the manual box. Each keeps its own buffer,
+  // stability and counters, so two scales never mix their frames. The big result
+  // panel follows the ACTIVE session; the list shows every one of them live.
 
   var VENDORS = { 0x1a86: "CH340 (QinHeng)", 0x10c4: "CP210x (Silicon Labs)",
                   0x0403: "FTDI", 0x067b: "PL2303 (Prolific)", 0x2341: "Arduino" };
   var STORE_KEY = "tarozi-test-v1";
   var LOG_MAX = 500;
+  var KIND_LABEL = { serial: "COM", ble: "BLE", manual: "Qo'lda" };
 
   function init(el) {
     var $ = function (sel) { return el.querySelector(sel); };
     var $$ = function (sel) { return Array.prototype.slice.call(el.querySelectorAll(sel)); };
 
-    var state = { port: null, reader: null, keepReading: false, closed: null,
-                  device: null, ch: null, buf: [], bytes: 0, frames: 0, bad: 0,
-                  last: null, log: [], connected: false };
-    var stability = new Stability(5);
+    var sessions = [];
+    var active = null;
+    var seq = 0;
+    var log = [];
 
     // ---- settings -----------------------------------------------------------
     var setEls = {};
@@ -285,6 +291,7 @@
       return { framing: opt("framing"), decoder: opt("decoder"), startChar: opt("startChar"),
                fixedLen: +opt("fixedLen"), reverse: opt("reverse") };
     }
+    function need() { return Math.max(1, +opt("stableCount") || 5); }
     function saveSettings() {
       var data = {};
       Object.keys(setEls).forEach(function (k) { data[k] = opt(k); });
@@ -301,14 +308,16 @@
       });
     }
     loadSettings();
-    stability.need = Math.max(1, +opt("stableCount") || 5);
+
+    // Only the reading settings restart the reading; baud and the rest apply the
+    // next time a port is opened.
+    var PARSE_KEYS = ["framing", "decoder", "startChar", "fixedLen", "stableCount", "reverse"];
     Object.keys(setEls).forEach(function (k) {
       setEls[k].addEventListener("change", function () {
         saveSettings();
-        // A new way of reading the stream starts the reading over.
-        state.buf = [];
-        stability = new Stability(Math.max(1, +opt("stableCount") || 5));
-        renderResult(null);
+        if (PARSE_KEYS.indexOf(k) === -1) return;
+        sessions.forEach(function (s) { s.buf = []; s.stability = new Stability(need()); s.last = null; });
+        renderAll();
       });
     });
 
@@ -340,83 +349,198 @@
       sb.hidden = false;
     }
 
-    // ---- status / result ----------------------------------------------------
     var statusEl = $("[data-tz-status]");
     function setStatus(text, tone) {
       statusEl.textContent = text;
       statusEl.className = "tz-status" + (tone ? " tz-status--" + tone : "");
     }
-    function setConnected(on) {
-      state.connected = on;
-      $$("[data-tz-disconnect]").forEach(function (b) { b.hidden = !on; });
-      $$("[data-tz-connect]").forEach(function (b) { b.disabled = on; });
-      $("[data-tz-send]").hidden = !(on && state.port);
-      if (!on) setStatus("Ulanmagan");
+
+    // ---- sessions -------------------------------------------------------------
+    function newSession(kind, extra) {
+      var count = sessions.filter(function (s) { return s.kind === kind; }).length + 1;
+      var s = { id: ++seq, kind: kind,
+                label: kind === "manual" ? "Qo'lda" : (kind === "ble" ? "BLE " : "Port ") + count,
+                port: null, device: null, ch: null, reader: null, keepReading: false, closed: null,
+                buf: [], stability: new Stability(need()), bytes: 0, frames: 0, bad: 0,
+                last: null, lastRes: null, lastFrame: null, connected: false, info: "", settings: "",
+                row: null };
+      Object.keys(extra || {}).forEach(function (k) { s[k] = extra[k]; });
+      sessions.push(s);
+      buildRow(s);
+      if (!active) setActive(s);
+      return s;
     }
 
-    function renderResult(res) {
-      $("[data-tz-frames]").textContent = state.frames;
-      $("[data-tz-bad]").textContent = state.bad;
-      $("[data-tz-bytes]").textContent = state.bytes;
-      if (!res) {
+    function removeSession(s) {
+      sessions = sessions.filter(function (x) { return x !== s; });
+      if (s.row) s.row.remove();
+      if (active === s) setActive(sessions[0] || null);
+      renderListEmpty();
+    }
+
+    function sessionForPort(port) {
+      return sessions.filter(function (s) { return s.port === port; })[0] || null;
+    }
+
+    function describePort(port) {
+      var info = port.getInfo();
+      if (info.bluetoothServiceClassId) return "Bluetooth (" + info.bluetoothServiceClassId + ")";
+      if (info.usbVendorId) {
+        return (VENDORS[info.usbVendorId] || "USB")
+          + " · VID " + info.usbVendorId.toString(16) + " PID " + (info.usbProductId || 0).toString(16);
+      }
+      return "Port";
+    }
+
+    function setActive(s) {
+      active = s;
+      sessions.forEach(function (x) { if (x.row) x.row.classList.toggle("is-active", x === s); });
+      renderActive();
+      if ($("[data-tz-log-active]").checked) renderLog();
+    }
+
+    // ---- sessions list (one row per scale) ---------------------------------------
+    var listEl = $("[data-tz-sessions]");
+
+    function renderListEmpty() {
+      var empty = listEl.querySelector(".tz-empty");
+      if (sessions.length && empty) empty.remove();
+      if (!sessions.length && !empty) {
+        listEl.insertAdjacentHTML("beforeend", '<div class="tz-empty">Hali port yo\'q. "Yangi port qo\'shish" ni bosing.</div>');
+      }
+    }
+
+    function buildRow(s) {
+      var row = document.createElement("div");
+      row.className = "tz-srow";
+      row.innerHTML =
+        '<span class="tz-sdot"></span>' +
+        '<input type="text" class="tz-sname" aria-label="Nomi">' +
+        '<span class="tz-sinfo"></span>' +
+        '<span class="tz-sweight"></span>' +
+        '<span class="tz-sbtns">' +
+        '<button type="button" class="btn btn-sm" data-act="connect">Ulash</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-act="disconnect">Uzish</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-act="show">Ko\'rsatish</button>' +
+        '<button type="button" class="btn btn-danger btn-sm" data-act="forget" title="Ro\'yxatdan olib tashlash">✕</button>' +
+        '</span>';
+      var name = row.querySelector(".tz-sname");
+      name.value = s.label;
+      name.addEventListener("input", function () {
+        s.label = name.value || "—";
+        if (active === s) renderActive();
+      });
+      row.addEventListener("click", function (e) {
+        var act = e.target.dataset && e.target.dataset.act;
+        if (act === "connect") connectSession(s);
+        else if (act === "disconnect") disconnectSession(s);
+        else if (act === "forget") forgetSession(s);
+        else if (e.target !== name) setActive(s);
+      });
+      s.row = row;
+      listEl.appendChild(row);
+      renderListEmpty();
+      updateRow(s);
+    }
+
+    function updateRow(s) {
+      if (!s.row) return;
+      var r = s.row;
+      r.classList.toggle("is-active", s === active);
+      r.querySelector(".tz-sdot").className = "tz-sdot" + (s.connected ? " is-on" : "");
+      r.querySelector(".tz-sinfo").textContent = KIND_LABEL[s.kind] + " · " + (s.info || "—")
+        + (s.connected ? " · " + (s.settings || "ulangan") : " · ulanmagan");
+      var w = r.querySelector(".tz-sweight");
+      if (s.last && s.last.ok) {
+        var stable = s.stability.stable();
+        w.textContent = fmtKg(s.last.kg) + " kg " + (stable ? "✓" : "~");
+        w.className = "tz-sweight " + (stable ? "is-stable" : "is-moving");
+      } else {
+        w.textContent = s.bytes ? "kadr yo'q" : "—";
+        w.className = "tz-sweight";
+      }
+      var canLink = s.kind !== "manual";
+      r.querySelector('[data-act="connect"]').hidden = !canLink || s.connected;
+      r.querySelector('[data-act="disconnect"]').hidden = !canLink || !s.connected;
+    }
+
+    // ---- result panel (the active session) ------------------------------------------
+    function renderActive() {
+      var s = active;
+      $("[data-tz-active]").textContent = s ? s.label + " · " + KIND_LABEL[s.kind] : "—";
+      $("[data-tz-send]").hidden = !(s && s.kind === "serial" && s.connected);
+      var res = s && s.lastRes;
+      $("[data-tz-frames]").textContent = s ? s.frames : 0;
+      $("[data-tz-bad]").textContent = s ? s.bad : 0;
+      $("[data-tz-bytes]").textContent = s ? s.bytes : 0;
+      $("[data-tz-last]").textContent = s && s.lastFrame ? toVisible(s.lastFrame) : "—";
+      $("[data-tz-format]").textContent = res && res.format || "—";
+      $("[data-tz-flag]").textContent = !res ? "—" : res.flag ? res.flag + (res.kind ? " · " + res.kind : "") : "yo'q";
+      var pill = $("[data-tz-stable]");
+      if (!s || !s.last || !s.last.ok) {
         $("[data-tz-weight]").textContent = "—";
-        $("[data-tz-stable]").textContent = "—";
-        $("[data-tz-stable]").className = "tz-pill";
+        $("[data-tz-unit]").textContent = "kg";
         $("[data-tz-repeat]").textContent = "0";
+        pill.textContent = "—";
+        pill.className = "tz-pill";
         return;
       }
-      $("[data-tz-format]").textContent = res.format || "—";
-      $("[data-tz-flag]").textContent = res.flag ? res.flag + (res.kind ? " · " + res.kind : "") : "yo'q";
-      if (!res.ok) return;
-      $("[data-tz-weight]").textContent = fmtKg(res.kg);
-      $("[data-tz-unit]").textContent = res.unit && res.unit !== "kg" ? "kg (keldi: " + res.unit + ")" : "kg";
-      $("[data-tz-repeat]").textContent = stability.repeat;
-      var pill = $("[data-tz-stable]");
-      var stable = stability.stable();
+      $("[data-tz-weight]").textContent = fmtKg(s.last.kg);
+      $("[data-tz-unit]").textContent = s.last.unit && s.last.unit !== "kg" ? "kg (keldi: " + s.last.unit + ")" : "kg";
+      $("[data-tz-repeat]").textContent = s.stability.repeat;
+      var stable = s.stability.stable();
       pill.textContent = stable ? "Barqaror" : "O'zgaryapti";
       pill.className = "tz-pill " + (stable ? "tz-pill--ok" : "tz-pill--wait");
     }
 
-    // ---- the pipeline: bytes → frames → weight -------------------------------
-    function handleFrames(frames) {
-      var o = opts();
-      frames.forEach(function (frame) {
-        state.frames++;
-        $("[data-tz-last]").textContent = toVisible(frame);
-        var res = decodeFrame(frame, o);
-        if (res.ok) {
-          stability.push(res.kg, res.flag);
-          state.last = res;
-        } else {
-          state.bad++;
-          if (res.error) addLog("note", null, "Kadr o'qilmadi: " + res.error);
-        }
-        renderResult(res);
-      });
+    function renderAll() {
+      sessions.forEach(updateRow);
+      renderActive();
     }
 
-    function onBytes(bytes, kind) {
-      state.bytes += bytes.length;
-      addLog(kind || "rx", bytes);
+    // ---- the pipeline: bytes → frames → weight, per session -----------------------------
+    function handleFrames(s, frames) {
       var o = opts();
-      if (o.framing === "chunk") { handleFrames([bytes]); return; }
-      for (var i = 0; i < bytes.length; i++) state.buf.push(bytes[i]);
-      var r = splitFrames(state.buf, o);
-      state.buf = r.rest;
-      handleFrames(r.frames);
+      frames.forEach(function (frame) {
+        s.frames++;
+        s.lastFrame = frame;
+        var res = decodeFrame(frame, o);
+        s.lastRes = res;
+        if (res.ok) {
+          s.stability.push(res.kg, res.flag);
+          s.last = res;
+        } else {
+          s.bad++;
+          if (res.error) addLog(s, "note", null, "Kadr o'qilmadi: " + res.error);
+        }
+      });
+      updateRow(s);
+      if (s === active) renderActive();
+    }
+
+    function onBytes(s, bytes, kind) {
+      s.bytes += bytes.length;
+      addLog(s, kind || "rx", bytes);
+      var o = opts();
+      if (o.framing === "chunk") { handleFrames(s, [bytes]); return; }
+      for (var i = 0; i < bytes.length; i++) s.buf.push(bytes[i]);
+      var r = splitFrames(s.buf, o);
+      s.buf = r.rest;
+      handleFrames(s, r.frames);
     }
 
     /* Pasted text has no "next frame" to end the last one — read what is left. */
-    function flush() {
-      if (!state.buf.length) return;
-      var frame = new Uint8Array(state.buf);
-      state.buf = [];
-      handleFrames([frame]);
+    function flush(s) {
+      if (!s.buf.length) return;
+      var frame = new Uint8Array(s.buf);
+      s.buf = [];
+      handleFrames(s, [frame]);
     }
 
     // ---- log ----------------------------------------------------------------
     var logEl = $("[data-tz-log]");
     var paused = $("[data-tz-pause]");
+    var onlyActive = $("[data-tz-log-active]");
 
     function stamp(d) {
       function p(n, w) { return String(n).padStart(w || 2, "0"); }
@@ -424,62 +548,84 @@
     }
     var KIND = { rx: "keldi", tx: "yuborildi", manual: "qo'lda", note: "izoh" };
 
-    function addLog(kind, bytes, text) {
-      var entry = { t: new Date(), kind: kind, bytes: bytes, text: text };
-      state.log.push(entry);
-      if (state.log.length > LOG_MAX * 4) state.log.splice(0, state.log.length - LOG_MAX * 4);
-      if (paused.checked) return;
-      var empty = logEl.querySelector(".tz-empty");
-      if (empty) empty.remove();
-      var nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+    function visible(entry) {
+      return !onlyActive.checked || !entry.session || entry.session === active;
+    }
+
+    function logRow(entry) {
       var row = document.createElement("div");
-      row.className = "tz-logrow tz-logrow--" + kind;
+      row.className = "tz-logrow tz-logrow--" + entry.kind;
       var t = document.createElement("span");
       t.className = "tz-t";
-      t.textContent = stamp(entry.t) + " " + KIND[kind];
+      t.textContent = stamp(entry.t) + " " + (entry.session ? entry.session.label + " " : "") + KIND[entry.kind];
       row.appendChild(t);
-      if (bytes) {
+      if (entry.bytes) {
         var h = document.createElement("span");
         h.className = "tz-hex";
-        h.textContent = toHex(bytes);
+        h.textContent = toHex(entry.bytes);
         var v = document.createElement("span");
         v.className = "tz-vis";
-        v.textContent = toVisible(bytes);
+        v.textContent = toVisible(entry.bytes);
         row.appendChild(h);
         row.appendChild(v);
       } else {
         var n = document.createElement("span");
         n.className = "tz-note";
-        n.textContent = text;
+        n.textContent = entry.text;
         row.appendChild(n);
       }
-      logEl.appendChild(row);
+      return row;
+    }
+
+    function addLog(s, kind, bytes, text) {
+      var entry = { t: new Date(), session: s, kind: kind, bytes: bytes, text: text };
+      log.push(entry);
+      if (log.length > LOG_MAX * 8) log.splice(0, log.length - LOG_MAX * 8);
+      if (paused.checked || !visible(entry)) return;
+      var empty = logEl.querySelector(".tz-empty");
+      if (empty) empty.remove();
+      var nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+      logEl.appendChild(logRow(entry));
       while (logEl.children.length > LOG_MAX) logEl.removeChild(logEl.firstChild);
       if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function renderLog() {
+      logEl.innerHTML = "";
+      var rows = log.filter(visible).slice(-LOG_MAX);
+      if (!rows.length) {
+        logEl.innerHTML = '<div class="tz-empty">Hali hech narsa kelmadi.</div>';
+        return;
+      }
+      rows.forEach(function (e) { logEl.appendChild(logRow(e)); });
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    onlyActive.addEventListener("change", renderLog);
+    paused.addEventListener("change", function () { if (!paused.checked) renderLog(); });
+
     function logText() {
-      return state.log.map(function (e) {
-        var head = stamp(e.t) + "  " + KIND[e.kind];
+      return log.map(function (e) {
+        var head = stamp(e.t) + "  " + (e.session ? e.session.label + "  " : "") + KIND[e.kind];
         return e.bytes ? head + "  " + toHex(e.bytes) + "  |  " + toVisible(e.bytes) : head + "  " + e.text;
       }).join("\n");
     }
 
     $("[data-tz-clear]").addEventListener("click", function () {
-      state.log = []; state.buf = []; state.bytes = 0; state.frames = 0; state.bad = 0;
-      stability = new Stability(Math.max(1, +opt("stableCount") || 5));
-      logEl.innerHTML = '<div class="tz-empty">Hali hech narsa kelmadi.</div>';
-      $("[data-tz-last]").textContent = "—";
-      $("[data-tz-format]").textContent = "—";
-      $("[data-tz-flag]").textContent = "—";
-      renderResult(null);
+      log = [];
+      sessions.forEach(function (s) {
+        s.buf = []; s.bytes = 0; s.frames = 0; s.bad = 0;
+        s.last = null; s.lastRes = null; s.lastFrame = null;
+        s.stability = new Stability(need());
+      });
+      renderLog();
+      renderAll();
     });
     $("[data-tz-copy]").addEventListener("click", function () {
       var btn = this;
       navigator.clipboard.writeText(logText()).then(function () {
         btn.textContent = "Nusxa olindi ✓";
         setTimeout(function () { btn.textContent = "Nusxa olish"; }, 1500);
-      }, function (e) { addLog("note", null, "Nusxa olib bo'lmadi: " + e.message); });
+      }, function (e) { addLog(null, "note", null, "Nusxa olib bo'lmadi: " + e.message); });
     });
     $("[data-tz-download]").addEventListener("click", function () {
       var blob = new Blob([logText() + "\n"], { type: "text/plain" });
@@ -497,7 +643,11 @@
       return s;
     }
 
-    async function connectSerial() {
+    /* The browser's picker shows the COM name ("USB-SERIAL CH340 (COM3)"); the page
+       never sees it again. Adding ports one at a time and naming each row is how
+       the tarozichi keeps track of which is which. */
+    async function addPort() {
+      if (!("serial" in navigator)) { setStatus("Web Serial yo'q — Chrome yoki Edge kerak.", "bad"); return; }
       var reqOpts = {};
       var svc = setEls.btService.value.trim();
       if (svc) {
@@ -512,69 +662,96 @@
         setStatus(e.name === "NotFoundError" ? "Port tanlanmadi" : "Xato: " + e.message, "warn");
         return;
       }
-      var openOpts = { baudRate: +opt("baud"), dataBits: +opt("dataBits"), stopBits: +opt("stopBits"),
-                       parity: opt("parity"), flowControl: opt("flowControl") };
+      var s = sessionForPort(port) || newSession("serial", { port: port, info: describePort(port) });
+      setActive(s);
+      connectSession(s);
+    }
+    $("[data-tz-add-port]").addEventListener("click", addPort);
+
+    $("[data-tz-connect-all]").addEventListener("click", function () {
+      sessions.forEach(function (s) {
+        if (s.kind === "serial" && !s.connected) connectSession(s);
+      });
+    });
+
+    async function connectSerial(s) {
+      var o = { baudRate: +opt("baud"), dataBits: +opt("dataBits"), stopBits: +opt("stopBits"),
+                parity: opt("parity"), flowControl: opt("flowControl") };
       try {
-        await port.open(openOpts);
+        await s.port.open(o);
       } catch (e) {
-        var msg = e.name === "InvalidStateError"
-          ? "Port allaqachon ochiq — sahifani yangilang."
-          : "Portni ochib bo'lmadi. Boshqa dastur (Hercules?) band qilgan bo'lishi mumkin — uni yoping. (" + e.message + ")";
+        var msg = s.label + ": " + (e.name === "InvalidStateError"
+          ? "port allaqachon ochiq."
+          : "portni ochib bo'lmadi. Boshqa dastur (Hercules?) band qilgan bo'lishi mumkin — uni yoping. (" + e.message + ")");
         setStatus(msg, "bad");
-        addLog("note", null, msg);
+        addLog(s, "note", null, msg);
         return;
       }
-      state.port = port;
-      var info = port.getInfo();
-      var what = info.bluetoothServiceClassId ? "Bluetooth (" + info.bluetoothServiceClassId + ")"
-        : info.usbVendorId ? (VENDORS[info.usbVendorId] || "USB " + hex2(info.usbVendorId >> 8) + hex2(info.usbVendorId & 0xff))
-          + " · VID " + info.usbVendorId.toString(16) + " PID " + (info.usbProductId || 0).toString(16)
-        : "port";
-      setConnected(true);
-      setStatus("Ulandi: " + what + " · " + openOpts.baudRate + " " + openOpts.dataBits
-        + openOpts.parity[0].toUpperCase() + openOpts.stopBits, "ok");
-      addLog("note", null, "Ulandi: " + what + ", " + JSON.stringify(openOpts));
-      state.keepReading = true;
-      state.closed = readLoop(port);
+      s.settings = o.baudRate + " " + o.dataBits + o.parity[0].toUpperCase() + o.stopBits;
+      s.connected = true;
+      s.buf = [];
+      setStatus("Ulandi: " + s.label + " · " + s.info + " · " + s.settings, "ok");
+      addLog(s, "note", null, "Ulandi: " + s.info + ", " + JSON.stringify(o));
+      renderAll();
+      s.keepReading = true;
+      s.closed = readLoop(s);
     }
 
-    async function readLoop(port) {
-      while (port.readable && state.keepReading) {
+    async function readLoop(s) {
+      var port = s.port;
+      while (port.readable && s.keepReading) {
         var reader = port.readable.getReader();
-        state.reader = reader;
+        s.reader = reader;
         try {
           for (;;) {
             var r = await reader.read();
             if (r.done) break;
-            if (r.value && r.value.length) onBytes(r.value);
+            if (r.value && r.value.length) onBytes(s, r.value);
           }
         } catch (e) {
           // Framing/parity/break errors are per-byte and the loop carries on;
           // NetworkError means the device itself went away.
-          addLog("note", null, "O'qish xatosi: " + e.name + " — " + e.message
+          addLog(s, "note", null, "O'qish xatosi: " + e.name + " — " + e.message
             + (e.name === "FramingError" || e.name === "ParityError" ? " (baud rate yoki parity noto'g'ri bo'lishi mumkin)" : ""));
-          if (e.name === "NetworkError") state.keepReading = false;
+          if (e.name === "NetworkError") s.keepReading = false;
         } finally {
           reader.releaseLock();
-          state.reader = null;
+          s.reader = null;
         }
       }
       try { await port.close(); } catch (e) { /* already gone */ }
-      if (state.port === port) {
-        state.port = null;
-        setConnected(false);
-        addLog("note", null, "Port yopildi.");
-      }
+      s.connected = false;
+      s.closed = null;
+      addLog(s, "note", null, "Port yopildi.");
+      renderAll();
     }
 
     if ("serial" in navigator) {
+      // Ports this site was allowed before come back without the picker.
+      navigator.serial.getPorts().then(function (ports) {
+        ports.forEach(function (port) {
+          if (!sessionForPort(port)) newSession("serial", { port: port, info: describePort(port) });
+        });
+        renderAll();
+      });
+      // A known port plugged back in (the hub, a cable) reappears in the list.
+      navigator.serial.addEventListener("connect", function (e) {
+        if (!sessionForPort(e.target)) newSession("serial", { port: e.target, info: describePort(e.target) });
+        addLog(sessionForPort(e.target), "note", null, "Qurilma ulandi (USB).");
+        renderAll();
+      });
       navigator.serial.addEventListener("disconnect", function (e) {
-        if (e.target === state.port) addLog("note", null, "Qurilma uzildi (kabel / qabul qilgich / Bluetooth).");
+        var s = sessionForPort(e.target);
+        if (s) addLog(s, "note", null, "Qurilma uzildi (kabel / hub / Bluetooth).");
       });
     }
 
     async function sendCommand() {
-      if (!state.port || !state.port.writable) return;
+      var s = active;
+      if (!s || s.kind !== "serial" || !s.connected || !s.port.writable) {
+        setStatus("Avval tanlangan portni ulang.", "warn");
+        return;
+      }
       var text = $("[data-tz-send-text]").value;
       var bytes;
       try {
@@ -583,12 +760,12 @@
       var end = parseEscaped($("[data-tz-send-end]").value);
       var all = new Uint8Array(bytes.length + end.length);
       all.set(bytes); all.set(end, bytes.length);
-      var writer = state.port.writable.getWriter();
+      var writer = s.port.writable.getWriter();
       try {
         await writer.write(all);
-        addLog("tx", all);
+        addLog(s, "tx", all);
       } catch (e) {
-        addLog("note", null, "Yuborib bo'lmadi: " + e.message);
+        addLog(s, "note", null, "Yuborib bo'lmadi: " + e.message);
       } finally {
         writer.releaseLock();
       }
@@ -602,28 +779,40 @@
       }).join(",");
     }
 
-    async function connectBle() {
-      var svc = serviceId(setEls.bleService.value);
-      var chr = setEls.bleChar.value.trim();
+    async function addBle() {
+      if (!("bluetooth" in navigator)) { setStatus("Web Bluetooth yo'q — Chrome yoki Edge kerak.", "bad"); return; }
       var device;
       try {
-        device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [svc] });
+        device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true, optionalServices: [serviceId(setEls.bleService.value)] });
       } catch (e) {
         setStatus(e.name === "NotFoundError" ? "Qurilma tanlanmadi" : "Xato: " + e.message, "warn");
         return;
       }
-      state.device = device;
-      device.addEventListener("gattserverdisconnected", function () {
-        addLog("note", null, "BLE qurilma uzildi.");
-        state.device = null; state.ch = null;
-        setConnected(false);
-      });
+      var s = sessions.filter(function (x) { return x.device === device; })[0]
+        || newSession("ble", { device: device, info: device.name || device.id });
+      if (!s.listening) {
+        s.listening = true;
+        device.addEventListener("gattserverdisconnected", function () {
+          addLog(s, "note", null, "BLE qurilma uzildi.");
+          s.connected = false; s.ch = null;
+          renderAll();
+        });
+      }
+      setActive(s);
+      connectSession(s);
+    }
+    $("[data-tz-add-ble]").addEventListener("click", addBle);
+
+    async function connectBle(s) {
+      var svc = serviceId(setEls.bleService.value);
+      var chr = setEls.bleChar.value.trim();
       try {
-        setStatus("Ulanmoqda: " + (device.name || device.id) + "…");
-        var server = await device.gatt.connect();
+        setStatus("Ulanmoqda: " + s.label + "…");
+        var server = await s.device.gatt.connect();
         var service = await server.getPrimaryService(svc);
         var chars = await service.getCharacteristics();
-        addLog("note", null, "Characteristics: " + chars.map(function (c) {
+        addLog(s, "note", null, "Characteristics: " + chars.map(function (c) {
           return c.uuid + " [" + props(c) + "]";
         }).join("; "));
         var ch = chr ? await service.getCharacteristic(serviceId(chr))
@@ -631,47 +820,59 @@
         if (!ch) throw new Error("Notify characteristic topilmadi — UUID ni tarozi ustasidan so'rang.");
         ch.addEventListener("characteristicvaluechanged", function (e) {
           var dv = e.target.value;
-          onBytes(new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength)));
+          onBytes(s, new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength)));
         });
         await ch.startNotifications();
-        state.ch = ch;
-        setConnected(true);
-        setStatus("Ulandi (BLE): " + (device.name || device.id) + " · " + ch.uuid, "ok");
+        s.ch = ch;
+        s.connected = true;
+        s.settings = ch.uuid;
+        setStatus("Ulandi (BLE): " + s.label + " · " + ch.uuid, "ok");
       } catch (e) {
-        var msg = "BLE xato: " + e.message
+        var msg = s.label + ": BLE xato: " + e.message
           + (e.name === "NotFoundError" ? " (service UUID noto'g'ri bo'lishi mumkin)" : "");
         setStatus(msg, "bad");
-        addLog("note", null, msg);
-        if (device.gatt.connected) device.gatt.disconnect();
+        addLog(s, "note", null, msg);
+        if (s.device.gatt.connected) s.device.gatt.disconnect();
       }
+      renderAll();
     }
 
-    // ---- connect / disconnect buttons -------------------------------------------
-    $$("[data-tz-connect]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        if (btn.dataset.tzConnect === "serial") {
-          if (!("serial" in navigator)) { setStatus("Web Serial yo'q — Chrome yoki Edge kerak.", "bad"); return; }
-          connectSerial();
-        } else {
-          if (!("bluetooth" in navigator)) { setStatus("Web Bluetooth yo'q — Chrome yoki Edge kerak.", "bad"); return; }
-          connectBle();
-        }
-      });
+    // ---- connect / disconnect / forget, whatever the session is ---------------------
+    function connectSession(s) {
+      if (s.connected) return;
+      if (s.kind === "serial") connectSerial(s);
+      else if (s.kind === "ble") connectBle(s);
+    }
+
+    async function disconnectSession(s) {
+      s.keepReading = false;
+      if (s.reader) { try { await s.reader.cancel(); } catch (e) { /* closing anyway */ } }
+      if (s.closed) { await s.closed; }
+      if (s.ch) { try { await s.ch.stopNotifications(); } catch (e) { /* gone */ } s.ch = null; }
+      if (s.device && s.device.gatt.connected) s.device.gatt.disconnect();
+      s.connected = false;
+      renderAll();
+    }
+
+    async function forgetSession(s) {
+      await disconnectSession(s);
+      // Forgetting drops the browser's permission too, so the port needs the picker
+      // again — which is what "remove it from the list" should mean.
+      if (s.port && s.port.forget) { try { await s.port.forget(); } catch (e) { /* older Chrome */ } }
+      if (s.device && s.device.forget) { try { await s.device.forget(); } catch (e) { /* older Chrome */ } }
+      removeSession(s);
+    }
+
+    window.addEventListener("beforeunload", function () {
+      sessions.forEach(function (s) { if (s.connected) disconnectSession(s); });
     });
 
-    async function disconnect() {
-      state.keepReading = false;
-      if (state.reader) { try { await state.reader.cancel(); } catch (e) { /* closing anyway */ } }
-      if (state.closed) { await state.closed; state.closed = null; }
-      if (state.ch) { try { await state.ch.stopNotifications(); } catch (e) { /* gone */ } state.ch = null; }
-      if (state.device && state.device.gatt.connected) state.device.gatt.disconnect();
-      state.device = null;
-      setConnected(false);
-    }
-    $$("[data-tz-disconnect]").forEach(function (b) { b.addEventListener("click", disconnect); });
-    window.addEventListener("beforeunload", function () { if (state.connected) disconnect(); });
-
     // ---- manual paste and keyboard-mode receivers ----------------------------------
+    function manualSession() {
+      return sessions.filter(function (s) { return s.kind === "manual"; })[0]
+        || newSession("manual", { info: "matn / hex / klaviatura" });
+    }
+
     $("[data-tz-paste-go]").addEventListener("click", function () {
       var text = $("[data-tz-paste]").value;
       if (!text.trim()) return;
@@ -679,8 +880,10 @@
       try {
         bytes = $("[data-tz-paste-mode]").value === "hex" ? parseHex(text) : parseEscaped(text);
       } catch (e) { setStatus(e.message, "warn"); return; }
-      onBytes(bytes, "manual");
-      flush();
+      var s = manualSession();
+      setActive(s);
+      onBytes(s, bytes, "manual");
+      flush(s);
     });
 
     /* A keyboard-mode receiver types the weight and usually ends with Enter (some
@@ -692,7 +895,9 @@
       var v = wedge.value;
       if (!v) return;
       wedge.value = "";
-      onBytes(parseEscaped(v + "\r"), "manual");
+      var s = manualSession();
+      setActive(s);
+      onBytes(s, parseEscaped(v + "\r"), "manual");
     }
     wedge.addEventListener("keydown", function (e) {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); wedgeTake(); }
@@ -705,16 +910,18 @@
     // ---- what a kg field will do: take the weight only when it has settled ----------
     $("[data-tz-take]").addEventListener("click", function () {
       var demo = $("[data-tz-demo]");
-      if (state.last && state.last.ok && stability.stable()) {
-        demo.value = fmtKg(state.last.kg);
-        setStatus("Olindi: " + fmtKg(state.last.kg) + " kg", "ok");
+      var s = active;
+      if (s && s.last && s.last.ok && s.stability.stable()) {
+        demo.value = fmtKg(s.last.kg);
+        setStatus("Olindi (" + s.label + "): " + fmtKg(s.last.kg) + " kg", "ok");
       } else {
         demo.value = "";
-        setStatus(state.last ? "Vazn hali barqaror emas — kuting." : "Tarozidan hali vazn kelmadi.", "warn");
+        setStatus(s && s.last ? "Vazn hali barqaror emas — kuting." : "Tanlangan tarozidan hali vazn kelmadi.", "warn");
       }
     });
 
-    renderResult(null);
+    renderListEmpty();
+    renderActive();
   }
 
   document.addEventListener("DOMContentLoaded", function () {

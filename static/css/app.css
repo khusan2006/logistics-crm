@@ -3876,14 +3876,37 @@ form.stacked .lineset-field--fee_bearer label {
   height: 340px; overflow: auto; background: var(--surface-2); border-radius: var(--r-sm);
   padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
 }
-.tz-logrow { display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 2px 0; border-bottom: 1px solid var(--border); }
-.tz-logrow--note { grid-template-columns: 150px minmax(0, 1fr); color: var(--text-muted); }
+.tz-logrow { display: grid; grid-template-columns: 230px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 2px 0; border-bottom: 1px solid var(--border); }
+.tz-logrow--note { grid-template-columns: 230px minmax(0, 1fr); color: var(--text-muted); }
 .tz-logrow--tx .tz-t { color: var(--violet); }
 .tz-logrow--manual .tz-t { color: var(--accent); }
-.tz-t { color: var(--text-faint); white-space: nowrap; }
+.tz-t { color: var(--text-faint); overflow-wrap: anywhere; }
 .tz-hex, .tz-vis, .tz-note { overflow-wrap: anywhere; }
 .tz-empty { color: var(--text-faint); padding: 8px 0; }
 @media (max-width: 700px) {
   .tz-logrow { grid-template-columns: 1fr; gap: 0; }
   .tz-logrow--note { grid-template-columns: 1fr; }
+}
+/* The scales on the bench, one row each, the shown one marked. */
+.tz-active { font-size: 13px; color: var(--text-muted); margin: -6px 0 10px; }
+.tz-sessions { display: flex; flex-direction: column; gap: 6px; }
+.tz-srow {
+  display: grid; grid-template-columns: 12px minmax(110px, 160px) minmax(0, 1fr) auto auto;
+  gap: 10px; align-items: center; padding: 8px 10px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
+}
+.tz-srow:hover { background: var(--surface-hover); }
+.tz-srow.is-active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.tz-sdot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+.tz-sdot.is-on { background: var(--success); }
+.tz-srow .tz-sname { width: 100%; max-width: none; padding: 4px 8px; font-weight: 600; }
+.tz-sinfo { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.tz-sweight { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-faint); }
+.tz-sweight.is-stable { color: var(--success); }
+.tz-sweight.is-moving { color: var(--warning); }
+.tz-sbtns { display: flex; gap: 4px; }
+@media (max-width: 700px) {
+  .tz-srow { grid-template-columns: 12px minmax(0, 1fr) auto; }
+  .tz-sinfo { grid-column: 2 / -1; }
+  .tz-sbtns { grid-column: 1 / -1; justify-content: flex-end; }
 }

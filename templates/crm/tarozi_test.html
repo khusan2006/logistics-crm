@@ -28,6 +28,7 @@ kiril pass would rewrite every one of them.
       {# ---- Serial: USB receiver, RS232 adapter, paired Bluetooth Classic (SPP) ---- #}
       <div class="tz-pane" data-tz-pane="serial">
         <p class="tz-hint">USB qabul qilgich, RS232 kabel yoki Bluetooth Classic (SPP). Bluetooth bo'lsa, avval kompyuterning Bluetooth sozlamalarida tarozini ulang (PIN odatda 1234 yoki 0000). Hercules ochiq bo'lsa — yoping.</p>
+        <p class="tz-hint"><b>Bir nechta tarozi (USB hub):</b> portlarni <b>bittadan</b> qo'shing — tanlash oynasida COM raqami ko'rinadi (masalan "CH340 (COM3)"), keyin pastdagi ro'yxatda unga nom bering. Sozlamalar (baud va b.) port ulanayotgan paytda qo'llanadi — har tarozi uchun o'zgartirib, keyin "Ulash" ni bosing.</p>
         <div class="tz-fields">
           <label>Baud rate
             <select data-tz-set="baud">
@@ -57,11 +58,11 @@ kiril pass would rewrite every one of them.
           </label>
         </div>
         <div class="tz-actions">
-          <button type="button" class="btn" data-tz-connect="serial">Portni tanlash va ulash</button>
-          <button type="button" class="btn btn-ghost" data-tz-disconnect hidden>Uzish</button>
+          <button type="button" class="btn" data-tz-add-port>+ Yangi port qo'shish</button>
+          <button type="button" class="btn btn-ghost" data-tz-connect-all>Hammasini ulash</button>
         </div>
         <div class="tz-send" data-tz-send hidden>
-          <label class="tz-wide">Taroziga buyruq yuborish <span class="tz-opt">(faqat "buyruq rejimi"dagi tarozilar uchun)</span>
+          <label class="tz-wide">Tanlangan taroziga buyruq yuborish <span class="tz-opt">(faqat "buyruq rejimi"dagi tarozilar uchun)</span>
             <span class="tz-row">
               <input type="text" data-tz-send-text placeholder="masalan R yoki \x02AB03\x03">
               <select data-tz-send-mode>
@@ -97,8 +98,7 @@ kiril pass would rewrite every one of them.
           </label>
         </div>
         <div class="tz-actions">
-          <button type="button" class="btn" data-tz-connect="ble">Qurilmani tanlash va ulash</button>
-          <button type="button" class="btn btn-ghost" data-tz-disconnect hidden>Uzish</button>
+          <button type="button" class="btn" data-tz-add-ble>+ Qurilmani tanlash va ulash</button>
         </div>
       </div>
 
@@ -131,6 +131,7 @@ kiril pass would rewrite every one of them.
 
     <section class="card tz-result">
       <div class="tz-status" data-tz-status>Ulanmagan</div>
+      <div class="tz-active">Tanlangan: <b data-tz-active>—</b></div>
       <div class="tz-weight"><span data-tz-weight>—</span> <small data-tz-unit>kg</small></div>
       <div class="tz-pill" data-tz-stable>—</div>
       <dl class="tz-facts">
@@ -185,11 +186,20 @@ kiril pass would rewrite every one of them.
     </section>
   </div>
 
+  <section class="card">
+    <div class="tz-loghead">
+      <strong>Tarozilar</strong>
+      <span class="tz-opt">qatorni bosing — katta panel o'sha tarozini ko'rsatadi · ✓ barqaror · ~ o'zgaryapti</span>
+    </div>
+    <div class="tz-sessions" data-tz-sessions></div>
+  </section>
+
   <section class="card tz-logcard">
     <div class="tz-loghead">
       <strong>Kelgan ma'lumot</strong>
       <span class="tz-opt">vaqt · hex · matn (ko'rinmas belgilar [STX], [CR], [LF] ko'rinishida)</span>
       <span class="tz-logbtns">
+        <label class="tz-check"><input type="checkbox" data-tz-log-active> Faqat tanlangan tarozi</label>
         <label class="tz-check"><input type="checkbox" data-tz-pause> To'xtatish</label>
         <button type="button" class="btn btn-ghost btn-sm" data-tz-copy>Nusxa olish</button>
         <button type="button" class="btn btn-ghost btn-sm" data-tz-download>Yuklab olish (.txt)</button>
