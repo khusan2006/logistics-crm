@@ -348,3 +348,23 @@ def test_rejections_are_summed_not_logged_one_by_one():
     assert len(lines) == 1
     log.add("noto'g'ri ma'lumot", now=61)
     assert len(lines) == 2 and "— 100" in lines[1]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_silent_connection_is_closed_within_one_deadline(monkeypatch):
+    # The wait for a Device ID and the wait for a first weight are ONE deadline
+    # from connecting — a port scanner that says nothing must not hold a slot twice.
+    monkeypatch.setattr(tarozi_listen, "AUTH_TIMEOUT", 0.6)
+    monkeypatch.setattr(tarozi_listen, "FIRST_READING_TIMEOUT", 0.6)
+    Scale.objects.create(name="ID bilan")
+    Scale.objects.create(name="Tarozi 1", require_id=False)
+
+    async def scenario(port):
+        loop = asyncio.get_running_loop()
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        t = loop.time()
+        closed = await _closed_within(reader, 3)
+        return closed, loop.time() - t
+
+    closed, took = asyncio.run(_with_receiver(scenario))
+    assert closed and took < 1.0

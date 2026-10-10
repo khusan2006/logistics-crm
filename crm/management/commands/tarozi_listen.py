@@ -41,8 +41,8 @@ from django.utils import timezone
 from crm.models import Scale
 from crm.tarozi import Stability, decode, split_frames
 
-AUTH_TIMEOUT = 10            # seconds to send a Device ID, for a converter that sends one
-FIRST_READING_TIMEOUT = 5    # seconds for an ID-less connection to show a valid weight
+AUTH_TIMEOUT = 5             # seconds to send a Device ID, for a converter that sends one
+FIRST_READING_TIMEOUT = 5    # seconds FROM CONNECTING for an ID-less one to show a weight
 HEALTHY_FOR = 10             # a connection with a reading this recent keeps its scale
 IDLE_TIMEOUT = 60            # seconds of silence before a connection is dropped
 MAX_CONNECTIONS = 20
@@ -155,7 +155,8 @@ class Receiver:
         peername = writer.get_extra_info("peername")
         peer = f"{peername[0]}:{peername[1]}" if peername else "?"
         loop = asyncio.get_running_loop()
-        if not self._admit(loop.time()):
+        connected_at = loop.time()
+        if not self._admit(connected_at):
             self._reject("ulanishlar juda ko'p")
             writer.close()
             return
@@ -173,7 +174,7 @@ class Receiver:
             elif self._healthy(scale.pk, loop.time()):
                 self._reject("tarozi band (ID'siz ikkinchi ulanish)")
                 return
-            await self.read_loop(scale, reader, writer, buf, peer, by_id)
+            await self.read_loop(scale, reader, writer, buf, peer, by_id, connected_at)
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
@@ -223,13 +224,14 @@ class Receiver:
         self._reject(reason)
         return None, None, False
 
-    async def read_loop(self, scale, reader, writer, buf, peer, registered):
+    async def read_loop(self, scale, reader, writer, buf, peer, registered, started):
         """Read lines until the connection ends. An ID-less connection becomes the
         scale's (`registered`) only with its first valid weight, and only if no
-        healthy connection holds the scale by then."""
+        healthy connection holds the scale by then. `started` is when it CONNECTED:
+        the wait for a Device ID counts against the same deadline, so a silent
+        connection holds a slot for FIRST_READING_TIMEOUT, not for twice that."""
         stability = Stability(STABLE_NEED)
         loop = asyncio.get_running_loop()
-        started = loop.time()
         written, written_at = None, 0.0
         pending = None      # a change held back by MIN_WRITE_GAP, written when it ends
         bad = 0
