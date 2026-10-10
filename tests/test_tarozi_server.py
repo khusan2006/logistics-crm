@@ -1,6 +1,7 @@
 """Network scales: the frame/decode rules in crm.tarozi, the Scale endpoints the
 Tarozi sinovi page polls, and the `tarozi_listen` receiver over a real socket."""
 import asyncio
+from contextlib import suppress
 from decimal import Decimal
 
 import pytest
@@ -231,3 +232,119 @@ def test_with_an_open_scale_a_real_id_still_goes_to_its_own_scale():
 
     assert asyncio.run(_with_receiver(scenario))
     assert Scale.objects.get(name="ID siz").last_kg is None
+
+
+# ---- hardening: what an ID-less connection must prove, and the limits -------------
+
+from crm.management.commands import tarozi_listen  # noqa: E402
+
+
+async def _closed_within(reader, seconds=3):
+    """True when the server closes the connection within `seconds`."""
+    try:
+        return await asyncio.wait_for(reader.read(10), seconds) == b""
+    except (TimeoutError, ConnectionError):
+        return False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_stranger_cannot_push_the_live_converter_off():
+    scale = Scale.objects.create(name="Tarozi 1", require_id=False)
+
+    async def scenario(port):
+        real_r, real_w = await asyncio.open_connection("127.0.0.1", port)
+        real_w.write(b"wn001.171kg\r\n" * 6)
+        await real_w.drain()
+        await _wait_for(lambda: _row_kg(scale.pk, "1.171"))
+
+        intruder_r, intruder_w = await asyncio.open_connection("127.0.0.1", port)
+        intruder_w.write(b"wn099.999kg\r\n" * 6)
+        await intruder_w.drain()
+        refused = await _closed_within(intruder_r)
+
+        real_w.write(b"wn002.000kg\r\n" * 6)
+        await real_w.drain()
+        kept = await _wait_for(lambda: _row_kg(scale.pk, "2"))
+        real_w.close()
+        return refused, kept
+
+    refused, kept = asyncio.run(_with_receiver(scenario))
+    assert refused, "the second ID-less connection must be refused"
+    assert kept, "the real converter keeps feeding its scale"
+
+
+async def _row_kg(pk, kg):
+    return (await Scale.objects.aget(pk=pk)).last_kg == Decimal(kg)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_garbage_is_closed_and_never_becomes_the_scale():
+    scale = Scale.objects.create(name="Tarozi 1", require_id=False)
+
+    async def scenario(port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"GET / HTTP/1.1\r\n" + b"hello\r\n" * 30)
+        await writer.drain()
+        return await _closed_within(reader)
+
+    assert asyncio.run(_with_receiver(scenario))
+    row = Scale.objects.get(pk=scale.pk)
+    assert not row.online and row.last_kg is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_id_less_connection_must_show_a_weight_quickly(monkeypatch):
+    monkeypatch.setattr(tarozi_listen, "FIRST_READING_TIMEOUT", 0.5)
+    Scale.objects.create(name="Tarozi 1", require_id=False)
+
+    async def scenario(port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"x")          # says something, never a weight
+        await writer.drain()
+        return await _closed_within(reader, 3)
+
+    assert asyncio.run(_with_receiver(scenario))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_flood_of_bytes_is_cut_off(monkeypatch):
+    monkeypatch.setattr(tarozi_listen, "MAX_BYTES_PER_SECOND", 300)
+    Scale.objects.create(name="Tarozi 1", require_id=False)
+
+    async def scenario(port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"wn001.171kg\r\n" * 6)
+        await writer.drain()
+        await asyncio.sleep(0.2)
+        writer.write(b"wn001.171kg\r\n" * 200)    # ~2.6 KB at once
+        with suppress(ConnectionError):
+            await writer.drain()
+        return await _closed_within(reader)
+
+    assert asyncio.run(_with_receiver(scenario))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_too_many_new_connections_a_minute_are_refused(monkeypatch):
+    monkeypatch.setattr(tarozi_listen, "MAX_NEW_PER_MINUTE", 2)
+    Scale.objects.create(name="Tarozi 1")       # requires an ID: nobody gets in anyway
+
+    async def scenario(port):
+        conns = [await asyncio.open_connection("127.0.0.1", port) for _ in range(3)]
+        third_reader = conns[2][0]
+        refused_fast = await _closed_within(third_reader, 1)
+        for _, w in conns:
+            w.close()
+        return refused_fast
+
+    assert asyncio.run(_with_receiver(scenario))
+
+
+def test_rejections_are_summed_not_logged_one_by_one():
+    lines = []
+    log = tarozi_listen.RejectLog(lines.append)
+    for t in range(100):
+        log.add("noto'g'ri ma'lumot", now=t * 0.1)     # 100 in 10 s
+    assert len(lines) == 1
+    log.add("noto'g'ri ma'lumot", now=61)
+    assert len(lines) == 2 and "— 100" in lines[1]
