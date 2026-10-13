@@ -84,6 +84,24 @@ def test_monthly_rows_are_split_between_eron_and_birja(admin_client, db):
     assert "Eron yuklar" in html and "Birja yuklar" in html
 
 
+def test_a_mahalliy_xarid_is_not_counted_as_an_eron_yuk(admin_client, db):
+    """Sentabrda 6 ta Eron yuki keldi, lekin jadval 7 dedi — yettinchisi mahalliy
+    xarid edi. Endi u o'z jadvalida."""
+    from crm.models import local_partner
+    eron = make_contract(kg="100000", price="1.00")
+    local = make_contract(partner=local_partner(), kg="10000", price="1.00")
+    _lot(eron, "1000", sent="2026-09-01", arrived="2026-09-02")
+    _lot(local, "500", sent="2026-09-22", arrived="2026-09-22")
+
+    ctx = admin_client.get("/").context
+    sept = date(2026, 9, 1)
+    assert {r["month"]: r for r in ctx["monthly_hamkor"]}[sept]["arrived"] == 1
+    assert {r["month"]: r for r in ctx["monthly_local"]}[sept]["arrived"] == 1
+    assert ctx["monthly_birja"] == []
+    assert {r["month"]: r for r in ctx["monthly"]}[sept]["arrived"] == 2
+    assert "Mahalliy xaridlar" in admin_client.get("/").content.decode()
+
+
 def test_monthly_table_renders(admin_client, db):
     c = make_contract(kg="100000", price="1.00")
     _lot(c, "1000", sent="2026-07-10", arrived="2026-07-15")

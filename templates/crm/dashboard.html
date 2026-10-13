@@ -188,7 +188,7 @@ only labelled then — a heading over the one section there is contrasts it with
   </p>
   {% comment %}
   Split by road, like the progress cards above: the birja's lots and margin summed
-  into the Eron trucks described neither. A sotuv sits under the road its lot came
+  into the Eron trucks described neither, and a mahalliy xarid is neither road. A sotuv sits under the road its lot came
   off. A road with nothing in the last twelve months draws no table.
   {% endcomment %}
   {% if monthly_hamkor %}
@@ -198,6 +198,10 @@ only labelled then — a heading over the one section there is contrasts it with
   {% if monthly_birja %}
   <div class="section-eyebrow"{% if monthly_hamkor %} style="margin-top: 18px;"{% endif %}>Birja yuklar</div>
   {% include "crm/_dashboard_monthly.html" with rows=monthly_birja %}
+  {% endif %}
+  {% if monthly_local %}
+  <div class="section-eyebrow"{% if monthly_hamkor or monthly_birja %} style="margin-top: 18px;"{% endif %}>Mahalliy xaridlar</div>
+  {% include "crm/_dashboard_monthly.html" with rows=monthly_local %}
   {% endif %}
 </div>
 {% endif %}

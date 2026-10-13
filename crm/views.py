@@ -471,6 +471,7 @@ def dashboard(request):
         "sales_profit_total": sales_profit_total,
         "monthly": monthly["all"],
         "monthly_hamkor": monthly["hamkor"], "monthly_birja": monthly["birja"],
+        "monthly_local": monthly["local"],
         # The doska opens on this month, so its Hammasi has to SAY hammasi — an empty
         # querystring is the state the page started in (see `_dashboard_window`).
         "date_from": date_from, "date_to": date_to,
@@ -505,7 +506,8 @@ def dashboard_contract_order(request):
 
 def _monthly_rows(limit=12):
     """Per-month activity, newest first, skipping months where nothing happened —
-    once for every yuk, and once each for the Eron road and the birja.
+    once for every yuk, and once each for the Eron road, the birja and the mahalliy
+    xaridlar.
 
     A truck counts under the month it LEFT for `sent` and the month it ARRIVED for
     everything else, so one load can appear in two rows — that is the point: it
@@ -513,17 +515,24 @@ def _monthly_rows(limit=12):
 
     Split by road for the same reason the progress cards are: the birja's many small
     lots and its thinner margin, summed into the Eron trucks, describe neither
-    business. A sotuv goes where the lot it was sold off came from.
+    business. A mahalliy xarid is neither road: counted under Eron it put a seventh
+    "kelgan" in Sentabr beside the six trucks Yuklar lists. A sotuv goes where the
+    lot it was sold off came from.
 
     Summed in Python over prefetched rows rather than in SQL: goods_value and a
     sale's profit both fall back to related rows (the kelishuv price, restocked
     returns), which the model properties already get right. One walk fills all
     three tables, so the split costs no extra query."""
-    tables = {"all": {}, "hamkor": {}, "birja": {}}
+    tables = {"all": {}, "hamkor": {}, "birja": {}, "local": {}}
 
-    def buckets(day, birja):
+    def road(partner):
+        if partner.is_birja:
+            return "birja"
+        return "local" if partner.is_local else "hamkor"
+
+    def buckets(day, name):
         key = day.replace(day=1)
-        for months in (tables["all"], tables["birja" if birja else "hamkor"]):
+        for months in (tables["all"], tables[name]):
             yield months.setdefault(key, {
                 "month": key, "sent": 0, "arrived": 0, "kg": Decimal("0"),
                 "value": Decimal("0"), "sales": Decimal("0"), "profit": Decimal("0"),
@@ -533,12 +542,12 @@ def _monthly_rows(limit=12):
 
     for shipment in (Shipment.objects.select_related("contract__partner")
                      .prefetch_related("lines__contract_line")):
-        birja = shipment.contract.partner.is_birja
+        name = road(shipment.contract.partner)
         if shipment.sent:
-            for row in buckets(shipment.sent, birja):
+            for row in buckets(shipment.sent, name):
                 row["sent"] += 1
         if shipment.arrived:
-            for row in buckets(shipment.arrived, birja):
+            for row in buckets(shipment.arrived, name):
                 row["arrived"] += 1
                 row["kg"] += shipment.kg
                 row["value"] += shipment.goods_value
@@ -550,8 +559,7 @@ def _monthly_rows(limit=12):
     for sale in priced_sales(Sale.objects.select_related(
             "line__contract_line__contract__partner")):
         profit = sale.profit
-        birja = sale.line.contract_line.contract.partner.is_birja
-        for row in buckets(sale.date, birja):
+        for row in buckets(sale.date, road(sale.line.contract_line.contract.partner)):
             row["sales"] += sale.net_total
             row["profit"] += profit
             row["sales_uzs"] += sale.net_total_uzs
