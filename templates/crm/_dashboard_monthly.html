@@ -1,0 +1,29 @@
+{% load crm_extras %}
+{% comment %}
+One road's Oylik hisobot table. `rows` is one of the lists `_monthly_rows` returns;
+the doska draws it once for the Eron yuklar and once for the birja.
+{% endcomment %}
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Oy</th>
+      <th class="num">Jo'natilgan</th>
+      <th class="num">Yetib kelgan</th>
+      <th class="num">Kelgan kg</th>
+      <th class="num">Yuk qiymati</th>
+      <th class="num">Sotuv</th>
+      <th class="num">Foyda</th>
+    </tr>
+    {% for m in rows %}
+    <tr>
+      <td class="sticky-col">{{ m.month|date:"F Y" }}</td>
+      <td class="num">{{ m.sent }}</td>
+      <td class="num"><strong>{{ m.arrived }}</strong></td>
+      <td class="num">{{ m.kg|floatformat:"-3" }}</td>
+      <td class="num">{% money_both m.value m.value_uzs %}</td>
+      <td class="num">{% money_both m.sales m.sales_uzs %}</td>
+      <td class="num">{% money_both m.profit m.profit_uzs %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>

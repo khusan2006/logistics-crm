@@ -57,6 +57,33 @@ def test_monthly_rows_are_newest_first_and_skip_empty_months(admin_client, db):
     assert months == [date(2026, 7, 1), date(2026, 5, 1)]       # iyun umuman yo'q
 
 
+def test_monthly_rows_are_split_between_eron_and_birja(admin_client, db):
+    """Oylik hisobot Eron yuklari va birja yuklari uchun alohida — sotuv ham o'z
+    yuki kelgan yo'lga tushadi."""
+    from crm.models import birja_partner
+    eron = make_contract(kg="100000", price="1.00")
+    birja = make_contract(partner=birja_partner(), kg="100000", price="1.00")
+    eron_lot = _lot(eron, "1000", sent="2026-07-05", arrived="2026-07-20").lines.first()
+    _lot(birja, "2000", sent="2026-07-06", arrived="2026-07-08")
+    _lot(birja, "500", sent="2026-07-09")
+    customer = Customer.objects.create(name="Alisher", phone="1")
+    Sale.objects.create(customer=customer, line=eron_lot, kg=Decimal("100"),
+                        price=Decimal("3"), date="2026-07-25")
+
+    ctx = admin_client.get("/").context
+    july = date(2026, 7, 1)
+    eron_july = {r["month"]: r for r in ctx["monthly_hamkor"]}[july]
+    birja_july = {r["month"]: r for r in ctx["monthly_birja"]}[july]
+    both_july = {r["month"]: r for r in ctx["monthly"]}[july]
+    assert (eron_july["sent"], eron_july["arrived"], eron_july["kg"]) == (1, 1, Decimal("1000"))
+    assert (birja_july["sent"], birja_july["arrived"], birja_july["kg"]) == (2, 1, Decimal("2000"))
+    assert eron_july["sales"] == Decimal("300.00") and birja_july["sales"] == 0
+    assert (both_july["sent"], both_july["arrived"]) == (3, 2)
+
+    html = admin_client.get("/").content.decode()
+    assert "Eron yuklar" in html and "Birja yuklar" in html
+
+
 def test_monthly_table_renders(admin_client, db):
     c = make_contract(kg="100000", price="1.00")
     _lot(c, "1000", sent="2026-07-10", arrived="2026-07-15")

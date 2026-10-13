@@ -454,6 +454,7 @@ def dashboard(request):
     # every standing figure on this board: a promise made in June is still owed
     # today, and the doska opens on this month.
     owed_refunds = pending_refunds()
+    monthly = _monthly_rows()
     return render(request, "crm/dashboard.html", {
         "owed_refunds": owed_refunds,
         "owed_refund_split": pending_refunds_by_currency(owed_refunds),
@@ -468,7 +469,8 @@ def dashboard(request):
         "birja_owed_count": sum(1 for kg in birja_short if kg > 0),
         "stock_kg": stock_kg,
         "sales_profit_total": sales_profit_total,
-        "monthly": _monthly_rows(),
+        "monthly": monthly["all"],
+        "monthly_hamkor": monthly["hamkor"], "monthly_birja": monthly["birja"],
         # The doska opens on this month, so its Hammasi has to SAY hammasi — an empty
         # querystring is the state the page started in (see `_dashboard_window`).
         "date_from": date_from, "date_to": date_to,
@@ -502,48 +504,61 @@ def dashboard_contract_order(request):
 
 
 def _monthly_rows(limit=12):
-    """Per-month activity, newest first, skipping months where nothing happened.
+    """Per-month activity, newest first, skipping months where nothing happened —
+    once for every yuk, and once each for the Eron road and the birja.
 
     A truck counts under the month it LEFT for `sent` and the month it ARRIVED for
     everything else, so one load can appear in two rows — that is the point: it
     answers "how many arrived in July", not "how many that left in July arrived".
 
+    Split by road for the same reason the progress cards are: the birja's many small
+    lots and its thinner margin, summed into the Eron trucks, describe neither
+    business. A sotuv goes where the lot it was sold off came from.
+
     Summed in Python over prefetched rows rather than in SQL: goods_value and a
     sale's profit both fall back to related rows (the kelishuv price, restocked
-    returns), which the model properties already get right."""
-    months = {}
+    returns), which the model properties already get right. One walk fills all
+    three tables, so the split costs no extra query."""
+    tables = {"all": {}, "hamkor": {}, "birja": {}}
 
-    def bucket(day):
+    def buckets(day, birja):
         key = day.replace(day=1)
-        return months.setdefault(key, {
-            "month": key, "sent": 0, "arrived": 0, "kg": Decimal("0"),
-            "value": Decimal("0"), "sales": Decimal("0"), "profit": Decimal("0"),
-            "value_uzs": Decimal("0"), "sales_uzs": Decimal("0"),
-            "profit_uzs": Decimal("0"),
-        })
+        for months in (tables["all"], tables["birja" if birja else "hamkor"]):
+            yield months.setdefault(key, {
+                "month": key, "sent": 0, "arrived": 0, "kg": Decimal("0"),
+                "value": Decimal("0"), "sales": Decimal("0"), "profit": Decimal("0"),
+                "value_uzs": Decimal("0"), "sales_uzs": Decimal("0"),
+                "profit_uzs": Decimal("0"),
+            })
 
-    for shipment in Shipment.objects.prefetch_related("lines__contract_line"):
+    for shipment in (Shipment.objects.select_related("contract__partner")
+                     .prefetch_related("lines__contract_line")):
+        birja = shipment.contract.partner.is_birja
         if shipment.sent:
-            bucket(shipment.sent)["sent"] += 1
+            for row in buckets(shipment.sent, birja):
+                row["sent"] += 1
         if shipment.arrived:
-            row = bucket(shipment.arrived)
-            row["arrived"] += 1
-            row["kg"] += shipment.kg
-            row["value"] += shipment.goods_value
-            row["value_uzs"] += shipment.goods_value_uzs
+            for row in buckets(shipment.arrived, birja):
+                row["arrived"] += 1
+                row["kg"] += shipment.kg
+                row["value"] += shipment.goods_value
+                row["value_uzs"] += shipment.goods_value_uzs
 
     # `profit_uzs` is the same figure at the sotuv's own kurs, so it is derived rather
     # than computed a second time; `priced_sales` is what stops each month row's foyda
     # from costing a handful of queries per sotuv.
-    for sale in priced_sales():
-        row = bucket(sale.date)
+    for sale in priced_sales(Sale.objects.select_related(
+            "line__contract_line__contract__partner")):
         profit = sale.profit
-        row["sales"] += sale.net_total
-        row["profit"] += profit
-        row["sales_uzs"] += sale.net_total_uzs
-        row["profit_uzs"] += sale.in_som(profit)
+        birja = sale.line.contract_line.contract.partner.is_birja
+        for row in buckets(sale.date, birja):
+            row["sales"] += sale.net_total
+            row["profit"] += profit
+            row["sales_uzs"] += sale.net_total_uzs
+            row["profit_uzs"] += sale.in_som(profit)
 
-    return sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
+    return {name: sorted(months.values(), key=lambda r: r["month"], reverse=True)[:limit]
+            for name, months in tables.items()}
 
 
 def _audit_search(q):

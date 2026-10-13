@@ -186,30 +186,19 @@ only labelled then — a heading over the one section there is contrasts it with
     Yuk jo'natilgan oyida <em>jo'natilgan</em>, omborga kelgan oyida <em>yetib kelgan</em>
     deb sanaladi — shuning uchun bitta yuk ikki oyda ko'rinishi mumkin.
   </p>
-  <div class="table-wrap">
-  <table>
-    <tr>
-      <th class="sticky-col">Oy</th>
-      <th class="num">Jo'natilgan</th>
-      <th class="num">Yetib kelgan</th>
-      <th class="num">Kelgan kg</th>
-      <th class="num">Yuk qiymati</th>
-      <th class="num">Sotuv</th>
-      <th class="num">Foyda</th>
-    </tr>
-    {% for m in monthly %}
-    <tr>
-      <td class="sticky-col">{{ m.month|date:"F Y" }}</td>
-      <td class="num">{{ m.sent }}</td>
-      <td class="num"><strong>{{ m.arrived }}</strong></td>
-      <td class="num">{{ m.kg|floatformat:"-3" }}</td>
-      <td class="num">{% money_both m.value m.value_uzs %}</td>
-      <td class="num">{% money_both m.sales m.sales_uzs %}</td>
-      <td class="num">{% money_both m.profit m.profit_uzs %}</td>
-    </tr>
-    {% endfor %}
-  </table>
-  </div>
+  {% comment %}
+  Split by road, like the progress cards above: the birja's lots and margin summed
+  into the Eron trucks described neither. A sotuv sits under the road its lot came
+  off. A road with nothing in the last twelve months draws no table.
+  {% endcomment %}
+  {% if monthly_hamkor %}
+  <div class="section-eyebrow">Eron yuklar</div>
+  {% include "crm/_dashboard_monthly.html" with rows=monthly_hamkor %}
+  {% endif %}
+  {% if monthly_birja %}
+  <div class="section-eyebrow"{% if monthly_hamkor %} style="margin-top: 18px;"{% endif %}>Birja yuklar</div>
+  {% include "crm/_dashboard_monthly.html" with rows=monthly_birja %}
+  {% endif %}
 </div>
 {% endif %}
 
