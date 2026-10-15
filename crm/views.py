@@ -3124,6 +3124,9 @@ def _ombor_qoldiq_on(day):
         # bought would bury the few that were actually on the shelf.
         if row["qoldiq"]:
             rows.append(row)
+    # Largest first: the question is "what was on the shelf", and that is read off
+    # the top rows — the half-kg tails of a finished marka belong at the bottom.
+    rows.sort(key=lambda r: r["qoldiq"], reverse=True)
     return rows
 
 

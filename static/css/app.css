@@ -3925,3 +3925,33 @@ form.stacked .lineset-field--fee_bearer label {
   .tz-netrow .tz-netid { grid-column: 2 / -1; grid-row: 3; }
 }
 .tz-open.is-on { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+
+/* ── Ombor qoldig'i (a Sotuvlar day band's button) ────────────────────────────
+   The modal's horizontal padding lives on `.modal-head` and `.modal-actions`'
+   siblings, so the body carries its own 22px or the table runs edge to edge. The
+   total leads because it is the question asked; the markalar follow, Qoldiq the
+   one bold column and the running totals beside it kept quiet. */
+.modal:has(.qoldiq) { width: min(640px, calc(100vw - var(--sidebar-w) - 32px)); }
+.qoldiq-sub { margin-top: 3px; font-size: 13px; color: var(--text-muted); }
+.qoldiq { padding: 16px 22px 0; }
+.qoldiq-page .qoldiq { padding: 0; }
+.qoldiq-total {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; margin-bottom: 14px;
+  border-radius: 14px; background: var(--accent-soft);
+}
+.qoldiq-total-label { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+.qoldiq-total-value { margin-top: 2px; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.qoldiq-total-value span { font-size: 14px; font-weight: 600; color: var(--text-muted); }
+.qoldiq-total-count { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.qoldiq-table { font-size: 13.5px; }
+.qoldiq-table td { padding: 11px 10px; }
+.qoldiq-table td.qoldiq-brand { color: var(--text); font-weight: 500; }
+.qoldiq-table td.qoldiq-flow { color: var(--text-faint); }
+.qoldiq-table td.qoldiq-left { font-weight: 700; color: var(--text); }
+.qoldiq-table td.qoldiq-left.is-negative { color: var(--danger); }
+.qoldiq-table tbody tr:last-child td { border-bottom: none; }
+.qoldiq-note { margin: 10px 2px 0; font-size: 12px; color: var(--text-faint); }
+.qoldiq-empty { margin: 4px 0 0; color: var(--text-muted); }
+.qoldiq-actions { justify-content: flex-end; padding: 18px 22px 20px; margin-top: 0; }
+.qoldiq-page .qoldiq-actions { padding: 18px 0 0; }

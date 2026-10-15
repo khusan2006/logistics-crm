@@ -2,40 +2,46 @@
 The ombor as it stood when one day ended, by marka — see `_ombor_qoldiq_on`. Shared
 by the modal opened from a Sotuvlar day band and its full-page fallback.
 
-Kirim, Sotilgan and Qaytgan are running totals up to and including the day, so the
-columns add up across the row: Qoldiq = Kirim − Sotilgan + Qaytgan.
+The answer first — how much was on the shelf — then the markalar, largest qoldiq
+first. Kirim, Sotilgan and Qaytgan are running totals up to and including the day,
+quiet beside the Qoldiq they add up to, and the note under the table says so.
 {% endcomment %}
-<div class="table-wrap">
-<table class="ledger-table">
-  <thead>
-    <tr>
-      <th>Marka</th>
-      <th class="num">Kirim</th>
-      <th class="num">Sotilgan</th>
-      <th class="num">Qaytgan</th>
-      <th class="num">Qoldiq, kg</th>
-    </tr>
-  </thead>
-  <tbody>
-  {% for r in rows %}
-    <tr>
-      <td>{{ r.brand }}</td>
-      <td class="num">{{ r.kirim|floatformat:"-3" }}</td>
-      <td class="num">{{ r.sold|floatformat:"-3" }}</td>
-      <td class="num">{% if r.returned %}{{ r.returned|floatformat:"-3" }}{% else %}—{% endif %}</td>
-      <td class="num{% if r.qoldiq < 0 %} late{% endif %}"><strong>{{ r.qoldiq|floatformat:"-3" }}</strong></td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="5" class="muted">Bu kun oxirida omborda mol yo'q edi</td></tr>
-  {% endfor %}
-  </tbody>
+<div class="qoldiq">
+  <div class="qoldiq-total">
+    <div>
+      <div class="qoldiq-total-label">Omborda jami</div>
+      <div class="qoldiq-total-value">{{ total|floatformat:"-3" }} <span>kg</span></div>
+    </div>
+    <div class="qoldiq-total-count">{{ rows|length }} marka</div>
+  </div>
+
   {% if rows %}
-  <tfoot>
-    <tr>
-      <th colspan="4">Jami</th>
-      <th class="num">{{ total|floatformat:"-3" }}</th>
-    </tr>
-  </tfoot>
+  <div class="table-wrap">
+  <table class="ledger-table qoldiq-table">
+    <thead>
+      <tr>
+        <th>Marka</th>
+        <th class="num">Kirim</th>
+        <th class="num">Sotilgan</th>
+        <th class="num">Qaytgan</th>
+        <th class="num">Qoldiq</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="qoldiq-brand">{{ r.brand }}</td>
+        <td class="num qoldiq-flow">{{ r.kirim|floatformat:"-3" }}</td>
+        <td class="num qoldiq-flow">{{ r.sold|floatformat:"-3" }}</td>
+        <td class="num qoldiq-flow">{% if r.returned %}{{ r.returned|floatformat:"-3" }}{% else %}—{% endif %}</td>
+        <td class="num qoldiq-left{% if r.qoldiq < 0 %} is-negative{% endif %}">{{ r.qoldiq|floatformat:"-3" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="qoldiq-note">Kirim, Sotilgan va Qaytgan — shu kun oxirigacha jami, kg. Qoldiq = Kirim − Sotilgan + Qaytgan.</p>
+  {% else %}
+  <p class="qoldiq-empty">Bu kun oxirida omborda mol yo'q edi.</p>
   {% endif %}
-</table>
 </div>

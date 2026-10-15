@@ -6,7 +6,7 @@ link in a new tab, or with JS off. Same body as the modal.
 {% block title %}Ombor qoldig'i · {{ day|date:"j-F, Y" }} · GranulaLog{% endblock %}
 {% block topbar_title %}Ombor qoldig'i · {{ day|date:"j-F, Y" }} kun oxirida{% endblock %}
 {% block content %}
-<div class="card" style="max-width: 720px;">
+<div class="card qoldiq-page" style="max-width: 720px;">
   {% include "crm/_ombor_qoldiq_body.html" %}
   <div class="modal-actions">
     <a class="btn btn-ghost" href="{% url 'sale_list' %}">Sotuvlarga qaytish</a>
