@@ -155,6 +155,7 @@ urlpatterns = [
     # `path` rather than `str`: a marka is free text on the kelishuv row and may
     # carry a slash, which `str` would refuse to match.
     path("ombor/marka/<path:brand>/", crm_views.brand_detail, name="brand_detail"),
+    path("ombor/qoldiq/<str:day>/", crm_views.ombor_qoldiq, name="ombor_qoldiq"),
     path("sales/", crm_views.sale_list, name="sale_list"),
     path("sales/day-order/", crm_views.sale_day_order, name="sale_day_order"),
     path("sales/new/", crm_views.sale_create, name="sale_create"),

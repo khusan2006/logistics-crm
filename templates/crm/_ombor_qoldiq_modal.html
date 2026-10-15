@@ -1,0 +1,10 @@
+<div class="modal-head">
+  <h2>Ombor qoldig'i · {{ day|date:"j-F, Y" }} kun oxirida</h2>
+  <button type="button" class="modal-x" data-modal-close aria-label="Yopish">&times;</button>
+</div>
+
+{% include "crm/_ombor_qoldiq_body.html" %}
+
+<div class="modal-actions">
+  <button type="button" class="btn btn-ghost" data-modal-close>Yopish</button>
+</div>

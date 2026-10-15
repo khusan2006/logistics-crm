@@ -86,7 +86,8 @@ it elsewhere to be moved against.
   per lot the granula came off.
   {% endcomment %}
   {% for d in days %}
-  {% include "crm/_day_row.html" with day=d.day label=d.label key=d.key colspan=colspan count=d.blocks|length count_noun="sotuv" note="" %}
+  {% url 'ombor_qoldiq' d.key as qoldiq_url %}
+  {% include "crm/_day_row.html" with day=d.day label=d.label key=d.key colspan=colspan count=d.blocks|length count_noun="sotuv" note="" qoldiq_url=qoldiq_url %}
   {% for g in d.blocks %}
   <tr class="sale-row" data-day="{{ d.key }}" data-order-key="{{ g.first.pk }}"{% if g.returns %} data-sale="{{ g.first.pk }}"{% endif %}>
     {% comment %}

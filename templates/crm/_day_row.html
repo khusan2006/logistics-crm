@@ -5,7 +5,9 @@ under it.
 
 Expects `day` (a date, or None for a band that has none), `label` (the WORD it goes
 by — Bugun, Kecha, Hali kelmagan — or "" for a day that is only its date), `colspan`,
-`key`, and optionally `count` + `count_noun` and a `note`.
+`key`, and optionally `count` + `count_noun`, a `note`, and `qoldiq_url` — the
+Sotuvlar bands pass it for an "Ombor qoldig'i" button that opens the ombor as it
+stood when that day ended.
 
 Bugun and Kecha are spelled out with the date beside them: they are the two the
 reader scans for, and the two a bare "24-avgust" makes them work out. Every older day
@@ -19,6 +21,7 @@ Django's l10n.
       {% if label and day %}<span class="day-sub">{{ day|date:"j-F, Y" }}</span>{% endif %}
       {% if count %}<span class="day-count">{{ count }} {{ count_noun }}</span>{% endif %}
       {% if note %}<span class="day-note muted">{{ note }}</span>{% endif %}
+      {% if qoldiq_url %}<a class="btn btn-ghost btn-sm" href="{{ qoldiq_url }}" data-modal title="Shu kun oxiridagi ombor qoldig'i">Ombor qoldig'i</a>{% endif %}
     </div>
   </td>
 </tr>

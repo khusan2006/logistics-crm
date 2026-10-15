@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% comment %}
+The non-AJAX fallback for a day band's Ombor qoldig'i button — reached by opening the
+link in a new tab, or with JS off. Same body as the modal.
+{% endcomment %}
+{% block title %}Ombor qoldig'i · {{ day|date:"j-F, Y" }} · GranulaLog{% endblock %}
+{% block topbar_title %}Ombor qoldig'i · {{ day|date:"j-F, Y" }} kun oxirida{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 720px;">
+  {% include "crm/_ombor_qoldiq_body.html" %}
+  <div class="modal-actions">
+    <a class="btn btn-ghost" href="{% url 'sale_list' %}">Sotuvlarga qaytish</a>
+  </div>
+</div>
+{% endblock %}

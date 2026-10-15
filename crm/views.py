@@ -3084,6 +3084,64 @@ def _ombor_groups(request):
     return groups, q
 
 
+def _ombor_qoldiq_on(day):
+    """The ombor as it stood when `day` ended — one row per marka: what had arrived,
+    what had gone out, what had come back, and the qoldiq that leaves.
+
+    Read by MARKA and never by lot. Which lot a sotuv is billed to is FIFO's answer
+    and moves whenever an earlier sotuv is corrected (see `SaleLot`), so a lot's past
+    qoldiq is not a fixed fact; the marka's is, because FIFO only shifts kg between
+    lots of the same marka.
+
+    Every date is the SANA typed on the row — `Shipment.arrived`, `Sale.date`,
+    `Return.date` — the same one the Sotuvlar bands are drawn by, so the qoldiq under
+    a band is the one that day closed on. kg only: the ombor's so'm tannarx is drawn
+    at today's kurs by design (`_ombor_kurs`), which says nothing about a past day.
+    A qoldiq below zero is shown as it is — a sotuv dated before its yuk's kelish
+    sanasi — rather than clamped into a figure that hides it."""
+    by_brand = {}
+    for lot in (arrived_lots().filter(shipment__arrived__lte=day)
+                .order_by("contract_line__brand")):
+        row = by_brand.setdefault(lot.brand, {
+            "brand": lot.brand, "kirim": Decimal("0"), "sold": Decimal("0"),
+            "returned": Decimal("0")})
+        row["kirim"] += lot.kg
+        for sl in lot.sale_lots.all():
+            sale = sl.sale
+            if sale.date > day:
+                continue
+            row["sold"] += sl.kg
+            # Prorated across the sotuv's lots the way `ShipmentLine.returned_kg`
+            # does it, counting only the vazvratlar dated by the end of the day.
+            back = sum((r.kg for r in sale.returns.all()
+                        if r.restock and r.date <= day), Decimal("0"))
+            if back and sale.kg:
+                row["returned"] += back * sl.kg / sale.kg
+    rows = []
+    for row in by_brand.values():
+        row["qoldiq"] = row["kirim"] - row["sold"] + row["returned"]
+        # A marka emptied before this day is history — listing every one ever
+        # bought would bury the few that were actually on the shelf.
+        if row["qoldiq"]:
+            rows.append(row)
+    return rows
+
+
+@role_required(User.Role.ADMIN, User.Role.SKLADCHI)
+def ombor_qoldiq(request, day):
+    """Ombor qoldig'i at the end of one day — opened from a day band on Sotuvlar."""
+    try:
+        day = _date.fromisoformat(day)
+    except ValueError:
+        raise Http404("Noto'g'ri sana")
+    rows = _ombor_qoldiq_on(day)
+    context = {"day": day, "rows": rows,
+               "total": sum((r["qoldiq"] for r in rows), Decimal("0"))}
+    template = ("crm/_ombor_qoldiq_modal.html" if is_ajax(request)
+                else "crm/ombor_qoldiq.html")
+    return render(request, template, context)
+
+
 def brand_activity(brand, sales, lots):
     """Everything that has happened to one marka, oldest first — kg in, kg out, and
     every correction since.
