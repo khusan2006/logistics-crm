@@ -175,7 +175,7 @@
               Said here, on the row that does it.
               {% endcomment %}
               {% if r.is_multi %}<div class="muted load-sub">umumiy: {{ r.brand_label }}</div>{% endif %}</td>
-            <td class="muted">{{ r.created_at|date:"d.m.Y" }}</td>
+            <td class="muted">{{ r.date|date:"d.m.Y" }}</td>
             <td class="num">{{ r.remaining_kg|floatformat:"-3" }}
               {% if r.fulfilled_kg %}<div class="muted load-sub">{{ r.fulfilled_kg|floatformat:"-3" }} kg berilgan</div>{% endif %}</td>
             {% if user.is_admin_role %}

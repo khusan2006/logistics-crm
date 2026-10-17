@@ -5,6 +5,7 @@ from decimal import Decimal
 from io import BytesIO
 
 import openpyxl
+import pytest
 from conftest import bron_data, line_data, make_bron
 from django.utils import timezone
 from crm.models import (
@@ -728,7 +729,7 @@ class TestBronlarReadsLikeKelishuvlar:
         _reserve(admin_client, "LLDPE", _customer("Yangi"), kg="1000")
         old = Reservation.objects.get(customer__name="Eski")
         Reservation.objects.filter(pk=old.pk).update(
-            created_at=timezone.now() - timedelta(days=40))
+            date=timezone.localdate() - timedelta(days=40))
         bugun = timezone.localdate().isoformat()
         rows = admin_client.get("/reservations/", {"from": bugun}).context["rows"]
         assert [r.customer.name for r in rows] == ["Yangi"]
@@ -1304,3 +1305,79 @@ class TestBronlarReadsLikeYuklar:
         html = admin_client.get("/reservations/").content.decode()
         panel = html[html.index(f'class="legs-detail bron-detail" data-bron="{bron.pk}"'):]
         assert f'href="/sales/{sale.pk}/">#{sale.pk}</a>' in panel
+
+
+# ── Bron sanasi ──────────────────────────────────────────────────────────────
+
+class TestBronDate:
+    """The day the mijoz asked — today unless typed otherwise, editable later."""
+
+    def _post(self, admin_client, customer, url="/reservations/new/", bron=None, **extra):
+        return admin_client.post(url, bron_data({
+            "customer": customer.pk, "brand": "LLDPE", "kg": "5000", "currency": "usd",
+            "price": "", "exchange_rate": "12000", "note": "", **extra}, bron=bron))
+
+    @pytest.fixture(autouse=True)
+    def _marka(self, db):
+        # The bron form offers only markalar the ombor has heard of.
+        _arrived_lot(kg="10000", brand="LLDPE")
+
+    def test_it_defaults_to_today(self, admin_client, db):
+        _reserve(admin_client, "LLDPE", _customer())
+        assert Reservation.objects.get().date == timezone.localdate()
+
+    def test_the_form_opens_on_today(self, admin_client, db):
+        html = admin_client.get("/reservations/new/").content.decode()
+        assert f'value="{TODAY}"' in html
+
+    def test_an_earlier_day_can_be_typed_and_edited(self, admin_client, db):
+        customer = _customer()
+        earlier = timezone.localdate() - timedelta(days=5)
+        assert self._post(admin_client, customer,
+                          date=earlier.isoformat()).status_code == 302
+        bron = Reservation.objects.get()
+        assert bron.date == earlier
+
+        later = earlier + timedelta(days=2)
+        self._post(admin_client, customer, url=f"/reservations/{bron.pk}/edit/",
+                   bron=bron, date=later.isoformat())
+        bron.refresh_from_db()
+        assert bron.date == later
+
+    def test_an_edit_without_the_box_keeps_the_date(self, admin_client, db):
+        customer = _customer()
+        earlier = timezone.localdate() - timedelta(days=5)
+        self._post(admin_client, customer, date=earlier.isoformat())
+        bron = Reservation.objects.get()
+        self._post(admin_client, customer, url=f"/reservations/{bron.pk}/edit/",
+                   bron=bron, kg="6000")
+        bron.refresh_from_db()
+        assert (bron.kg, bron.date) == (Decimal("6000.000"), earlier)
+
+    def test_a_future_day_is_refused(self, admin_client, db):
+        tomorrow = timezone.localdate() + timedelta(days=1)
+        resp = self._post(admin_client, _customer(), date=tomorrow.isoformat())
+        assert resp.status_code != 302
+        assert not Reservation.objects.exists()
+
+    def test_the_queue_follows_the_bron_sanasi_not_the_entry(self, admin_client, db):
+        from crm.models import bron_queue
+
+        first, second = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", first)
+        # Typed in second, but asked for three days earlier.
+        self._post(admin_client, second,
+                   date=(timezone.localdate() - timedelta(days=3)).isoformat())
+        assert [b.customer_id for b in bron_queue("LLDPE")] == [second.pk, first.pk]
+
+    def test_a_sotuv_dated_before_the_bron_sanasi_does_not_draw_it(self, admin_client, db):
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer)
+        yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+        admin_client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "date": yesterday,
+            "debt_deadline": "", "note": "", "draw_from_bron": "on",
+            "draw_from_bron_asked": "1",
+            **line_data({"brand": "LLDPE", "kg": "1000", "price": "1.50"})})
+        assert Sale.objects.exists()
+        assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")

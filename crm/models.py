@@ -2526,6 +2526,10 @@ class Reservation(MoneyEntry):
         help_text="Sotuvga aylantirilgan qismi — qolgani navbatda turadi")
     status = models.CharField("Holat", max_length=10, choices=Status.choices,
                               default=Status.ACTIVE)
+    # The day the mijoz actually asked — today by default, but a bron agreed on the
+    # phone is often typed in days later, and `created_at` (the moment of entry)
+    # would put it behind brons that were really asked for after it.
+    date = models.DateField("Bron sanasi", default=timezone.localdate)
     note = models.CharField("Izoh", max_length=255, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="reservations",
@@ -2537,7 +2541,7 @@ class Reservation(MoneyEntry):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ["-date", "-created_at"]
         verbose_name = "Bron"
         verbose_name_plural = "Bronlar"
         constraints = [models.UniqueConstraint(fields=["code_slug", "code_number"],
@@ -3062,7 +3066,8 @@ def bron_advance_holds(reservations):
     holds = {}
     queues = Reservation.objects.filter(
         customer_id__in=customers, status=Reservation.Status.ACTIVE
-    ).select_related("customer").prefetch_related("items").order_by("created_at", "pk")
+    ).select_related("customer").prefetch_related("items").order_by(
+        "date", "created_at", "pk")
     by_customer = defaultdict(list)
     for bron in queues:
         by_customer[bron.customer_id].append(bron)
@@ -3358,14 +3363,14 @@ def bron_queue(brand=None):
 
     One list, not one per marka, so the caller can see the whole board; pass a
     marka to narrow it. A bron of several markalar stands in the queue of each of
-    them, at the place its `created_at` gives it. Ordering is `created_at` then pk:
-    two brons taken in the same second still have a defined order, and it is the
-    one entered first."""
+    them, at the place its `date` gives it. Ordering is the bron sanasi, then
+    `created_at`, then pk: two brons of one day stand in the order they were
+    entered."""
     qs = (Reservation.objects
           .filter(status=Reservation.Status.ACTIVE)
           .select_related("customer")
           .prefetch_related("items")
-          .order_by("created_at", "pk"))
+          .order_by("date", "created_at", "pk"))
     if brand is not None:
         qs = qs.filter(items__brand=brand).distinct()
     return [r for r in qs if r.remaining_kg > 0]
@@ -3481,8 +3486,8 @@ def bron_countable_sales(bron):
 
 
 def bron_postdates(bron, sale):
-    """True when the bron was struck after this sotuv — entered after it, or opened
-    on a later day than the sotuv's sana — so the sotuv cannot have served it.
+    """True when the bron was struck after this sotuv — entered after it, or its
+    bron sanasi later than the sotuv's sana — so the sotuv cannot have served it.
 
     The sana matters as much as the moment of entry: a delivery typed in late is
     entered after every bron on the board. Komoliddin's 28-sentabr sotuv at 1.42,
@@ -3491,7 +3496,7 @@ def bron_postdates(bron, sale):
     before: a bron and its first delivery are often struck on one day."""
     if sale.created_at and bron.created_at > sale.created_at:
         return True
-    return timezone.localdate(bron.created_at) > sale.date
+    return bron.date > sale.date
 
 
 def draw_down_bron(sale, served_id=None):

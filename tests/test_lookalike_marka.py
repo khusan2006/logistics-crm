@@ -185,7 +185,7 @@ class TestMergingThePairAlreadyEntered:
         # Struck before the sotuvlar it should have been serving — they are dated
         # 8-sentabr, and a bron only counts sotuvlar from its own day on.
         Reservation.objects.filter(pk=bron.pk).update(
-            created_at=timezone.make_aware(datetime(2026, 9, 1, 9, 0)))
+            created_at=timezone.make_aware(datetime(2026, 9, 1, 9, 0)), date="2026-09-01")
         for kg in ("7000", "3000"):
             Sale.objects.create(customer=mijoz, line=lot, kg=Decimal(kg),
                                 price=Decimal("1.5"), date="2026-09-08")

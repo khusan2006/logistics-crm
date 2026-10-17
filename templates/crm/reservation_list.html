@@ -157,7 +157,7 @@ paginated and the rows of the other pages are not on this one to filter.
       {% if not r.avans_held and not r.avans_short %}<span class="muted">—</span>{% endif %}
     </td>
     <td>
-      <div>{{ r.created_at|date:"d.m.Y" }}</div>
+      <div>{{ r.date|date:"d.m.Y" }}</div>
       {% if r.note %}<div class="muted load-sub" title="{{ r.note }}">{{ r.note|truncatechars:24 }}</div>{% endif %}
     </td>
     <td class="row-actions">
@@ -244,7 +244,7 @@ paginated and the rows of the other pages are not on this one to filter.
           </div>
           <div class="lf">
             <span class="lf-label">Bron qilingan</span>
-            <span class="lf-value">{{ r.created_at|date:"d.m.Y" }}</span>
+            <span class="lf-value">{{ r.date|date:"d.m.Y" }}</span>
             {% if r.created_by %}<span class="lf-sub">{{ r.created_by.get_full_name|default:r.created_by.username }}</span>{% endif %}
           </div>
           <div class="lf">

@@ -5476,9 +5476,9 @@ RESERVATION_SORTS = [
     # Navbat first: who asked for each marka and in what order is the thing the
     # screen exists to show, so it is the default unless you ask for another sort.
     ("queue", "Navbat bo'yicha",
-     lambda r: (r.brands[0] if r.brands else "", r.created_at, r.pk), False),
-    ("-created", "Sana — yangi avval", lambda r: (r.created_at, r.pk), True),
-    ("created", "Sana — eski avval", lambda r: (r.created_at, r.pk), False),
+     lambda r: (r.brands[0] if r.brands else "", r.date, r.created_at, r.pk), False),
+    ("-created", "Sana — yangi avval", lambda r: (r.date, r.created_at, r.pk), True),
+    ("created", "Sana — eski avval", lambda r: (r.date, r.created_at, r.pk), False),
     ("code", "Kod — A-Z", lambda r: (r.code_slug, r.code_number), False),
     ("customer", "Mijoz — A-Z", lambda r: (r.customer.name.casefold(), r.pk), False),
     ("-kg", "Kg — kattadan", lambda r: (r.kg, r.pk), True),
@@ -5524,14 +5524,12 @@ def _filter_reservations(request):
             | _contract_code_filter(q)).distinct()
     if customer_id.isdigit():
         reservations = reservations.filter(customer_id=int(customer_id))
-    # When the bron was struck. `created_at` is a timestamp rather than a date, so the
-    # window is read against its DATE — otherwise a bron booked at 14:00 falls outside
-    # a davr that ends on its own day.
+    # When the bron was struck — its bron sanasi, not the moment it was typed in.
     date_from, date_to = _date_window(request)
     if date_from:
-        reservations = reservations.filter(created_at__date__gte=date_from)
+        reservations = reservations.filter(date__gte=date_from)
     if date_to:
-        reservations = reservations.filter(created_at__date__lte=date_to)
+        reservations = reservations.filter(date__lte=date_to)
 
     rows = list(reservations)
     # What is on the shelf for each marka right now, plus the position in each
@@ -6828,7 +6826,7 @@ def _customer_history(customer):
         prices = {(item.price, item.price_uzs) for item in bron.item_list}
         price, price_uzs = prices.pop() if len(prices) == 1 else (None, None)
         events.append({
-            "date": bron.created_at.date(), "kind": "bron",
+            "date": bron.date, "kind": "bron",
             "label": f"Bron · {bron.get_status_display()}",
             "detail": f"{bron.brand_label} · {_kg(bron.kg)} kg",
             "total": price, "total_uzs": price_uzs,
@@ -6889,7 +6887,7 @@ def debt_customer(request, pk):
         bron for bron in customer.reservations.filter(
             status=Reservation.Status.ACTIVE).select_related("customer")
         .prefetch_related("items")
-        .order_by("created_at", "pk") if bron.remaining_kg > 0])
+        .order_by("date", "created_at", "pk") if bron.remaining_kg > 0])
     history, f = _filter_customer_history(request, customer)
     return render(request, "crm/debt_customer.html", {
         "customer": customer, "sales": sales, "brons": brons,
@@ -8350,7 +8348,7 @@ def _reservations_table(reservations):
         total = (r.kg * price).quantize(Decimal("0.01")) if price is not None else None
         total_uzs = ((r.kg * price_uzs).quantize(Decimal("0.01"))
                      if price_uzs is not None else None)
-        return [r.code, timezone.localtime(r.created_at).date(), r.customer.name,
+        return [r.code, r.date, r.customer.name,
                 r.brand_label, r.queue_pos, r.kg, r.fulfilled_kg, r.remaining_kg,
                 r.unpaid_given, r.get_currency_display(), r.exchange_rate, price, price_uzs,
                 total, total_uzs, spelled(r), r.get_status_display(), r.note]

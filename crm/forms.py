@@ -2416,8 +2416,9 @@ class ReservationForm(forms.ModelForm):
 
     class Meta:
         model = Reservation
-        fields = ["customer", "kg", "currency", "exchange_rate", "note"]
+        fields = ["customer", "kg", "currency", "exchange_rate", "date", "note"]
         widgets = {
+            "date": date_widget(),
             "note": forms.Textarea(attrs={"rows": 2}),
             # The same mijoz picker the sotuv forms carry, for the same reason: the
             # list runs to hundreds of names in the operator's own spelling, and a
@@ -2430,6 +2431,10 @@ class ReservationForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         _customer_phone_field(self.fields["customer"])
+        # Today unless the mijoz asked earlier. Not required, so a post that never
+        # carried the box (an older caller, a test) keeps the date it would have had.
+        self.fields["date"].required = False
+        no_future_date(self.fields["date"])
         self.fields["kg"].label = "Bron qilingan kg (jami)"
         self.fields["kg"].help_text = ("Bir nechta marka tanlansa ham kg bitta — "
                                        "qaysi markadan berilsa ham shundan ayiriladi")
@@ -2439,6 +2444,10 @@ class ReservationForm(forms.ModelForm):
         rate.required = False
         _group_thousands(rate)
         _group_thousands(self.fields["kg"])
+
+    def clean_date(self):
+        return (self.cleaned_data.get("date")
+                or (self.instance.date if self.instance.pk else timezone.localdate()))
 
     def clean_kg(self):
         kg = self.cleaned_data.get("kg")
