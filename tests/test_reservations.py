@@ -1021,6 +1021,47 @@ class TestBronDrawIsAsked:
         assert theirs.fulfilled_kg == Decimal("2000.000")
         assert mine.fulfilled_kg == Decimal("0.000")
 
+    def test_a_sotuv_typed_against_a_mijoz_with_no_bron_draws_when_moved(
+            self, admin_client, db):
+        """Typed against the wrong name — one with no bron, so nothing was drawn — and
+        moved to the mijoz who holds one: their bron comes down, as a fresh sotuv to
+        them would have brought it down. Islom Luks palimer's 30 000 kg bron stayed
+        whole after exactly this."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        holder, wrong = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", holder, kg="6000")
+        _sell(admin_client, "LLDPE", wrong, kg="1500")
+        bron = Reservation.objects.get()
+        assert bron.fulfilled_kg == Decimal("0.000")
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
+            "customer": holder.pk, "currency": "usd",
+            "date": TODAY, "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "1500", "price": "1.50"},
+                        initial=1)})
+
+        bron.refresh_from_db()
+        assert Sale.objects.get().reservation_id == bron.pk
+        assert bron.fulfilled_kg == Decimal("1500.000")
+        assert bron.remaining_kg == Decimal("4500.000")
+
+    def test_moved_with_a_new_kg_it_still_draws_on_the_new_mijozs_bron(
+            self, admin_client, db):
+        """The same correction with the kg fixed too: the row is re-sliced, and the
+        new slices draw on the new mijoz's bron."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        holder, wrong = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", holder, kg="6000")
+        _sell(admin_client, "LLDPE", wrong, kg="1500")
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
+            "customer": holder.pk, "currency": "usd",
+            "date": TODAY, "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
+                        initial=1)})
+
+        assert Reservation.objects.get().fulfilled_kg == Decimal("2000.000")
+
 
 # ── Oldin yozilgan sotuvni bronga hisoblash ──────────────────────────────────
 

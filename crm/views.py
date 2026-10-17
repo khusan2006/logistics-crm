@@ -5148,13 +5148,16 @@ def sale_edit(request, pk):
                         # The bron this row came out of is the PREVIOUS mijoz's
                         # promise and cannot follow the sotuv to somebody else: it
                         # would go on reading as served by kg that are now another
-                        # mijoz's. The kg go back, and are drawn again from the NEW
-                        # mijoz's own bron for that marka if this row came out of a
-                        # bron at all — whether a sotuv draws on a promise is decided
-                        # when it is entered and survives a correction.
-                        served_id, was_from_bron = kept.reservation_id, False
+                        # mijoz's. The kg go back, and are drawn from the NEW mijoz's
+                        # own bron for that marka — whether or not the row came out
+                        # of a bron before. "Brondan ushlansin" was a question about
+                        # the old mijoz's promise; the new one's was never asked, and
+                        # a fresh sotuv to them would draw on it by default. A
+                        # 1 500 kg sotuv typed against a mijoz with no bron and then
+                        # moved to Islom Luks palimer left his 30 000 kg bron whole.
+                        served_id = kept.reservation_id
                         if moved:
-                            was_from_bron = release_bron(kept) > 0
+                            release_bron(kept)
                             kept.reservation = None
                         kept.customer = data["customer"]
                         kept.group = group
@@ -5165,7 +5168,7 @@ def sale_edit(request, pk):
                         kept.debt_deadline = data["debt_deadline"]
                         kept.note = data["note"]
                         kept.save()
-                        if was_from_bron:
+                        if moved:
                             draw_down_bron(kept, served_id=served_id)
                         slices.append(kept)
                 else:
@@ -5191,8 +5194,9 @@ def sale_edit(request, pk):
                         remaining -= take
                         # A row that came out of a bron goes on coming out of it:
                         # whether a sotuv draws on a promise is decided when it is
-                        # entered and must survive a correction to its kg.
-                        if served_id is not None:
+                        # entered and must survive a correction to its kg. A row
+                        # moved to another mijoz draws on theirs, as above.
+                        if served_id is not None or moved:
                             draw_down_bron(fresh, served_id=served_id)
                 sold.append(f"{_kg(kg)} kg {brand}"
                             + (f" ({reys}-reys)" if reys else ""))
