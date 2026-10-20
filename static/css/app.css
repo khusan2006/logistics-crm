@@ -2910,6 +2910,9 @@ ul.errorlist li::before { content: "⚠ "; }
 .day-row.is-today .day-title { color: var(--accent); }
 .day-sub { color: var(--text-muted); font-weight: 600; }
 .day-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
+/* Bron page: the line that splits a bron's own sotuvlar from the ones no bron counted. */
+.bron-loose-row > td { font-size: 12px; font-weight: 600; padding: 6px 14px; background: var(--surface); }
+.bron-band { scroll-margin-top: 80px; }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;

@@ -65,38 +65,91 @@
 </div>
 
 {% comment %}
-Only the sotuvlar counted into THIS bron. A sotuv bigger than what the bron still
-owed gave only part of itself here and the rest to the mijoz's next bron, so both
-figures are shown: Sotuv kg is what the mijoz took, Bronga hisoblangan is the share
-of it that this bron's Berilgan kg is made of.
+The mijoz's story, newest bron first, in the Sotuvlar table's own rows: under each
+bron the sotuvlar counted into it, then the ones struck between it and the next
+newer bron that no bron counted. The opened bron is one band of it — marked, and
+scrolled to — so what came after it stays in view above.
+
+Sana takes the Mijoz column's place: every row is this mijoz's, and the list is not
+banded by day. A sotuv that spilled into the next bron says under its kg how much
+of it was counted here.
 {% endcomment %}
 <div class="card">
-  <h3 style="margin-top: 0;">Sotuvlar <span class="muted" style="font-weight: 400; font-size: 13px;">· {{ draws|length }} ta</span></h3>
-  {% if draws %}
+  <h3 style="margin-top: 0;">Sotuvlar <span class="muted" style="font-weight: 400; font-size: 13px;">· {{ sale_count }} ta</span></h3>
   <div class="table-wrap">
-    <table>
-      <tr><th>Sana</th><th>Sotuv</th><th>Marka</th><th>Sotuv kg</th><th title="Shu sotuvning shu bronga hisoblangan qismi">Bronga hisoblangan kg</th></tr>
-      {% for d in draws %}
-      <tr>
-        <td>{{ d.sale.date|date:"d.m.Y" }}</td>
-        <td><a href="{% url 'sale_detail' d.sale_id %}">#{{ d.sale_id }}</a></td>
-        <td>{{ d.sale.line.brand }}</td>
-        <td>{{ d.sale.kg|floatformat:"-3" }}</td>
-        <td>{{ d.kg|floatformat:"-3" }}</td>
-      </tr>
-      {% endfor %}
-      <tr>
-        <td class="muted">Jami</td>
-        <td></td>
-        <td></td>
-        <td><strong>{{ sold_kg|floatformat:"-3" }}</strong></td>
-        <td><strong>{{ drawn_kg|floatformat:"-3" }}</strong></td>
-      </tr>
-    </table>
+  <table>
+    <tr>
+      <th class="sticky-col">Sana</th>
+      <th>Mahsulotlar</th>
+      <th>Kg</th>
+      <th>Tan narx</th>
+      <th>Sotuv narxi</th>
+      <th>Jami</th>
+      <th>Foyda</th>
+      <th>Qoldiq/qarz</th>
+      <th></th>
+    </tr>
+    {% for sec in sections %}
+    {% with b=sec.bron %}
+    <tr class="day-row bron-band{% if sec.current %} is-today{% endif %}" id="bron-{{ b.pk }}"{% if sec.current %} data-current-bron{% endif %}>
+      <td colspan="9">
+        <div class="day-head">
+          <span class="day-title">{% if sec.current %}{{ b.code }}{% else %}<a href="{% url 'reservation_detail' b.pk %}">{{ b.code }}</a>{% endif %}</span>
+          <span class="day-sub">{{ b.date|date:"j-F, Y" }}</span>
+          <span class="day-count">{{ b.fulfilled_kg|floatformat:"-3" }} / {{ b.kg|floatformat:"-3" }} kg</span>
+          {% if b.status == "active" %}<span class="badge badge-warning">Faol</span>
+          {% elif b.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
+          {% else %}<span class="badge">{{ b.get_status_display }}</span>{% endif %}
+          <span class="day-note muted">{{ b.brand_label }}</span>
+        </div>
+      </td>
+    </tr>
+    {% for g in sec.drawn %}
+    <tr class="sale-row">
+      <td class="sticky-col"><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.date|date:"d.m.Y" }}</a></td>
+      {% include "crm/_sale_group_cells.html" %}
+    </tr>
+    {% endfor %}
+    {% if sec.loose %}
+    <tr class="bron-loose-row"><td colspan="9" class="muted">Bronsiz sotuvlar</td></tr>
+    {% for g in sec.loose %}
+    <tr class="sale-row">
+      <td class="sticky-col"><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.date|date:"d.m.Y" }}</a></td>
+      {% include "crm/_sale_group_cells.html" %}
+    </tr>
+    {% endfor %}
+    {% endif %}
+    {% if not sec.drawn and not sec.loose %}
+    <tr><td colspan="9" class="muted">Bu bronga hali sotuv hisoblanmagan.</td></tr>
+    {% endif %}
+    {% endwith %}
+    {% endfor %}
+  </table>
   </div>
-  {% else %}
-  <p class="muted">Bu bronga hali sotuv hisoblanmagan.</p>
-  {% endif %}
 </div>
+
+<script>
+(function () {
+  // The kg of a multi-lot sotuv, summed and opened by its caret — as on Sotuvlar.
+  document.querySelectorAll('.kg-toggle').forEach(function (cell) {
+    cell.addEventListener('click', function (e) {
+      if (e.target.closest('a')) { return; }
+      var sum = cell.querySelector('.kg-sum');
+      var lines = cell.querySelector('.kg-lines');
+      var btn = cell.querySelector('.leg-expand');
+      if (!sum || !lines || !btn) { return; }
+      var willOpen = lines.hidden;
+      lines.hidden = !willOpen;
+      sum.hidden = willOpen;
+      btn.classList.toggle('is-open', willOpen);
+    });
+  });
+  // An older bron opened: bring its band into view, the newer ones above it.
+  var current = document.querySelector('[data-current-bron]');
+  if (current && current.previousElementSibling && current.previousElementSibling.querySelector('th') === null) {
+    current.scrollIntoView({ block: 'start' });
+  }
+})();
+</script>
 
 {% endblock %}

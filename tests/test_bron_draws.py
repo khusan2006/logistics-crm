@@ -55,16 +55,37 @@ class TestSpill:
 
 
 class TestDetailPage:
-    def test_lists_only_the_sotuvlar_counted_into_this_bron(self, admin_client, db):
+    def test_each_bron_lists_the_sotuvlar_counted_into_it(self, admin_client, db):
         _arrived_lot(kg="50000", brand="LLDPE")
         customer = _customer()
         older, newer = _two_brons(customer)
         _sell(admin_client, customer, "LLDPE", "2000")   # all of it into the older
         _sell(admin_client, customer, "LLDPE", "5000")   # 1 000 older, 4 000 newer
         first, second = Sale.objects.order_by("pk")
-        page = admin_client.get(f"/reservations/{newer.pk}/").content.decode()
-        assert f"/sales/{second.pk}/" in page
-        assert f"/sales/{first.pk}/" not in page
+        sections = admin_client.get(f"/reservations/{older.pk}/").context["sections"]
+        assert [(s["bron"], s["current"]) for s in sections] == [
+            (newer, False), (older, True)]
+        drawn = {s["bron"].pk: [(b["first"].pk, b["bron_kg"]) for b in s["drawn"]]
+                 for s in sections}
+        assert drawn[newer.pk] == [(second.pk, Decimal("4000.000"))]
+        assert sorted(drawn[older.pk]) == [(first.pk, Decimal("2000.000")),
+                                           (second.pk, Decimal("1000.000"))]
+
+    def test_bronsiz_sotuvlar_sit_under_the_bron_they_follow(self, admin_client, db):
+        lot = _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        Reservation.objects.filter(pk=older.pk).update(date="2026-07-01")
+        Reservation.objects.filter(pk=newer.pk).update(date="2026-07-10")
+
+        def loose(day):
+            return Sale.objects.create(customer=customer, line=lot, kg=Decimal("100"),
+                                       price=Decimal("1.4"), date=day)
+        before, between, after = loose("2026-06-20"), loose("2026-07-05"), loose("2026-07-15")
+        sections = admin_client.get(f"/reservations/{newer.pk}/").context["sections"]
+        listed = {s["bron"].pk: [b["first"].pk for b in s["loose"]] for s in sections}
+        assert listed == {newer.pk: [after.pk], older.pk: [between.pk]}
+        assert before.pk not in sum(listed.values(), [])
 
     def test_translator_forbidden(self, translator_client, db):
         bron = make_bron(_customer())

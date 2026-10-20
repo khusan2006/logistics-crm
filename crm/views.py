@@ -5714,14 +5714,51 @@ def reservation_detail(request, pk):
         Reservation.objects.select_related("customer", "created_by")
         .prefetch_related("items", "draws__sale__returns", "draws__sale__allocations"),
         pk=pk)
-    draws = list(bron.draws
-                 .select_related("sale__line__contract_line", "sale__line__shipment")
-                 .order_by("sale__date", "sale__pk"))
+    sections = _bron_timeline(bron)
     return render(request, "crm/reservation_detail.html", {
-        "bron": bron, "draws": draws,
-        "drawn_kg": sum((d.kg for d in draws), Decimal("0")),
-        "sold_kg": sum((d.sale.kg for d in draws), Decimal("0")),
+        "bron": bron, "sections": sections,
+        "sale_count": sum(len(s["drawn"]) + len(s["loose"]) for s in sections),
     })
+
+
+def _bron_timeline(bron):
+    """The mijoz's brons newest first, each with the sotuvlar counted into it and
+    then the sotuvlar struck between it and the next newer bron that no bron
+    counted — so the bron page reads as the mijoz's story from the top down, and
+    the opened bron is one section of it rather than the whole of it.
+
+    A sotuv that spilled across two brons is listed under each, with the share each
+    one got (`bron_kg`). Sotuvlar older than the mijoz's first bron are not listed:
+    they belong to no bron's stretch. A cancelled bron promised nothing, so it is
+    left out — unless it is the one opened."""
+    brons = list(Reservation.objects
+                 .filter(customer_id=bron.customer_id)
+                 .filter(~Q(status=Reservation.Status.CANCELLED) | Q(pk=bron.pk))
+                 .order_by("-date", "-code_number"))
+    sales = list(Sale.objects
+                 .filter(Q(bron_draws__reservation__in=brons)
+                         | Q(customer_id=bron.customer_id, bron_draws__isnull=True,
+                             date__gte=brons[-1].date))
+                 .distinct()
+                 .select_related("customer", "line__contract_line",
+                                 "line__shipment__contract__partner")
+                 .prefetch_related(*PRICED_SALE_PREFETCH, "allocations",
+                                   "returns__batch__settlements", "bron_draws")
+                 .order_by("-date", F("position").asc(nulls_first=True), "-created_at"))
+    sections = []
+    for index, row in enumerate(brons):
+        newer = brons[index - 1].date if index else None
+        shares = {s.pk: d.kg for s in sales for d in s.bron_draws.all()
+                  if d.reservation_id == row.pk}
+        drawn = _sale_groups([s for s in sales if s.pk in shares])
+        for block in drawn:
+            block["bron_kg"] = sum((shares[s.pk] for s in block["sales"]), Decimal("0"))
+        loose = _sale_groups([s for s in sales if not s.bron_draws.all()
+                              and s.date >= row.date
+                              and (newer is None or s.date < newer)])
+        sections.append({"bron": row, "drawn": drawn, "loose": loose,
+                         "current": row.pk == bron.pk})
+    return sections
 
 
 def _bron_items_formset(request, instance=None, initial=None):
