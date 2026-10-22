@@ -88,6 +88,21 @@ class TestDetailPage:
         assert drawn["total"] == sale.net_total * Decimal("0.6")
         assert response.context["sale_count"] == 1
 
+    def test_both_parts_of_a_split_entry_name_the_whole_entry(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="3000")
+        admin_client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": timezone.localdate().isoformat(),
+            **line_data({"brand": "LLDPE", "kg": "2000", "price": "1.5"},
+                        {"brand": "LLDPE", "kg": "4000", "price": "1.5"})})
+        assert Sale.objects.count() == 2
+        [section] = admin_client.get(f"/reservations/{bron.pk}/").context["sections"]
+        [drawn], [loose] = section["drawn"], section["loose"]
+        assert (drawn["kg"], loose["kg"]) == (Decimal("3000.000"), Decimal("3000.000"))
+        assert drawn["whole_kg"] == loose["whole_kg"] == Decimal("6000.000")
+
     def test_bronsiz_sotuvlar_sit_under_the_bron_they_follow(self, admin_client, db):
         lot = _arrived_lot(kg="50000", brand="LLDPE")
         customer = _customer()

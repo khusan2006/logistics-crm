@@ -5730,8 +5730,9 @@ def _bron_timeline(bron):
     the opened bron is one section of it rather than the whole of it.
 
     A sotuv that spilled across two brons is listed under each, cut down to the share
-    each one got, and what no bron took is listed as bronsiz (see `_share_groups`). Sotuvlar older than the mijoz's first bron are not listed:
-    they belong to no bron's stretch. A cancelled bron promised nothing, so it is
+    each one got, and what no bron took is listed as bronsiz (see `_share_groups`).
+    Sotuvlar older than the mijoz's first bron are not listed: they belong to no
+    bron's stretch. A cancelled bron promised nothing, so it is
     left out — unless it is the one opened."""
     brons = list(Reservation.objects
                  .filter(customer_id=bron.customer_id)
@@ -5747,32 +5748,40 @@ def _bron_timeline(bron):
                  .prefetch_related(*PRICED_SALE_PREFETCH, "allocations",
                                    "returns__batch__settlements", "bron_draws")
                  .order_by("-date", F("position").asc(nulls_first=True), "-created_at"))
+    # Each part of a split sotuv names the whole entry's kg, so the bron row and the
+    # bronsiz row of one trip to the counter both say the same "… kg sotuvdan".
+    entry_kg = defaultdict(Decimal)
+    for s in sales:
+        entry_kg[s.group or ("sale", s.pk)] += s.kg
     sections = []
     for index, row in enumerate(brons):
         newer = brons[index - 1].date if index else None
         drawn = _share_groups([
             (s, d.kg) for s in sales for d in s.bron_draws.all()
-            if d.reservation_id == row.pk])
+            if d.reservation_id == row.pk], entry_kg)
         loose = _share_groups([
             (s, s.kg - sum((d.kg for d in s.bron_draws.all()), Decimal("0")))
             for s in sales
-            if s.date >= row.date and (newer is None or s.date < newer)])
+            if s.date >= row.date and (newer is None or s.date < newer)], entry_kg)
         sections.append({"bron": row, "drawn": drawn, "loose": loose,
                          "current": row.pk == bron.pk})
     return sections
 
 
-def _share_groups(pairs):
+def _share_groups(pairs, entry_kg):
     """`_sale_groups` over (sotuv, kg) pairs, each sotuv cut down to that kg.
 
     A sotuv bigger than what the bron still owed is split on the bron page: the
     24 000 kg counted into the bron sit under it, the 985 kg no bron took sit under
     Bronsiz sotuvlar — rather than the whole 24 985 kg and its whole Jami under the
     bron with a small "bronga 24 000" beside them, which read as bron and bronsiz
-    granula mixed in one row. A pair with nothing left is dropped."""
+    granula mixed in one row. A pair with nothing left is dropped.
+
+    `entry_kg` is each entry's whole kg, keyed by its group (or ("sale", pk) for a
+    lone sotuv) — what the part's "… kg sotuvdan" note names."""
     blocks = _sale_groups([_SaleShare(sale, kg) for sale, kg in pairs if kg > 0])
     for block in blocks:
-        block["whole_kg"] = sum((s.sale.kg for s in block["sales"]), Decimal("0"))
+        block["whole_kg"] = entry_kg[block["group"] or ("sale", block["first"].pk)]
     return blocks
 
 
