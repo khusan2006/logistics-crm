@@ -1381,3 +1381,17 @@ class TestBronDate:
             **line_data({"brand": "LLDPE", "kg": "1000", "price": "1.50"})})
         assert Sale.objects.exists()
         assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")
+
+
+def test_a_lot_sold_below_zero_counts_against_its_marka(db):
+    """2102 кампаунд on prod: lot #118 at −1 020 kg, lot #136 at +1 020 — the ombor
+    read 0, and the sotuv form's Marka picker offered 1 020 kg omborda."""
+    from crm.forms import _stock_brand_choices
+    from crm.models import brand_stock_costed
+
+    oversold = _arrived_lot(kg="1000", brand="LLDPE")
+    _arrived_lot_for("Other", kg="1020", brand="LLDPE")
+    Sale.objects.create(customer=_customer(), line=oversold, kg=Decimal("2020"),
+                        price=Decimal("1.4"))
+    assert "LLDPE" not in [row["brand"] for row in brand_stock_costed()]
+    assert "LLDPE" not in [brand for brand, _label in _stock_brand_choices()]

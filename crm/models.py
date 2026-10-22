@@ -3646,13 +3646,23 @@ def brand_stock_costed():
     # to'lovlari. Without it the pricing asked those per lot — which is what made the
     # Marka picker (and so the multi-mahsulot Tahrirlash form) slower with every
     # kelishuv the ombor took in.
+    #
+    # `on_hand` is the NET of every lot, the figure the ombor and `brand_on_hand_kg`
+    # show. A lot sold below zero (a sotuv slice landed on the wrong truck) has to
+    # count against the lot still holding those kg: summing only the lots above zero
+    # offered 2102 кампаунд as 1 020 kg omborda while the ombor read 0 — lot #118 at
+    # −1 020, lot #136 at +1 020. The cost and the codes are still those of the lots
+    # that hold granula, since a lot below zero has none to price.
+    held = {}
     for lot in arrived_lots().prefetch_related(*STOCK_COST_PREFETCH):
         a = lot.available_kg
+        b = lot.brand
+        on_hand[b] = on_hand.get(b, Decimal("0")) + a
         if a > 0:
-            b = lot.brand
-            on_hand[b] = on_hand.get(b, Decimal("0")) + a
+            held[b] = held.get(b, Decimal("0")) + a
             cost[b] = cost.get(b, Decimal("0")) + a * lot.landed_cost_per_kg
             codes.setdefault(b, set()).add(lot.contract_line.contract.code)
+    on_hand = {b: kg for b, kg in on_hand.items() if kg > 0 and b in held}
     # Every open bron in ONE trip, grouped here. Asked per marka — which is what
     # `brand_reserved_kg` does — this was a query per row of the ombor, and it is the
     # last thing that still made pricing the shelf cost more as the shelf filled.
@@ -3667,7 +3677,7 @@ def brand_stock_costed():
             "brand": b,
             "on_hand": on_hand[b],
             "reserved": reserved,
-            "cost": (cost[b] / on_hand[b]).quantize(Decimal("0.0001")),
+            "cost": (cost[b] / held[b]).quantize(Decimal("0.0001")),
             "codes": sorted(codes[b]),
         })
     return rows
