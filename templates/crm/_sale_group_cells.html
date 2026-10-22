@@ -68,11 +68,11 @@ row has nothing to fold.
     </div>
   </div>
   {% comment %}
-  The bron page only: a sotuv bigger than what the bron still owed gave only part of
-  itself here and the rest to the next bron, so the share counted HERE is said.
+  The bron page only: a sotuv bigger than what the bron still owed is split, and
+  this row is one part of it — so the whole sotuv's kg is said under the part.
   {% endcomment %}
-  {% if g.bron_kg is not None and g.bron_kg != g.sold_kg %}
-  <div class="load-sub muted" title="Shu sotuvning shu bronga hisoblangan qismi">bronga {{ g.bron_kg|floatformat:"-3" }}</div>
+  {% if g.whole_kg is not None and g.whole_kg != g.sold_kg %}
+  <div class="load-sub muted" title="Sotuvning qolgan qismi boshqa bronga yoki bronsiz hisoblangan">{{ g.whole_kg|floatformat:"-3" }} kg sotuvdan</div>
   {% endif %}
 </td>
 {% if user.is_admin_role %}

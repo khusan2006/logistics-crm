@@ -65,11 +65,28 @@ class TestDetailPage:
         sections = admin_client.get(f"/reservations/{older.pk}/").context["sections"]
         assert [(s["bron"], s["current"]) for s in sections] == [
             (newer, False), (older, True)]
-        drawn = {s["bron"].pk: [(b["first"].pk, b["bron_kg"]) for b in s["drawn"]]
+        drawn = {s["bron"].pk: [(b["first"].pk, b["sold_kg"]) for b in s["drawn"]]
                  for s in sections}
         assert drawn[newer.pk] == [(second.pk, Decimal("4000.000"))]
         assert sorted(drawn[older.pk]) == [(first.pk, Decimal("2000.000")),
                                            (second.pk, Decimal("1000.000"))]
+        assert not any(s["loose"] for s in sections)
+
+    def test_what_no_bron_took_is_listed_as_bronsiz(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="3000")
+        _sell(admin_client, customer, "LLDPE", "5000")
+        sale = Sale.objects.get()
+        response = admin_client.get(f"/reservations/{bron.pk}/")
+        [section] = response.context["sections"]
+        [drawn], [loose] = section["drawn"], section["loose"]
+        assert (drawn["first"].pk, drawn["kg"]) == (sale.pk, Decimal("3000.000"))
+        assert (loose["first"].pk, loose["kg"]) == (sale.pk, Decimal("2000.000"))
+        assert drawn["whole_kg"] == loose["whole_kg"] == Decimal("5000.000")
+        assert drawn["total"] + loose["total"] == sale.net_total
+        assert drawn["total"] == sale.net_total * Decimal("0.6")
+        assert response.context["sale_count"] == 1
 
     def test_bronsiz_sotuvlar_sit_under_the_bron_they_follow(self, admin_client, db):
         lot = _arrived_lot(kg="50000", brand="LLDPE")

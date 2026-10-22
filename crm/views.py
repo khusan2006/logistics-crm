@@ -5717,7 +5717,9 @@ def reservation_detail(request, pk):
     sections = _bron_timeline(bron)
     return render(request, "crm/reservation_detail.html", {
         "bron": bron, "sections": sections,
-        "sale_count": sum(len(s["drawn"]) + len(s["loose"]) for s in sections),
+        # A split sotuv sits in two places but is still one sotuv.
+        "sale_count": len({b["group"] or ("sale", b["first"].pk) for s in sections
+                           for b in s["drawn"] + s["loose"]}),
     })
 
 
@@ -5727,8 +5729,8 @@ def _bron_timeline(bron):
     counted — so the bron page reads as the mijoz's story from the top down, and
     the opened bron is one section of it rather than the whole of it.
 
-    A sotuv that spilled across two brons is listed under each, with the share each
-    one got (`bron_kg`). Sotuvlar older than the mijoz's first bron are not listed:
+    A sotuv that spilled across two brons is listed under each, cut down to the share
+    each one got, and what no bron took is listed as bronsiz (see `_share_groups`). Sotuvlar older than the mijoz's first bron are not listed:
     they belong to no bron's stretch. A cancelled bron promised nothing, so it is
     left out — unless it is the one opened."""
     brons = list(Reservation.objects
@@ -5748,17 +5750,54 @@ def _bron_timeline(bron):
     sections = []
     for index, row in enumerate(brons):
         newer = brons[index - 1].date if index else None
-        shares = {s.pk: d.kg for s in sales for d in s.bron_draws.all()
-                  if d.reservation_id == row.pk}
-        drawn = _sale_groups([s for s in sales if s.pk in shares])
-        for block in drawn:
-            block["bron_kg"] = sum((shares[s.pk] for s in block["sales"]), Decimal("0"))
-        loose = _sale_groups([s for s in sales if not s.bron_draws.all()
-                              and s.date >= row.date
-                              and (newer is None or s.date < newer)])
+        drawn = _share_groups([
+            (s, d.kg) for s in sales for d in s.bron_draws.all()
+            if d.reservation_id == row.pk])
+        loose = _share_groups([
+            (s, s.kg - sum((d.kg for d in s.bron_draws.all()), Decimal("0")))
+            for s in sales
+            if s.date >= row.date and (newer is None or s.date < newer)])
         sections.append({"bron": row, "drawn": drawn, "loose": loose,
                          "current": row.pk == bron.pk})
     return sections
+
+
+def _share_groups(pairs):
+    """`_sale_groups` over (sotuv, kg) pairs, each sotuv cut down to that kg.
+
+    A sotuv bigger than what the bron still owed is split on the bron page: the
+    24 000 kg counted into the bron sit under it, the 985 kg no bron took sit under
+    Bronsiz sotuvlar — rather than the whole 24 985 kg and its whole Jami under the
+    bron with a small "bronga 24 000" beside them, which read as bron and bronsiz
+    granula mixed in one row. A pair with nothing left is dropped."""
+    blocks = _sale_groups([_SaleShare(sale, kg) for sale, kg in pairs if kg > 0])
+    for block in blocks:
+        block["whole_kg"] = sum((s.sale.kg for s in block["sales"]), Decimal("0"))
+    return blocks
+
+
+class _SaleShare:
+    """A sotuv seen through part of its kg — one side of a split on the bron page.
+
+    The kg, Jami and Foyda are scaled by the share: at one narx they are linear in
+    kg, so the bron row and the bronsiz row add up to the sotuv exactly. Qoldiq is
+    scaled the same way by convention — a to'lov is not paid per kg — so that each
+    row still reads Jami less what is paid on it, and the two still add up.
+    Everything else (narx, marka, links) is the sotuv's own."""
+
+    _SCALED = ("returned_kg", "net_total", "net_total_uzs", "profit", "profit_uzs",
+               "remaining", "remaining_uzs", "remaining_own")
+
+    def __init__(self, sale, kg):
+        self.sale = sale
+        self.kg = kg
+        factor = kg / sale.kg
+        for name in self._SCALED:
+            setattr(self, name, getattr(sale, name) * factor)
+        self.net_kg = kg - self.returned_kg
+
+    def __getattr__(self, name):
+        return getattr(self.sale, name)
 
 
 def _bron_items_formset(request, instance=None, initial=None):
