@@ -112,7 +112,7 @@ sotuv's kg under its own.
     </tr>
     {% endfor %}
     {% if sec.loose %}
-    <tr class="bron-loose-row"><td colspan="9" class="muted">Bronsiz sotuvlar</td></tr>
+    <tr class="bron-loose-row"><td colspan="9">Bronsiz sotuvlar</td></tr>
     {% for g in sec.loose %}
     <tr class="sale-row">
       <td class="sticky-col"><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.date|date:"d.m.Y" }}</a></td>

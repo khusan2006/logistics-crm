@@ -2911,8 +2911,13 @@ ul.errorlist li::before { content: "⚠ "; }
 .day-sub { color: var(--text-muted); font-weight: 600; }
 .day-count { font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
 /* Bron page: the line that splits a bron's own sotuvlar from the ones no bron counted. */
-.bron-loose-row > td { font-size: 12px; font-weight: 600; padding: 6px 14px; background: var(--surface); }
+.bron-loose-row > td { font-size: 15px; font-weight: 700; color: var(--text); padding: 12px 14px; background: var(--surface); box-shadow: inset 3px 0 0 var(--border-strong); }
 .bron-band { scroll-margin-top: 80px; }
+/* The bron bands are the page's sections, so they read larger than a Sotuvlar day. */
+.bron-band > td { padding: 14px 14px; }
+.bron-band .day-title { font-size: 18px; }
+.bron-band .day-sub { font-size: 15px; }
+.bron-band .day-count { font-size: 13px; padding: 3px 11px; }
 /* Truck progress: a soft fill behind the count, so "1/2" stays readable on top. */
 .kelishuv-progress {
   flex: 0 0 118px;
