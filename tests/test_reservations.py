@@ -1395,3 +1395,23 @@ def test_a_lot_sold_below_zero_counts_against_its_marka(db):
                         price=Decimal("1.4"))
     assert "LLDPE" not in [row["brand"] for row in brand_stock_costed()]
     assert "LLDPE" not in [brand for brand, _label in _stock_brand_choices()]
+
+
+def test_settling_moves_only_the_excess_off_a_lot_below_zero(db):
+    from crm.fifo import settle_negative_lots
+
+    oversold = _arrived_lot(kg="1000", brand="LLDPE")
+    spare = _arrived_lot_for("Other", kg="5000", brand="LLDPE")
+    customer = _customer()
+    first = Sale.objects.create(customer=customer, line=oversold, kg=Decimal("1000"),
+                                price=Decimal("1.4"))
+    late = Sale.objects.create(customer=customer, line=oversold, kg=Decimal("700"),
+                               price=Decimal("1.4"))
+    moves = settle_negative_lots("LLDPE")
+    assert [(s.pk, src.pk, dst.pk, kg) for s, src, dst, kg in moves] == [
+        (late.pk, oversold.pk, spare.pk, Decimal("700.000"))]
+    oversold.refresh_from_db()
+    spare.refresh_from_db()
+    assert (oversold.available_kg, spare.available_kg) == (Decimal("0"), Decimal("4300"))
+    late.refresh_from_db()
+    assert late.line_id == spare.pk and first.lots.get().line_id == oversold.pk

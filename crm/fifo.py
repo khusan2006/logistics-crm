@@ -227,3 +227,68 @@ def weighted_cost(slices):
         return None
     total = sum((lot.landed_cost_per_kg * k for lot, k in slices), ZERO)
     return (total / kg).quantize(Decimal("0.0001"))
+
+
+def settle_negative_lots(brand):
+    """Move sotuv kg off any lot of this marka that is below zero, onto the lots
+    still holding kg. Returns [(sale, from_lot, to_lot, kg)].
+
+    A lot goes below zero when a restocked vazvrat is deleted or cut down after its
+    kg were sold again: the kg leave the lot they came back to, and the sotuv that
+    took them stays on it. On 19-oktabr three of Rise servise's vazvratlar were
+    deleted and one cut down; 17 980 kg of 2102 репак had already gone out to
+    Komoliddin off those lots, which then read −7 000, −3 000 and −7 980 while the
+    new truck read +17 980. The marka as a whole was right; only the lots were not,
+    so the tannarx of those sotuvlar was the old truck's, and the sotuv form's Marka
+    list, summing only the lots above zero, offered granula that was not there.
+
+    Only the excess moves, and only off the sotuvlar typed in LAST — the ones that
+    found the returned kg — onto the oldest lot with room. A chosen lot (`pinned`)
+    is never moved, nor a sotuv with a restocked vazvrat of its own, whose kg
+    going back follow its slices. Nothing about the sotuv's kg, narx or qarz
+    changes; its tannarx and foyda follow the lot."""
+    lots = list(arrived_lots().filter(contract_line__brand=brand)
+                .order_by("shipment__arrived", "id"))
+    room = {lot.pk: lot.available_kg for lot in lots}
+    moves = []
+    for lot in lots:
+        if room[lot.pk] >= 0:
+            continue
+        slices = (SaleLot.objects.filter(line=lot, pinned=False)
+                  .select_related("sale")
+                  .prefetch_related("sale__returns")
+                  .order_by("-sale__created_at", "-id"))
+        for piece in slices:
+            if room[lot.pk] >= 0:
+                break
+            if restocked_kg(piece.sale):
+                continue
+            for target in lots:
+                deficit = -room[lot.pk]
+                if deficit <= 0 or piece.kg <= 0:
+                    break
+                if target.pk == lot.pk or room[target.pk] <= 0:
+                    continue
+                kg = min(room[target.pk], deficit, piece.kg)
+                there = SaleLot.objects.filter(sale=piece.sale, line=target,
+                                               pinned=False).first()
+                if there is None:
+                    SaleLot.objects.create(sale=piece.sale, line=target, kg=kg)
+                else:
+                    there.kg += kg
+                    there.save(update_fields=["kg"])
+                piece.kg -= kg
+                room[target.pk] -= kg
+                room[lot.pk] += kg
+                moves.append((piece.sale, lot, target, kg))
+            if piece.kg <= 0:
+                piece.delete()
+            else:
+                piece.save(update_fields=["kg"])
+    # A sotuv left on one lot names it, so the row on Sotuvlar shows the truck it
+    # is billed to.
+    for sale in {sale.pk: sale for sale, *_ in moves}.values():
+        only = list(sale.lots.all())
+        if len(only) == 1 and only[0].line_id != sale.line_id:
+            Sale.objects.filter(pk=sale.pk).update(line=only[0].line_id)
+    return moves
