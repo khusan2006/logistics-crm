@@ -3561,6 +3561,49 @@ def draw_down_bron(sale, served_id=None):
     return drawn
 
 
+def recount_brons(customer_id, since=None):
+    """Count a mijoz's sotuvlar into their brons again, in SANA order.
+
+    `draw_down_bron` fills a bron in the order sotuvlar are TYPED, so a day typed
+    late loses the bron to a later day typed first: Komoliddin's 16-oktabr sotuv,
+    typed at 05:55, took 2 100 kg of bron-3, and his 15-oktabr sotuv typed six
+    minutes later found 2 850 kg left. Here every sotuv is released and drawn again
+    oldest sana first — entry time breaks a tie within a day — so a bron goes to
+    the days that came first, however they were typed in.
+
+    `since` limits it to sotuvlar of that sana or later: in sana order the earlier
+    ones are not touched by anything that comes after them.
+
+    Only sotuvlar the operator let draw (`draws_bron`), each offered its
+    `bron_pick` first. `bron_postdates` still holds, so a bron struck after a
+    sotuv is not filled by it unless that bron was named for it. A sotuv with kg
+    in a bron that ended by agreement (Tugatildi) or was cancelled is left as it
+    is: that bron is off the queue, and its kg, once released, would not come back."""
+    with transaction.atomic():
+        _recount_brons(customer_id, since)
+
+
+def _recount_brons(customer_id, since):
+    sales = (Sale.objects.filter(customer_id=customer_id)
+             .filter(Q(draws_bron=True) | Q(bron_draws__isnull=False))
+             .distinct().select_related("line")
+             .prefetch_related("bron_draws__reservation")
+             .order_by("date", "created_at", "pk"))
+    if since is not None:
+        sales = sales.filter(date__gte=since)
+    ended = (Reservation.Status.CLOSED, Reservation.Status.CANCELLED)
+    sales = [sale for sale in sales
+             if not any(d.reservation.status in ended for d in sale.bron_draws.all())]
+    for sale in sales:
+        release_bron(sale)
+        if sale.reservation_id is not None:
+            sale.reservation = None
+            sale.save(update_fields=["reservation"])
+    for sale in sales:
+        if sale.draws_bron:
+            draw_down_bron(sale, served_id=sale.bron_pick_id)
+
+
 def release_bron(sale):
     """Give a sotuv's kg back to every bron it was drawn from — for an edit or a
     delete. Returns the kg released.
@@ -3662,6 +3705,17 @@ class Sale(MoneyEntry):
                              related_name="sales", verbose_name="Lot (mahsulot)")
     reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name="+", verbose_name="Bron")
+    # The Brondan ushlansin answer, kept: `recount_brons` gives every sotuv back to
+    # its brons again, and a sotuv the operator said is NOT against the bron must stay
+    # out — without the answer on record it reads the same as one that was ticked but
+    # found the bron already full.
+    draws_bron = models.BooleanField("Brondan ushlansin", default=True)
+    # A bron somebody named for this sotuv — the bron whose Sotuv button opened the
+    # form, or the one it was counted into by hand on Bronlar. The recount offers it
+    # that bron first, as `draw_down_bron`'s `served_id` does live.
+    bron_pick = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True,
+                                  blank=True, related_name="+",
+                                  verbose_name="Tanlangan bron")
     # The rows entered in ONE go carry the same id: several markalar typed into one
     # modal, and each marka's kg split FIFO across lots. Without it Sotuvlar shows a
     # single trip to the counter as N unrelated rows and nothing on screen says the

@@ -58,7 +58,7 @@ from .models import (
     Logist, LogistPayment, Contract, ContractLine, Currency, Customer, CustomerPayment,
     OtherExpense, Partner,
     PaymentAllocation,
-    PayMethod, Reservation, Return, ReturnBatch, ReturnSettlement,
+    PayMethod, Reservation, ReservationDraw, Return, ReturnBatch, ReturnSettlement,
     Sale, Scale, Shipment, ShipmentDelay, ShipmentExpense, ShipmentLeg,
     ShipmentLine, ShipmentStatus, STOCK_COST_PREFETCH, STOCK_LOT_RELATED,
     SupplierPayment, allocate_customer_payment,
@@ -74,7 +74,7 @@ from .models import (
     _by_currency, bron_queue, cash_date_expression, commission_total,
     contract_value_by_currency, convert_pair, pending_expenses_by_currency,
     customer_paid_by_currency, customer_sales_by_currency,
-    draw_down_bron, release_bron,
+    draw_down_bron, recount_brons, release_bron,
     customs_positions, logist_positions, payable_by_currency, supplier_paid_by_currency,
     customer_advance_total, customer_balance_by_currency,
     customer_receivable_by_currency, fifo_lots,
@@ -4757,6 +4757,11 @@ def sale_create(request):
             rows_in = lines.rows()
             reys_numbers = _reys_numbers(rows_in)
             slices, sold = [], []
+            # The bron whose Sotuv button opened the form — the mijoz's own, or none.
+            pick = (Reservation.objects.filter(pk=data.get("bron"),
+                                               customer=data["customer"])
+                    .values_list("pk", flat=True).first()
+                    if data.get("bron") else None)
             with transaction.atomic():
                 for line, reys in zip(rows_in, reys_numbers):
                     take_from = line.cleaned_data
@@ -4780,17 +4785,19 @@ def sale_create(request):
                             reys=reys,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=request.user,
+                            # Serving this mijoz normally makes their own promise
+                            # smaller, whichever lot the granula came off. Unticked,
+                            # the sotuv is something else they bought and the
+                            # booking stands. Counted by `recount_brons` below.
+                            draws_bron=bool(data.get("draw_from_bron")), bron_pick_id=pick,
                         )
                         slices.append(sale)
                         remaining -= take
-                        # Serving this mijoz normally makes their own promise smaller,
-                        # whichever lot the granula came off — per slice and in order,
-                        # so the bron falls by exactly what was sold. Unticked, the
-                        # sotuv is something else they bought and the booking stands.
-                        if data.get("draw_from_bron"):
-                            draw_down_bron(sale, served_id=data.get("bron"))
                     sold.append(f"{take_from['kg']} kg {take_from['brand']}"
                                 + (f" ({reys}-reys)" if reys else ""))
+            # In sana order, so a day typed in late still gets the bron before the
+            # days after it.
+            recount_brons(data["customer"].pk, since=data["date"])
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", slices[0].pk if slices else 0,
                 f"Yangi sotuv (FIFO): {', '.join(sold)} · "
@@ -4843,9 +4850,9 @@ def sale_create_lot(request, lot_id):
                 **form.money_kwargs(),
                 date=data["date"], debt_deadline=data["debt_deadline"],
                 note=data["note"], created_by=request.user,
+                draws_bron=bool(data.get("draw_from_bron")),
             )
-            if data.get("draw_from_bron"):
-                draw_down_bron(sale)
+            recount_brons(sale.customer_id, since=sale.date)
             AuditLog.record(
                 request.user, AuditLog.Action.CREATE, "Sotuv", sale.pk,
                 f"Yangi sotuv (lot #{sale.line_id}): {sale.kg} kg "
@@ -4961,6 +4968,8 @@ def sale_delete(request, pk):
             # the bron and a bron it closed reopens.
             release_bron(sale)
             sale.delete()
+            # The kg it gave back go to the next sotuvlar by sana.
+            recount_brons(customer.pk, since=sale.date)
             # Its allocations went with it (CASCADE); that money is avans again, and
             # the mijoz's other open sotuvlar have first claim on it.
             reconcile_customer_allocations(customer)
@@ -5159,6 +5168,7 @@ def sale_edit(request, pk):
                         if moved:
                             release_bron(kept)
                             kept.reservation = None
+                            kept.draws_bron, kept.bron_pick = True, None
                         kept.customer = data["customer"]
                         kept.group = group
                         kept.price, kept.price_uzs = usd, uzs
@@ -5177,6 +5187,11 @@ def sale_edit(request, pk):
                     # into it rather than into whichever of the mijoz's brons is oldest.
                     served_id = next((s.reservation_id for s in (row or {}).get("sales", [])
                                       if s.reservation_id), None)
+                    # The bron answers the old slices were entered with carry over —
+                    # to the new mijoz only the default does.
+                    before = ((row or {}).get("sales") or [head])[0]
+                    draws_bron = moved or before.draws_bron
+                    bron_pick = None if moved else before.bron_pick_id
                     for lot in fifo_lots(brand):
                         if remaining <= 0:
                             break
@@ -5188,6 +5203,7 @@ def sale_edit(request, pk):
                             group=group, reys=reys, position=position,
                             date=data["date"], debt_deadline=data["debt_deadline"],
                             note=data["note"], created_by=head.created_by,
+                            draws_bron=draws_bron, bron_pick_id=bron_pick,
                         )
                         slices.append(fresh)
                         resliced.append(fresh.pk)
@@ -5207,6 +5223,12 @@ def sale_edit(request, pk):
             if resliced:
                 Sale.objects.filter(pk__in=resliced).update(
                     created_at=head.created_at)
+            # The kg and the sana may both have moved, so the brons are counted again
+            # in sana order from whichever day is earlier — for the mijoz the sotuv
+            # left too, whose bron got its kg back.
+            recount_brons(data["customer"].pk, since=min(previous_date, data["date"]))
+            if moved:
+                recount_brons(previous_customer.pk, since=previous_date)
             # A replaced row's pk is gone and its Tarix lines point at it, so the
             # sotuv's trail — what it was entered as, and every correction since —
             # would fall off the page the first time a kg was corrected. The lines
@@ -5282,6 +5304,8 @@ def sale_group_delete(request, pk):
                     # single-row deletion does.
                     release_bron(row)
                     row.delete()
+                # The kg they gave back go to the next sotuvlar by sana.
+                recount_brons(customer.pk, since=min(row.date for row in rows))
         except ProtectedError:
             messages.error(request, "Sotuvga bog'liq ma'lumot bor — o'chirib bo'lmaydi")
         else:
@@ -6049,8 +6073,15 @@ def reservation_count_sales(request, pk):
             sales = sorted(form.cleaned_data["sales"],
                            key=lambda sale: (sale.created_at, sale.pk))
             with transaction.atomic():
-                drawn = sum((draw_down_bron(sale, served_id=reservation.pk)
-                             for sale in sales), Decimal("0"))
+                # Named for this bron, so the recount offers them this bron first and
+                # lets them in although it was struck after them.
+                Sale.objects.filter(pk__in=[sale.pk for sale in sales]).update(
+                    draws_bron=True, bron_pick=reservation)
+                recount_brons(reservation.customer_id,
+                              since=min(sale.date for sale in sales))
+                drawn = (ReservationDraw.objects
+                         .filter(reservation=reservation, sale__in=sales)
+                         .aggregate(kg=Sum("kg"))["kg"] or Decimal("0"))
             numbers = ", ".join(f"#{sale.pk}" for sale in sales)
             AuditLog.record(
                 request.user, AuditLog.Action.UPDATE, "Bron", reservation.pk,
