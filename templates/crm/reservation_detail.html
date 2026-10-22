@@ -110,6 +110,12 @@ sotuv's kg under its own.
       <td class="sticky-col"><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.date|date:"d.m.Y" }}</a></td>
       {% include "crm/_sale_group_cells.html" %}
     </tr>
+    {% empty %}
+    {% comment %}
+    Said even when bronsiz sotuvlar follow: without it the Bronsiz header sits
+    straight under the bron and reads as the bron's own list.
+    {% endcomment %}
+    <tr><td colspan="9" class="muted">Sotuv yo'q</td></tr>
     {% endfor %}
     {% if sec.loose %}
     <tr class="bron-loose-row"><td colspan="9" class="muted">Bronsiz sotuvlar</td></tr>
@@ -119,9 +125,6 @@ sotuv's kg under its own.
       {% include "crm/_sale_group_cells.html" %}
     </tr>
     {% endfor %}
-    {% endif %}
-    {% if not sec.drawn and not sec.loose %}
-    <tr><td colspan="9" class="muted">Bu bronga hali sotuv hisoblanmagan.</td></tr>
     {% endif %}
     {% endwith %}
     {% endfor %}
