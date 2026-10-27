@@ -27,6 +27,7 @@ they can act on; "Kelishuv pars-4 · LLDPE · 24 000 kg · Bojxonada" is the loa
       <th>Marka</th>
       <th class="num">Kg</th>
       <th>Holat</th>
+      <th>Jo'natilgan sana</th>
       <th>Sana</th>
       {% if show_sent %}<th class="num" title="Shu yuk uchun oldindan yuborilgan">Yuborilgan</th>{% endif %}
       <th class="num">{{ paid_label|default:"To'lagan" }}</th>
@@ -43,6 +44,11 @@ they can act on; "Kelishuv pars-4 · LLDPE · 24 000 kg · Bojxonada" is the loa
       <td>{{ r.shipment.brand_summary|default:"—" }}</td>
       <td class="num">{{ r.shipment.kg|floatformat:"-3" }}</td>
       <td class="muted">{{ r.shipment.status.name }}</td>
+      {% comment %}
+      The day the truck was loaded and left — `Shipment.sent`. Its own column so it
+      stays visible once the load has arrived and Sana moves on to the arrival day.
+      {% endcomment %}
+      <td class="muted">{% if r.shipment.sent %}{{ r.shipment.sent|date:"d.m.Y" }}{% else %}—{% endif %}</td>
       {% comment %}
       `r.date` — how far the load has actually got, arrived or else sent. The rows
       are ordered by this same value, so the column reads top to bottom; see
