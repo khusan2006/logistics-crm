@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 import pytest
 
+from crm import geo
 from crm.models import AuditLog, Customer
 
 
@@ -220,3 +223,94 @@ def test_the_avans_button_is_on_every_mijoz_row(admin_client, db):
 def test_translator_cannot_book_an_avans(translator_client, db):
     customer = Customer.objects.create(name="Yopiq", phone="", address="")
     assert translator_client.get(f"/customers/{customer.pk}/avans/").status_code == 403
+
+
+# --- joylashuv -------------------------------------------------------------
+
+
+def _post_customer(client, pk=None, **fields):
+    data = {"name": "Joyli Mijoz", "phone": "", "address": "Chilonzor", "note": "",
+            "location": "", **fields}
+    url = f"/customers/{pk}/edit/" if pk else "/customers/new/"
+    return client.post(url, data)
+
+
+def test_create_customer_with_pasted_link_saves_the_point(admin_client):
+    resp = _post_customer(
+        admin_client, location="https://yandex.uz/maps/?pt=69.240562,41.311081&z=17")
+    assert resp.status_code == 302
+    c = Customer.objects.get(name="Joyli Mijoz")
+    assert (c.latitude, c.longitude) == (Decimal("41.311081"), Decimal("69.240562"))
+
+
+def test_create_customer_without_location_leaves_it_empty(admin_client):
+    _post_customer(admin_client)
+    assert not Customer.objects.get(name="Joyli Mijoz").has_location
+
+
+def test_unreadable_location_is_a_field_error(admin_client):
+    resp = _post_customer(admin_client, location="Chilonzor bozori yonida")
+    assert resp.status_code == 200
+    assert "Joylashuv tanilmadi" in resp.content.decode()
+    assert not Customer.objects.filter(name="Joyli Mijoz").exists()
+
+
+def test_short_link_resolved_on_save(admin_client, monkeypatch):
+    monkeypatch.setattr(geo, "_next_hop",
+                        lambda url: "https://www.google.com/maps/@41.311081,69.240562,17z")
+    _post_customer(admin_client, location="https://maps.app.goo.gl/xyz")
+    assert Customer.objects.get(name="Joyli Mijoz").latitude == Decimal("41.311081")
+
+
+def test_edit_shows_saved_point_and_clearing_removes_it(admin_client):
+    c = Customer.objects.create(name="Joyli Mijoz", latitude=Decimal("41.3"),
+                                longitude=Decimal("69.24"))
+    html = admin_client.get(f"/customers/{c.pk}/edit/").content.decode()
+    assert 'value="41.3, 69.24"' in html and "data-geo-picker" in html
+    _post_customer(admin_client, pk=c.pk, location="")
+    c.refresh_from_db()
+    assert not c.has_location
+
+
+def test_location_modal_offers_every_way_to_share(admin_client):
+    c = Customer.objects.create(name="Joyli Mijoz", phone="+998901112233",
+                                address="Chilonzor", latitude=Decimal("41.311081"),
+                                longitude=Decimal("69.240562"))
+    resp = admin_client.get(f"/customers/{c.pk}/location/", HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+    html = resp.content.decode()
+    assert resp.status_code == 200 and "<html" not in html
+    assert "data-share-native" in html
+    assert "https://t.me/share/url?url=https%3A%2F%2Fwww.google.com%2Fmaps%3Fq%3D41.311081%2C69.240562" in html
+    assert "https://wa.me/?text=Joyli%20Mijoz%0AChilonzor" in html
+    assert "sms:?&amp;body=" in html
+    assert "yandex.uz/maps/?pt=69.240562,41.311081" in html
+
+
+def test_location_modal_404_without_point(admin_client):
+    c = Customer.objects.create(name="Joysiz")
+    assert admin_client.get(f"/customers/{c.pk}/location/").status_code == 404
+
+
+def test_list_shows_pin_only_for_located_customers(admin_client):
+    Customer.objects.create(name="Joyli", latitude=Decimal("41.3"), longitude=Decimal("69.2"))
+    Customer.objects.create(name="Joysiz")
+    html = admin_client.get("/customers/").content.decode()
+    assert html.count('class="geo-pin"') == 1
+
+
+def test_geo_parse_endpoint(admin_client):
+    ok = admin_client.get("/geo/parse/", {"q": "geo:41.311081,69.240562"})
+    assert ok.json() == {"lat": 41.311081, "lng": 69.240562, "text": "41.311081, 69.240562"}
+    bad = admin_client.get("/geo/parse/", {"q": "salom"})
+    assert bad.status_code == 400 and "tanilmadi" in bad.json()["error"]
+
+
+def test_geo_parse_forbidden_for_translator(translator_client):
+    assert translator_client.get("/geo/parse/", {"q": "41.3,69.2"}).status_code == 403
+
+
+def test_location_page_without_modal(admin_client):
+    c = Customer.objects.create(name="Joyli", latitude=Decimal("41.3"), longitude=Decimal("69.2"))
+    html = admin_client.get(f"/customers/{c.pk}/location/").content.decode()
+    assert "<html" in html and "data-geo-share" in html
+    assert 'data-share-url="https://www.google.com/maps?q=41.3,69.2"' in html

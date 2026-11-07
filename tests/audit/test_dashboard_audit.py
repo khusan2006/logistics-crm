@@ -24,7 +24,8 @@ from decimal import ROUND_HALF_UP, Decimal
 import pytest
 from django.utils import timezone
 
-from conftest import line_data, make_contract, make_shipment, supplier_payment_rows
+from conftest import (line_data, make_bron, make_contract, make_shipment,
+                      supplier_payment_rows)
 from crm.models import (
     ContractLine, Currency, Customer, CustomerPayment, Partner, Reservation,
     Return, Sale, Shipment, ShipmentExpense, ShipmentLine, ShipmentStatus,
@@ -479,16 +480,14 @@ def test_a_cancelled_bron_leaves_every_figure_alone(admin_client):
     customer = _customer()
     before = _figures(admin_client)
 
-    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("500"),
-                               price=Decimal("1.2000"), price_uzs=Decimal("15000"),
-                               currency=Currency.UZS, exchange_rate=Decimal("12500"),
-                               status=Reservation.Status.CANCELLED)
+    make_bron(customer, "LLDPE", kg="500", price="1.2000", price_uzs="15000",
+              currency=Currency.UZS, exchange_rate=Decimal("12500"),
+              status=Reservation.Status.CANCELLED)
     assert _figures(admin_client) == before
 
-    Reservation.objects.create(customer=customer, brand="LLDPE", kg=Decimal("500"),
-                               price=Decimal("1.2000"), price_uzs=Decimal("15000"),
-                               currency=Currency.UZS, exchange_rate=Decimal("12500"),
-                               status=Reservation.Status.ACTIVE)
+    make_bron(customer, "LLDPE", kg="500", price="1.2000", price_uzs="15000",
+              currency=Currency.UZS, exchange_rate=Decimal("12500"),
+              status=Reservation.Status.ACTIVE)
     assert _figures(admin_client) == before
 
 

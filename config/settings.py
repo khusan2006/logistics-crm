@@ -141,6 +141,12 @@ STORAGES = {
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# --- Tarozi (network scales) --------------------------------------------------
+# The public host:port of the `tarozi_listen` service's TCP proxy on Railway — what
+# a scale's converter is told to connect to. Shown on the Tarozi sinovi page; set on
+# the WEB service once the proxy exists.
+TAROZI_PUBLIC_ADDR = os.environ.get("TAROZI_PUBLIC_ADDR", "")
+
 # --- Production security -------------------------------------------------------
 # Enforced only when DEBUG is off, so local HTTP development is unaffected. The
 # app is expected to sit behind a TLS-terminating reverse proxy in production.

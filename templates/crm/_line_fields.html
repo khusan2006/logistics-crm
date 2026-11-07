@@ -15,6 +15,32 @@ Uzbek rather than being spelled inside base.html's JS.
   <ul class="errorlist">{% for e in lines.non_form_errors %}<li>{{ e }}</li>{% endfor %}</ul>
   {% endif %}
 
+  {% comment %}
+  A new birja truck names no kelishuv. The operator says which marka and how many
+  kg the truck carries, and the rows below fill themselves off the open birja lots,
+  oldest kelishuv first — base.html's `fillFromTotal`. The rows are still the
+  formset, so what is saved is exactly what is shown, and a row can be corrected.
+  {% endcomment %}
+  {% if lines_fill %}
+  <div class="lineset-fill" data-line-fill>
+    <div class="lineset-grid lineset-grid--fill">
+      <label class="lineset-field">
+        <span>Marka</span>
+        <select data-fill-brand>
+          {% for brand, kg in lines_fill %}
+          <option value="{{ brand }}">{{ brand }} · {{ kg|floatformat:"-3g" }} kg qolgan</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="lineset-field">
+        <span>Mashinadagi jami kg</span>
+        <input type="text" inputmode="decimal" data-fill-kg data-money autocomplete="off">
+      </label>
+    </div>
+    <p class="muted lineset-fill-summary" data-fill-summary hidden></p>
+  </div>
+  {% endif %}
+
   <div data-line-rows>
     {% for f in lines %}
     <div class="lineset-row" data-line-row>

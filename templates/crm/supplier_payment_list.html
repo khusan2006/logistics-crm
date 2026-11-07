@@ -11,11 +11,11 @@ Kelishuv picker on. Everything else is the same page because a birja to'lov IS a
 kelishuv to'lov; see crm.views.supplier_payment_list.
 {% endcomment %}
 {% comment %}
-`?birja=1` on the + link, so the Kelishuv picker inside opens on this side of the
-books. Without it the modal offers every kelishuv that still owes money, which on
-this page is the wall of hamkor names the operator came here to get away from.
+`?birja=1` / `?birja=0` on the + link, so the Kelishuv picker inside opens on this
+side of the books. Without it the modal offers every kelishuv that still owes money —
+hamkor and birja mixed together on either page.
 {% endcomment %}
-{% block fab %}<a class="fab" href="{% url 'supplier_payment_create' %}{% if birja %}?birja=1{% endif %}" data-modal data-hotkey="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Yangi birja to'lov{% else %}Yangi to'lov{% endif %}</a>{% endblock %}
+{% block fab %}<a class="fab" href="{% url 'supplier_payment_create' %}?birja={% if birja %}1{% else %}0{% endif %}" data-modal data-hotkey="n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>{% if birja %}Yangi birja to'lov{% else %}Yangi to'lov{% endif %}</a>{% endblock %}
 {% block content %}
 
 {% comment %}

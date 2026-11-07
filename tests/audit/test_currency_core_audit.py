@@ -170,17 +170,19 @@ def test_the_backstop_never_overwrites_a_typed_som_value_on_a_som_row(db):
 
 
 def test_the_backstop_is_one_directional_so_a_som_row_can_lose_its_dollar_side(db):
-    """Documented asymmetry, and a real trap for code-built rows: a bron entered
-    in so'm with only `price_uzs` set keeps price = None. It then shows a so'm
-    total and NO dollar total — the same "reads as a missing figure" gap the
-    backstop exists to close, just on the other side."""
+    """Documented asymmetry, and a real trap for code-built rows: a bron marka
+    entered in so'm with only `price_uzs` set keeps price = None. It then shows a
+    so'm total and NO dollar total — the same "reads as a missing figure" gap the
+    backstop exists to close, just on the other side. (The narx lives on the
+    bron's item, which is not a MoneyEntry at all: the form converts both sides.)"""
     bron = Reservation.objects.create(
-        customer=_customer(), brand="LLDPE", kg=Decimal("1000"), currency=UZS,
-        price=None, price_uzs=Decimal("14040"), exchange_rate=Decimal("12000"))
-    bron.refresh_from_db()
-    assert bron.price is None                            # never back-filled
-    assert bron.total is None                            # invisible to $ totals
-    assert bron.total_uzs == Decimal("14040000.00")      # …but visible to so'm
+        customer=_customer(), kg=Decimal("1000"), currency=UZS,
+        exchange_rate=Decimal("12000"))
+    item = bron.items.create(brand="LLDPE", price=None, price_uzs=Decimal("14040"))
+    item.refresh_from_db()
+    assert item.price is None                            # never back-filled
+    assert item.total is None                            # invisible to $ totals
+    assert item.total_uzs == Decimal("14040000.00")      # …but visible to so'm
 
 
 def test_a_targeted_update_that_omits_the_money_column_does_not_persist_the_fill(db):

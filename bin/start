@@ -1,0 +1,17 @@
+#!/bin/sh
+# One repo, two Railway services. railway.json's start command is shared by every
+# service built from this repo, so the choice is made here, by the service's own
+# PROCESS variable:
+#   PROCESS=tarozi  → the scale receiver (crm/management/commands/tarozi_listen.py)
+#   anything else   → the website, exactly as before
+# `exec` so Railway's stop signal reaches the process itself, not this shell.
+set -e
+
+if [ "$PROCESS" = "tarozi" ]; then
+  # -u: unbuffered, so every connect/reject line reaches the Railway logs at once.
+  exec python -u manage.py tarozi_listen --port "${TAROZI_PORT:-9000}"
+fi
+
+python manage.py migrate --noinput
+python manage.py import_prototype --noinput --if-empty
+exec gunicorn config.wsgi --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 60

@@ -470,9 +470,10 @@ def test_each_list_offers_only_its_own_chain(admin_client):
 
 def test_the_birja_list_opens_on_the_first_step_of_its_own_chain(admin_client):
     """There is no "Yo'lda" to open on — the operator has not named the birja steps
-    yet — so it opens on whichever step is currently first."""
+    yet — so the active view opens on whichever step is currently first. (The list
+    itself opens on Hammasi, which preselects no tab — see below.)"""
     make_shipment(contract=_birja_contract(), status=_first_birja_status())
-    context = admin_client.get("/birja/yuklar/").context
+    context = admin_client.get("/birja/yuklar/", {"all": "0"}).context
     assert context["default_tab"] == _first_birja_status().pk
 
 
@@ -569,6 +570,41 @@ def test_the_yuk_form_drops_the_qr_and_bojxonachi_boxes():
     assert "qr_date" not in birja_fields and "customs_agent" not in birja_fields
     hamkor_fields = ShipmentForm(birja=False).fields
     assert "qr_date" in hamkor_fields and "customs_agent" in hamkor_fields
+
+
+def test_the_yuk_form_has_no_logist_or_haydovchi_avansi():
+    """The birja truck is not paid through a logist, so there is no balance for an
+    avans to come out of. The Eron form keeps both."""
+    from crm.forms import ShipmentForm
+    birja_fields = ShipmentForm(birja=True).fields
+    assert "logist" not in birja_fields and "driver_advance" not in birja_fields
+    hamkor_fields = ShipmentForm(birja=False).fields
+    assert "logist" in hamkor_fields and "driver_advance" in hamkor_fields
+
+
+def test_a_new_birja_yuk_opens_on_the_arrival_holat():
+    from crm.forms import ShipmentForm
+    assert ShipmentForm(birja=True).initial["status"] == ShipmentStatus.arrival().pk
+    assert "status" not in ShipmentForm(birja=False).initial
+
+
+def test_editing_a_birja_yuk_keeps_its_own_holat():
+    from crm.forms import ShipmentForm
+    shipment = make_shipment(contract=_birja_contract(), status=_first_birja_status())
+    form = ShipmentForm(instance=shipment)
+    assert form["status"].value() == _first_birja_status().pk
+
+
+def test_a_birja_yuk_posted_on_the_arrival_holat_lands_today(admin_client):
+    from django.utils import timezone
+    contract = _birja_contract()
+    # The form opens with today in the Kelish sanasi box; that is what it posts.
+    today = str(timezone.localdate())
+    assert _post_birja_shipment(admin_client, contract, sent=today, arrived=today,
+                                status=ShipmentStatus.arrival().pk
+                                ).status_code == 302
+    shipment = Shipment.objects.get()
+    assert shipment.arrived == timezone.localdate() and shipment.logist is None
 
 
 def test_the_yuk_detail_page_says_nothing_about_a_qr_kod(admin_client):
@@ -856,6 +892,10 @@ def test_the_new_tolov_modal_opens_on_the_side_it_was_opened_from(admin_client):
     offered = admin_client.get(
         "/supplier-payments/new/?birja=1").context["form"].fields["contract"]
     assert [c.pk for c in offered.queryset] == [birja.pk]
+    # Opened off the hamkor page, the birja kelishuvlar stay out of it.
+    offered = admin_client.get(
+        "/supplier-payments/new/?birja=0").context["form"].fields["contract"]
+    assert [c.pk for c in offered.queryset] == [hamkor.pk]
     # And the plain link keeps offering everything, as it always has.
     offered = admin_client.get(
         "/supplier-payments/new/").context["form"].fields["contract"]
@@ -866,3 +906,52 @@ def test_a_translator_cannot_reach_the_birja_tolovlar(translator_client):
     """Their whole job is the Eron road — the same reason the birja kelishuvlar and
     yuklar lists are closed to them."""
     assert translator_client.get("/birja/tolovlar/").status_code == 403
+
+
+def test_the_birja_list_opens_on_hammasi_by_kelish_sanasi(admin_client):
+    """The owner's call: a birja yuk is entered once it is in the ombor, so the list
+    opens on everything, the day each landed on top. The Eron list is untouched."""
+    ctx = admin_client.get("/birja/yuklar/").context
+    assert ctx["show_all"] and ctx["sort"] == "kelish"
+    eron = admin_client.get("/shipments/").context
+    assert not eron["show_all"] and not eron["sort"]
+
+
+def test_both_birja_defaults_can_still_be_switched_off(admin_client):
+    ctx = admin_client.get("/birja/yuklar/", {"sort": "0"}).context
+    assert ctx["show_all"] and not ctx["sort"]
+    ctx = admin_client.get("/birja/yuklar/", {"all": "0"}).context
+    assert not ctx["show_all"]
+    page = admin_client.get("/birja/yuklar/").content.decode()
+    assert "all=0" in page and "sort=0" in page       # the ways back out
+
+
+def test_the_narx_box_opens_labelled_in_the_currency_the_picker_shows(admin_client):
+    """A new birja kelishuv opens on so'm, so the narx label must not say USD —
+    base.html retitles it only when the picker is CHANGED, and it is not touched
+    on a form the operator agrees with."""
+    # The label as DRAWN — base.html carries the same words in a comment too.
+    som = "<span>1 kg narxi (so&#x27;m)</span>"
+    dollar = "<span>1 kg narxi (USD)</span>"
+    page = admin_client.get("/birja/kelishuvlar/new/").content.decode()
+    assert som in page, "the birja narx box still calls itself something else"
+    assert dollar not in page
+    eron = admin_client.get("/contracts/new/").content.decode()
+    assert dollar in eron and som not in eron
+
+
+def test_a_birja_yuk_asks_the_kelish_sanasi_not_a_taxminiy_one(admin_client):
+    """A birja yuk is entered once it is already in the ombor, so the form asks
+    when it CAME, and that date is what the yuk keeps — not today's."""
+    contract = _birja_contract()
+    fields = admin_client.get("/birja/yuklar/new/").context["form"].fields
+    assert "eta" not in fields
+    assert fields["arrived"].label == "Kelish sanasi"
+    arrival = ShipmentStatus.arrival()
+    resp = _post_birja_shipment(admin_client, contract, status=arrival.pk,
+                                arrived="2026-07-06")
+    assert resp.status_code == 302
+    assert str(Shipment.objects.get(contract=contract).arrived) == "2026-07-06"
+    # The Eron form is untouched: a taxminiy kelish, and no arrival date yet.
+    eron = admin_client.get("/shipments/new/").context["form"].fields
+    assert "eta" in eron and "arrived" not in eron

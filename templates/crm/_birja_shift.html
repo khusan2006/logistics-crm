@@ -1,0 +1,63 @@
+{% comment %}
+What saving this birja kelishuv would do to the trucks already booked, drawn under
+the form while it is being filled in.
+
+A kelishuv struck earlier but entered later takes its place in the ORDER, and the
+rule is that a truck comes off the oldest kelishuv with the marka still to send —
+so the trucks that went out after it belong on it now. That happens on save either
+way; this is the operator seeing it first.
+
+Rendered from a dry run of the real redistribution (`birja_shift_preview`), so what
+it promises is what saving does. Yuklar are named by number and kelishuv, never by
+kg alone — which truck moved is the thing to recognise on the Yuklar list after.
+{% endcomment %}
+{% if plan %}
+{% if plan.problems %}
+<div class="stacked" style="margin-top: 10px;">
+  <label class="muted" style="display:block; margin-bottom:6px;">
+    Yuklarni qayta taqsimlab bo'lmaydi
+  </label>
+  <p class="field-hint" style="margin:0 0 8px;">
+    {% for problem in plan.problems %}{{ problem }}{% if not forloop.last %}; {% endif %}{% endfor %}.
+    Kelishuv saqlanadi, yuklar esa turgan joyida qoladi.
+  </p>
+</div>
+{% elif plan.moves %}
+<div class="stacked" style="margin-top: 10px;">
+  <label class="muted" style="display:block; margin-bottom:6px;">
+    Saqlansa, {{ plan.moves|length }} ta yuk qayta taqsimlanadi
+  </label>
+  <p class="field-hint" style="margin:0 0 8px;">
+    Birja yuki eng eski ochiq kelishuvdan olinadi, shuning uchun bu kelishuv
+    o'z o'rniga turgach quyidagi yuklar unga o'tadi:
+  </p>
+  <ul class="field-hint" style="margin:0 0 8px; padding-left: 18px;">
+    {% for move in plan.moves %}
+    <li>
+      <strong>#{{ move.shipment.pk }}</strong> · {{ move.brand }} ·
+      {{ move.kg|floatformat:"-3" }} kg: {{ move.now.code }} &rarr;
+      {% for target, kg in move.target %}{{ target.code }} ({{ kg|floatformat:"-3" }} kg){% if not forloop.last %} + {% endif %}{% endfor %}
+      {% if move.is_split %}<span class="muted">— ikki yukka bo'linadi</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if plan.totals %}
+  <p class="field-hint" style="margin:0 0 8px;">
+    Kelishuvlar bo'yicha yuborilgan kg:
+    {% for code, pair in plan.totals.items %}{{ code }} {{ pair.0|floatformat:"-3" }} &rarr; {{ pair.1|floatformat:"-3" }}{% if not forloop.last %} · {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+  {% if plan.sold_slices %}
+  <p class="field-hint" style="margin:0;">
+    Ko'chadigan yuklardan {{ plan.sold_slices }} ta sotuv bo'lagi olingan — sotuvning
+    kg'i va puli o'zgarmaydi, faqat qaysi lotdan olingani o'zgaradi.
+  </p>
+  {% endif %}
+  {% for truck, why in plan.pinned %}
+  <p class="field-hint" style="margin:0;">
+    #{{ truck.pk }} ({{ truck.contract.code }}) tegilmaydi — {{ why }}.
+  </p>
+  {% endfor %}
+</div>
+{% endif %}
+{% endif %}

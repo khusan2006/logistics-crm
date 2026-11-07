@@ -52,6 +52,14 @@
       <div class="muted">Kg</div>
       <div>{{ shipment.kg|floatformat:"-3" }}</div>
     </div>
+    {% with yuklar=shipment.truck_yuklar %}{% if yuklar|length > 1 %}
+    {# One truck booked across two kelishuvlar — every part, and what they add up to. #}
+    <div class="stat">
+      <div class="muted">Bitta mashina</div>
+      <div>{{ shipment.truck_kg|floatformat:"-3" }} kg</div>
+      <div class="muted">{% for yuk in yuklar %}<a href="{% url 'shipment_detail' yuk.pk %}">#{{ yuk.pk }}</a> {{ yuk.contract.code }} · {{ yuk.kg|floatformat:"-3" }} kg{% if not forloop.last %} + {% endif %}{% endfor %}</div>
+    </div>
+    {% endif %}{% endwith %}
     {% if user.is_admin_role %}
     <div class="stat">
       <div class="muted">Yuk qiymati</div>

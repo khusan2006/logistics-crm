@@ -17,7 +17,7 @@ from accounts.models import User  # noqa: E402
 from crm.models import (Contract, ContractLine, Customer, Reservation,  # noqa: E402
                         Partner, Shipment, ShipmentLine, ShipmentStatus)
 
-from conftest import e2e_context  # noqa: E402
+from conftest import e2e_context, make_bron  # noqa: E402
 
 pw = pytest.importorskip("playwright.sync_api")
 
@@ -58,8 +58,7 @@ def world(transactional_db):
 
     holder = Customer.objects.create(name="Bronli mijoz", phone="1", address="T")
     Customer.objects.create(name="Oddiy mijoz", phone="1", address="T")
-    Reservation.objects.create(customer=holder, brand="LLDPE",
-                               kg=Decimal("5000"), price=Decimal("1.50"))
+    make_bron(holder, "LLDPE", kg="5000", price="1.50")
     return holder
 
 

@@ -11,6 +11,10 @@ class User(AbstractUser):
         # nothing else — and no narx anywhere, which is why every money figure in
         # the app hangs off `is_admin_role` rather than off "is logged in".
         SKLADCHI = "skladchi", "Skladchi"
+        # Whoever sits at the weighing scale — often the tarozi ustasi, from outside
+        # the company. Opens the Tarozi sinovi bench and nothing else: no yuk, no
+        # ombor, no money.
+        TAROZICHI = "tarozichi", "Tarozichi"
 
     role = models.CharField("Rol", max_length=12, choices=Role.choices, default=Role.TRANSLATOR)
     phone = models.CharField("Telefon", max_length=30, blank=True)
@@ -28,6 +32,10 @@ class User(AbstractUser):
     @property
     def is_skladchi(self):
         return self.role == self.Role.SKLADCHI
+
+    @property
+    def is_tarozichi(self):
+        return self.role == self.Role.TAROZICHI
 
     def __str__(self):
         return self.get_full_name() or self.username

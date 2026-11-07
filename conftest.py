@@ -5,7 +5,8 @@ import pytest
 from django.test import Client
 
 from accounts.models import User
-from crm.models import Contract, ContractLine, Partner, Shipment, ShipmentLine, ShipmentStatus
+from crm.models import (Contract, ContractLine, Partner, Reservation, Shipment, ShipmentLine,
+                        ShipmentStatus)
 
 PASSWORD = "test-pass-123"
 
@@ -199,6 +200,51 @@ def kapital_rows(*entries, kind="in", date="2026-07-01"):
                        {"currency": "usd", "amount": "0", "exchange_rate": "12000",
                         "method": "cash", "fee_percent": "0", "note": ""},
                        {"kind": kind, "date": date})
+
+
+def make_bron(customer, brand="LLDPE", kg="1000", price=None, price_uzs=None, **fields):
+    """A bron straight into the database, the way the tests used to create one when
+    the marka and narx sat on the bron itself.
+
+    `brand` may be a list for a bron of several markalar, and `price`/`price_uzs`
+    then a matching list (or one figure for all). A dollar narx with no so'm twin
+    gets one at the bron's kurs — what MoneyEntry's save() backstop used to do."""
+    bron = Reservation.objects.create(customer=customer, kg=Decimal(kg), **fields)
+    brands = brand if isinstance(brand, (list, tuple)) else [brand]
+
+    def each(value):
+        values = value if isinstance(value, (list, tuple)) else [value] * len(brands)
+        return [None if v is None else Decimal(v) for v in values]
+
+    for name, usd, uzs in zip(brands, each(price), each(price_uzs)):
+        if usd is not None and uzs is None:
+            uzs = bron.in_som(usd)
+        bron.items.create(brand=name, price=usd, price_uzs=uzs)
+    return bron
+
+
+def bron_data(fields, bron=None):
+    """POST payload for the bron form: the header plus its Markalar rows.
+
+    `fields` is the flat shape the bron form used to take — `brand` and `price`
+    beside the kg — and those two become the rows. Either may be a list for a bron
+    of several markalar. With `bron`, the rows edit its existing markalar in order,
+    the way the form opens them."""
+    fields = dict(fields)
+    brands = fields.pop("brand", None)
+    prices = fields.pop("price", "")
+    brands = list(brands) if isinstance(brands, (list, tuple)) else (
+        [] if brands is None else [brands])
+    if not isinstance(prices, (list, tuple)):
+        prices = [prices] * len(brands)
+    existing = list(bron.items.all()) if bron is not None else []
+    rows = [{"brand": b, "price": p} for b, p in zip(brands, prices)]
+    for row, item in zip(rows, existing):
+        row["id"] = item.pk
+    # Markalar the bron has but the post leaves out are struck off, as the − does.
+    for item in existing[len(rows):]:
+        rows.append({"id": item.pk, "brand": item.brand, "price": "", "DELETE": "on"})
+    return {**fields, **line_data(*rows, initial=len(existing), prefix="items")}
 
 
 def line_data(*rows, initial=0, prefix="lines"):

@@ -7,7 +7,7 @@ different products to the database.
 Reports and writes nothing by default; `--apply` does the work in one transaction.
 
 Why it is needed: a marka is a free-typed string, held on `ContractLine.brand` and
-`Reservation.brand`, and every join the app makes on it — a bron to a sotuv, a truck
+`ReservationItem.brand`, and every join the app makes on it — a bron to a sotuv, a truck
 to an ombor shelf, a queue position — is an exact string match. A latin `i` and a
 cyrillic `и` are one keystroke apart and the screen transliterates lotin to kiril, so
 the two spellings are indistinguishable to the reader and unequal to Postgres. The
@@ -33,6 +33,7 @@ from crm.models import (
     AuditLog,
     ContractLine,
     Reservation,
+    ReservationItem,
     Sale,
     brand_on_hand_kg,
     brand_reserved_kg,
@@ -56,7 +57,8 @@ def _shape(brand):
         "sales": sales.count(),
         "on_hand": brand_on_hand_kg(brand),
         "reserved": brand_reserved_kg(brand),
-        "brons": list(Reservation.objects.filter(brand=brand).select_related("customer")),
+        "brons": list(Reservation.objects.filter(items__brand=brand).distinct()
+                      .select_related("customer")),
     }
 
 
@@ -80,7 +82,7 @@ class Command(BaseCommand):
             raise CommandError("source va --into bir xil — birlashtiradigan narsa yo'q")
 
         line_count = ContractLine.objects.filter(brand=source).count()
-        bron_count = Reservation.objects.filter(brand=source).count()
+        bron_count = ReservationItem.objects.filter(brand=source).count()
         if not line_count and not bron_count:
             raise CommandError(f"{source!r} nomli marka topilmadi")
         # A typo in --into would otherwise rename a real marka to nothing anybody
@@ -108,7 +110,12 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             ContractLine.objects.filter(brand=source).update(brand=into)
-            Reservation.objects.filter(brand=source).update(brand=into)
+            # A bron that already names BOTH spellings holds the one marka twice:
+            # its `source` row goes, the `into` row stays. The two narxlar were for
+            # the same granula, so the kept one is the one the marka is known by.
+            ReservationItem.objects.filter(
+                brand=source, reservation__items__brand=into).delete()
+            ReservationItem.objects.filter(brand=source).update(brand=into)
             AuditLog.record(
                 None, AuditLog.Action.UPDATE, "Marka", None,
                 f"Marka birlashtirildi: {source} → {into} · "
@@ -136,7 +143,7 @@ class Command(BaseCommand):
         actually moved, with their remaining kg before and after."""
         brons = {b.pk: b.remaining_kg
                  for b in Reservation.objects.filter(
-                     brand=brand, status=Reservation.Status.ACTIVE)}
+                     items__brand=brand, status=Reservation.Status.ACTIVE).distinct()}
         sales = (Sale.objects
                  .filter(line__contract_line__brand=brand, reservation__isnull=True)
                  .select_related("line__contract_line", "customer")

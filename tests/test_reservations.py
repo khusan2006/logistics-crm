@@ -5,11 +5,16 @@ from decimal import Decimal
 from io import BytesIO
 
 import openpyxl
-from conftest import line_data
+import pytest
+from conftest import bron_data, line_data, make_bron
 from django.utils import timezone
 from crm.models import (
-    Contract, ContractLine, Customer, CustomerPayment, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
+    Contract, ContractLine, Customer, CustomerPayment, apply_customer_advance, Partner, PaymentAllocation, Reservation, Sale, Shipment, ShipmentLine, ShipmentStatus,
 )
+
+# Sotuvlar are dated today: a bron only counts a sotuv dated on or after the day
+# it was struck (`bron_postdates`), and the brons here are struck today.
+TODAY = timezone.localdate().isoformat()
 
 
 def _customer(name="Alisher Mebel"):
@@ -53,10 +58,10 @@ def _reserve(admin_client, brand, customer, kg="5000", price="", currency="usd",
              exchange_rate="12000"):
     """A bron is taken against a MARKA — no lot, because whichever kelishuv's truck
     lands first with that granula fills it."""
-    return admin_client.post("/reservations/new/", {
+    return admin_client.post("/reservations/new/", bron_data({
         "customer": customer.pk, "brand": brand, "kg": kg, "currency": currency,
         "price": price, "exchange_rate": exchange_rate, "note": "",
-    })
+    }))
 
 
 def _convert(admin_client, reservation, price=None, kg=None):
@@ -73,21 +78,22 @@ def _convert(admin_client, reservation, price=None, kg=None):
     from crm.models import brand_on_hand_kg
 
     reservation.refresh_from_db()
+    item = reservation.item_list[0]
     give = kg if kg is not None else min(reservation.remaining_kg,
-                                         brand_on_hand_kg(reservation.brand))
+                                         brand_on_hand_kg(item.brand))
     if price is not None:
         narx = price
     elif reservation.is_som:
-        narx = reservation.price_uzs      # typed in the row's own currency
+        narx = item.price_uzs      # typed in the row's own currency
     else:
-        narx = reservation.price
+        narx = item.price
     return admin_client.post("/sales/new/", {
         "customer": reservation.customer_id,
         "currency": reservation.currency,
         "exchange_rate": str(reservation.exchange_rate),
-        "date": "2026-07-20", "debt_deadline": "", "note": "",
+        "date": TODAY, "debt_deadline": "", "note": "",
         "draw_from_bron_asked": "1", "draw_from_bron": "on",
-        **line_data({"brand": reservation.brand, "kg": str(give),
+        **line_data({"brand": item.brand, "kg": str(give),
                      "price": "" if narx is None else str(narx)}),
     })
 
@@ -99,7 +105,7 @@ class TestBronIsAgainstAMarka:
         resp = _reserve(admin_client, "HDPE", _customer(), kg="40000")
         assert resp.status_code == 302
         bron = Reservation.objects.get()
-        assert bron.brand == "HDPE"
+        assert bron.brands == ["HDPE"]
         assert bron.kg == Decimal("40000.000")
         assert bron.remaining_kg == Decimal("40000.000")
         assert not hasattr(bron, "line")
@@ -300,7 +306,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "customer": _customer("Kelgan mijoz").pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         assert resp.status_code == 302
@@ -314,7 +320,7 @@ class TestBronsDoNotBlockOrdinarySales:
         admin_client.post("/sales/new/", {
             "customer": _customer("Kelgan mijoz").pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         bron = Reservation.objects.get()
@@ -331,7 +337,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "lot": lot.pk, "customer": _customer("Kelgan mijoz").pk, "kg": "10000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
         })
         assert resp.status_code == 302
         assert Sale.objects.get().kg == Decimal("10000.000")
@@ -344,7 +350,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "customer": holder.pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24000", "price": "2.00"}),
         })
         assert resp.status_code == 302
@@ -356,7 +362,7 @@ class TestBronsDoNotBlockOrdinarySales:
         resp = admin_client.post("/sales/new/", {
             "customer": _customer("Kelgan mijoz").pk,
             "currency": "usd", "exchange_rate": "12000",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": "LLDPE", "kg": "24001", "price": "2.00"}),
         })
         assert resp.status_code == 200          # re-rendered, invalid
@@ -421,10 +427,10 @@ class TestEditAndDelete:
         customer = _customer()
         _reserve(admin_client, "LLDPE", customer, kg="5000")
         r = Reservation.objects.get()
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "3000",
             "currency": "usd", "price": "1.25", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("3000.000")
@@ -435,10 +441,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         _convert(admin_client, r)                       # 12 000 kg handed over
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "5000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 200                  # invalid, re-rendered
         r.refresh_from_db()
         assert r.kg == Decimal("20000.000")
@@ -452,10 +458,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         _convert(admin_client, r)                       # 12 000 kg handed over
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("12000.000")
@@ -471,20 +477,20 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         _convert(admin_client, r)                       # 12 000 kg handed over
-        admin_client.post(f"/reservations/{r.pk}/edit/", {
+        admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         r.refresh_from_db()
         assert r.status == Reservation.Status.CONVERTED
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "12000",
             "currency": "usd", "price": "2.50", "exchange_rate": "12000",
             "note": "narx to'g'rilandi",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
-        assert r.price == Decimal("2.5000")
+        assert r.items.get().price == Decimal("2.5000")
         assert r.note == "narx to'g'rilandi"
 
     def test_raising_a_converted_bron_reopens_it(self, admin_client, db):
@@ -497,10 +503,10 @@ class TestEditAndDelete:
         _convert(admin_client, r)                       # served in full
         r.refresh_from_db()
         assert r.status == Reservation.Status.CONVERTED
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "18000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.status == Reservation.Status.ACTIVE
@@ -515,10 +521,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="20000", price="2.00")
         r = Reservation.objects.get()
         admin_client.post(f"/reservations/{r.pk}/close/", {})
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "18000",
             "currency": "usd", "price": "2.00", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("18000.000")
@@ -530,10 +536,10 @@ class TestEditAndDelete:
         _reserve(admin_client, "LLDPE", customer, kg="5000")
         r = Reservation.objects.get()
         admin_client.post(f"/reservations/{r.pk}/cancel/", {})
-        resp = admin_client.post(f"/reservations/{r.pk}/edit/", {
+        resp = admin_client.post(f"/reservations/{r.pk}/edit/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "3000",
             "currency": "usd", "price": "", "exchange_rate": "12000", "note": "",
-        })
+        }, r))
         assert resp.status_code == 302
         r.refresh_from_db()
         assert r.kg == Decimal("5000.000")
@@ -587,9 +593,9 @@ class TestPermissions:
         customer = _customer()
         assert translator_client.get("/reservations/").status_code == 403
         assert translator_client.get("/reservations/new/").status_code == 403
-        assert translator_client.post("/reservations/new/", {
+        assert translator_client.post("/reservations/new/", bron_data({
             "customer": customer.pk, "brand": "LLDPE", "kg": "100", "note": "",
-        }).status_code == 403
+        })).status_code == 403
 
     def test_translator_cannot_edit_or_delete(self, translator_client, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -631,80 +637,54 @@ class TestReservationList:
             f"/reservations/{Reservation.objects.order_by('pk').first().pk}/cancel/", {})
         tabs = {t["key"]: t["count"]
                 for t in admin_client.get("/reservations/").context["status_tabs"]}
-        assert tabs == {"active": 1, "converted": 0, "closed": 0,
-                        "cancelled": 1, "": 2}
+        assert tabs == {"": 2, "active": 1, "converted": 0, "closed": 0,
+                        "cancelled": 1}
 
 
 class TestBronlarReadsLikeKelishuvlar:
-    """The list wears the Kelishuvlar shape: one row per booking with its markalar
-    stacked inside it, Qolgan as a badge that says whether anything is left, a Jami
-    column, and the toolbar every other ro'yxat has — davr, Filtrlash, Excel."""
+    """One row per bron led by its code, its markalar stacked inside it, Qolgan as a
+    badge that says whether anything is left, and the toolbar every other ro'yxat has
+    — davr, Filtrlash, Excel. Laid out as Yuklar is: see TestBronlarReadsLikeYuklar."""
 
-    def test_one_mijoz_on_one_kun_is_one_row(self, admin_client, db):
-        """Two markalar booked together are one booking, not two table rows."""
+    def test_one_row_per_bron_led_by_its_code(self, admin_client, db):
+        """Each bron is its own row, as each kelishuv is, and its first cell is its
+        code — the mijoz's name and their bron number — linking to the bron's page."""
         _arrived_lot(kg="10000", brand="LLDPE")
         _in_transit_lot(kg="5000", brand="HDPE")
         mijoz = _customer("Mak Plast")
         _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
         _reserve(admin_client, "HDPE", mijoz, kg="2000", price="2.00")
-        groups = admin_client.get("/reservations/").context["groups"]
-        assert len(groups) == 1
-        assert groups[0]["customer"] == mijoz
-        assert sorted(r.brand for r in groups[0]["items"]) == ["HDPE", "LLDPE"]
+        resp = admin_client.get("/reservations/?sort=created")
+        assert [r.code for r in resp.context["rows"]] == ["mak-plast-1", "mak-plast-2"]
+        first = Reservation.objects.get(code_number=1)
+        assert f'href="/reservations/{first.pk}/">mak-plast-1</a>' in resp.content.decode()
 
-    def test_another_mijoz_is_another_row(self, admin_client, db):
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _reserve(admin_client, "LLDPE", _customer("Bir"), kg="1000", price="2.00")
-        _reserve(admin_client, "LLDPE", _customer("Ikki"), kg="1000", price="2.00")
-        groups = admin_client.get("/reservations/").context["groups"]
-        assert [g["customer"].name for g in groups] == ["Bir", "Ikki"]
-        assert [len(g["items"]) for g in groups] == [1, 1]
-
-    def test_a_different_kun_is_a_different_row(self, admin_client, db):
-        """The group is the BOOKING — what was put down on one day — so the same
-        mijoz coming back next week starts a row of their own."""
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _in_transit_lot(kg="5000", brand="HDPE")
-        mijoz = _customer("Mak Plast")
-        _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
-        _reserve(admin_client, "HDPE", mijoz, kg="1000", price="2.00")
-        old = Reservation.objects.order_by("pk").first()
-        Reservation.objects.filter(pk=old.pk).update(
-            created_at=timezone.now() - timedelta(days=7))
-        groups = admin_client.get("/reservations/").context["groups"]
-        assert [len(g["items"]) for g in groups] == [1, 1]
-        assert len({g["date"] for g in groups}) == 2
-
-    def test_the_page_never_splits_a_booking_across_two_pages(self, admin_client, db):
-        """Paginated by GROUP: 20 bookings to a page, not 20 bronlar — half a mijoz's
-        day at the foot of one page and half at the head of the next is the thing
-        grouping exists to prevent."""
+    def test_paginated_by_bron(self, admin_client, db):
         for n in range(21):
-            mijoz = _customer(f"Mijoz {n:02d}")
-            for brand in ("LLDPE", "HDPE"):
-                Reservation.objects.create(customer=mijoz, brand=brand,
-                                           kg=Decimal("10"), price=Decimal("2"))
+            make_bron(_customer(f"Mijoz {n:02d}"), "LLDPE", kg="10", price="2")
         page = admin_client.get("/reservations/?sort=customer").context["page"]
         assert page.paginator.num_pages == 2
         assert len(page.object_list) == 20
-        assert all(len(g["items"]) == 2 for g in page.object_list)
 
-    def test_the_columns_stand_in_kelishuvlar_order(self, admin_client, db):
-        """Marka, then what was agreed, at what narx, for how much, and what of it is
-        still outstanding — the order Kelishuvlar reads in, so the two lists do not ask
-        the reader to change gear between them. Qolgan kg sits AFTER Jami, not between
-        Kg and Narx.
+    def test_a_code_is_searchable(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        mijoz = _customer("Mak Plast")
+        _reserve(admin_client, "LLDPE", mijoz, kg="1000", price="2.00")
+        _reserve(admin_client, "LLDPE", mijoz, kg="3000", price="2.00")
+        rows = admin_client.get("/reservations/?q=mak-plast-2").context["rows"]
+        assert [r.kg for r in rows] == [Decimal("3000.000")]
 
-        The avans pair comes after Qolgan kg rather than between it and Jami: it is the
-        money side of what is still outstanding (read off the kg still owed), so it
-        continues the sentence instead of interrupting it."""
+    def test_the_columns_stand_in_yuklar_order(self, admin_client, db):
+        """Yuklar's order: the row's id, Marka (narx and navbat under each marka), Kg,
+        Qiymati, Holat — then what is still outstanding in kg and in money, and the
+        avans, with the sana last as Yuklar ends on Kelish."""
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="1000", price="2.00")
         page = _plain(admin_client.get("/reservations/").content.decode())
         header = page[page.index("<table"):page.index("</tr>")]
         assert re.findall(r">([^<>]+)</th>", header) == [
-            "Mijoz", "Sana", "Marka", "Navbat", "Bron qilingan kg", "Narx", "Jami",
-            "Qolgan kg", "Avansdan band", "Yetishmayapti", "Holat"]
+            "Bron", "Marka", "Kg", "Qiymati", "Holat", "Qolgan kg", "Qolgan to'lov",
+            "Avans", "Sana"]
 
     def test_qolgan_is_a_badge_that_says_whether_anything_is_left(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -725,7 +705,7 @@ class TestBronlarReadsLikeKelishuvlar:
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="17000",
                  currency="uzs")
-        assert Reservation.objects.get().total_uzs == Decimal("85000000.00")
+        assert Reservation.objects.get().totals[0][1] == Decimal("85000000.00")
         html = _plain(admin_client.get("/reservations/").content.decode())
         assert "85 000 000 so'm" in html
         assert "$7 083" not in html
@@ -733,24 +713,15 @@ class TestBronlarReadsLikeKelishuvlar:
     def test_jami_is_kelishilmagan_until_a_narx_is_agreed(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
-        assert Reservation.objects.get().total is None
+        assert Reservation.objects.get().totals == []
         assert "kelishilmagan" in admin_client.get("/reservations/").content.decode()
 
-    def test_the_four_selects_live_in_the_filtrlar_panel(self, admin_client, db):
+    def test_mijoz_and_saralash_live_in_the_filtrlar_panel(self, admin_client, db):
+        """Holat and Berish are tabs above the table now; the panel keeps the rest."""
         filters = admin_client.get("/reservations/").context["filters"]
-        assert [f["name"] for f in filters["fields"]] == [
-            "customer", "status", "lot", "sort"]
-        # Faol and Navbat are where the page opens, so standing on them is not a
-        # filter and draws no chip.
+        assert [f["name"] for f in filters["fields"]] == ["customer", "sort"]
+        # Navbat is where the page opens, so standing on it draws no chip.
         assert filters["count"] == 0
-
-    def test_a_narrowed_list_says_so_as_a_chip(self, admin_client, db):
-        _arrived_lot(kg="10000", brand="LLDPE")
-        _reserve(admin_client, "LLDPE", _customer("Mak Plast"), kg="1000")
-        filters = admin_client.get("/reservations/?lot=ready").context["filters"]
-        assert filters["count"] == 1
-        assert filters["chips"][0]["label"] == "Berish"
-        assert filters["chips"][0]["value"] == "Berish mumkin"
 
     def test_the_davr_narrows_the_list(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
@@ -758,7 +729,7 @@ class TestBronlarReadsLikeKelishuvlar:
         _reserve(admin_client, "LLDPE", _customer("Yangi"), kg="1000")
         old = Reservation.objects.get(customer__name="Eski")
         Reservation.objects.filter(pk=old.pk).update(
-            created_at=timezone.now() - timedelta(days=40))
+            date=timezone.localdate() - timedelta(days=40))
         bugun = timezone.localdate().isoformat()
         rows = admin_client.get("/reservations/", {"from": bugun}).context["rows"]
         assert [r.customer.name for r in rows] == ["Yangi"]
@@ -786,15 +757,15 @@ class TestReservationTotal:
     def test_total_is_none_until_a_narx_is_agreed(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000")
-        assert Reservation.objects.get().total is None
+        assert Reservation.objects.get().totals == []
         assert "kelishilmagan" in admin_client.get("/reservations/").content.decode()
 
     def test_total_is_kg_times_narx_in_both_currencies(self, admin_client, db):
         _arrived_lot(kg="10000", brand="LLDPE")
         _reserve(admin_client, "LLDPE", _customer(), kg="5000", price="1.50")
         r = Reservation.objects.get()
-        assert r.total == Decimal("7500.00")
-        assert r.total_uzs == Decimal("90000000.00")   # 5000 × 1.50 × 12000
+        assert r.totals == [(Decimal("7500.00"),
+                             Decimal("90000000.00"))]   # 5000 × 1.50 × 12000
 
 
 class TestAnOrdinarySotuvDrawsTheBronDown:
@@ -804,13 +775,12 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
     while its holder bought 24 000 kg of it over the counter."""
 
     def _bron(self, customer, brand="LLDPE", kg="6000"):
-        return Reservation.objects.create(
-            customer=customer, brand=brand, kg=Decimal(kg), price=Decimal("1.50"))
+        return make_bron(customer, brand, kg=kg, price="1.50")
 
     def _sell(self, client, customer, brand, kg):
         return client.post("/sales/new/", {
             "customer": customer.pk,
-            "currency": "usd", "exchange_rate": "12000", "date": "2026-07-20",
+            "currency": "usd", "exchange_rate": "12000", "date": TODAY,
             **line_data({"brand": brand, "kg": kg, "price": "1.50"})})
 
     def test_selling_to_the_holder_shrinks_their_bron(self, admin_client, db):
@@ -891,7 +861,7 @@ class TestAnOrdinarySotuvDrawsTheBronDown:
         corrected sotuv is read back by its kg rather than by a pk."""
         return client.post(f"/sales/{sale.pk}/edit/", {
             "customer": sale.customer_id, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": sale.line.brand, "kg": kg, "price": "1.50"},
                         initial=1)})
 
@@ -933,7 +903,7 @@ def _sell(admin_client, brand, customer, kg="2000", price="1.50", **extra):
     """The Yangi sotuv form as the browser posts it — the box ticked unless a test
     says otherwise, because that is how it renders."""
     data = {"customer": customer.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             "draw_from_bron_asked": "1", "draw_from_bron": "on",
             **line_data({"brand": brand, "kg": kg, "price": price})}
     data.update(extra)
@@ -977,7 +947,7 @@ class TestBronDrawIsAsked:
         customer = _customer()
         _reserve(admin_client, "LLDPE", customer, kg="6000")
         resp = admin_client.post("/sales/new/", {
-            "customer": customer.pk, "currency": "usd", "date": "2026-07-20",
+            "customer": customer.pk, "currency": "usd", "date": TODAY,
             "debt_deadline": "", "note": "",          # no box, no twin
             **line_data({"brand": "LLDPE", "kg": "2000", "price": "1.50"})})
         assert resp.status_code == 302
@@ -994,7 +964,7 @@ class TestBronDrawIsAsked:
 
         admin_client.post(f"/sales/{sale.pk}/edit/", {
             "customer": customer.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2500", "price": "1.50"},
                         initial=1)})
         corrected = Sale.objects.get()
@@ -1018,7 +988,7 @@ class TestBronDrawIsAsked:
         # Only the mijoz changes — the kg and the narx stay exactly as typed.
         admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
             "customer": other.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
                         initial=1)})
 
@@ -1042,7 +1012,7 @@ class TestBronDrawIsAsked:
 
         admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
             "customer": second.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
                         initial=1)})
 
@@ -1051,6 +1021,47 @@ class TestBronDrawIsAsked:
         assert Sale.objects.get().reservation_id == theirs.pk
         assert theirs.fulfilled_kg == Decimal("2000.000")
         assert mine.fulfilled_kg == Decimal("0.000")
+
+    def test_a_sotuv_typed_against_a_mijoz_with_no_bron_draws_when_moved(
+            self, admin_client, db):
+        """Typed against the wrong name — one with no bron, so nothing was drawn — and
+        moved to the mijoz who holds one: their bron comes down, as a fresh sotuv to
+        them would have brought it down. Islom Luks palimer's 30 000 kg bron stayed
+        whole after exactly this."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        holder, wrong = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", holder, kg="6000")
+        _sell(admin_client, "LLDPE", wrong, kg="1500")
+        bron = Reservation.objects.get()
+        assert bron.fulfilled_kg == Decimal("0.000")
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
+            "customer": holder.pk, "currency": "usd",
+            "date": TODAY, "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "1500", "price": "1.50"},
+                        initial=1)})
+
+        bron.refresh_from_db()
+        assert Sale.objects.get().reservation_id == bron.pk
+        assert bron.fulfilled_kg == Decimal("1500.000")
+        assert bron.remaining_kg == Decimal("4500.000")
+
+    def test_moved_with_a_new_kg_it_still_draws_on_the_new_mijozs_bron(
+            self, admin_client, db):
+        """The same correction with the kg fixed too: the row is re-sliced, and the
+        new slices draw on the new mijoz's bron."""
+        lot = _arrived_lot(kg="10000", brand="LLDPE")
+        holder, wrong = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", holder, kg="6000")
+        _sell(admin_client, "LLDPE", wrong, kg="1500")
+
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/edit/", {
+            "customer": holder.pk, "currency": "usd",
+            "date": TODAY, "debt_deadline": "", "note": "",
+            **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
+                        initial=1)})
+
+        assert Reservation.objects.get().fulfilled_kg == Decimal("2000.000")
 
 
 # ── Oldin yozilgan sotuvni bronga hisoblash ──────────────────────────────────
@@ -1142,7 +1153,7 @@ class TestCountingAnEarlierSotuvIntoABron:
 
         admin_client.post(f"/sales/{sale.pk}/edit/", {
             "customer": customer.pk, "currency": "usd",
-            "date": "2026-07-20", "debt_deadline": "", "note": "",
+            "date": TODAY, "debt_deadline": "", "note": "",
             **line_data({"brand": lot.brand, "kg": "2000", "price": "1.50"},
                         initial=1)})
         corrected = Sale.objects.get()
@@ -1223,16 +1234,184 @@ def test_the_bron_row_offers_a_full_sotuv_prefilled(admin_client, db):
     _arrived_lot(kg="10000", brand="LLDPE")
     customer = _customer()
     _reserve(admin_client, "LLDPE", customer, kg="6000")
+    bron = Reservation.objects.get()
     html = admin_client.get("/reservations/").content.decode()
-    assert f"/sales/new/?customer={customer.pk}&amp;brand=LLDPE" in html
+    assert (f"/sales/new/?customer={customer.pk}&amp;bron={bron.pk}&amp;brand=LLDPE"
+            in html)
 
 
-def test_the_bron_row_links_the_name_to_that_mijoz_page(admin_client, db):
+def test_the_bron_page_links_the_name_to_that_mijoz_page(admin_client, db):
     _arrived_lot(kg="10000", brand="LLDPE")
     customer = _customer()
     _reserve(admin_client, "LLDPE", customer, kg="6000")
-    html = admin_client.get("/reservations/").content.decode()
+    bron = Reservation.objects.get()
+    html = admin_client.get(f"/reservations/{bron.pk}/").content.decode()
     # The ism is in its own `data-lotin` span — the operator's text, which the
     # transliterator leaves alone (see test_yozuv) — so the link wraps the span.
     assert (f'href="/debts/{customer.pk}/"><span data-lotin>{customer.name}</span></a>'
             in html)
+
+
+class TestBronlarReadsLikeYuklar:
+    """The operators find Yuklar the easiest screen to work in, so Bronlar is laid
+    out the same way: holat tabs with counts, a band per mijoz, and a ▸ that opens
+    each bron in place."""
+
+    def test_holat_and_berish_are_tabs_and_the_pressed_one_clears_itself(
+            self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        _reserve(admin_client, "LLDPE", _customer(), kg="1000")
+        html = admin_client.get("/reservations/?lot=ready").content.decode()
+        tab = re.search(r'<a class="status-tab[^"]*is-active"\s+href="([^"]*)"[^>]*>'
+                        r'Berish mumkin', html)
+        assert tab is not None
+        assert "lot=" not in tab.group(1)          # pressing it again clears it
+        assert admin_client.get("/reservations/?lot=ready").context["lot_tabs"] == [
+            {"key": "ready", "label": "Berish mumkin", "count": 1},
+            {"key": "waiting", "label": "Mol kutilmoqda", "count": 0}]
+
+    def test_brons_sit_under_a_band_per_mijoz(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        mak, ali = _customer("Mak Plast"), _customer("Ali")
+        _reserve(admin_client, "LLDPE", mak, kg="1000")
+        _reserve(admin_client, "LLDPE", ali, kg="2000")
+        _reserve(admin_client, "LLDPE", mak, kg="3000")
+        groups = admin_client.get("/reservations/?sort=created").context["groups"]
+        assert [(g["customer"].name, [r.kg for r in g["rows"]]) for g in groups] == [
+            ("Mak Plast", [Decimal("1000.000"), Decimal("3000.000")]),
+            ("Ali", [Decimal("2000.000")])]
+
+    def test_the_band_says_how_much_of_the_given_kg_is_paid(self, admin_client, db):
+        """2 000 kg given at 1.50 is $3 000; a $1 000 to'lov leaves it 1 000 / 3 000."""
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="5000")
+        _sell(admin_client, "LLDPE", customer, kg="2000", price="1.50")
+        CustomerPayment.objects.create(customer=customer, amount=Decimal("1000"),
+                                       currency="usd", date=TODAY)
+        apply_customer_advance(Sale.objects.get())
+        resp = admin_client.get("/reservations/")
+        assert resp.context["groups"][0]["money"] == [
+            ("usd", Decimal("1000.00"), Decimal("3000.00"))]
+        assert "$1 000 / $3 000 to'langan" in _plain(resp.content.decode())
+
+    def test_the_panel_lists_the_sotuvlar_counted_into_the_bron(self, admin_client, db):
+        _arrived_lot(kg="10000", brand="LLDPE")
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer, kg="5000")
+        bron = Reservation.objects.get()
+        _sell(admin_client, "LLDPE", customer, kg="2000")
+        sale = Sale.objects.get()
+        html = admin_client.get("/reservations/").content.decode()
+        panel = html[html.index(f'class="legs-detail bron-detail" data-bron="{bron.pk}"'):]
+        assert f'href="/sales/{sale.pk}/">#{sale.pk}</a>' in panel
+
+
+# ── Bron sanasi ──────────────────────────────────────────────────────────────
+
+class TestBronDate:
+    """The day the mijoz asked — today unless typed otherwise, editable later."""
+
+    def _post(self, admin_client, customer, url="/reservations/new/", bron=None, **extra):
+        return admin_client.post(url, bron_data({
+            "customer": customer.pk, "brand": "LLDPE", "kg": "5000", "currency": "usd",
+            "price": "", "exchange_rate": "12000", "note": "", **extra}, bron=bron))
+
+    @pytest.fixture(autouse=True)
+    def _marka(self, db):
+        # The bron form offers only markalar the ombor has heard of.
+        _arrived_lot(kg="10000", brand="LLDPE")
+
+    def test_it_defaults_to_today(self, admin_client, db):
+        _reserve(admin_client, "LLDPE", _customer())
+        assert Reservation.objects.get().date == timezone.localdate()
+
+    def test_the_form_opens_on_today(self, admin_client, db):
+        html = admin_client.get("/reservations/new/").content.decode()
+        assert f'value="{TODAY}"' in html
+
+    def test_an_earlier_day_can_be_typed_and_edited(self, admin_client, db):
+        customer = _customer()
+        earlier = timezone.localdate() - timedelta(days=5)
+        assert self._post(admin_client, customer,
+                          date=earlier.isoformat()).status_code == 302
+        bron = Reservation.objects.get()
+        assert bron.date == earlier
+
+        later = earlier + timedelta(days=2)
+        self._post(admin_client, customer, url=f"/reservations/{bron.pk}/edit/",
+                   bron=bron, date=later.isoformat())
+        bron.refresh_from_db()
+        assert bron.date == later
+
+    def test_an_edit_without_the_box_keeps_the_date(self, admin_client, db):
+        customer = _customer()
+        earlier = timezone.localdate() - timedelta(days=5)
+        self._post(admin_client, customer, date=earlier.isoformat())
+        bron = Reservation.objects.get()
+        self._post(admin_client, customer, url=f"/reservations/{bron.pk}/edit/",
+                   bron=bron, kg="6000")
+        bron.refresh_from_db()
+        assert (bron.kg, bron.date) == (Decimal("6000.000"), earlier)
+
+    def test_a_future_day_is_refused(self, admin_client, db):
+        tomorrow = timezone.localdate() + timedelta(days=1)
+        resp = self._post(admin_client, _customer(), date=tomorrow.isoformat())
+        assert resp.status_code != 302
+        assert not Reservation.objects.exists()
+
+    def test_the_queue_follows_the_bron_sanasi_not_the_entry(self, admin_client, db):
+        from crm.models import bron_queue
+
+        first, second = _customer(), _customer("Boshqa mijoz")
+        _reserve(admin_client, "LLDPE", first)
+        # Typed in second, but asked for three days earlier.
+        self._post(admin_client, second,
+                   date=(timezone.localdate() - timedelta(days=3)).isoformat())
+        assert [b.customer_id for b in bron_queue("LLDPE")] == [second.pk, first.pk]
+
+    def test_a_sotuv_dated_before_the_bron_sanasi_does_not_draw_it(self, admin_client, db):
+        customer = _customer()
+        _reserve(admin_client, "LLDPE", customer)
+        yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+        admin_client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "date": yesterday,
+            "debt_deadline": "", "note": "", "draw_from_bron": "on",
+            "draw_from_bron_asked": "1",
+            **line_data({"brand": "LLDPE", "kg": "1000", "price": "1.50"})})
+        assert Sale.objects.exists()
+        assert Reservation.objects.get().fulfilled_kg == Decimal("0.000")
+
+
+def test_a_lot_sold_below_zero_counts_against_its_marka(db):
+    """2102 кампаунд on prod: lot #118 at −1 020 kg, lot #136 at +1 020 — the ombor
+    read 0, and the sotuv form's Marka picker offered 1 020 kg omborda."""
+    from crm.forms import _stock_brand_choices
+    from crm.models import brand_stock_costed
+
+    oversold = _arrived_lot(kg="1000", brand="LLDPE")
+    _arrived_lot_for("Other", kg="1020", brand="LLDPE")
+    Sale.objects.create(customer=_customer(), line=oversold, kg=Decimal("2020"),
+                        price=Decimal("1.4"))
+    assert "LLDPE" not in [row["brand"] for row in brand_stock_costed()]
+    assert "LLDPE" not in [brand for brand, _label in _stock_brand_choices()]
+
+
+def test_settling_moves_only_the_excess_off_a_lot_below_zero(db):
+    from crm.fifo import settle_negative_lots
+
+    oversold = _arrived_lot(kg="1000", brand="LLDPE")
+    spare = _arrived_lot_for("Other", kg="5000", brand="LLDPE")
+    customer = _customer()
+    first = Sale.objects.create(customer=customer, line=oversold, kg=Decimal("1000"),
+                                price=Decimal("1.4"))
+    late = Sale.objects.create(customer=customer, line=oversold, kg=Decimal("700"),
+                               price=Decimal("1.4"))
+    moves = settle_negative_lots("LLDPE")
+    assert [(s.pk, src.pk, dst.pk, kg) for s, src, dst, kg in moves] == [
+        (late.pk, oversold.pk, spare.pk, Decimal("700.000"))]
+    oversold.refresh_from_db()
+    spare.refresh_from_db()
+    assert (oversold.available_kg, spare.available_kg) == (Decimal("0"), Decimal("4300"))
+    late.refresh_from_db()
+    assert late.line_id == spare.pk and first.lots.get().line_id == oversold.pk

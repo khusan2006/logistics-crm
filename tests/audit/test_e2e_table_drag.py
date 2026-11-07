@@ -144,9 +144,10 @@ def test_a_drag_that_ends_on_a_link_does_not_open_it(browser, live_server, world
 
 def test_a_plain_click_on_a_link_still_works(browser, live_server, world):
     """The threshold earns its keep here: pressing and releasing without moving is
-    still a click, however wide the table is."""
+    still a click, however wide the table is. A link that NAVIGATES — the day band's
+    Ombor qoldig'i opens a modal and leaves the url where it was."""
     ctx, page = _open(browser, live_server)
-    page.locator(".table-wrap a[href]").first.click()
+    page.locator(".table-wrap a[href]:not([data-modal])").first.click()
     page.wait_for_timeout(500)
     assert not page.url.endswith("/sales/"), "a plain click was swallowed"
     ctx.close()

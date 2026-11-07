@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% load crm_extras %}
+{% block title %}Bron {{ bron.code }} · GranulaLog{% endblock %}
+{% block topbar_title %}Bron {{ bron.code }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; margin-bottom: 14px;">
+    <a class="btn btn-ghost" href="{% url 'reservation_list' %}">&larr; Bronlar ro'yxatiga</a>
+    {% if bron.status != "cancelled" %}
+    <a class="btn" href="{% url 'reservation_edit' bron.pk %}" data-modal>Tahrirlash</a>
+    {% endif %}
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="muted">Mijoz</div>
+      <div><a href="{% url 'debt_customer' bron.customer_id %}">{{ bron.customer.name|lotin }}</a></div>
+    </div>
+    <div class="stat">
+      <div class="muted">Sana</div>
+      <div>{{ bron.date|date:"d.m.Y" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Holat</div>
+      <div>
+        {% if bron.status == "active" %}<span class="badge badge-warning">Faol</span>
+        {% elif bron.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
+        {% else %}<span class="badge">{{ bron.get_status_display }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="muted">Bron qilingan kg</div>
+      <div>{{ bron.kg|floatformat:"-3" }}{% if bron.is_multi %} <span class="muted">· {{ bron.item_list|length }} marka uchun umumiy</span>{% endif %}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Berilgan kg</div>
+      <div>{{ bron.fulfilled_kg|floatformat:"-3" }}</div>
+    </div>
+    <div class="stat">
+      <div class="muted">Qolgan kg</div>
+      <div><span class="badge {% if bron.remaining_kg > 0 %}badge-warning{% else %}badge-ok{% endif %}">{{ bron.remaining_kg|floatformat:"-3" }}</span></div>
+    </div>
+    <div class="stat">
+      <div class="muted">Qolgan to'lov</div>
+      <div>{% with owed=bron.unpaid_given %}{% if owed is None %}<span class="muted">—</span>{% else %}<span class="badge {% if owed > 0 %}badge-warning{% else %}badge-ok{% endif %}">{% money_in owed bron.currency %}</span>{% endif %}{% endwith %}</div>
+    </div>
+  </div>
+  {% if bron.note %}<p class="muted" style="margin-top: 14px;">{{ bron.note }}</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin-top: 0;">Markalar</h3>
+  <div class="table-wrap">
+    <table>
+      <tr><th>Marka</th><th>Narx</th></tr>
+      {% for item in bron.item_list %}
+      <tr>
+        <td>{{ item.brand }}</td>
+        <td>{% if item.price %}{% rate item.price item.price_uzs bron.currency %}{% else %}<span class="muted">kelishilmagan</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+{% comment %}
+The mijoz's story, newest bron first, in the Sotuvlar table's own rows: under each
+bron the sotuvlar counted into it, then the ones struck between it and the next
+newer bron that no bron counted. The opened bron is one band of it — marked, and
+scrolled to — so what came after it stays in view above.
+
+Sana takes the Mijoz column's place: every row is this mijoz's, and the list is not
+banded by day. A sotuv bigger than what the bron owed is split: each bron shows
+only its share, what no bron took shows as bronsiz, and each part names the whole
+sotuv's kg under its own.
+{% endcomment %}
+<div class="card">
+  <h3 style="margin-top: 0;">Sotuvlar <span class="muted" style="font-weight: 400; font-size: 13px;">· {{ sale_count }} ta</span></h3>
+  <div class="table-wrap">
+  <table>
+    <tr>
+      <th class="sticky-col">Sana</th>
+      <th>Mahsulotlar</th>
+      <th>Kg</th>
+      <th>Tan narx</th>
+      <th>Sotuv narxi</th>
+      <th>Jami</th>
+      <th>Foyda</th>
+      <th>Qoldiq/qarz</th>
+      <th></th>
+    </tr>
+    {% for sec in sections %}
+    {% with b=sec.bron %}
+    <tr class="day-row bron-band{% if sec.current %} is-today{% endif %}" id="bron-{{ b.pk }}"{% if sec.current %} data-current-bron{% endif %}>
+      <td colspan="9">
+        <div class="day-head">
+          <span class="day-title">{% if sec.current %}{{ b.code }}{% else %}<a href="{% url 'reservation_detail' b.pk %}">{{ b.code }}</a>{% endif %}</span>
+          <span class="day-sub">{{ b.date|date:"j-F, Y" }}</span>
+          <span class="day-count">{{ b.fulfilled_kg|floatformat:"-3" }} / {{ b.kg|floatformat:"-3" }} kg</span>
+          {% if b.status == "active" %}<span class="badge badge-warning">Faol</span>
+          {% elif b.status == "converted" %}<span class="badge badge-ok">Sotuvga aylandi</span>
+          {% else %}<span class="badge">{{ b.get_status_display }}</span>{% endif %}
+          <span class="day-note muted">{{ b.brand_label }}</span>
+        </div>
+      </td>
+    </tr>
+    {% for g in sec.drawn %}
+    <tr class="sale-row">
+      <td class="sticky-col"><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.date|date:"d.m.Y" }}</a></td>
+      {% include "crm/_sale_group_cells.html" %}
+    </tr>
+    {% empty %}
+    {% comment %}
+    Said even when bronsiz sotuvlar follow: without it the Bronsiz header sits
+    straight under the bron and reads as the bron's own list.
+    {% endcomment %}
+    <tr><td colspan="9" class="muted">Sotuv yo'q</td></tr>
+    {% endfor %}
+    {% if sec.loose %}
+    <tr class="day-row bron-loose-row"><td colspan="9"><div class="day-head"><span class="day-title">Bronsiz sotuvlar</span></div></td></tr>
+    {% for g in sec.loose %}
+    <tr class="sale-row">
+      <td class="sticky-col"><a href="{% url 'sale_detail' g.first.pk %}">{{ g.first.date|date:"d.m.Y" }}</a></td>
+      {% include "crm/_sale_group_cells.html" %}
+    </tr>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    {% endfor %}
+  </table>
+  </div>
+</div>
+
+<script>
+(function () {
+  // The kg of a multi-lot sotuv, summed and opened by its caret — as on Sotuvlar.
+  document.querySelectorAll('.kg-toggle').forEach(function (cell) {
+    cell.addEventListener('click', function (e) {
+      if (e.target.closest('a')) { return; }
+      var sum = cell.querySelector('.kg-sum');
+      var lines = cell.querySelector('.kg-lines');
+      var btn = cell.querySelector('.leg-expand');
+      if (!sum || !lines || !btn) { return; }
+      var willOpen = lines.hidden;
+      lines.hidden = !willOpen;
+      sum.hidden = willOpen;
+      btn.classList.toggle('is-open', willOpen);
+    });
+  });
+  // An older bron opened: bring its band into view, the newer ones above it.
+  var current = document.querySelector('[data-current-bron]');
+  if (current && current.previousElementSibling && current.previousElementSibling.querySelector('th') === null) {
+    current.scrollIntoView({ block: 'start' });
+  }
+})();
+</script>
+
+{% endblock %}

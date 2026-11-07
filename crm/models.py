@@ -5,8 +5,9 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.db.models import DecimalField, Max, Sum
+from django.db.models import DecimalField, Max, Q, Sum
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 from django.utils.text import slugify
 
 MONEY = DecimalField(max_digits=14, decimal_places=2)   # USD
@@ -18,6 +19,12 @@ def partner_code_slug(name):
     Cyrillic survives; a name that slugifies to nothing falls back so no code is a
     bare "-3"."""
     return slugify(name, allow_unicode=True) or "hamkor"
+
+
+def customer_code_slug(name):
+    """The name half of a bron code — komoliddin-sintafon-3 — made the way a kelishuv
+    code's is from its hamkor."""
+    return slugify(name, allow_unicode=True) or "mijoz"
 
 
 class PayMethod(models.TextChoices):
@@ -620,13 +627,62 @@ class Customer(models.Model):
     name = models.CharField("Ismi", max_length=200)
     phone = models.CharField("Telefon", max_length=30, blank=True)
     address = models.CharField("Manzil", max_length=300, blank=True)
+    # Where the mijoz actually is, beside the Manzil they describe it as. Both or
+    # neither — CustomerForm only ever writes the pair together.
+    latitude = models.DecimalField("Kenglik", max_digits=9, decimal_places=6,
+                                   null=True, blank=True)
+    longitude = models.DecimalField("Uzunlik", max_digits=9, decimal_places=6,
+                                    null=True, blank=True)
     note = models.TextField("Izoh", blank=True)
+    # Bron codes, numbered per mijoz the way kelishuv codes are per hamkor — see
+    # `Partner.code_counter` for why the high-water mark lives here and only climbs.
+    code_slug = models.CharField(max_length=200, db_index=True, editable=False)
+    code_counter = models.PositiveIntegerField(default=0, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["name"]
         verbose_name = "Mijoz"
         verbose_name_plural = "Mijozlar"
+
+    def save(self, *args, **kwargs):
+        self.code_slug = customer_code_slug(self.name)
+        if (fields := kwargs.get("update_fields")) is not None:
+            kwargs["update_fields"] = {*fields, "code_slug"}
+        elif self.pk:
+            # Reservation.save() bumps code_counter with a targeted UPDATE — the same
+            # stale-instance guard `Partner.save` carries.
+            stored = Customer.objects.filter(pk=self.pk).values_list(
+                "code_counter", flat=True).first()
+            if stored is not None:
+                self.code_counter = max(self.code_counter, stored)
+        return super().save(*args, **kwargs)
+
+    @property
+    def has_location(self):
+        return self.latitude is not None and self.longitude is not None
+
+    @property
+    def _lat(self):
+        return f"{self.latitude.normalize():f}"  # 41.300000 → "41.3", as everywhere
+
+    @property
+    def _lng(self):
+        return f"{self.longitude.normalize():f}"
+
+    @property
+    def coordinates(self):
+        """"41.311081, 69.240562" — the form every map app accepts pasted back."""
+        return f"{self._lat}, {self._lng}" if self.has_location else ""
+
+    @property
+    def google_maps_url(self):
+        return f"https://www.google.com/maps?q={self._lat},{self._lng}"
+
+    @property
+    def yandex_maps_url(self):
+        # Yandex writes the point longitude first.
+        return f"https://yandex.uz/maps/?pt={self._lng},{self._lat}&z=17&l=map"
 
     @property
     def sales_total(self):
@@ -1886,10 +1942,24 @@ class Shipment(models.Model):
     destination = models.CharField("Qayerga (yetkazish joyi)", max_length=120,
                                    blank=True, default="O'zbekiston")
     note = models.TextField("Izoh", blank=True)
+    # One birja truck that carries more than its kelishuv has left: the rest comes
+    # off the next kelishuv, and a yuk belongs to one kelishuv (its kod, transport
+    # and to'lovlar are that kelishuv's), so the truck is several yuklar. Every part
+    # after the first points here, at the yuk the truck started on, so the pair
+    # still reads as the one load it is — see `truck_yuklar` and crm.birja.
+    truck = models.ForeignKey("self", on_delete=models.SET_NULL, null=True,
+                              blank=True, related_name="truck_parts",
+                              verbose_name="Bitta mashina")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="shipments",
                                    verbose_name="Kim kiritdi")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    #: What describes the TRUCK rather than which kelishuv a part is booked on —
+    #: kept the same on every yuk of one truck (see `save`).
+    TRUCK_FIELDS = ("status", "sent", "eta", "arrived", "transport", "container",
+                    "responsible", "logist", "driver_name", "driver_phone",
+                    "origin", "destination")
 
     class Meta:
         ordering = ["-created_at"]
@@ -1908,9 +1978,37 @@ class Shipment(models.Model):
         rows are saved. That is not belt-and-braces: a yuk being created has no
         lines at the moment it is first saved, so its kg — which is what the rate is
         multiplied by — is not knowable until they exist. The sync rewrites nothing
-        when nothing has changed, so the second call is free on every other path."""
+        when nothing has changed, so the second call is free on every other path.
+
+        A yuk that is one part of a truck (`truck`) hands its truck fields to the
+        other parts: a holat clicked, a date or a plate corrected on one of them is
+        a fact about the one truck they all ride."""
         super().save(*args, **kwargs)
         sync_birja_transport(self)
+        others = [yuk for yuk in self.truck_yuklar if yuk.pk != self.pk]
+        if others:
+            Shipment.objects.filter(pk__in=[yuk.pk for yuk in others]).update(
+                **{name: getattr(self, name) for name in self.TRUCK_FIELDS})
+            # `update` skips save(), so each part's transport follows here — an
+            # arrival date moving is what dates and creates that xarajat.
+            for yuk in Shipment.objects.filter(pk__in=[yuk.pk for yuk in others]):
+                sync_birja_transport(yuk)
+
+    @property
+    def truck_yuklar(self):
+        """Every yuk of the truck this one rides, the first part first — just
+        [self] for a truck that is one yuk, which is nearly all of them."""
+        if not self.pk:
+            return [self]
+        head_id = self.truck_id or self.pk
+        parts = list(Shipment.objects.filter(Q(pk=head_id) | Q(truck_id=head_id))
+                     .select_related("contract").order_by("pk"))
+        return parts if len(parts) > 1 else [self]
+
+    @property
+    def truck_kg(self):
+        """What the whole truck carries, across every kelishuv it came off."""
+        return sum((yuk.kg for yuk in self.truck_yuklar), Decimal("0"))
 
     @property
     def order_in_contract(self):
@@ -2344,6 +2442,14 @@ class LocalPurchase(models.Model):
                                     related_name="local_purchase", verbose_name="Yuk")
     seller_name = models.CharField("Sotuvchi", max_length=200, blank=True)
     seller_phone = models.CharField("Sotuvchi telefoni", max_length=30, blank=True)
+    # The to'lov typed into "Hozir to'landi" — what the edit form shows back in that
+    # box and rewrites when it changes. A link rather than a match on the izoh: the
+    # to'lov is an ordinary hamkor to'lovi and its izoh can be edited on its own page.
+    # Null on nasiya, and when that to'lov was deleted from the hamkor to'lovlar list.
+    spot_payment = models.OneToOneField(
+        "SupplierPayment", on_delete=models.SET_NULL, null=True, blank=True,
+        editable=False, related_name="local_purchase",
+        verbose_name="Xarid paytidagi to'lov")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="local_purchases",
                                    verbose_name="Kim kiritdi")
@@ -2377,6 +2483,12 @@ class Reservation(MoneyEntry):
     lot here — pinning a bron to a lot would mean the mijoz waits for one specific
     truck while the same granula sits in the ombor from another kelishuv.
 
+    And not always of ONE marka: some granula are interchangeable, and a mijoz who
+    books 20 000 kg of "A or B" takes whichever lands first. The markalar are the
+    bron's `items`, all equal, each with its own narx; the kg is one figure for the
+    whole bron. A sotuv of any of them draws the same `remaining_kg` down, so 12 000
+    of A and then 8 000 of B serve it in full.
+
     A bron reserves nothing physically. It does not hold kg back from an ordinary
     sotuv and it does not block another bron: the granula goes to whoever the
     operator hands it to. The `created_at` order is shown as a queue position so it
@@ -2387,8 +2499,13 @@ class Reservation(MoneyEntry):
     purpose. Either way the bron stays open for the rest.
 
     The agreed narx carries its currency into the sotuv, so a bron struck in so'm
-    becomes a so'm sotuv rather than silently turning into dollars."""
+    becomes a so'm sotuv rather than silently turning into dollars. One currency per
+    bron, as one sotuv is one currency: the narxlar differ per marka, the valyuta
+    and kurs do not."""
 
+    # The narx lives on the items now. MoneyEntry's save() backstop reads these by
+    # name and does nothing when they are absent — which they are, deliberately:
+    # a `price` property here would be written to by that backstop.
     money_fields = ("price", "price_uzs")
 
     class Status(models.TextChoices):
@@ -2403,27 +2520,105 @@ class Reservation(MoneyEntry):
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT,
                                  related_name="reservations", verbose_name="Mijoz")
-    brand = models.CharField("Marka", max_length=120, db_index=True)
     kg = models.DecimalField("Bron qilingan kg", max_digits=12, decimal_places=3)
     fulfilled_kg = models.DecimalField(
         "Berilgan kg", max_digits=12, decimal_places=3, default=0,
         help_text="Sotuvga aylantirilgan qismi — qolgani navbatda turadi")
-    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
-                                null=True, blank=True)
-    price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
-                                    decimal_places=2, null=True, blank=True)
     status = models.CharField("Holat", max_length=10, choices=Status.choices,
                               default=Status.ACTIVE)
+    # The day the mijoz actually asked — today by default, but a bron agreed on the
+    # phone is often typed in days later, and `created_at` (the moment of entry)
+    # would put it behind brons that were really asked for after it.
+    date = models.DateField("Bron sanasi", default=timezone.localdate)
     note = models.CharField("Izoh", max_length=255, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, related_name="reservations",
                                    verbose_name="Kim kiritdi")
+    # The code the operator reads — komoliddin-sintafon-3 — the mijoz's name and
+    # their bron number, split the way `Contract.code_slug` / `code_number` are.
+    code_slug = models.CharField(max_length=200, db_index=True, editable=False)
+    code_number = models.PositiveIntegerField(editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ["-date", "-created_at"]
         verbose_name = "Bron"
         verbose_name_plural = "Bronlar"
+        constraints = [models.UniqueConstraint(fields=["code_slug", "code_number"],
+                                               name="unique_reservation_code")]
+
+    @property
+    def code(self):
+        return f"{self.code_slug}-{self.code_number}"
+
+    def _next_code_number(self, slug):
+        """One past the highest number this mijoz — or anyone sharing their slug —
+        has been issued; see `Contract._next_code_number`."""
+        top = Customer.objects.filter(
+            models.Q(code_slug=slug) | models.Q(pk=self.customer_id)
+        ).aggregate(top=Max("code_counter"))["top"]
+        return (top or 0) + 1
+
+    def save(self, *args, **kwargs):
+        """Stamps the code once, as `Contract.save` does: re-issued only when the bron
+        is moved to another mijoz, and retried when two saves race for a number."""
+        if self.pk:
+            was = (Reservation.objects.filter(pk=self.pk)
+                   .values_list("customer_id", flat=True).first())
+            needs_code = was is not None and was != self.customer_id
+        else:
+            needs_code = True
+        if not needs_code:
+            return super().save(*args, **kwargs)
+        for attempt in range(5):
+            slug = customer_code_slug(self.customer.name)
+            self.code_slug, self.code_number = slug, self._next_code_number(slug)
+            if (fields := kwargs.get("update_fields")) is not None:
+                kwargs["update_fields"] = {*fields, "code_slug", "code_number"}
+            try:
+                with transaction.atomic():
+                    result = super().save(*args, **kwargs)
+                    Customer.objects.filter(pk=self.customer_id,
+                                            code_counter__lt=self.code_number
+                                            ).update(code_counter=self.code_number)
+                    return result
+            except IntegrityError:
+                if attempt == 4:
+                    raise
+                kwargs.pop("force_insert", None)
+
+    @property
+    def unpaid_given(self):
+        """Qolgan to'lov, in the bron's own currency: what the mijoz still owes for
+        the kg already given out of this bron. A sotuv that gave only part of its kg
+        here brings that part of its qarz. None when nothing is given yet.
+
+        Reads `draws` and each sotuv's `returns` and `allocations` — the list
+        prefetches them."""
+        given = self._given_money()
+        return None if given is None else given[0]
+
+    @property
+    def value_given(self):
+        """What the kg already given out of this bron come to, in its own currency —
+        the whole of which `unpaid_given` is the unpaid part. None when nothing is
+        given yet."""
+        given = self._given_money()
+        return None if given is None else given[1]
+
+    def _given_money(self):
+        """(owed, value) of the kg given out of this bron, each sotuv bringing the
+        share of itself that was counted here."""
+        draws = list(self.draws.all())
+        if not draws:
+            return None
+        owed = value = Decimal("0")
+        for draw in draws:
+            sale = draw.sale
+            share = draw.kg / sale.kg
+            owed += own_side(self, sale.remaining, sale.remaining_uzs) * share
+            value += own_side(self, sale.net_total, sale.net_total_uzs) * share
+        return owed.quantize(Decimal("0.01")), value.quantize(Decimal("0.01"))
 
     @property
     def remaining_kg(self):
@@ -2437,34 +2632,144 @@ class Reservation(MoneyEntry):
         return self.status == self.Status.ACTIVE and self.remaining_kg > 0
 
     @property
-    def price_own(self):
-        """The agreed narx in the currency it was agreed in — what the sotuv form
-        has to be handed when this bron is served, because the narx box there is
-        read as whichever currency the Valyuta picker says.
+    def item_list(self):
+        """The markalar in the order they were typed. `.all()` so a prefetch is
+        used — every list that shows brons prefetches `items`."""
+        return list(self.items.all())
 
-        None while the narx is still open, same as `total`."""
+    @property
+    def brands(self):
+        return [item.brand for item in self.item_list]
+
+    @property
+    def brand_label(self):
+        """"A / B / C" — the bron's markalar as one line of text, for the places
+        that have room for a name and not a list (an izoh, a help text, Excel)."""
+        return " / ".join(self.brands)
+
+    @property
+    def is_multi(self):
+        return len(self.item_list) > 1
+
+    def item_for(self, brand):
+        """This bron's row for one marka — None if the marka is not one of its."""
+        return next((item for item in self.item_list if item.brand == brand), None)
+
+    @property
+    def value_price(self):
+        """The narx the kg still owed are valued at, in the bron's own currency — or
+        None when any marka's narx is not agreed yet.
+
+        With several markalar at different narxlar, which one the mijoz ends up
+        taking is not known until they take it. The HIGHEST is used: the avans a bron
+        speaks for is then never reported as covering more than it might have to.
+        An unagreed narx makes the whole value unknown rather than quietly valuing
+        the bron at the markalar that happen to be priced."""
+        prices = [item.price_own for item in self.item_list]
+        if not prices or any(price is None for price in prices):
+            return None
+        return max(prices)
+
+    @property
+    def totals(self):
+        """[(usd, uzs)] — what the bron is worth at its narxlar: one pair when they
+        all agree, the cheapest and dearest when they do not, [] while any narx is
+        still open. None rather than 0 is the old rule — a bron may be struck
+        before the price is, and "kelishilmagan" must not read as a free bron."""
+        items = self.item_list
+        if not items or any(item.price is None for item in items):
+            return []
+        pairs = sorted({((self.kg * item.price).quantize(Decimal("0.01")),
+                         (self.kg * item.price_uzs).quantize(Decimal("0.01"))
+                         if item.price_uzs is not None else None)
+                        for item in items},
+                       key=lambda pair: own_side(self, *pair) or Decimal("0"))
+        return [pairs[0]] if len(pairs) == 1 else [pairs[0], pairs[-1]]
+
+    def __str__(self):
+        return f"Bron #{self.pk} · {self.customer} · {self.brand_label} · {self.kg} kg"
+
+
+class ReservationItem(models.Model):
+    """One marka a bron may be served with, and the narx agreed for it.
+
+    Every item of a bron is equal — there is no main marka with backups. The kg is
+    not here: it is the bron's, shared by all its markalar. The narx is optional,
+    the same as it always was on a bron, and it is kept in both currencies at the
+    bron's own kurs."""
+
+    reservation = models.ForeignKey(Reservation, on_delete=models.CASCADE,
+                                    related_name="items", verbose_name="Bron")
+    brand = models.CharField("Marka", max_length=120, db_index=True)
+    price = models.DecimalField("1 kg narxi (USD)", max_digits=14, decimal_places=4,
+                                null=True, blank=True)
+    price_uzs = models.DecimalField("1 kg narxi (so'm)", max_digits=18,
+                                    decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        ordering = ["pk"]
+        verbose_name = "Bron markasi"
+        verbose_name_plural = "Bron markalari"
+        constraints = [
+            models.UniqueConstraint(fields=["reservation", "brand"],
+                                    name="reservation_item_unique_brand"),
+        ]
+
+    @property
+    def price_own(self):
+        """The agreed narx in the currency the bron was agreed in — what the sotuv
+        form is handed when this marka is served. None while it is still open."""
         if self.price is None:
             return None
-        return own_side(self, self.price, self.price_uzs)
+        return own_side(self.reservation, self.price, self.price_uzs)
 
     @property
     def total(self):
-        """What the bron is worth at the agreed narx — None while the narx is still
-        open, which is a real state here: a bron may be struck before the price is.
-        None rather than 0 so the screen can say "kelishilmagan" instead of showing
-        a free reservation."""
+        """The whole bron's kg at THIS marka's narx — what it comes to if the mijoz
+        is served with this one. None while the narx is open."""
         if self.price is None:
             return None
-        return (self.kg * self.price).quantize(Decimal("0.01"))
+        return (self.reservation.kg * self.price).quantize(Decimal("0.01"))
 
     @property
     def total_uzs(self):
         if self.price_uzs is None:
             return None
-        return (self.kg * self.price_uzs).quantize(Decimal("0.01"))
+        return (self.reservation.kg * self.price_uzs).quantize(Decimal("0.01"))
 
     def __str__(self):
-        return f"Bron #{self.pk} · {self.customer} · {self.brand} · {self.kg} kg"
+        return f"{self.brand} (bron #{self.reservation_id})"
+
+
+class ReservationDraw(models.Model):
+    """How many kg of one sotuv were counted into one bron.
+
+    A sotuv bigger than what its mijoz's oldest bron still owes spills into the next
+    one: 24 100 kg of 2102 репак closed bron #6 with 2 700 and put 21 400 into bron
+    #9. `Sale.reservation` names only the first bron it touched, so the 21 400 were
+    written onto #9 with nothing recording where they came from — the bron page could
+    not list the sotuv, and deleting it gave all 24 100 back to #6.
+
+    One row per (sotuv, bron) pair, written by `draw_down_bron` and removed by
+    `release_bron`. The sum of a bron's rows is its `fulfilled_kg`."""
+
+    reservation = models.ForeignKey(Reservation, on_delete=models.CASCADE,
+                                    related_name="draws", verbose_name="Bron")
+    sale = models.ForeignKey("Sale", on_delete=models.CASCADE,
+                             related_name="bron_draws", verbose_name="Sotuv")
+    kg = models.DecimalField("Bronga hisoblangan kg", max_digits=12, decimal_places=3)
+
+    class Meta:
+        ordering = ["pk"]
+        verbose_name = "Brondan berilgan"
+        verbose_name_plural = "Brondan berilganlar"
+        constraints = [
+            models.UniqueConstraint(fields=["reservation", "sale"],
+                                    name="reservation_draw_unique_sale"),
+        ]
+
+    def __str__(self):
+        return f"sotuv #{self.sale_id} → bron #{self.reservation_id}: {self.kg} kg"
 
 
 # ── Pozitsiya: what the cash figure means ────────────────────────────────────────
@@ -2749,6 +3054,8 @@ def bron_advance_holds(reservations):
 
     A bron whose narx is not agreed yet holds nothing and is short nothing — what it
     is worth is not known, and a figure invented here would read as an agreed one.
+    One of several markalar is valued at the dearest of their narxlar — see
+    `Reservation.value_price`.
 
     Computed over each mijoz's WHOLE open queue rather than the rows handed in, so
     filtering the list cannot change what a bron is holding."""
@@ -2759,7 +3066,8 @@ def bron_advance_holds(reservations):
     holds = {}
     queues = Reservation.objects.filter(
         customer_id__in=customers, status=Reservation.Status.ACTIVE
-    ).select_related("customer").order_by("created_at", "pk")
+    ).select_related("customer").prefetch_related("items").order_by(
+        "date", "created_at", "pk")
     by_customer = defaultdict(list)
     for bron in queues:
         by_customer[bron.customer_id].append(bron)
@@ -2778,7 +3086,7 @@ def bron_advance_holds(reservations):
             (payment.currency, unspent_payment_amount(payment))
             for payment in payments[customer_id]))
         for bron in queue:
-            price = bron.price_own
+            price = bron.value_price
             if price is None or bron.remaining_kg <= 0:
                 if bron.pk in wanted:
                     holds[bron.pk] = {"held": None, "short": None,
@@ -3054,20 +3362,27 @@ def bron_queue(brand=None):
     actually agreed on the phone.
 
     One list, not one per marka, so the caller can see the whole board; pass a
-    marka to narrow it. Ordering is `created_at` then pk: two brons taken in the
-    same second still have a defined order, and it is the one entered first."""
+    marka to narrow it. A bron of several markalar stands in the queue of each of
+    them, at the place its `date` gives it. Ordering is the bron sanasi, then
+    `created_at`, then pk: two brons of one day stand in the order they were
+    entered."""
     qs = (Reservation.objects
           .filter(status=Reservation.Status.ACTIVE)
           .select_related("customer")
-          .order_by("created_at", "pk"))
+          .prefetch_related("items")
+          .order_by("date", "created_at", "pk"))
     if brand is not None:
-        qs = qs.filter(brand=brand)
+        qs = qs.filter(items__brand=brand).distinct()
     return [r for r in qs if r.remaining_kg > 0]
 
 
 def brand_reserved_kg(brand):
     """Kg of this marka already promised to somebody. Counted on `remaining_kg`, so
     a bron half filled from an earlier truck only reports the half still owed.
+
+    A bron of several markalar counts in full under each of them: which one it will
+    be served with is not known yet, so the figures of two such markalar add up to
+    more than was promised — the screens say so where it happens.
 
     Reported, never enforced: this figure tells the operator who is waiting on the
     granula, and nothing more. It is not subtracted from what a sotuv may take —
@@ -3112,8 +3427,9 @@ def bron_brands():
 
 
 def last_sale_prices_by_customer():
-    """{customer_id: {brand: (price_usd, price_uzs)}} — the narx each marka last
-    went out at, per mijoz, which is what the sotuv form opens with.
+    """{customer_id: {brand: (price_usd, price_uzs, currency)}} — the narx each marka
+    last went out at, per mijoz, and the valyuta it was agreed in, which is what the
+    sotuv form opens with.
 
     Every mijoz. The last narx is simply what this mijoz paid last time, and an
     operator who is quoting a new one types over it — so there is nothing to decide
@@ -3128,7 +3444,9 @@ def last_sale_prices_by_customer():
 
     Both currencies are carried. Which of them the form fills is the SOTUV's own
     valyuta, decided in the browser when the row is filled — a sotuv agreed in so'm
-    must not open with a dollar figure standing in a so'm box.
+    must not open with a dollar figure standing in a so'm box. The valyuta the last
+    one was agreed in rides along too: the form opens on it, so a mijoz who buys in
+    so'm is offered so'm without the operator switching it first.
 
     Values rather than Sale objects: this now walks every sotuv in the app on every
     sotuv form, and the marka is one join away, so there is no reason to build a
@@ -3136,11 +3454,11 @@ def last_sale_prices_by_customer():
     prices = {}
     # Oldest first, so a later sotuv of the same marka simply writes over it — one
     # pass, and no per-row comparison of dates that the ordering already settles.
-    for customer_id, brand, usd_price, uzs_price in (
+    for customer_id, brand, usd_price, uzs_price, currency in (
             Sale.objects.order_by("date", "pk")
             .values_list("customer_id", "line__contract_line__brand",
-                         "price", "price_uzs")):
-        prices.setdefault(customer_id, {})[brand] = (usd_price, uzs_price)
+                         "price", "price_uzs", "currency")):
+        prices.setdefault(customer_id, {})[brand] = (usd_price, uzs_price, currency)
     return prices
 
 
@@ -3153,8 +3471,8 @@ def fifo_lots(brand):
 
 
 def bron_countable_sales(bron):
-    """The mijoz's sotuvlar of this bron's marka that no bron has counted yet, newest
-    first — what Bronlar offers to count into it by hand.
+    """The mijoz's sotuvlar of any of this bron's markalar that no bron has counted
+    yet, newest first — what Bronlar offers to count into it by hand.
 
     The sotuv form can only draw on a bron that is already there, so a sotuv typed in
     first and its bron second leaves the bron at its full kg. Which of these sotuvlar
@@ -3162,13 +3480,28 @@ def bron_countable_sales(bron):
     them."""
     return (Sale.objects
             .filter(customer_id=bron.customer_id, reservation__isnull=True,
-                    line__contract_line__brand=bron.brand)
+                    line__contract_line__brand__in=bron.brands)
             .select_related("line__contract_line")
             .order_by("-date", "-pk"))
 
 
+def bron_postdates(bron, sale):
+    """True when the bron was struck after this sotuv — entered after it, or its
+    bron sanasi later than the sotuv's sana — so the sotuv cannot have served it.
+
+    The sana matters as much as the moment of entry: a delivery typed in late is
+    entered after every bron on the board. Komoliddin's 28-sentabr sotuv at 1.42,
+    typed in eight minutes after his 29-sentabr bron at 1.40 was struck, went into
+    that bron with 21 400 kg it had nothing to do with. The same day counts as
+    before: a bron and its first delivery are often struck on one day."""
+    if sale.created_at and bron.created_at > sale.created_at:
+        return True
+    return bron.date > sale.date
+
+
 def draw_down_bron(sale, served_id=None):
-    """Take a sotuv out of its OWN mijoz's bron for that marka. Returns the kg drawn.
+    """Take a sotuv out of its OWN mijoz's bron for that marka — a bron naming it
+    among its markalar. Returns the kg drawn.
 
     A bron is a promise of kg of one marka to one mijoz. When that mijoz is served,
     the promise is smaller — however the granula reached them. Only the Brondan
@@ -3184,8 +3517,9 @@ def draw_down_bron(sale, served_id=None):
     promise and this sotuv does not settle it. A sotuv that already came FROM a
     bron is left alone — `reservation_convert` has booked it.
 
-    And only brons that already EXISTED when the sotuv was entered: a promise made
-    afterwards is not one this sotuv can have served. Live that costs nothing, since
+    And only brons that already EXISTED when the sotuv was entered and on its sana
+    — see `bron_postdates`: a promise made afterwards is not one this sotuv can
+    have served. Live that costs nothing, since
     a sotuv being saved now is younger than every bron on the board. It matters when
     past sales are replayed — `merge_brand` does exactly that after two names for one
     marka are joined — where without it a fresh bron would be eaten by sales that
@@ -3208,16 +3542,17 @@ def draw_down_bron(sale, served_id=None):
             break
         if bron.customer_id != sale.customer_id:
             continue
-        if (bron.pk != served_id and sale.created_at
-                and bron.created_at > sale.created_at):
+        if bron.pk != served_id and bron_postdates(bron, sale):
             continue
         take = min(bron.remaining_kg, remaining)
         bron.fulfilled_kg += take
         if bron.remaining_kg <= 0:
             bron.status = Reservation.Status.CONVERTED
         bron.save(update_fields=["fulfilled_kg", "status"])
-        # Linked to the FIRST bron it touched, so the sotuv can say which promise it
-        # went against and `release_bron` knows where to put the kg back.
+        # Every bron it touched gets its own row with its own kg, so the bron page
+        # can list this sotuv and `release_bron` puts each share back where it
+        # came from. The link on the sotuv names only the FIRST bron.
+        ReservationDraw.objects.create(reservation=bron, sale=sale, kg=take)
         if sale.reservation_id is None:
             sale.reservation = bron
             sale.save(update_fields=["reservation"])
@@ -3226,28 +3561,75 @@ def draw_down_bron(sale, served_id=None):
     return drawn
 
 
-def release_bron(sale, kg=None):
-    """Give a sotuv's kg back to the bron it was drawn from — for an edit or a
+def recount_brons(customer_id, since=None):
+    """Count a mijoz's sotuvlar into their brons again, in SANA order.
+
+    `draw_down_bron` fills a bron in the order sotuvlar are TYPED, so a day typed
+    late loses the bron to a later day typed first: Komoliddin's 16-oktabr sotuv,
+    typed at 05:55, took 2 100 kg of bron-3, and his 15-oktabr sotuv typed six
+    minutes later found 2 850 kg left. Here every sotuv is released and drawn again
+    oldest sana first — entry time breaks a tie within a day — so a bron goes to
+    the days that came first, however they were typed in.
+
+    `since` limits it to sotuvlar of that sana or later: in sana order the earlier
+    ones are not touched by anything that comes after them.
+
+    Only sotuvlar the operator let draw (`draws_bron`), each offered its
+    `bron_pick` first. `bron_postdates` still holds, so a bron struck after a
+    sotuv is not filled by it unless that bron was named for it. A sotuv with kg
+    in a bron that ended by agreement (Tugatildi) or was cancelled is left as it
+    is: that bron is off the queue, and its kg, once released, would not come back."""
+    with transaction.atomic():
+        _recount_brons(customer_id, since)
+
+
+def _recount_brons(customer_id, since):
+    sales = (Sale.objects.filter(customer_id=customer_id)
+             .filter(Q(draws_bron=True) | Q(bron_draws__isnull=False))
+             .distinct().select_related("line")
+             .prefetch_related("bron_draws__reservation")
+             .order_by("date", "created_at", "pk"))
+    if since is not None:
+        sales = sales.filter(date__gte=since)
+    ended = (Reservation.Status.CLOSED, Reservation.Status.CANCELLED)
+    sales = [sale for sale in sales
+             if not any(d.reservation.status in ended for d in sale.bron_draws.all())]
+    for sale in sales:
+        release_bron(sale)
+        if sale.reservation_id is not None:
+            sale.reservation = None
+            sale.save(update_fields=["reservation"])
+    for sale in sales:
+        if sale.draws_bron:
+            draw_down_bron(sale, served_id=sale.bron_pick_id)
+
+
+def release_bron(sale):
+    """Give a sotuv's kg back to every bron it was drawn from — for an edit or a
     delete. Returns the kg released.
 
-    `kg` is what the sotuv took, when the instance no longer says so: a bound form
-    writes the posted kg onto the instance at `is_valid()`, before the edit is
-    saved. Releasing that NEW kg and drawing it again moved the bron by nothing —
-    bron #5 missed 4 000 kg when a 3 000 kg sotuv was corrected to 7 000.
+    What goes back is what the `ReservationDraw` rows say was taken, bron by bron —
+    not the sotuv's kg. Those differ twice over: a sotuv that spilled across two
+    brons took only part of itself from each, and a bound form has already written
+    the posted kg onto the instance by the time an edit releases (bron #5 missed
+    4 000 kg when a 3 000 kg sotuv was corrected to 7 000 and the NEW kg went back).
 
     A bron closed by the sotuv reopens: the promise is unkept again, and a bron
-    that stayed CONVERTED would go on reading as served while the mijoz waits."""
-    bron = sale.reservation
-    if bron is None:
-        return Decimal("0")
-    give = min(sale.kg if kg is None else kg, bron.fulfilled_kg)
-    if give <= 0:
-        return Decimal("0")
-    bron.fulfilled_kg -= give
-    if bron.status == Reservation.Status.CONVERTED and bron.remaining_kg > 0:
-        bron.status = Reservation.Status.ACTIVE
-    bron.save(update_fields=["fulfilled_kg", "status"])
-    return give
+    that stayed CONVERTED would go on reading as served while the mijoz waits.
+
+    The rows are deleted, so a sotuv drawn down again after an edit starts clean."""
+    given = Decimal("0")
+    for draw in sale.bron_draws.select_related("reservation"):
+        bron = draw.reservation
+        give = min(draw.kg, bron.fulfilled_kg)
+        if give > 0:
+            bron.fulfilled_kg -= give
+            if bron.status == Reservation.Status.CONVERTED and bron.remaining_kg > 0:
+                bron.status = Reservation.Status.ACTIVE
+            bron.save(update_fields=["fulfilled_kg", "status"])
+            given += give
+        draw.delete()
+    return given
 
 
 def brand_stock_costed():
@@ -3264,19 +3646,30 @@ def brand_stock_costed():
     # to'lovlari. Without it the pricing asked those per lot — which is what made the
     # Marka picker (and so the multi-mahsulot Tahrirlash form) slower with every
     # kelishuv the ombor took in.
+    #
+    # `on_hand` is the NET of every lot, the figure the ombor and `brand_on_hand_kg`
+    # show. A lot sold below zero (a sotuv slice landed on the wrong truck) has to
+    # count against the lot still holding those kg: summing only the lots above zero
+    # offered 2102 кампаунд as 1 020 kg omborda while the ombor read 0 — lot #118 at
+    # −1 020, lot #136 at +1 020. The cost and the codes are still those of the lots
+    # that hold granula, since a lot below zero has none to price.
+    held = {}
     for lot in arrived_lots().prefetch_related(*STOCK_COST_PREFETCH):
         a = lot.available_kg
+        b = lot.brand
+        on_hand[b] = on_hand.get(b, Decimal("0")) + a
         if a > 0:
-            b = lot.brand
-            on_hand[b] = on_hand.get(b, Decimal("0")) + a
+            held[b] = held.get(b, Decimal("0")) + a
             cost[b] = cost.get(b, Decimal("0")) + a * lot.landed_cost_per_kg
             codes.setdefault(b, set()).add(lot.contract_line.contract.code)
+    on_hand = {b: kg for b, kg in on_hand.items() if kg > 0 and b in held}
     # Every open bron in ONE trip, grouped here. Asked per marka — which is what
     # `brand_reserved_kg` does — this was a query per row of the ombor, and it is the
     # last thing that still made pricing the shelf cost more as the shelf filled.
     reserved_by_brand = defaultdict(Decimal)
     for bron in bron_queue():
-        reserved_by_brand[bron.brand] += bron.remaining_kg
+        for brand in bron.brands:
+            reserved_by_brand[brand] += bron.remaining_kg
     rows = []
     for b in sorted(on_hand):
         reserved = reserved_by_brand[b]
@@ -3284,7 +3677,7 @@ def brand_stock_costed():
             "brand": b,
             "on_hand": on_hand[b],
             "reserved": reserved,
-            "cost": (cost[b] / on_hand[b]).quantize(Decimal("0.0001")),
+            "cost": (cost[b] / held[b]).quantize(Decimal("0.0001")),
             "codes": sorted(codes[b]),
         })
     return rows
@@ -3322,6 +3715,17 @@ class Sale(MoneyEntry):
                              related_name="sales", verbose_name="Lot (mahsulot)")
     reservation = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name="+", verbose_name="Bron")
+    # The Brondan ushlansin answer, kept: `recount_brons` gives every sotuv back to
+    # its brons again, and a sotuv the operator said is NOT against the bron must stay
+    # out — without the answer on record it reads the same as one that was ticked but
+    # found the bron already full.
+    draws_bron = models.BooleanField("Brondan ushlansin", default=True)
+    # A bron somebody named for this sotuv — the bron whose Sotuv button opened the
+    # form, or the one it was counted into by hand on Bronlar. The recount offers it
+    # that bron first, as `draw_down_bron`'s `served_id` does live.
+    bron_pick = models.ForeignKey("Reservation", on_delete=models.SET_NULL, null=True,
+                                  blank=True, related_name="+",
+                                  verbose_name="Tanlangan bron")
     # The rows entered in ONE go carry the same id: several markalar typed into one
     # modal, and each marka's kg split FIFO across lots. Without it Sotuvlar shows a
     # single trip to the counter as N unrelated rows and nothing on screen says the
@@ -5510,3 +5914,47 @@ class ShipmentLeg(models.Model):
 
     def __str__(self):
         return f"{self.from_location} → {self.to_location}"
+
+
+def _scale_device_id():
+    """The secret a scale's converter sends first on connecting. Fixed length and a
+    prefix no weight line starts with, so one ID can never be the start of another
+    and the receiver can match it on the raw bytes before any line ending."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "TRZ-" + get_random_string(20, alphabet)
+
+
+class Scale(models.Model):
+    """A weighing scale that reports over the network: its RS232 output goes into a
+    serial-to-Ethernet converter (USR-TCP232-410S and the like) set to TCP Client,
+    which connects to `manage.py tarozi_listen` and sends `device_id` first.
+
+    The `last_*` fields are the latest reading only — the receiver writes them when
+    the weight or its stability changes (and refreshes `last_seen` at most once a
+    second); nothing here is a history. The kg a form takes from a scale is still
+    typed into that form's own field, so a reading never becomes a record by itself."""
+
+    name = models.CharField("Nomi", max_length=60)
+    device_id = models.CharField("Device ID", max_length=40, unique=True,
+                                 default=_scale_device_id, editable=False)
+    is_active = models.BooleanField("Faol", default=True)
+    # Off = this scale also takes connections that send NO Device ID (a converter not
+    # set up for one yet). At most one scale may be open: a connection without an ID
+    # cannot say which scale it is, so there has to be exactly one it can be.
+    require_id = models.BooleanField("Device ID talab qilinadi", default=True)
+    online = models.BooleanField("Ulangan", default=False, editable=False)
+    peer = models.CharField("Manzil", max_length=64, blank=True, editable=False)
+    last_raw = models.CharField("Oxirgi qator", max_length=128, blank=True, editable=False)
+    last_kg = models.DecimalField("Oxirgi vazn", max_digits=12, decimal_places=3,
+                                  null=True, blank=True, editable=False)
+    last_stable = models.BooleanField("Barqaror", default=False, editable=False)
+    last_seen = models.DateTimeField("Oxirgi ma'lumot", null=True, blank=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        verbose_name = "Tarozi"
+        verbose_name_plural = "Tarozilar"
+
+    def __str__(self):
+        return self.name

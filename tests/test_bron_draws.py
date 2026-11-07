@@ -1,0 +1,411 @@
+"""A sotuv that spills across two brons records its kg against each of them.
+
+24 100 kg of 2102 репак closed bron #6 with 2 700 and put 21 400 into bron #9, while
+the sotuv named only #6: bron #9's berilgan kg came from nowhere anybody could see,
+and deleting the sotuv gave all 24 100 back to #6.
+"""
+import importlib
+from datetime import timedelta
+from decimal import Decimal
+from io import StringIO
+from uuid import uuid4
+
+import pytest
+
+from conftest import line_data, make_bron
+from django.apps import apps as django_apps
+from django.core.management import call_command
+from django.utils import timezone
+from crm.models import Reservation, ReservationDraw, ReservationItem, Sale
+from tests.test_bron_markalar import _sell
+from tests.test_reservations import _arrived_lot, _customer
+
+backfill_draws = importlib.import_module(
+    "crm.migrations.0081_reservation_draws").backfill_draws
+backfill_choice = importlib.import_module(
+    "crm.migrations.0086_sale_bron_choice").backfill
+
+
+def _two_brons(customer):
+    older = make_bron(customer, brand="LLDPE", kg="3000")
+    newer = make_bron(customer, brand=["HDPE", "LLDPE"], kg="75000")
+    return older, newer
+
+
+class TestSpill:
+    def test_a_sotuv_records_what_it_gave_each_bron(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        _sell(admin_client, customer, "LLDPE", "24100")
+        sale = Sale.objects.get()
+        assert sale.reservation == older
+        assert [(d.reservation_id, d.kg) for d in sale.bron_draws.all()] == [
+            (older.pk, Decimal("3000.000")), (newer.pk, Decimal("21100.000"))]
+        newer.refresh_from_db()
+        assert newer.fulfilled_kg == Decimal("21100.000")
+
+    def test_deleting_it_gives_each_bron_back_its_own_share(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        _sell(admin_client, customer, "LLDPE", "24100")
+        admin_client.post(f"/sales/{Sale.objects.get().pk}/delete/", {})
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        assert older.fulfilled_kg == Decimal("0") and newer.fulfilled_kg == Decimal("0")
+        assert older.status == Reservation.Status.ACTIVE
+        assert not ReservationDraw.objects.exists()
+
+
+class TestDetailPage:
+    def test_each_bron_lists_the_sotuvlar_counted_into_it(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        _sell(admin_client, customer, "LLDPE", "2000")   # all of it into the older
+        _sell(admin_client, customer, "LLDPE", "5000")   # 1 000 older, 4 000 newer
+        first, second = Sale.objects.order_by("pk")
+        sections = admin_client.get(f"/reservations/{older.pk}/").context["sections"]
+        assert [(s["bron"], s["current"]) for s in sections] == [
+            (newer, False), (older, True)]
+        drawn = {s["bron"].pk: [(b["first"].pk, b["sold_kg"]) for b in s["drawn"]]
+                 for s in sections}
+        assert drawn[newer.pk] == [(second.pk, Decimal("4000.000"))]
+        assert sorted(drawn[older.pk]) == [(first.pk, Decimal("2000.000")),
+                                           (second.pk, Decimal("1000.000"))]
+        assert not any(s["loose"] for s in sections)
+
+    def test_what_no_bron_took_is_listed_as_bronsiz(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="3000")
+        _sell(admin_client, customer, "LLDPE", "5000")
+        sale = Sale.objects.get()
+        response = admin_client.get(f"/reservations/{bron.pk}/")
+        [section] = response.context["sections"]
+        [drawn], [loose] = section["drawn"], section["loose"]
+        assert (drawn["first"].pk, drawn["kg"]) == (sale.pk, Decimal("3000.000"))
+        assert (loose["first"].pk, loose["kg"]) == (sale.pk, Decimal("2000.000"))
+        assert drawn["whole_kg"] == loose["whole_kg"] == Decimal("5000.000")
+        assert drawn["total"] + loose["total"] == sale.net_total
+        assert drawn["total"] == sale.net_total * Decimal("0.6")
+        assert response.context["sale_count"] == 1
+
+    def test_both_parts_of_a_split_entry_name_the_whole_entry(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="3000")
+        admin_client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": timezone.localdate().isoformat(),
+            **line_data({"brand": "LLDPE", "kg": "2000", "price": "1.5"},
+                        {"brand": "LLDPE", "kg": "4000", "price": "1.5"})})
+        assert Sale.objects.count() == 2
+        [section] = admin_client.get(f"/reservations/{bron.pk}/").context["sections"]
+        [drawn], [loose] = section["drawn"], section["loose"]
+        assert (drawn["kg"], loose["kg"]) == (Decimal("3000.000"), Decimal("3000.000"))
+        assert drawn["whole_kg"] == loose["whole_kg"] == Decimal("6000.000")
+
+    def test_bronsiz_sotuvlar_sit_under_the_bron_they_follow(self, admin_client, db):
+        lot = _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        Reservation.objects.filter(pk=older.pk).update(date="2026-07-01")
+        Reservation.objects.filter(pk=newer.pk).update(date="2026-07-10")
+
+        def loose(day):
+            return Sale.objects.create(customer=customer, line=lot, kg=Decimal("100"),
+                                       price=Decimal("1.4"), date=day)
+        before, between, after = loose("2026-06-20"), loose("2026-07-05"), loose("2026-07-15")
+        sections = admin_client.get(f"/reservations/{newer.pk}/").context["sections"]
+        listed = {s["bron"].pk: [b["first"].pk for b in s["loose"]] for s in sections}
+        assert listed == {newer.pk: [after.pk], older.pk: [between.pk]}
+        assert before.pk not in sum(listed.values(), [])
+
+    def test_translator_forbidden(self, translator_client, db):
+        bron = make_bron(_customer())
+        assert translator_client.get(f"/reservations/{bron.pk}/").status_code == 403
+
+
+class TestBackfill:
+    def test_rebuilds_a_spill_from_fulfilled_kg(self, db):
+        """The prod shape: the sotuv links the older bron only, and the newer bron's
+        berilgan kg are its spill."""
+        lot = _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        sale = Sale.objects.create(customer=customer, line=lot, kg=Decimal("24100"),
+                                   price=Decimal("1.4"), date="2026-07-20",
+                                   reservation=older)
+        Reservation.objects.filter(pk=older.pk).update(fulfilled_kg=Decimal("3000"))
+        Reservation.objects.filter(pk=newer.pk).update(fulfilled_kg=Decimal("21100"))
+        backfill_draws(Reservation, ReservationItem, ReservationDraw, Sale)
+        assert [(d.reservation_id, d.kg) for d in sale.bron_draws.all()] == [
+            (older.pk, Decimal("3000.000")), (newer.pk, Decimal("21100.000"))]
+
+    def test_stops_when_a_bron_cannot_be_explained(self, db):
+        bron = make_bron(_customer(), kg="5000")
+        Reservation.objects.filter(pk=bron.pk).update(fulfilled_kg=Decimal("100"))
+        with pytest.raises(RuntimeError, match=f"{bron.pk}"):
+            backfill_draws(Reservation, ReservationItem, ReservationDraw, Sale)
+
+
+class TestCodes:
+    def test_numbered_per_mijoz_and_never_reused(self, db):
+        komoliddin, other = _customer("Komoliddin sintafon"), _customer("Mak Plast")
+        first = make_bron(komoliddin)
+        make_bron(other)
+        second = make_bron(komoliddin)
+        assert (first.code, second.code) == ("komoliddin-sintafon-1", "komoliddin-sintafon-2")
+        second.delete()
+        assert make_bron(komoliddin).code == "komoliddin-sintafon-3"
+
+    def test_an_edit_keeps_the_code(self, db):
+        bron = make_bron(_customer("Mak Plast"))
+        bron.note = "tel qildi"
+        bron.save()
+        bron.refresh_from_db()
+        assert bron.code == "mak-plast-1"
+
+
+class TestQolganTolov:
+    def test_only_the_share_given_here_is_owed_here(self, admin_client, db):
+        """24 100 kg at $1.50, 3 000 into the older bron and 21 100 into the newer:
+        unpaid, the newer bron is owed 21 100 × 1.50."""
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = _two_brons(customer)
+        assert newer.unpaid_given is None
+        _sell(admin_client, customer, "LLDPE", "24100", price="1.50")
+        newer = Reservation.objects.get(pk=newer.pk)
+        assert newer.unpaid_given == Decimal("31650.00")
+        older = Reservation.objects.get(pk=older.pk)
+        assert older.unpaid_given == Decimal("4500.00")
+
+
+class TestASotuvDatedBeforeTheBron:
+    """Komoliddin's 28-sentabr delivery at 1.42, typed in eight minutes after his
+    29-sentabr bron at 1.40 was struck, went into that bron with 21 400 kg it had
+    nothing to do with."""
+
+    def _post(self, client, customer, date, kg="5000", price="1.42", **extra):
+        return client.post("/sales/new/", {
+            "customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": date, "draw_from_bron_asked": "1", "draw_from_bron": "on",
+            **extra, **line_data({"brand": "LLDPE", "kg": kg, "price": price})})
+
+    def test_is_not_counted_into_it(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="75000", price="1.40")
+        yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+        self._post(admin_client, customer, yesterday)
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0")
+        assert Sale.objects.get().reservation is None
+
+    def test_one_dated_the_same_day_is(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="75000", price="1.40")
+        self._post(admin_client, customer, timezone.localdate().isoformat())
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("5000.000")
+
+
+class TestTheSotuvButtonOfOneBron:
+    """Two brons of one marka at 1.50 and 1.60: the button on the 1.60 one fills in
+    1.60, and the kg have to come off that bron, not the oldest."""
+
+    def test_serves_that_bron(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older = make_bron(customer, brand="LLDPE", kg="10000", price="1.50")
+        newer = make_bron(customer, brand="LLDPE", kg="10000", price="1.60")
+        page = admin_client.get("/reservations/").content.decode()
+        assert f"bron={newer.pk}&amp;" in page
+        TestASotuvDatedBeforeTheBron()._post(
+            admin_client, customer, timezone.localdate().isoformat(),
+            kg="10000", price="1.60", bron=str(newer.pk))
+        older.refresh_from_db()
+        newer.refresh_from_db()
+        assert newer.fulfilled_kg == Decimal("10000.000")
+        assert newer.status == Reservation.Status.CONVERTED
+        assert older.fulfilled_kg == Decimal("0")
+
+    def test_the_form_carries_it(self, admin_client, db):
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="10000", price="1.60")
+        page = admin_client.get(f"/sales/new/?customer={customer.pk}&bron={bron.pk}"
+                                ).content.decode()
+        assert f'name="bron" value="{bron.pk}"' in page
+
+
+class TestRebronByDate:
+    """The repair for sotuvlar already counted into a bron struck after their sana."""
+
+    def test_moves_a_late_typed_sotuv_out_of_the_newer_bron(self, admin_user):
+        lot = _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="75000", price="1.40")
+        yesterday = timezone.localdate() - timedelta(days=1)
+        sale = Sale.objects.create(customer=customer, line=lot, kg=Decimal("5000"),
+                                   price=Decimal("1.42"), date=yesterday,
+                                   reservation=bron)
+        ReservationDraw.objects.create(reservation=bron, sale=sale, kg=Decimal("5000"))
+        Reservation.objects.filter(pk=bron.pk).update(fulfilled_kg=Decimal("5000"))
+
+        call_command("rebron_by_date", stdout=StringIO())
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("5000.000")      # dry run writes nothing
+
+        call_command("rebron_by_date", apply=True, user=admin_user.username,
+                     stdout=StringIO())
+        bron.refresh_from_db()
+        sale.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("0.000")
+        assert sale.reservation is None and sale.price == Decimal("1.4200")
+
+
+def _sell_on(client, customer, day, kg, ticked=True, bron=None):
+    """A sotuv of LLDPE dated `day`, typed now — the Brondan ushlansin box asked."""
+    data = {"customer": customer.pk, "currency": "usd", "exchange_rate": "12000",
+            "date": day.isoformat(), "draw_from_bron_asked": "1",
+            **line_data({"brand": "LLDPE", "kg": kg, "price": "1.5"})}
+    if ticked:
+        data["draw_from_bron"] = "on"
+    if bron is not None:
+        data["bron"] = bron.pk
+    client.post("/sales/new/", data)
+    return Sale.objects.order_by("-pk").first()
+
+
+def _drawn(sale):
+    return sum((d.kg for d in sale.bron_draws.all()), Decimal("0"))
+
+
+class TestDateOrder:
+    """A bron goes to the sotuvlar of the earliest sana, whatever order they were
+    typed in — Komoliddin's 16-oktabr sotuv, typed first, took the bron his
+    15-oktabr one should have had."""
+
+    def _bron(self, customer, kg="3000"):
+        bron = make_bron(customer, brand="LLDPE", kg=kg)
+        Reservation.objects.filter(pk=bron.pk).update(
+            date=timezone.localdate() - timedelta(days=10))
+        return bron
+
+    def test_a_day_typed_late_gets_the_bron_first(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = self._bron(customer)
+        today = timezone.localdate()
+        later = _sell_on(admin_client, customer, today - timedelta(days=1), "2000")
+        earlier = _sell_on(admin_client, customer, today - timedelta(days=3), "2000")
+        assert (_drawn(earlier), _drawn(later)) == (Decimal("2000"), Decimal("1000"))
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("3000")
+        assert bron.status == Reservation.Status.CONVERTED
+
+    def test_an_unticked_sotuv_is_never_counted(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        self._bron(customer)
+        today = timezone.localdate()
+        _sell_on(admin_client, customer, today, "1000")
+        unticked = _sell_on(admin_client, customer, today - timedelta(days=2), "1000",
+                            ticked=False)
+        assert not unticked.draws_bron and _drawn(unticked) == 0
+
+    def test_deleting_one_gives_its_kg_to_the_next_by_sana(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = self._bron(customer)
+        today = timezone.localdate()
+        first = _sell_on(admin_client, customer, today - timedelta(days=3), "2000")
+        second = _sell_on(admin_client, customer, today - timedelta(days=1), "2000")
+        admin_client.post(f"/sales/{first.pk}/delete/", {})
+        assert _drawn(second) == Decimal("2000")
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("2000")
+
+    def test_a_bron_struck_after_the_sotuvlar_stays_empty(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        today = timezone.localdate()
+        sale = _sell_on(admin_client, customer, today - timedelta(days=2), "1000")
+        bron = self._bron(customer)
+        _sell_on(admin_client, customer, today, "500")
+        assert _drawn(sale) == 0
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("500")
+
+    def test_a_hand_counted_sotuv_stays_in_its_bron(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        today = timezone.localdate()
+        typed_first = _sell_on(admin_client, customer, today - timedelta(days=2), "1000")
+        bron = self._bron(customer)
+        admin_client.post(f"/reservations/{bron.pk}/count-sales/",
+                          {"sales": [typed_first.pk]})
+        assert _drawn(typed_first) == Decimal("1000")
+        _sell_on(admin_client, customer, today, "500")
+        typed_first.refresh_from_db()
+        assert typed_first.bron_pick_id == bron.pk
+        assert _drawn(typed_first) == Decimal("1000")
+
+    def test_the_bron_button_is_offered_its_own_bron_first(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        older, newer = self._bron(customer), self._bron(customer)
+        sale = _sell_on(admin_client, customer, timezone.localdate(), "500", bron=newer)
+        assert [(d.reservation_id, d.kg) for d in sale.bron_draws.all()] == [
+            (newer.pk, Decimal("500.000"))]
+        _sell_on(admin_client, customer, timezone.localdate() - timedelta(days=1), "100")
+        assert [(d.reservation_id, d.kg) for d in sale.bron_draws.all()] == [
+            (newer.pk, Decimal("500.000"))]
+        older.refresh_from_db()
+        assert older.fulfilled_kg == Decimal("100")
+
+
+class TestRecountCommand:
+    def test_dry_run_reports_and_writes_nothing(self, admin_client, db):
+        _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = TestDateOrder()._bron(customer)
+        today = timezone.localdate()
+        later = _sell_on(admin_client, customer, today - timedelta(days=1), "2000")
+        earlier = _sell_on(admin_client, customer, today - timedelta(days=3), "2000",
+                           ticked=False)
+        # Ticked after the fact, the way prod's sotuvlar were: drawn by entry order.
+        Sale.objects.filter(pk=earlier.pk).update(draws_bron=True)
+        out = StringIO()
+        call_command("recount_brons", stdout=out)
+        assert f"sotuv #{earlier.pk}" in out.getvalue()
+        assert _drawn(earlier) == 0
+        call_command("recount_brons", "--apply", "--user", "boss", stdout=StringIO())
+        assert (_drawn(earlier), _drawn(later)) == (Decimal("2000"), Decimal("1000"))
+        bron.refresh_from_db()
+        assert bron.fulfilled_kg == Decimal("3000")
+
+
+class TestChoiceBackfill:
+    def test_reads_the_answers_back_from_the_draws(self, db):
+        lot = _arrived_lot(kg="50000", brand="LLDPE")
+        customer = _customer()
+        bron = make_bron(customer, brand="LLDPE", kg="5000")
+        entry = uuid4()
+
+        def sale(group=None, **fields):
+            return Sale.objects.create(customer=customer, line=lot, kg=Decimal("100"),
+                                       price=Decimal("1.4"), group=group, **fields)
+        drawn, mate, lone = sale(entry), sale(entry), sale()
+        ReservationDraw.objects.create(reservation=bron, sale=drawn, kg=Decimal("100"))
+        hand = sale(date=timezone.localdate() - timedelta(days=1))
+        ReservationDraw.objects.create(reservation=bron, sale=hand, kg=Decimal("100"))
+        backfill_choice(django_apps, None)
+        flags = dict(Sale.objects.values_list("pk", "draws_bron"))
+        assert (flags[drawn.pk], flags[mate.pk], flags[lone.pk]) == (True, True, False)
+        picks = dict(Sale.objects.values_list("pk", "bron_pick_id"))
+        assert (picks[drawn.pk], picks[hand.pk]) == (None, bron.pk)
