@@ -2951,9 +2951,64 @@ def ombor(request):
     and every Sotish/Bron button are drawn only for an admin — see the template."""
     groups, q = _ombor_groups(request)
     page = Paginator(groups, 20).get_page(request.GET.get("page"))
+    kurs = _ombor_kurs(request)
+    # Only the tannarx calculator in the lot panel reads these, and only an admin is
+    # shown it — so a skladchi's page does not pay for them.
+    if request.user.is_admin_role:
+        _ombor_transit(page.object_list, kurs)
     return render(request, "crm/ombor.html", {
-        "page": page, "q": q, "kurs": _ombor_kurs(request),
+        "page": page, "q": q, "kurs": kurs,
         "export_url": reverse("ombor_export")})
+
+
+def _ombor_transit(groups, kurs):
+    """Trucks of each marka on the page that are sent but not yet arrived — stamped
+    on the group as `transit`, so the lot panel can set them beside the shelf when
+    the operator works out what the tannarx averages to once they land.
+
+    Costed with the same `landed_cost_per_kg` as a lot, so a yo'ldagi yuk and a lot
+    are comparable in one sum. On a truck still moving that is the narx plus whatever
+    xarajat has been entered so far — the panel says so. Fetched only for the markalar
+    on this page: the panel is per marka, and a marka with nothing on the shelf has
+    no ombor row to open."""
+    by_brand = {g["brand"]: g for g in groups}
+    for g in groups:
+        g["transit"] = []
+        g["transit_trucks"] = 0
+    if not by_brand:
+        return
+    lines = (ShipmentLine.objects
+             .filter(shipment__arrived__isnull=True,
+                     contract_line__brand__in=list(by_brand))
+             .select_related("shipment__status", "shipment__contract",
+                             "contract_line__contract")
+             # A lot's cost prefetch, less the sotuv slices a truck on the road has none of.
+             .prefetch_related(*(p for p in STOCK_COST_PREFETCH
+                                 if not p.startswith("sale_lots")))
+             .order_by("shipment__sent", "shipment_id", "id"))
+    lines = list(lines)
+    # "можтабо-1 · 3-yuk", the way the yuklar list names a truck. `Shipment.label`
+    # counts its kelishuv's trucks with a query of its own, so the order is worked out
+    # here for every kelishuv on the list at once, by the same rule (`sent`, then id,
+    # an unsent truck last).
+    order = {}
+    if lines:
+        trucks = defaultdict(list)
+        for pk, contract_id, sent in (Shipment.objects
+                                      .filter(contract_id__in={line.shipment.contract_id
+                                                               for line in lines})
+                                      .values_list("pk", "contract_id", "sent")):
+            trucks[contract_id].append((sent is None, sent, pk))
+        for rows in trucks.values():
+            for n, (_, _, pk) in enumerate(sorted(rows), start=1):
+                order[pk] = n
+    for line in lines:
+        line.cost_uzs = (line.landed_cost_per_kg * kurs).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+        line.yuk_label = f"{line.shipment.contract.code} · {order[line.shipment_id]}-yuk"
+        by_brand[line.brand]["transit"].append(line)
+    for g in groups:
+        g["transit_trucks"] = len({line.shipment_id for line in g["transit"]})
 
 
 def _ombor_kurs(request):
@@ -3072,6 +3127,23 @@ def _ombor_groups(request):
         costed = [(lot.landed_cost_per_kg, lot.cost_uzs) for lot in g["lots"]]
         g["cost_min"], g["cost_min_uzs"] = min(costed)
         g["cost_max"], g["cost_max_uzs"] = max(costed)
+        # What the granula ON THE SHELF cost, on average. The spread above runs over
+        # every lot the marka ever came on, sold-out ones included, so on a marka with
+        # a long history it says little about the kg that are still there to sell.
+        # Weighted by each lot's qoldiq kg: 25 t at one cost and 1 t at another
+        # average close to the 25 t, not halfway between them.
+        shelf = g["open_lots"]
+        g["shelf_kg"] = sum((lot.available_kg for lot in shelf), Decimal("0"))
+        if shelf and g["shelf_kg"]:
+            g["avg_cost"] = weighted_cost([(lot, lot.available_kg) for lot in shelf])
+            g["avg_cost_uzs"] = (sum(lot.available_kg * lot.cost_uzs
+                                     for lot in shelf) / g["shelf_kg"]).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+            shelf_costed = [(lot.landed_cost_per_kg, lot.cost_uzs) for lot in shelf]
+            g["shelf_min"], g["shelf_min_uzs"] = min(shelf_costed)
+            g["shelf_max"], g["shelf_max_uzs"] = max(shelf_costed)
+        else:
+            g["avg_cost"] = g["avg_cost_uzs"] = None
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
         # Who has asked for this marka, oldest first. A bron holds nothing back, so
         # `on_hand` is both the physical count and what may be sold; `reserved` says

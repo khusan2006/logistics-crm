@@ -43,8 +43,27 @@ def test_the_ombor_does_not_query_per_lot(admin_client, django_assert_max_num_qu
     """Every row prints a tannarx; the truck's xarajatlar and the kelishuv's
     to'lovlar behind it have to be loaded once for the page, not once per lot."""
     _world()
-    with django_assert_max_num_queries(20):
+    # 21: one more than before for the yo'ldagi yuklar the lot panel's tannarx
+    # calculator lists — a single query for the page, whatever it finds.
+    with django_assert_max_num_queries(21):
         assert admin_client.get("/ombor/").status_code == 200
+
+
+def test_the_ombor_does_not_query_per_truck_on_the_road(admin_client,
+                                                        django_assert_max_num_queries):
+    """The lot panel lists each marka's trucks still on the road, costed and named
+    ("kod · 2-yuk"). Both the cost and the name reach past the truck itself, so a
+    handful of them must cost the same as one."""
+    _world()
+    for i in range(6):
+        contract = ShipmentLine.objects.filter(
+            contract_line__brand=f"marka-{i}").first().contract_line.contract
+        make_shipment(contract=contract, kg="500", sent="2026-07-20")
+        make_shipment(contract=contract, kg="500", sent="2026-07-21")
+    with django_assert_max_num_queries(28):
+        resp = admin_client.get("/ombor/")
+    assert resp.status_code == 200
+    assert sum(len(g["transit"]) for g in resp.context["page"].object_list) == 12
 
 
 def test_the_sotuvlar_list_does_not_query_per_sotuv(admin_client,
@@ -84,7 +103,7 @@ def test_the_budget_holds_as_the_table_grows(admin_client, django_assert_max_num
     """The real guard: doubling the rows must not double the queries. A budget that
     only ever sees six lots would pass just as happily on a per-row page."""
     _world(lots=12, sales_per_lot=2)
-    with django_assert_max_num_queries(20):
+    with django_assert_max_num_queries(21):
         assert admin_client.get("/ombor/").status_code == 200
     with django_assert_max_num_queries(25):
         assert admin_client.get("/sales/").status_code == 200

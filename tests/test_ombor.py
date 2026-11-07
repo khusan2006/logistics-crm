@@ -212,3 +212,109 @@ class TestBugungiKurs:
             username="sklad", password="x", role=django_user_model.Role.SKLADCHI)
         client.force_login(user)
         assert 'name="kurs"' not in client.get("/ombor/").content.decode()
+
+
+class TestShelfAverageTannarx:
+    """The ombor's tannarx headline is the AVERAGE of what is on the shelf, weighted
+    by each lot's qoldiq kg. The spread across every lot the marka ever came on is
+    history — on a marka with a long run of trucks it says little about the kg still
+    there to sell — so the average is read off the open lots only."""
+
+    def _sell(self, lot, kg):
+        from crm.models import Customer, Sale
+        customer = Customer.objects.create(name=f"Mijoz {lot.pk}")
+        Sale.objects.create(customer=customer, line=lot, kg=Decimal(kg),
+                            price=Decimal("2"), date="2026-07-25")
+
+    def test_weighted_by_qoldiq_and_blind_to_sold_out_lots(self, admin_client, db):
+        gone = _lot(brand="LLDPE", kg="1000", price="1.00", arrived="2026-07-10")
+        self._sell(gone, "1000")                       # sold out — not on the shelf
+        _lot(brand="LLDPE", kg="3000", price="1.40", arrived="2026-07-12", partner="B")
+        part = _lot(brand="LLDPE", kg="2000", price="1.60", arrived="2026-07-14",
+                    partner="C")
+        self._sell(part, "1000")                       # 1 000 kg left at 1.60
+
+        g = admin_client.get("/ombor/", {"kurs": "12000"}).context["page"].object_list[0]
+        # (3000 × 1.40 + 1000 × 1.60) / 4000 — not (1.40 + 1.60) / 2, and the
+        # sold-out 1.00 lot plays no part.
+        assert g["shelf_kg"] == Decimal("4000")
+        assert g["avg_cost"] == Decimal("1.4500")
+        assert g["avg_cost_uzs"] == Decimal("17400.00")
+        assert (g["shelf_min"], g["shelf_max"]) == (Decimal("1.4000"), Decimal("1.6000"))
+        # The history spread is still there for the Excel and the sold-out case.
+        assert g["cost_min"] == Decimal("1.0000")
+
+    def test_the_marka_row_prints_the_average(self, admin_client, db):
+        _lot(brand="LLDPE", kg="3000", price="1.40")
+        _lot(brand="LLDPE", kg="1000", price="1.60", partner="B")
+        html = admin_client.get("/ombor/", {"kurs": "12000"}).content.decode()
+        assert "1.45 $/kg" in html
+        assert "17\u00a0400 so&#x27;m/kg" in html     # format_html escapes the '
+        assert "o'rtacha" in html
+
+    def test_a_sold_out_marka_keeps_its_history_spread(self, admin_client, db):
+        a = _lot(brand="LLDPE", kg="1000", price="1.00")
+        b = _lot(brand="LLDPE", kg="1000", price="1.20", partner="B")
+        self._sell(a, "1000")
+        self._sell(b, "1000")
+        resp = admin_client.get("/ombor/", {"kurs": "12000"})
+        g = resp.context["page"].object_list[0]
+        assert g["avg_cost"] is None
+        assert "1 – 1.2 $/kg" in resp.content.decode()
+
+
+class TestTannarxCalculator:
+    """The lot panel's tick boxes: every open lot, ticked, carrying its qoldiq kg and
+    tannarx for the bar to average; trucks still on the road listed beside them,
+    unticked, so the operator can see what the average becomes once they land."""
+
+    def test_open_lots_carry_their_figures_and_start_ticked(self, admin_client, db):
+        lot = _lot(brand="LLDPE", kg="3000", price="1.40")
+        html = admin_client.get("/ombor/", {"kurs": "12000"}).content.decode()
+        assert "data-pick-bar" in html
+        assert 'data-kg="3000.000"' in html
+        assert 'data-usd="1.4000"' in html
+        assert 'data-uzs="16800.00"' in html
+        assert f'aria-label="#{lot.pk} — tan narx' in html
+
+    def test_a_finished_lot_has_no_box(self, admin_client, db):
+        from crm.models import Customer, Sale
+        live = _lot(brand="LLDPE", kg="1000", price="1.40")
+        done = _lot(brand="LLDPE", kg="500", price="1.20", partner="B")
+        Sale.objects.create(customer=Customer.objects.create(name="Ali"), line=done,
+                            kg=Decimal("500"), price=Decimal("2"), date="2026-07-25")
+        html = admin_client.get("/ombor/").content.decode()
+        assert f'aria-label="#{live.pk} — tan narx' in html
+        assert f'aria-label="#{done.pk} — tan narx' not in html
+
+    def test_trucks_on_the_road_are_offered_unticked(self, admin_client, db):
+        lot = _lot(brand="LLDPE", kg="1000", price="1.40")
+        c = lot.contract_line.contract
+        road = Shipment.objects.create(contract=c, status=ShipmentStatus.objects.first(),
+                                       sent="2026-07-20", eta="2026-08-05")
+        ShipmentLine.objects.create(shipment=road, contract_line=lot.contract_line,
+                                    kg=Decimal("2000"), price=Decimal("1.50"))
+        resp = admin_client.get("/ombor/", {"kurs": "12000"})
+        g = resp.context["page"].object_list[0]
+        assert [t.shipment_id for t in g["transit"]] == [road.pk]
+        assert g["transit_trucks"] == 1
+        assert g["transit"][0].cost_uzs == Decimal("18000.00")
+        html = resp.content.decode()
+        assert "1 yuk yo&#x27;lda" in html or "1 yuk yo'lda" in html
+        assert 'data-transit' in html and 'data-kg="2000.000"' in html
+        # The shelf average does not take the road into account on its own.
+        assert g["avg_cost"] == Decimal("1.4000")
+
+    def test_a_skladchi_gets_no_calculator(self, client, django_user_model, db):
+        lot = _lot(brand="LLDPE", kg="1000", price="1.40")
+        road = Shipment.objects.create(contract=lot.contract_line.contract,
+                                       status=ShipmentStatus.objects.first(),
+                                       sent="2026-07-20")
+        ShipmentLine.objects.create(shipment=road, contract_line=lot.contract_line,
+                                    kg=Decimal("2000"))
+        user = django_user_model.objects.create_user(
+            username="sklad", password="x", role=django_user_model.Role.SKLADCHI)
+        client.force_login(user)
+        html = client.get("/ombor/").content.decode()
+        assert "data-pick" not in html                 # no boxes, no bar, no script
+        assert "yo'lda" not in html and "yo&#x27;lda" not in html

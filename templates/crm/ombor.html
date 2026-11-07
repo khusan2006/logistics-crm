@@ -62,7 +62,7 @@
       ignores clicks on links, so the two do not fight over the same cell.
       {% endcomment %}
       <a class="load-partner" href="{% url 'brand_detail' g.brand %}" title="{{ g.brand }} haqida to'liq ma'lumot">{{ g.brand }}</a>
-      <div class="muted load-sub">{{ g.lots|length }} lot</div>
+      <div class="muted load-sub">{{ g.lots|length }} lot{% if g.transit_trucks %} · <span class="transit-hint" title="Hali kelmagan yuklar — lotlarni ochib, tan narx hisobiga qo'shish mumkin">{{ g.transit_trucks }} yuk yo'lda</span>{% endif %}</div>
     </td>
     <td>{{ g.partners|join:", " }}</td>
     <td>{{ g.arrived_last }}</td>
@@ -86,8 +86,19 @@
     <td class="num"><strong>{{ g.on_hand|floatformat:"-3" }}</strong>
       {% if g.short %}<div class="late load-sub">bronlarga {{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
     {% if user.is_admin_role %}
+    {% comment %}
+    The headline is the AVERAGE tannarx of what is on the shelf now, weighted by each
+    lot's qoldiq kg — the figure a selling price is set against. Under it, the spread
+    of those same lots. It used to print only the spread across every lot the marka
+    ever came on, sold-out ones included, which on a marka with a long history said
+    little about the kg still there. A sold-out marka has no shelf to average, so it
+    keeps that historical spread.
+    {% endcomment %}
     <td class="num">
-      {% if g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}
+      {% if g.avg_cost is not None %}
+      <span title="O'rtacha tan narx — omborda qolgan {{ g.open_lots|length }} lotning qoldiq kg'iga tortilgan">{% rate_both g.avg_cost g.avg_cost_uzs %}</span>
+      <div class="muted load-sub">o'rtacha{% if g.shelf_min != g.shelf_max %} · {% rate_range_both g.shelf_min g.shelf_max %}{% endif %}</div>
+      {% elif g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}
       {% else %}<span title="Lotlar turli tan narxda keldi">{% rate_range_both g.cost_min g.cost_max g.cost_min_uzs g.cost_max_uzs %}</span>{% endif %}
     </td>
     <td class="row-actions">
@@ -106,6 +117,25 @@
           <strong>{{ g.brand }} lotlari</strong>
           <span class="muted">eng eski birinchi — FIFO shu tartibda sotadi; alohida lotni shu yerdan soting</span>
         </div>
+        {% comment %}
+        Tannarx calculator. Tick lots — and trucks still on the road, listed below
+        the lots — and the bar gives their average tannarx, weighted by kg: a lot
+        counts with its qoldiq, a yo'ldagi yuk with what it carries. It opens with
+        the whole shelf ticked, so it starts at the same average as the marka row.
+        Nothing is saved; it is arithmetic on the figures already on the page.
+        {% endcomment %}
+        {% if user.is_admin_role and g.open_lots %}
+        <div class="pick-bar" data-pick-bar>
+          <span>Tanlangan: <strong data-pick-n>{{ g.open_lots|length }}</strong> ta ·
+            <strong data-pick-kg>{{ g.shelf_kg|floatformat:"-3" }}</strong> kg ·
+            o'rtacha tan narx <strong data-pick-avg>{% if g.avg_cost is not None %}{% rate_both g.avg_cost g.avg_cost_uzs %}{% else %}—{% endif %}</strong></span>
+          <span class="pick-bar-actions">
+            <button type="button" class="btn btn-sm btn-ghost" data-pick-set="shelf">Ombordagilar</button>
+            {% if g.transit %}<button type="button" class="btn btn-sm btn-ghost" data-pick-set="all">Ombor + yo'ldagilar</button>{% endif %}
+            <button type="button" class="btn btn-sm btn-ghost" data-pick-set="none">Tozalash</button>
+          </span>
+        </div>
+        {% endif %}
         <table class="legs-inline-table">
           <tr>
             {% comment %}
@@ -114,6 +144,7 @@
             would be an invention. The marka row above carries it.
             {% endcomment %}
             {# No Hamkor: the kelishuv kod already names whose it is. #}
+            {% if user.is_admin_role %}<th class="pick" title="Tan narx hisobiga qo'shish"></th>{% endif %}
             <th>Lot</th><th>Kelishuv</th><th>Kelgan sana</th>
             <th class="num">Kirim</th><th class="num">Sotilgan</th>
             <th class="num">Qoldiq</th>
@@ -122,7 +153,7 @@
             {% endif %}
           </tr>
           {% for lot in g.open_lots %}
-          <tr>{% include "crm/_ombor_lot_cells.html" %}</tr>
+          <tr>{% include "crm/_ombor_lot_cells.html" with pick=True %}</tr>
           {% endfor %}
           {% comment %}
           Finished lots are folded away rather than dropped. They cannot be sold from
@@ -133,11 +164,11 @@
           {% if g.done_lots %}
           {% for lot in g.done_lots %}
           <tr class="lot-done" data-done="{{ forloop.parentloop.counter }}" hidden>
-            {% include "crm/_ombor_lot_cells.html" %}
+            {% include "crm/_ombor_lot_cells.html" with pick=True %}
           </tr>
           {% endfor %}
           <tr>
-            <td colspan="{% if user.is_admin_role %}9{% else %}6{% endif %}">
+            <td colspan="{% if user.is_admin_role %}10{% else %}6{% endif %}">
               <button type="button" class="btn btn-sm btn-ghost" data-done-toggle="{{ forloop.counter }}"
                       data-label-open="{{ g.done_lots|length }} ta tugagan lotni yashirish"
                       data-label-closed="{{ g.done_lots|length }} ta tugagan lotni ko'rsatish">
@@ -147,6 +178,41 @@
           </tr>
           {% endif %}
         </table>
+
+        {% comment %}
+        Trucks of this marka sent and not yet arrived — here only to be ticked into the
+        tannarx bar above. Not a lot yet: nothing can be sold or bronned from them.
+        Their tannarx is the narx plus the xarajatlar entered SO FAR, so a truck whose
+        transport has not been booked yet reads cheaper than it will land.
+        {% endcomment %}
+        {% if user.is_admin_role and g.transit %}
+        <div class="legs-inline-head" style="margin-top: 14px;">
+          <strong>{{ g.brand }} — yo'lda</strong>
+          <span class="muted">hali kelmagan yuklar; tan narxga hozircha kiritilgan xarajatlar kiradi</span>
+        </div>
+        <table class="legs-inline-table">
+          <tr>
+            <th class="pick" title="Tan narx hisobiga qo'shish"></th>
+            <th>Yuk</th><th>Holat</th><th>Jo'natilgan</th><th>Taxminiy kelish</th>
+            <th class="num">Kg</th>
+            <th class="num">Tan narx ($)</th><th class="num">Tan narx (so'm)</th>
+          </tr>
+          {% for t in g.transit %}
+          <tr>
+            <td class="pick"><input type="checkbox" data-pick data-transit
+                   data-kg="{{ t.kg|unlocalize }}" data-usd="{{ t.landed_cost_per_kg|unlocalize }}"
+                   data-uzs="{{ t.cost_uzs|unlocalize }}" aria-label="{{ t.yuk_label }} — tan narx hisobiga qo'shish"></td>
+            <td><a class="load-id" href="{% url 'shipment_detail' t.shipment_id %}">{{ t.yuk_label }}</a></td>
+            <td>{{ t.shipment.status.name }}</td>
+            <td>{{ t.shipment.sent|default:"—" }}</td>
+            <td>{{ t.shipment.eta|default:"—" }}</td>
+            <td class="num">{{ t.kg|floatformat:"-3" }}</td>
+            <td class="num">{% rate_typed t.landed_cost_per_kg 'usd' %}</td>
+            <td class="num">{% rate_som t.cost_uzs %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% endif %}
 
         {% comment %}
         Who has asked for this marka. These kg are NOT held back from Qoldiq above —
@@ -241,5 +307,56 @@ document.querySelectorAll('[data-done-toggle]').forEach(function (btn) {
     btn.textContent = willOpen ? btn.dataset.labelOpen : btn.dataset.labelClosed;
   });
 });
+
+{% if user.is_admin_role %}
+// Tan narx kalkulyatori: belgilangan lotlar (va yo'ldagi yuklar) kg'iga tortilgan
+// o'rtacha. Yozuvlar lotincha — yozuv.js ularni boshqa matn kabi kirilga o'giradi.
+(function () {
+  var NBSP = ' ';
+  function group(digits) { return digits.replace(/\B(?=(\d{3})+(?!\d))/g, NBSP); }
+  // `_trim` bilan bir xil: 4 xona, oxiridagi nollarsiz.
+  function usd(x) { return x.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''); }
+  function som(x) { return group(Math.round(x).toString()); }
+  // floatformat:"-3" kabi: butun bo'lsa kasrsiz, aks holda 3 xona, vergul bilan.
+  function kg(x) {
+    var r = Math.round(x * 1000) / 1000;
+    if (r === Math.round(r)) { return group(String(Math.round(r))); }
+    var parts = r.toFixed(3).split('.');
+    return group(parts[0]) + ',' + parts[1];
+  }
+  function recount(panel) {
+    var bar = panel.querySelector('[data-pick-bar]');
+    if (!bar) { return; }
+    var n = 0, totalKg = 0, sumUsd = 0, sumUzs = 0;
+    panel.querySelectorAll('input[data-pick]:checked').forEach(function (cb) {
+      var k = parseFloat(cb.dataset.kg);
+      n += 1; totalKg += k;
+      sumUsd += k * parseFloat(cb.dataset.usd);
+      sumUzs += k * parseFloat(cb.dataset.uzs);
+    });
+    bar.querySelector('[data-pick-n]').textContent = n;
+    bar.querySelector('[data-pick-kg]').textContent = kg(totalKg);
+    var avg = bar.querySelector('[data-pick-avg]');
+    if (!totalKg) { avg.textContent = '—'; return; }
+    avg.innerHTML = '<span class="money-pair">' + usd(sumUsd / totalKg) + ' $/kg' +
+      '<span class="money-alt">' + som(sumUzs / totalKg) + " so'm/kg</span></span>";
+  }
+  document.querySelectorAll('[data-pick-bar]').forEach(function (bar) {
+    var panel = bar.closest('.legs-inline');
+    panel.addEventListener('change', function (e) {
+      if (e.target.matches('input[data-pick]')) { recount(panel); }
+    });
+    bar.querySelectorAll('[data-pick-set]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var mode = btn.dataset.pickSet;
+        panel.querySelectorAll('input[data-pick]').forEach(function (cb) {
+          cb.checked = mode === 'all' || (mode === 'shelf' && !cb.hasAttribute('data-transit'));
+        });
+        recount(panel);
+      });
+    });
+  });
+})();
+{% endif %}
 </script>
 {% endblock %}

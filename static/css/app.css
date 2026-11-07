@@ -3003,6 +3003,18 @@ tbody tr.sale-row.is-dragging td.sticky-col { background: color-mix(in srgb, var
 .legs-inline-table { width: 100%; background: var(--surface); border-radius: 10px; }
 .legs-inline-table th, .legs-inline-table td { padding: 7px 10px; font-size: 13px; }
 
+/* Ombor lot panel: the tannarx calculator — tick lots / yo'ldagi yuklar, read the
+   kg-weighted average off the bar above them. */
+.pick-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap;
+  margin-bottom: 10px; padding: 8px 12px; background: var(--accent-soft); border: 1px solid var(--accent-ring);
+  border-radius: 10px; font-size: 13px; }
+.pick-bar strong { font-variant-numeric: tabular-nums; }
+.pick-bar .money-pair { vertical-align: middle; }
+.pick-bar-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.legs-inline-table .pick { width: 28px; padding-right: 0; text-align: center; }
+.legs-inline-table .pick input { margin: 0; cursor: pointer; }
+.transit-hint { color: var(--accent); }
+
 /* Expanded load panel: head strip + facts grid + two-column detail */
 .load-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .load-panel-head > strong { font-size: 15px; }

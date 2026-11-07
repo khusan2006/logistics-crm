@@ -1,4 +1,4 @@
-{% load crm_extras %}
+{% load crm_extras l10n %}
 {% comment %}
 One lot's cells, shared by the open list and the folded-away finished one so the two
 cannot drift apart. Expects `lot`; the caller owns the <tr>.
@@ -6,7 +6,16 @@ cannot drift apart. Expects `lot`; the caller owns the <tr>.
 The lot number opens the lot's own page — what landed and where every kg went. That
 page is not a skladchi's, so for them it is plain text: a link that 403s reads as a
 broken page rather than as a limit, same as the kelishuv kod does for a tarjimon.
+
+`pick` adds the tick box the ombor's tannarx bar reads (an admin's, like every cost
+figure here). Only a lot with kg left gets one — a finished lot has nothing to
+average. The marka page includes this partial without it.
 {% endcomment %}
+{% if pick and user.is_admin_role %}
+<td class="pick">{% if lot.available_kg > 0 %}<input type="checkbox" data-pick checked
+    data-kg="{{ lot.available_kg|unlocalize }}" data-usd="{{ lot.landed_cost_per_kg|unlocalize }}"
+    data-uzs="{{ lot.cost_uzs|unlocalize }}" aria-label="#{{ lot.pk }} — tan narx hisobiga qo'shish">{% endif %}</td>
+{% endif %}
 <td>{% if user.is_admin_role %}<a class="load-id" href="{% url 'lot_detail' lot.pk %}" title="Lot tarixi">#{{ lot.pk }}</a>
     {% else %}<span class="load-id">#{{ lot.pk }}</span>{% endif %}</td>
 <td>{{ lot.shipment.contract.code }}</td>
