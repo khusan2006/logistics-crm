@@ -675,9 +675,12 @@ def test_stock_value_equals_the_ombor_shelf_at_landed_cost(admin_client):
 
 
 # Regression guard. This was an xfail documenting an inverted so'm tan narx range
-# when lots were booked at different kursi; it passes since every lot's so'm
-# tannarx is taken at the one kurs the Ombor page is drawn at (`_ombor_kurs`).
-# Kept as a test so the defect cannot come back.
+# when lots were booked at different kursi. It passed once every lot's so'm
+# tannarx was taken at the one kurs the Ombor page is drawn at (`_ombor_kurs`).
+# Lots bought in so'm now keep the so'm they cost (`_ombor_lot_som`, 2026-11-07),
+# so their kursi differ again and the range holds only because each currency's
+# spread is taken on its own (`_cost_spread`). Kept as a test so the defect cannot
+# come back.
 def test_som_tannarx_range_is_a_real_range_when_kursi_differ(admin_client):
     # cheaper in dollars, dearer in so'm (booked when the kurs was high)
     _lot(brand="2102", kg="1000", lot_typed="18000", contract_currency=UZS,

@@ -128,6 +128,25 @@ def test_marka_page_gathers_deals_lots_sales_and_brons(admin_client, db):
     assert 'class="lot-done"' in html
 
 
+def test_marka_page_prints_each_lots_som_tannarx(admin_client, db):
+    """The lot rows are the ombor's partial, which prints a `cost_uzs` the marka page
+    never stamped — so its Tan narx (so'm) column read "—" on every lot. A dollar lot
+    is stated at its own kurs (this page has no Bugungi kurs box), a so'm lot at the
+    so'm it cost."""
+    from conftest import make_contract, make_lot
+    usd_lot = _lot("PE", "1000", "1.40", "2026-07-10")
+    som = make_contract(brand="PE", kg="100000", price="1.3833", price_uzs="16600",
+                        currency="uzs")
+    som_lot = make_lot(contract=som, kg="1000", arrived="2026-07-12",
+                       status=ShipmentStatus.arrival())
+    resp = admin_client.get("/ombor/marka/PE/")
+    by_pk = {lot.pk: lot for lot in resp.context["lots"]}
+    assert by_pk[usd_lot.pk].cost_uzs == Decimal("16800.00")    # 1.40 × its 12 000
+    assert by_pk[som_lot.pk].cost_uzs == Decimal("16600.00")    # not 1.3833 × 12 000
+    html = resp.content.decode()
+    assert "16 800 so&#x27;m/kg" in html and "16 600 so&#x27;m/kg" in html
+
+
 def test_marka_page_is_404_for_an_unknown_marka(admin_client, db):
     _lot("PA", "1000", "1.00", "2026-07-10")
     assert admin_client.get("/ombor/marka/YOQ/").status_code == 404

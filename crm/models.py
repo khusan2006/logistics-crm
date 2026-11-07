@@ -2377,6 +2377,24 @@ class ShipmentLine(MoneyEntry):
         return self.in_som(self.landed_cost_per_kg)
 
     @property
+    def landed_cost_per_kg_som(self):
+        """Tannarx in so'm read straight off the so'm columns: the narx's so'm side,
+        the truck's xarajatlar in so'm spread over its kg, and the kelishuv's add-on in
+        so'm. The same three terms as `landed_cost_per_kg`, from the same prefetches.
+
+        What a lot bought IN SO'M really cost. Its dollar figure is only a twin taken
+        at the entry kurs and rounded to 0,0001 $ — about 1,2 so'm at 12 000 — so
+        going back through it turns a 16 600 so'm narx into 16 599,60, and re-rating
+        it at another kurs turns it into anything at all. Each part here was stored
+        at its own row's kurs on the day it was entered, so nothing moves it later."""
+        shipment = self.shipment
+        total_kg = shipment.kg
+        freight = shipment.expenses_total_uzs / total_kg if total_kg else Decimal("0")
+        return (self.unit_price_uzs + freight
+                + self.contract_line.contract.cost_per_kg_uzs).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    @property
     def sold_kg(self):
         """Read off the slices rather than off `sales`: a sotuv that reached across
         a lot boundary leaves only PART of its kg here, and counting the whole sotuv

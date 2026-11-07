@@ -143,7 +143,55 @@ class TestBugungiKurs:
     nearly every kelishuv is struck in dollars, and the question the ombor is opened
     with is "what would this cost me in so'm today, to decide what to sell it for
     today". Lots booked at different kursi are otherwise not comparable to each
-    other at all."""
+    other at all.
+
+    Goods bought IN SO'M are the exception: nobody paid dollars for them, so there is
+    no dollar figure to re-rate, and their so'm tannarx is the so'm they cost."""
+
+    def _som_lot(self, kg="1000", price_uzs="16600", price="1.3833", **ship):
+        """A lot bought in so'm, the way birja granula is: the so'm narx is the typed
+        figure and the dollar one only its twin at the row's 12 000."""
+        from conftest import make_contract, make_lot
+        contract = make_contract(brand="LLDPE", kg="100000", price=price,
+                                 price_uzs=price_uzs, currency="uzs")
+        ship.setdefault("arrived", "2026-07-16")
+        ship.setdefault("status", ShipmentStatus.arrival())
+        return make_lot(contract=contract, kg=kg, **ship)
+
+    def test_a_lot_bought_in_som_keeps_the_som_it_cost(self, admin_client, db):
+        som_lot = self._som_lot()
+        usd_lot = _lot(brand="LLDPE", kg="1000", price="1.40", partner="Basir")
+        for kurs in ("12000", "12500"):
+            g = admin_client.get("/ombor/", {"kurs": kurs}).context["page"].object_list[0]
+            by_pk = {lot.pk: lot for lot in g["lots"]}
+            # Not 1.3833 × kurs: 16 599,60 at 12 000, 17 291,25 at 12 500.
+            assert by_pk[som_lot.pk].cost_uzs == Decimal("16600.00")
+            # The dollar lot still follows the box, and its dollar column is untouched.
+            assert by_pk[usd_lot.pk].cost_uzs == Decimal("1.40") * Decimal(kurs)
+            assert by_pk[som_lot.pk].landed_cost_per_kg == Decimal("1.3833")
+
+    def test_its_xarajatlar_are_added_in_the_som_they_were_paid(self, admin_client, db):
+        from crm.models import Currency, ShipmentExpense
+        lot = self._som_lot(kg="1000")
+        ShipmentExpense.objects.create(
+            shipment=lot.shipment, date="2026-07-16", amount=Decimal("229.17"),
+            amount_uzs=Decimal("2750000"), currency=Currency.UZS,
+            exchange_rate=Decimal("12000"))
+        g = admin_client.get("/ombor/", {"kurs": "13000"}).context["page"].object_list[0]
+        # 16 600 + 2 750 000 / 1 000 kg
+        assert g["lots"][0].cost_uzs == Decimal("19350.00")
+        assert g["avg_cost_uzs"] == Decimal("19350.00")
+
+    def test_so_does_a_truck_of_it_on_the_road(self, admin_client, db):
+        lot = self._som_lot(kg="1000")
+        road = self._som_lot(kg="2000", arrived=None, sent="2026-07-20",
+                             status=ShipmentStatus.objects.first())
+        road.contract_line = lot.contract_line
+        road.save()
+        g = admin_client.get("/ombor/", {"kurs": "12500"}).context["page"].object_list[0]
+        assert [t.pk for t in g["transit"]] == [road.pk]
+        assert g["transit"][0].cost_uzs == Decimal("16600.00")
+        assert g["avg_all_uzs"] == Decimal("16600.00")
 
     def test_every_lot_is_converted_at_the_kurs_that_was_typed(self, admin_client, db):
         cheap = _lot(brand="LLDPE", kg="1000", price="1.00")
@@ -304,6 +352,34 @@ class TestTannarxCalculator:
         assert 'data-transit' in html and 'data-kg="2000.000"' in html
         # The shelf average does not take the road into account on its own.
         assert g["avg_cost"] == Decimal("1.4000")
+
+    def test_the_marka_row_can_count_the_road_in(self, admin_client, db):
+        """The row opens on the shelf average; "+ yo'ldagi N yuk" swaps in the one
+        with every truck on the road counted in, each by all it carries."""
+        lot = _lot(brand="LLDPE", kg="1000", price="1.40")
+        road = Shipment.objects.create(contract=lot.contract_line.contract,
+                                       status=ShipmentStatus.objects.first(),
+                                       sent="2026-07-20")
+        ShipmentLine.objects.create(shipment=road, contract_line=lot.contract_line,
+                                    kg=Decimal("2000"), price=Decimal("1.50"))
+        resp = admin_client.get("/ombor/", {"kurs": "12000"})
+        g = resp.context["page"].object_list[0]
+        assert g["avg_cost"] == Decimal("1.4000")
+        assert (g["road_kg"], g["all_kg"]) == (Decimal("2000"), Decimal("3000"))
+        # (1 000 × 1.40 + 2 000 × 1.50) / 3 000
+        assert g["avg_all"] == Decimal("1.4667")
+        assert g["avg_all_uzs"] == Decimal("17600.00")
+        html = resp.content.decode()
+        assert 'data-road-toggle="1"' in html
+        assert "+ yo'ldagi 1 yuk</button>" in html
+        assert '<div data-avg-view="road" hidden>' in html
+        assert "1.4667 $/kg" in html and "17 600 so&#x27;m/kg" in html
+
+    def test_no_button_without_a_truck_on_the_road(self, admin_client, db):
+        _lot(brand="LLDPE", kg="1000", price="1.40")
+        html = admin_client.get("/ombor/").content.decode()
+        assert 'data-road-toggle="' not in html       # the script names it; no button
+        assert '<div data-avg-view="road"' not in html
 
     def test_a_skladchi_gets_no_calculator(self, client, django_user_model, db):
         lot = _lot(brand="LLDPE", kg="1000", price="1.40")

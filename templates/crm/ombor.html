@@ -11,17 +11,18 @@
     {% if q %}<a href="?" class="toolbar-search-x" title="Qidiruvni tozalash" aria-label="Qidiruvni tozalash">&times;</a>{% endif %}
   </div>
   {% comment %}
-  Bugungi kurs. Nearly every kelishuv is struck in dollars, so the so'm tannarx on
-  this page is an ESTIMATE — "what would this cost me in so'm today" — rather than a
-  recorded figure, and one kurs for the whole page is what makes two lots
-  comparable. Nothing is saved against a lot: type a different number and only what
-  is on screen (and in the Excel) changes. See `_ombor_kurs`.
+  Bugungi kurs. For goods bought in dollars the so'm tannarx on this page is an
+  ESTIMATE — "what would this cost me in so'm today" — rather than a recorded figure,
+  and one kurs for the whole page is what makes two lots comparable. Nothing is saved
+  against a lot: type a different number and only what is on screen (and in the
+  Excel) changes. Goods bought in so'm keep the so'm they cost and the box does not
+  move them. See `_ombor_kurs` and `_ombor_lot_som`.
 
   Inside the search form on purpose: it submits with the qidiruv, so changing the
   kurs does not throw away what the operator was looking at.
   {% endcomment %}
   {% if user.is_admin_role %}
-  <label class="ombor-kurs" title="So'm tan narx shu kursda hisoblanadi — faqat ko'rish uchun, hech qayerga yozilmaydi">
+  <label class="ombor-kurs" title="Dollarga olingan tovarning so'm tan narxi shu kursda hisoblanadi; so'mga olingani o'z so'm narxida qoladi. Faqat ko'rish uchun, hech qayerga yozilmaydi">
     <span>Bugungi kurs</span>
     <input type="text" name="kurs" value="{{ kurs|unlocalize }}" inputmode="decimal"
            data-money data-submit-on-change autocomplete="off"
@@ -93,13 +94,30 @@
     ever came on, sold-out ones included, which on a marka with a long history said
     little about the kg still there. A sold-out marka has no shelf to average, so it
     keeps that historical spread.
+
+    With trucks of the marka on the road, a button under it swaps in the same average
+    with those trucks counted in — each by everything it carries — and back again.
+    Both figures are worked out on the server; the button only shows one or the other,
+    and puts the lot panel's calculator in the same state.
     {% endcomment %}
     <td class="num">
+      <div data-avg-view="shelf">
       {% if g.avg_cost is not None %}
       <span title="O'rtacha tan narx — omborda qolgan {{ g.open_lots|length }} lotning qoldiq kg'iga tortilgan">{% rate_both g.avg_cost g.avg_cost_uzs %}</span>
       <div class="muted load-sub">o'rtacha{% if g.shelf_min != g.shelf_max %} · {% rate_range_both g.shelf_min g.shelf_max %}{% endif %}</div>
-      {% elif g.cost_min == g.cost_max %}{% rate_both g.cost_min g.cost_min_uzs %}
+      {% elif g.cost_min == g.cost_max and g.cost_min_uzs == g.cost_max_uzs %}{% rate_both g.cost_min g.cost_min_uzs %}
       {% else %}<span title="Lotlar turli tan narxda keldi">{% rate_range_both g.cost_min g.cost_max g.cost_min_uzs g.cost_max_uzs %}</span>{% endif %}
+      </div>
+      {% if g.transit %}
+      <div data-avg-view="road" hidden>
+        {% if g.avg_all is not None %}<span title="O'rtacha tan narx — omborda qolgan kg va yo'ldagi {{ g.transit_trucks }} yukning kg'iga tortilgan">{% rate_both g.avg_all g.avg_all_uzs %}</span>{% else %}—{% endif %}
+        {# A sold-out marka has no shelf in this figure, only the road — said so. #}
+        <div class="muted load-sub">{% if g.shelf_kg %}ombor + {% endif %}yo'ldagi {{ g.transit_trucks }} yuk · {{ g.all_kg|floatformat:"-3" }} kg</div>
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost road-toggle" data-road-toggle="{{ forloop.counter }}" aria-pressed="false"
+              title="Yo'lda kelayotgan {{ g.transit_trucks }} yukni ({{ g.road_kg|floatformat:"-3" }} kg) ham qo'shib o'rtacha tan narxni ko'rsatish"
+              data-label-off="+ yo'ldagi {{ g.transit_trucks }} yuk" data-label-on="Faqat ombor">+ yo'ldagi {{ g.transit_trucks }} yuk</button>
+      {% endif %}
     </td>
     <td class="row-actions">
       {% if g.on_hand > 0 %}
@@ -354,6 +372,23 @@ document.querySelectorAll('[data-done-toggle]').forEach(function (btn) {
         });
         recount(panel);
       });
+    });
+  });
+
+  // Marka qatoridagi "+ yo'ldagi N yuk": o'rtacha tan narxga yo'ldagi yuklarni
+  // qo'shadi va qaytaradi. Ikkala raqam ham serverda hisoblangan, bu faqat
+  // ko'rsatadi — va lotlar panelidagi kalkulyatorni ham shu holatga o'tkazadi.
+  document.querySelectorAll('[data-road-toggle]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var cell = btn.closest('td');
+      var on = btn.getAttribute('aria-pressed') !== 'true';
+      cell.querySelector('[data-avg-view="shelf"]').hidden = on;
+      cell.querySelector('[data-avg-view="road"]').hidden = !on;
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.textContent = on ? btn.dataset.labelOn : btn.dataset.labelOff;
+      var detail = document.querySelector('.stock-detail[data-marka="' + btn.dataset.roadToggle + '"]');
+      var set = detail && detail.querySelector('[data-pick-set="' + (on ? 'all' : 'shelf') + '"]');
+      if (set) { set.click(); }
     });
   });
 })();

@@ -3003,12 +3003,49 @@ def _ombor_transit(groups, kurs):
             for n, (_, _, pk) in enumerate(sorted(rows), start=1):
                 order[pk] = n
     for line in lines:
-        line.cost_uzs = (line.landed_cost_per_kg * kurs).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP)
+        line.cost_uzs = _ombor_lot_som(line, kurs)
         line.yuk_label = f"{line.shipment.contract.code} · {order[line.shipment_id]}-yuk"
         by_brand[line.brand]["transit"].append(line)
     for g in groups:
         g["transit_trucks"] = len({line.shipment_id for line in g["transit"]})
+        if not g["transit"]:
+            continue
+        # The shelf average with the road counted in — what the marka row's
+        # "+ yo'ldagi yuk" button swaps in for the shelf one. Weighted the same way:
+        # a lot by the kg still on it, a yo'ldagi yuk by everything it carries.
+        parts = ([(lot, lot.available_kg) for lot in g["open_lots"]]
+                 + [(line, line.kg) for line in g["transit"]])
+        g["road_kg"] = sum((line.kg for line in g["transit"]), Decimal("0"))
+        g["all_kg"] = sum((kg for _, kg in parts), Decimal("0"))
+        g["avg_all"] = weighted_cost(parts)
+        g["avg_all_uzs"] = (
+            (sum(kg * line.cost_uzs for line, kg in parts) / g["all_kg"]).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if g["all_kg"] else None)
+
+
+def _cost_spread(g, prefix, lots):
+    """`<prefix>_min`/`_max` and their `_uzs` twins: the lowest and highest tannarx
+    across `lots`, each currency taken on its own (see `rate_range_both`). The two
+    ends of the so'm spread need not be the same lots as the dollar ends."""
+    usd = [lot.landed_cost_per_kg for lot in lots]
+    uzs = [lot.cost_uzs for lot in lots]
+    g[f"{prefix}_min"], g[f"{prefix}_max"] = min(usd), max(usd)
+    g[f"{prefix}_min_uzs"], g[f"{prefix}_max_uzs"] = min(uzs), max(uzs)
+
+
+def _ombor_lot_som(line, kurs):
+    """A lot's — or a yo'ldagi yuk's — so'm tannarx as the ombor prints it.
+
+    Bought in so'm, it is what it cost in so'm: its own stored so'm figures, each at
+    the kurs it was entered at (`landed_cost_per_kg_som`). The Bugungi kurs box does
+    not touch it — nobody paid dollars for it, so there is no dollar figure to re-rate.
+    Bought in dollars, it is the dollar tannarx at the page's kurs, Khusan's "what
+    would this cost me in so'm today". See `_ombor_kurs`."""
+    if line.unit_currency == Currency.UZS:
+        return line.landed_cost_per_kg_som
+    return (line.landed_cost_per_kg * kurs).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _ombor_kurs(request):
@@ -3030,7 +3067,12 @@ def _ombor_kurs(request):
     opens where it was left.
 
     Falls back to the last kurs somebody actually typed anywhere in the app
-    (`latest_exchange_rate`), which is the closest thing to today's the book has."""
+    (`latest_exchange_rate`), which is the closest thing to today's the book has.
+
+    Goods bought IN SO'M are the exception (`_ombor_lot_som`): their so'm tannarx is
+    the so'm that was paid, as entered, and the box leaves it alone. Rating them here
+    sent a so'm figure out to dollars and back at a different kurs, so typing 12 500
+    made birja granula bought at 16 600 so'm read as 17 291. Sarvar, 2026-11-07."""
     raw = (request.GET.get("kurs") or "")
     # The box is a data-money input, so what comes back may be space-grouped and may
     # use a comma for the decimal — the same shapes `toNumeric` cleans up in the JS.
@@ -3117,16 +3159,17 @@ def _ombor_groups(request):
         # table opens them, and each one's own page carries the full hand-over.
         g["open_lots"] = [lot for lot in g["lots"] if lot.available_kg > 0]
         g["done_lots"] = [lot for lot in g["lots"] if lot.available_kg <= 0]
-        # Every lot's so'm tannarx at the ONE kurs the page is drawn at — see
-        # `_ombor_kurs`. Stamped on the lot the way `servable_kg` is below, because
-        # the row that prints it is a shared partial and re-deriving it there would
-        # let the marka row and its lots disagree.
+        # Every lot's so'm tannarx: a dollar lot at the ONE kurs the page is drawn
+        # at, a so'm lot at what it cost in so'm — see `_ombor_lot_som`. Stamped on
+        # the lot because the row that prints it is a shared partial, and re-deriving
+        # it there would let the marka row and its lots disagree.
         for lot in g["lots"]:
-            lot.cost_uzs = (lot.landed_cost_per_kg * kurs).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP)
-        costed = [(lot.landed_cost_per_kg, lot.cost_uzs) for lot in g["lots"]]
-        g["cost_min"], g["cost_min_uzs"] = min(costed)
-        g["cost_max"], g["cost_max_uzs"] = max(costed)
+            lot.cost_uzs = _ombor_lot_som(lot, kurs)
+        # Each currency's own spread, not the so'm of whichever lot is cheapest in
+        # dollars: so'm lots keep the so'm they were bought at, and when their kursi
+        # differ the lot cheapest in dollars can be the dearest in so'm, which printed
+        # the so'm range backwards.
+        _cost_spread(g, "cost", g["lots"])
         # What the granula ON THE SHELF cost, on average. The spread above runs over
         # every lot the marka ever came on, sold-out ones included, so on a marka with
         # a long history it says little about the kg that are still there to sell.
@@ -3139,9 +3182,7 @@ def _ombor_groups(request):
             g["avg_cost_uzs"] = (sum(lot.available_kg * lot.cost_uzs
                                      for lot in shelf) / g["shelf_kg"]).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP)
-            shelf_costed = [(lot.landed_cost_per_kg, lot.cost_uzs) for lot in shelf]
-            g["shelf_min"], g["shelf_min_uzs"] = min(shelf_costed)
-            g["shelf_max"], g["shelf_max_uzs"] = max(shelf_costed)
+            _cost_spread(g, "shelf", shelf)
         else:
             g["avg_cost"] = g["avg_cost_uzs"] = None
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
@@ -3331,9 +3372,18 @@ def brand_detail(request, brand):
 
     brons = bron_queue(brand)
     on_hand = sum((lot.available_kg for lot in lots), Decimal("0"))
-    costed = [(lot.landed_cost_per_kg, lot.landed_cost_per_kg_uzs) for lot in lots]
+    # The lot rows are the ombor's shared partial, which prints `cost_uzs`; left
+    # unstamped here, that column read "—" on every lot. This page has no Bugungi kurs
+    # box, so a dollar lot is stated at its own kurs, as on every other screen, and a
+    # lot bought in so'm at the so'm it cost.
+    for lot in lots:
+        lot.cost_uzs = (lot.landed_cost_per_kg_som if lot.unit_currency == Currency.UZS
+                        else lot.landed_cost_per_kg_uzs)
+    spread = {}
+    _cost_spread(spread, "cost", lots)
     reserved = sum((r.remaining_kg for r in brons), Decimal("0"))
     return render(request, "crm/brand_detail.html", {
+        **spread,
         "brand": brand,
         "lots": lots,
         "open_lots": [lot for lot in lots if lot.available_kg > 0],
@@ -3347,9 +3397,7 @@ def brand_detail(request, brand):
         "on_hand": on_hand,
         "reserved": reserved,
         "short": max(reserved - on_hand, Decimal("0")),
-        "cost_min": min(costed)[0], "cost_min_uzs": min(costed)[1],
-        "cost_max": max(costed)[0], "cost_max_uzs": max(costed)[1],
-        "revenue": sum((s.total for s in sales), Decimal("0")),
+        "revenue":sum((s.total for s in sales), Decimal("0")),
         "revenue_uzs": sum((s.total_uzs for s in sales), Decimal("0")),
         "profit": sum((s.profit for s in sales), Decimal("0")),
         "profit_uzs": sum((s.profit_uzs for s in sales), Decimal("0")),

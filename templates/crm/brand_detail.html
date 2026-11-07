@@ -28,7 +28,7 @@ Money is an admin's throughout, same rule as the ombor: a skladchi reads kg.
         {% if short %}<div class="late">{{ short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}
         {% else %}<span class="muted">—</span>{% endif %}</td>
       {% if user.is_admin_role %}
-      <td class="num">{% if cost_min == cost_max %}{% rate_both cost_min cost_min_uzs %}
+      <td class="num">{% if cost_min == cost_max and cost_min_uzs == cost_max_uzs %}{% rate_both cost_min cost_min_uzs %}
         {% else %}{% rate_range_both cost_min cost_max cost_min_uzs cost_max_uzs %}{% endif %}</td>
       <td class="num">{% money_both revenue revenue_uzs %}</td>
       <td class="num"><strong>{% money_both profit profit_uzs %}</strong></td>

@@ -3014,6 +3014,11 @@ tbody tr.sale-row.is-dragging td.sticky-col { background: color-mix(in srgb, var
 .legs-inline-table .pick { width: 28px; padding-right: 0; text-align: center; }
 .legs-inline-table .pick input { margin: 0; cursor: pointer; }
 .transit-hint { color: var(--accent); }
+/* Marka row: "+ yo'ldagi N yuk" swaps the shelf average for the one with the road
+   counted in. Pressed, it wears the accent so the swapped figure is not mistaken
+   for the shelf one. */
+.road-toggle { margin-top: 4px; color: var(--accent); border-color: var(--accent-ring); }
+.road-toggle[aria-pressed="true"] { background: var(--accent-soft); }
 
 /* Expanded load panel: head strip + facts grid + two-column detail */
 .load-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
