@@ -197,7 +197,8 @@ def test_a_skladchi_can_take_the_ombor_but_not_the_kassa(skladchi_client, db):
 CONTRACT_MONEY_COLUMNS = ["Narx ($)", "Narx (so'm)", "Jami ($)", "Jami (so'm)",
                           "To'langan ($)", "To'langan (so'm)", "Qarz ($)", "Qarz (so'm)"]
 
-OMBOR_COST_COLUMNS = ["Tan narx eng past ($)", "Tan narx eng baland ($)",
+OMBOR_COST_COLUMNS = ["O'rtacha tan narx ($)", "O'rtacha tan narx (so'm)",
+                      "Tan narx eng past ($)", "Tan narx eng baland ($)",
                       "Tan narx eng past (so'm)", "Tan narx eng baland (so'm)"]
 
 

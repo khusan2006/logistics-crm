@@ -3018,10 +3018,7 @@ def _ombor_transit(groups, kurs):
         g["road_kg"] = sum((line.kg for line in g["transit"]), Decimal("0"))
         g["all_kg"] = sum((kg for _, kg in parts), Decimal("0"))
         g["avg_all"] = weighted_cost(parts)
-        g["avg_all_uzs"] = (
-            (sum(kg * line.cost_uzs for line, kg in parts) / g["all_kg"]).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP)
-            if g["all_kg"] else None)
+        g["avg_all_uzs"] = _weighted_som(parts)
 
 
 def _cost_spread(g, prefix, lots):
@@ -3032,6 +3029,16 @@ def _cost_spread(g, prefix, lots):
     uzs = [lot.cost_uzs for lot in lots]
     g[f"{prefix}_min"], g[f"{prefix}_max"] = min(usd), max(usd)
     g[f"{prefix}_min_uzs"], g[f"{prefix}_max_uzs"] = min(uzs), max(uzs)
+
+
+def _weighted_som(parts):
+    """The so'm twin of `weighted_cost`: the kg-weighted so'm tannarx of (lot, kg)
+    pairs, off the `cost_uzs` the ombor stamped on each (see `_ombor_lot_som`)."""
+    kg = sum((k for _, k in parts), Decimal("0"))
+    if kg <= 0:
+        return None
+    return (sum(k * lot.cost_uzs for lot, k in parts) / kg).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _ombor_lot_som(line, kurs):
@@ -3177,14 +3184,20 @@ def _ombor_groups(request):
         # average close to the 25 t, not halfway between them.
         shelf = g["open_lots"]
         g["shelf_kg"] = sum((lot.available_kg for lot in shelf), Decimal("0"))
+        g["avg_kirim"] = g["avg_kirim_uzs"] = None
         if shelf and g["shelf_kg"]:
-            g["avg_cost"] = weighted_cost([(lot, lot.available_kg) for lot in shelf])
-            g["avg_cost_uzs"] = (sum(lot.available_kg * lot.cost_uzs
-                                     for lot in shelf) / g["shelf_kg"]).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP)
-            _cost_spread(g, "shelf", shelf)
+            parts = [(lot, lot.available_kg) for lot in shelf]
+            g["avg_cost"] = weighted_cost(parts)
+            g["avg_cost_uzs"] = _weighted_som(parts)
         else:
             g["avg_cost"] = g["avg_cost_uzs"] = None
+            # A sold-out marka has no shelf to average, so its row gives what the
+            # marka came in at over every lot, each weighted by its kirim kg. It
+            # printed the bare min – max spread before, the one row of the
+            # O'rtacha tan narx column that was not an average (Sarvar, 2026-11-07).
+            parts = [(lot, lot.kg) for lot in g["lots"]]
+            g["avg_kirim"] = weighted_cost(parts)
+            g["avg_kirim_uzs"] = _weighted_som(parts)
         g["arrived_last"] = max(lot.arrived for lot in g["lots"])
         # Who has asked for this marka, oldest first. A bron holds nothing back, so
         # `on_hand` is both the physical count and what may be sold; `reserved` says
@@ -8752,7 +8765,8 @@ def _ombor_table(groups, include_costs=True):
     hides tan narx from that role: what a marka landed at is the margin, and a
     skladchi is shown qoldiq and bron, never what the stock cost. The Excel button
     has to hold the same line the screen does."""
-    cost_headers = ["Tan narx eng past ($)", "Tan narx eng baland ($)",
+    cost_headers = ["O'rtacha tan narx ($)", "O'rtacha tan narx (so'm)",
+                    "Tan narx eng past ($)", "Tan narx eng baland ($)",
                     "Tan narx eng past (so'm)",
                     "Tan narx eng baland (so'm)"] if include_costs else []
     headers = ["Marka", "Lotlar", "Hamkorlar", "Kirim kg", "Sotilgan kg", "Qoldiq kg",
@@ -8761,7 +8775,12 @@ def _ombor_table(groups, include_costs=True):
     def cost_cells(g):
         if not include_costs:
             return []
-        return [g["cost_min"], g["cost_max"], g["cost_min_uzs"], g["cost_max_uzs"]]
+        # The average the screen's O'rtacha tan narx column prints: the shelf's,
+        # or for a sold-out marka every lot's by kirim kg.
+        on_shelf = g["avg_cost"] is not None
+        return [g["avg_cost"] if on_shelf else g["avg_kirim"],
+                g["avg_cost_uzs"] if on_shelf else g["avg_kirim_uzs"],
+                g["cost_min"], g["cost_max"], g["cost_min_uzs"], g["cost_max_uzs"]]
 
     rows = (
         [g["brand"], len(g["lots"]), ", ".join(g["partners"]), g["kirim"], g["sold"],

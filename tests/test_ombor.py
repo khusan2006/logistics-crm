@@ -288,7 +288,6 @@ class TestShelfAverageTannarx:
         assert g["shelf_kg"] == Decimal("4000")
         assert g["avg_cost"] == Decimal("1.4500")
         assert g["avg_cost_uzs"] == Decimal("17400.00")
-        assert (g["shelf_min"], g["shelf_max"]) == (Decimal("1.4000"), Decimal("1.6000"))
         # The history spread is still there for the Excel and the sold-out case.
         assert g["cost_min"] == Decimal("1.0000")
 
@@ -298,17 +297,48 @@ class TestShelfAverageTannarx:
         html = admin_client.get("/ombor/", {"kurs": "12000"}).content.decode()
         assert "1.45 $/kg" in html
         assert "17\u00a0400 so&#x27;m/kg" in html     # format_html escapes the '
-        assert "o'rtacha" in html
+        # The column says "o'rtacha" once, in its header, not again under each
+        # figure (Sarvar, 2026-11-07).
+        assert ">O'rtacha tan narx</th>" in html
+        assert "<div class=\"muted load-sub\">o'rtacha" not in html
+        # Nor the cheapest – dearest lot under it: "keremas" (Sarvar, 2026-11-07).
+        assert "1.4 – 1.6 $/kg" not in html
 
-    def test_a_sold_out_marka_keeps_its_history_spread(self, admin_client, db):
-        a = _lot(brand="LLDPE", kg="1000", price="1.00")
-        b = _lot(brand="LLDPE", kg="1000", price="1.20", partner="B")
-        self._sell(a, "1000")
+    def test_a_sold_out_marka_averages_everything_it_came_in_at(self, admin_client, db):
+        """Nothing on the shelf to average, so the row reads every lot the marka came
+        on, weighted by kirim kg, not the min – max spread it printed before."""
+        a = _lot(brand="LLDPE", kg="3000", price="1.00")
+        b = _lot(brand="LLDPE", kg="1000", price="1.40", partner="B")
+        self._sell(a, "3000")
         self._sell(b, "1000")
         resp = admin_client.get("/ombor/", {"kurs": "12000"})
         g = resp.context["page"].object_list[0]
         assert g["avg_cost"] is None
-        assert "1 – 1.2 $/kg" in resp.content.decode()
+        # (3000 × 1.00 + 1000 × 1.40) / 4000, not (1.00 + 1.40) / 2.
+        assert g["avg_kirim"] == Decimal("1.1000")
+        assert g["avg_kirim_uzs"] == Decimal("13200.00")
+        html = resp.content.decode()
+        assert "1.1 $/kg" in html
+        assert "barcha kirim bo'yicha" in html
+        assert "1 – 1.4 $/kg" not in html
+
+    def test_the_excel_carries_the_same_average(self, admin_client, db):
+        from io import BytesIO
+
+        import openpyxl
+
+        _lot(brand="LLDPE", kg="3000", price="1.40")
+        _lot(brand="LLDPE", kg="1000", price="1.60", partner="B")
+        gone = _lot(brand="HDPE", kg="1000", price="1.00", partner="C")
+        self._sell(gone, "1000")
+        resp = admin_client.get("/ombor/export.xlsx", {"kurs": "12000"})
+        sheet = openpyxl.load_workbook(BytesIO(resp.content)).worksheets[0]
+        headers = [c.value for c in sheet[1]]
+        rows = {r[0]: r for r in ([c.value for c in row] for row in sheet.iter_rows(min_row=2))}
+        usd = headers.index("O'rtacha tan narx ($)")
+        uzs = headers.index("O'rtacha tan narx (so'm)")
+        assert (rows["LLDPE"][usd], rows["LLDPE"][uzs]) == (1.45, 17400)
+        assert (rows["HDPE"][usd], rows["HDPE"][uzs]) == (1, 12000)
 
 
 class TestTannarxCalculator:

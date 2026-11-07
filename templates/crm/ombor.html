@@ -49,7 +49,7 @@
     its lots and the kg — what is on the shelf — and sells nothing from this page.
     {% endcomment %}
     {% if user.is_admin_role %}
-    <th class="num">Tan narx</th>
+    <th class="num" title="Omborda qolgan lotlarning qoldiq kg'iga tortilgan o'rtacha tan narx; omborda qolmagan markada — barcha kelgan lotlarning kirim kg'iga tortilgani">O'rtacha tan narx</th>
     <th></th>
     {% endif %}
   </tr>
@@ -88,12 +88,15 @@
       {% if g.short %}<div class="late load-sub">bronlarga {{ g.short|floatformat:"-3" }} kg yetmaydi</div>{% endif %}</td>
     {% if user.is_admin_role %}
     {% comment %}
-    The headline is the AVERAGE tannarx of what is on the shelf now, weighted by each
-    lot's qoldiq kg — the figure a selling price is set against. Under it, the spread
-    of those same lots. It used to print only the spread across every lot the marka
-    ever came on, sold-out ones included, which on a marka with a long history said
-    little about the kg still there. A sold-out marka has no shelf to average, so it
-    keeps that historical spread.
+    The column is the AVERAGE tannarx of what is on the shelf now, weighted by each
+    lot's qoldiq kg — the figure a selling price is set against. The header says
+    "o'rtacha", so the cell does not repeat it. No min – max line under it either:
+    Sarvar read it as a puzzle, not a help ("keremas", 2026-11-07), and each lot's
+    own tannarx is one click away in the panel below. It used to print only the
+    spread across every lot the marka ever came on, sold-out ones included, which on
+    a marka with a long history said little about the kg still there. A sold-out
+    marka has no shelf to average, so it averages every lot it came on by kirim kg,
+    and says so.
 
     With trucks of the marka on the road, a button under it swaps in the same average
     with those trucks counted in — each by everything it carries — and back again.
@@ -103,10 +106,11 @@
     <td class="num">
       <div data-avg-view="shelf">
       {% if g.avg_cost is not None %}
-      <span title="O'rtacha tan narx — omborda qolgan {{ g.open_lots|length }} lotning qoldiq kg'iga tortilgan">{% rate_both g.avg_cost g.avg_cost_uzs %}</span>
-      <div class="muted load-sub">o'rtacha{% if g.shelf_min != g.shelf_max %} · {% rate_range_both g.shelf_min g.shelf_max %}{% endif %}</div>
-      {% elif g.cost_min == g.cost_max and g.cost_min_uzs == g.cost_max_uzs %}{% rate_both g.cost_min g.cost_min_uzs %}
-      {% else %}<span title="Lotlar turli tan narxda keldi">{% rate_range_both g.cost_min g.cost_max g.cost_min_uzs g.cost_max_uzs %}</span>{% endif %}
+      <span title="Omborda qolgan {{ g.open_lots|length }} lotning qoldiq kg'iga tortilgan">{% rate_both g.avg_cost g.avg_cost_uzs %}</span>
+      {% elif g.avg_kirim is not None %}
+      <span title="Omborda qolmagan — kelgan {{ g.lots|length }} lotning kirim kg'iga tortilgan">{% rate_both g.avg_kirim g.avg_kirim_uzs %}</span>
+      <div class="muted load-sub">barcha kirim bo'yicha</div>
+      {% else %}<span class="muted">—</span>{% endif %}
       </div>
       {% if g.transit %}
       <div data-avg-view="road" hidden>
@@ -116,7 +120,7 @@
       </div>
       <button type="button" class="btn btn-sm btn-ghost road-toggle" data-road-toggle="{{ forloop.counter }}" aria-pressed="false"
               title="Yo'lda kelayotgan {{ g.transit_trucks }} yukni ({{ g.road_kg|floatformat:"-3" }} kg) ham qo'shib o'rtacha tan narxni ko'rsatish"
-              data-label-off="+ yo'ldagi {{ g.transit_trucks }} yuk" data-label-on="Faqat ombor">+ yo'ldagi {{ g.transit_trucks }} yuk</button>
+              data-label-off="+ yo'ldagi {{ g.transit_trucks }} yuk" data-label-on="{% if g.shelf_kg %}Faqat ombor{% else %}Barcha kirim{% endif %}">+ yo'ldagi {{ g.transit_trucks }} yuk</button>
       {% endif %}
     </td>
     <td class="row-actions">
