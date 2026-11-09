@@ -48,7 +48,7 @@ def _create(client, *rows, partner=None, created="2026-07-01", note="", **extra)
     for row in rows:
         currency = row.pop("currency", currency)
         kurs = row.pop("exchange_rate", kurs)
-    payload = {"partner": partner.pk, "currency": currency, "created": created,
+    payload = {"partner": partner.pk, "delivery": "sip", "currency": currency, "created": created,
                "note": note, "planned_trucks": "", **line_data(*rows), **extra}
     with _inherited_kurs(kurs):
         resp = client.post("/contracts/new/", payload)
@@ -146,7 +146,7 @@ def test_the_derived_dollar_side_of_a_som_narx_keeps_four_decimals(admin_client,
 def test_a_narx_with_no_kurs_is_refused(admin_client, db):
     partner = _partner()
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "", "planned_trucks": "",
+        "partner": partner.pk, "delivery": "sip", "created": "2026-07-01", "note": "", "planned_trucks": "",
         **line_data({"brand": "LLDPE", "kg": "1000", "currency": "uzs",
                      "price": "12650", "exchange_rate": ""})})
     assert resp.status_code == 200
@@ -156,7 +156,7 @@ def test_a_narx_with_no_kurs_is_refused(admin_client, db):
 def test_a_narx_at_a_zero_kurs_is_refused(admin_client, db):
     partner = _partner()
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "", "planned_trucks": "",
+        "partner": partner.pk, "delivery": "sip", "created": "2026-07-01", "note": "", "planned_trucks": "",
         **line_data({"brand": "LLDPE", "kg": "1000", "currency": "usd",
                      "price": "1.00", "exchange_rate": "0"})})
     assert resp.status_code == 200
@@ -170,7 +170,7 @@ def test_a_blank_zero_or_negative_figure_is_refused(admin_client, db, bad):
     row = {"brand": "LLDPE", "kg": "1000", "currency": "usd", "price": "1.00",
            "exchange_rate": "12000", **bad}
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "",
+        "partner": partner.pk, "delivery": "sip", "created": "2026-07-01", "note": "",
         "planned_trucks": "", **line_data(row)})
     assert resp.status_code == 200
     assert not Contract.objects.exists()
@@ -536,7 +536,7 @@ def test_shrinking_a_marka_below_what_already_shipped_is_refused(admin_client, d
 def test_the_same_marka_twice_is_refused(admin_client, db):
     partner = _partner()
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "created": "2026-07-01", "note": "", "planned_trucks": "",
+        "partner": partner.pk, "delivery": "sip", "created": "2026-07-01", "note": "", "planned_trucks": "",
         **line_data({"brand": "LLDPE", "kg": "1000", "price": "1.00"},
                     {"brand": "lldpe", "kg": "500", "price": "1.10"})})
     assert resp.status_code == 200

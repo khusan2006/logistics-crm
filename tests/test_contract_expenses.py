@@ -197,7 +197,7 @@ def test_the_kelishuv_screen_re_prices_through_to_the_row(contract, admin_client
     row = _save(contract)
     line = contract.lines.get()
     admin_client.post(f"/contracts/{contract.pk}/edit/", {
-        "partner": contract.partner_id, "currency": "usd", "created": "2026-07-01",
+        "partner": contract.partner_id, "delivery": "sip", "currency": "usd", "created": "2026-07-01",
         "note": "", **line_data({"id": line.pk, "brand": line.brand,
                                  "kg": "30000", "price": "1.00"}, initial=1)})
     row.refresh_from_db()

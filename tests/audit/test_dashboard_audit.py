@@ -290,7 +290,7 @@ def test_resaving_a_som_kelishuv_unchanged_moves_nothing(admin_client):
     """(b) Same probe on the other input into 'Hamkor qarzi'."""
     partner = Partner.objects.create(name="Pars", phone="1", city="Tehron")
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+        "partner": partner.pk, "delivery": "sip", "currency": "uzs", "created": "2026-07-01",
         "note": "", "planned_trucks": "",
         "lines-TOTAL_FORMS": "1", "lines-INITIAL_FORMS": "0",
         "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000",

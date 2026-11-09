@@ -47,7 +47,7 @@ def test_total_value(db):
 def test_create_via_view(admin_client, admin_user):
     p = Partner.objects.create(name="Arya", phone="1", city="Shiroz")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "currency": "usd", "created": "2026-07-04", "note": "",
+        "partner": p.pk, "delivery": "sip", "currency": "usd", "created": "2026-07-04", "note": "",
         **line_data({"brand": "HDPE 7000F", "kg": "30000", "price": "1.05"}),
     })
     assert resp.status_code == 302
@@ -68,7 +68,7 @@ def test_create_contract_modal_post_valid_returns_204_with_redirect(admin_client
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
+            "partner": p.pk, "delivery": "sip", "currency": "usd", "created": "2026-07-05", "note": "",
             **line_data({"brand": "LDPE 2100TN00", "kg": "20000", "price": "1.10"}),
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
@@ -83,7 +83,7 @@ def test_create_contract_modal_post_invalid_returns_422(admin_client):
     resp = admin_client.post(
         "/contracts/new/",
         {
-            "partner": p.pk, "created": "2026-07-10", "note": "",
+            "partner": p.pk, "delivery": "sip", "created": "2026-07-10", "note": "",
             **line_data({"brand": "B", "kg": "0", "price": "1"}),   # kg musbat emas
         },
         HTTP_X_REQUESTED_WITH="XMLHttpRequest",
@@ -264,7 +264,7 @@ def test_planned_trucks_is_optional_and_saved(admin_client, db):
     """Mahsulotga nechta mashina biriktirilishi — ixtiyoriy."""
     p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
     row = {"brand": "2102", "kg": "20000", "price": "1.10"}
-    payload = {"partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
+    payload = {"partner": p.pk, "delivery": "sip", "currency": "usd", "created": "2026-07-05", "note": "",
                **line_data(row)}
     assert admin_client.post("/contracts/new/", payload).status_code == 302
     assert Contract.objects.get().planned_trucks is None
@@ -281,7 +281,7 @@ def test_trucks_are_asked_per_product_and_the_kelishuv_totals_them(admin_client,
     The kelishuv's own figure is what its products add up to."""
     p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
+        "partner": p.pk, "delivery": "sip", "currency": "usd", "created": "2026-07-05", "note": "",
         **line_data({"brand": "7000 campaund", "kg": "120000", "price": "1.10",
                      "planned_trucks": "6"},
                     {"brand": "209 campaund", "kg": "120000", "price": "1.20",
@@ -299,7 +299,7 @@ def test_a_product_with_no_truck_target_does_not_zero_the_kelishuv(admin_client,
     one target it was given, and the unplanned row simply adds nothing."""
     p = Partner.objects.create(name="Zamin", phone="1", city="Buxoro")
     admin_client.post("/contracts/new/", {
-        "partner": p.pk, "currency": "usd", "created": "2026-07-05", "note": "",
+        "partner": p.pk, "delivery": "sip", "currency": "usd", "created": "2026-07-05", "note": "",
         **line_data({"brand": "Rejali", "kg": "1000", "price": "1.10",
                      "planned_trucks": "3"},
                     {"brand": "Rejasiz", "kg": "1000", "price": "1.20"})})
@@ -429,7 +429,7 @@ def test_a_kelishuv_is_struck_in_one_currency_and_its_rows_follow(admin_client, 
     "qolgan to'lov" be a single figure in a single currency."""
     p = Partner.objects.create(name="Sobir", phone="1", city="Tehron")
     resp = admin_client.post("/contracts/new/", {
-        "partner": p.pk, "currency": "uzs", "created": "2026-07-04", "note": "",
+        "partner": p.pk, "delivery": "sip", "currency": "uzs", "created": "2026-07-04", "note": "",
         **line_data({"brand": "2102 repak", "kg": "1000", "price": "12650"},
                     {"brand": "ftor oq", "kg": "500", "price": "13000"}),
     })
@@ -465,7 +465,7 @@ def test_the_currency_is_frozen_once_money_or_goods_are_attached(admin_client, d
     assert form.fields["currency"].disabled
     # and a posted currency is ignored rather than half-applied
     admin_client.post(f"/contracts/{c.pk}/edit/", {
-        "partner": c.partner_id, "currency": "uzs", "created": "2026-07-01",
+        "partner": c.partner_id, "delivery": "sip", "currency": "uzs", "created": "2026-07-01",
         "note": "", "planned_trucks": "",
         **line_data({"id": c.lines.get().pk, "brand": "LLDPE 209AA",
                      "kg": "50000", "price": "0.96"}, initial=1)})

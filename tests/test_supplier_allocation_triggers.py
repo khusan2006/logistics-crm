@@ -108,7 +108,7 @@ def _reprice(admin_client, contract, prices):
     rows = [{"id": line.pk, "brand": line.brand, "kg": line.kg, "price": price}
             for line, price in prices.items()]
     resp = admin_client.post(f"/contracts/{contract.pk}/edit/", {
-        "partner": contract.partner_id, "currency": contract.currency,
+        "partner": contract.partner_id, "delivery": "sip", "currency": contract.currency,
         "created": "2026-07-01", "note": "",
         **line_data(*rows, initial=len(rows))})
     assert resp.status_code in (200, 302), resp.status_code
@@ -176,7 +176,7 @@ def test_editing_the_kelishuv_replaces_the_money(admin_client, db):
     assert _placed(contract)["7000"] == Decimal("500.00")
 
     resp = admin_client.post(f"/contracts/{contract.pk}/edit/", {
-        "partner": contract.partner_id, "created": "2026-07-01",
+        "partner": contract.partner_id, "delivery": "sip", "created": "2026-07-01",
         "currency": contract.currency, "exchange_rate": "12000", "note": "",
         "lines-TOTAL_FORMS": "2", "lines-INITIAL_FORMS": "2",
         "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000",

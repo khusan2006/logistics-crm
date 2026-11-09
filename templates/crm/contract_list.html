@@ -82,6 +82,9 @@ so changing a select keeps it (see crm/_daterange.html).
     <th title="Kelishilgan narx ustiga vositachi ulushi — 1 kg uchun, to'liq aniqlikda. Yukning bojxonasi va yo'l xarajatlari bunga kirmaydi, ular yukning o'zida.">Xarajat bilan</th>
     {% endif %}
     <th>Jami</th>
+    {% if not birja %}
+    <th title="SIP Toshkent — transport hamkorniki. Logist — kelishuv logisti va u shu kelishuv yuklarida to'lagan jami xarajat (haydovchi avansi bilan).">Logist</th>
+    {% endif %}
     {% endif %}
     <th title="Har bir marka bo'yicha yuborilishi kerak bo'lgan kg — yashil bo'lsa yakunlangan">Qolgan kg</th>
     {% if user.is_admin_role %}
@@ -147,6 +150,21 @@ so changing a select keeps it (see crm/_daterange.html).
     {% endcomment %}
     <td>{% for ln in c.lines.all %}<div class="cell-line">{% rate_typed ln.price_with_expenses c.currency %}</div>{% endfor %}{% for g in c.brand_averages %}<div class="cell-line cell-avg"><span class="cell-avg-label">{% if c.brand_averages|length > 1 %}{{ g.brand }} · {% endif %}o'rtacha</span>{% rate_typed g.price_with_expenses c.currency %}</div>{% endfor %}</td>
     <td>{% money c.total_value c.total_value_uzs c.currency %}</td>
+    {% comment %}
+    How the kelishuv is hauled, and on a Logist one what the logist has paid on its
+    yuklar so far (crm.views._attach_logist_spent). A Logist kelishuv with no logist
+    named is an old one the backfill could not settle — it says so rather than
+    leaving the cell blank.
+    {% endcomment %}
+    {% if not birja %}
+    <td>
+      {% if c.is_sip %}<span class="muted">SIP Toshkent</span>
+      {% elif c.delivery %}
+      <div class="cell-line">{% if c.logist %}{{ c.logist.name }}{% else %}<span class="badge badge-warning">logist belgilanmagan</span>{% endif %}</div>
+      {% for currency, amount in c.logist_spent %}<div class="cell-line muted">{% money_in amount currency %}</div>{% endfor %}
+      {% else %}<span class="muted">—</span>{% endif %}
+    </td>
+    {% endif %}
     {% endif %}
     <td>
       {% for ln in c.lines.all %}

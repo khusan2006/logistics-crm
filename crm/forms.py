@@ -655,14 +655,18 @@ class ContractForm(forms.ModelForm):
     offering it reads as a choice somebody might have got wrong. The view supplies
     it — see `crm.models.birja_partner`."""
 
-    field_order = ["partner", "currency", "created", "note"]
+    field_order = ["partner", "currency", "created", "delivery", "logist", "note"]
 
     class Meta:
         model = Contract
-        fields = ["partner", "currency", "created", "note"]
+        fields = ["partner", "currency", "created", "delivery", "logist", "note"]
         widgets = {
             "created": date_widget(),
             "note": forms.Textarea(attrs={"rows": 3}),
+            # A select like Valyuta beside it. `data-delivery-source` is what
+            # base.html watches to show the logist picker only for Logist.
+            "delivery": forms.Select(attrs={"data-delivery-source": ""}),
+            "logist": forms.Select(attrs={"data-delivery-logist": ""}),
         }
 
     def __init__(self, *args, birja=False, **kwargs):
@@ -675,6 +679,10 @@ class ContractForm(forms.ModelForm):
         # Contract; only where it is typed changed. See ContractExpenseForm.
         if birja:
             del self.fields["partner"]
+            # A birja purchase is not hauled from Eron, so how it is hauled is not
+            # a question — see `Contract.Delivery`.
+            del self.fields["delivery"]
+            del self.fields["logist"]
             # Goods bought on the birja here are priced and settled in so'm. Still
             # a choice, not a lock: a lot quoted in dollars is the operator's to
             # record, and freezing the currency would make that unrecordable.
@@ -686,6 +694,17 @@ class ContractForm(forms.ModelForm):
             # Nor is the mahalliy xarid placeholder — see `LocalPurchase`.
             self.fields["partner"].queryset = Partner.objects.filter(
                 is_birja=False, is_local=False)
+            # Asked on every Eron kelishuv, with nothing picked in advance: a
+            # default here would be saved unread on the deals it is wrong for.
+            # Required on edit too, so an old kelishuv the backfill could not give
+            # a logist asks for one the first time it is opened.
+            self.fields["delivery"].required = True
+            self.fields["delivery"].choices = [("", "Tanlang"),
+                                               *Contract.Delivery.choices]
+            self.fields["logist"].empty_label = "Logistni tanlang"
+            self.fields["logist"].help_text = (
+                "Bu kelishuvning yuklari shu logist bilan ochiladi — bitta yukda "
+                "boshqasini tanlash mumkin.")
         if not self.instance.pk:  # new contract → default the date to today
             self.fields["created"].initial = timezone.localdate
         # Re-striking a live kelishuv in the other currency would re-read every
@@ -696,6 +715,19 @@ class ContractForm(forms.ModelForm):
             self.fields["currency"].disabled = True
             self.fields["currency"].help_text = (
                 "To'lov yoki yuk biriktirilgan kelishuvning valyutasi o'zgartirilmaydi")
+
+    def clean(self):
+        cleaned = super().clean()
+        delivery = cleaned.get("delivery")
+        if delivery == Contract.Delivery.LOGIST and not cleaned.get("logist"):
+            self.add_error("logist", "Logistni tanlang")
+        elif delivery == Contract.Delivery.SIP:
+            # SIP Toshkent has no logist. A picker left filled before the switch is
+            # dropped rather than refused: it is hidden, so the operator cannot see
+            # what they would be asked to clear. Yuklar already under this kelishuv
+            # keep whatever they carry — switching does not rewrite past loads.
+            cleaned["logist"] = None
+        return cleaned
 
 
 def contract_locked(contract):
@@ -1141,6 +1173,21 @@ class ContractChoiceSelect(forms.Select):
         return option
 
 
+class ContractDeliverySelect(forms.Select):
+    """The yuk form's kelishuv <select>: each option says how that kelishuv is
+    hauled and by which logist, so base.html can hide the logist box for SIP
+    Toshkent and open a new yuk on the kelishuv's logist without a round trip."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        instance = getattr(value, "instance", None)
+        if instance is not None:
+            option["attrs"]["data-delivery"] = instance.delivery
+            if instance.logist_id:
+                option["attrs"]["data-logist"] = instance.logist_id
+        return option
+
+
 class ShipmentStatusForm(forms.ModelForm):
     """A holat and the chain it belongs to. `scope` is a real choice on this form
     because there are now two pipelines and the operator owns both — the birja one
@@ -1212,7 +1259,7 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
                   "customs_agent", "responsible", "driver_name", "driver_phone",
                   "transport", "container", "note"]
         widgets = {
-            "contract": forms.Select(attrs={"data-contract-source": ""}),
+            "contract": ContractDeliverySelect(attrs={"data-contract-source": ""}),
             "sent": date_widget(),
             "eta": date_widget(),
             "arrived": date_widget(),
@@ -1433,6 +1480,19 @@ class ShipmentForm(GroupedFieldsMixin, forms.ModelForm):
         # comes off the logist's own funding.
         if cleaned.get("driver_advance") and not cleaned.get("logist"):
             self.add_error("logist", "Avansni kim berdi? Logistni tanlang")
+        # SIP Toshkent: the hamkor hauls it, so there is no logist and no avans to
+        # record. Refused rather than dropped — the box is hidden for such a
+        # kelishuv, so a value here was posted on purpose or by a stale page.
+        #
+        # Only a NEW logist is refused. A yuk loaded before its kelishuv was
+        # switched to SIP keeps what it carries and must stay saveable; switching
+        # does not rewrite past loads (see ContractForm.clean).
+        contract = cleaned.get("contract") or (
+            self.instance.contract if self.instance.contract_id else None)
+        logist = cleaned.get("logist")
+        if (contract is not None and contract.is_sip and logist is not None
+                and logist.pk != self.instance.logist_id):
+            self.add_error("logist", "SIP Toshkent kelishuvida logist bo'lmaydi")
         self._clean_arrived(cleaned)
         return cleaned
 
@@ -3495,7 +3555,13 @@ class OtherExpenseForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.ModelForm
         return self.float_currency
 
 
-def payer_choices(category):
+#: The value "Kassadan to'landi" carries where it is a real pick rather than the
+#: blank the box rests on — see `payer_choices(ask=True)`. `resolve_payer` reads
+#: it as the kassa, like the blank.
+KASSA_PAYER = "kassa"
+
+
+def payer_choices(category, ask=False):
     """Who could have paid a xarajat of THIS turkum out of money we already sent
     them — bojxonachilar for a bojxona, logistlar for a transport.
 
@@ -3518,12 +3584,17 @@ def payer_choices(category):
         return [("", "Tamojnini tanlang"),
                 *((f"customs:{row.pk}", row.name)
                   for row in CustomsAgent.objects.all())]
-    if category == ShipmentExpense.Category.TRANSPORT:
+    if category in (ShipmentExpense.Category.TRANSPORT, ShipmentExpense.Category.ROAD):
         rows, prefix = Logist.objects.all(), "logist"
     else:
         rows, prefix = (), ""
-    return [("", "Kassadan to'landi"),
-            *((f"{prefix}:{row.pk}", row.name) for row in rows)]
+    named = [(f"{prefix}:{row.pk}", row.name) for row in rows]
+    # `ask`: a yuk hauled through a logist, where who paid the driver or the road
+    # differs load to load (the owner, 2026-11-09). Neither answer is safe to rest
+    # on, so the box opens blank and the kassa is one more pick beside the logist.
+    if ask:
+        return [("", "Tanlang"), (KASSA_PAYER, "Kassadan to'landi"), *named]
+    return [("", "Kassadan to'landi"), *named]
 
 
 def resolve_payer(value):
@@ -3627,7 +3698,15 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         # a figure in the jadval the grid does not carry is never a mystery.
         self.shipment = shipment
         self.recorded, self.others = self.load_rows(shipment)
-        for value, label in self.CATEGORIES:
+        self.categories = self.categories_for(shipment, self.recorded, self.others)
+        # On a yuk hauled through a logist, transport and yo'l xarajati are paid by
+        # the logist on some loads and from the kassa on others — so those boxes
+        # carry a payer picker and must be answered rather than default to either.
+        contract = getattr(shipment, "contract", None) if shipment is not None else None
+        hauled = contract is not None and contract.delivery == Contract.Delivery.LOGIST
+        self.must_name_payer = self.LOGIST_ASKED if hauled else frozenset()
+        self.payer_categories = self.PAYER_CATEGORIES | self.must_name_payer
+        for value, label in self.categories:
             field = forms.DecimalField(
                 label=label, max_digits=14, decimal_places=2, required=False,
                 min_value=Decimal("0"),
@@ -3680,7 +3759,7 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
             #
             # Choices built per instance, not at import: a bojxonachi added this
             # morning has to be pickable this afternoon without a restart.
-            if value in self.PAYER_CATEGORIES:
+            if value in self.payer_categories:
                 self.fields[self.payer_name(value)] = forms.ChoiceField(
                     label="Kim to'laydi", required=False, initial="",
                     choices=self.payer_options(value),
@@ -3702,6 +3781,29 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
             box = self.payer_name(ShipmentExpense.Category.CUSTOMS)
             if not self.initial.get(box):
                 self.initial[box] = default_payer(shipment)
+
+    #: The boxes that must name who paid on a Logist kelishuv's yuk.
+    LOGIST_ASKED = frozenset({ShipmentExpense.Category.TRANSPORT,
+                              ShipmentExpense.Category.ROAD})
+
+    #: Haulage the hamkor pays on a SIP Toshkent kelishuv — see `Contract.Delivery`.
+    SIP_ABSENT = frozenset({ShipmentExpense.Category.TRANSPORT,
+                            ShipmentExpense.Category.ROAD})
+
+    @classmethod
+    def categories_for(cls, shipment, recorded, others):
+        """The turkumlar this yuk's grid offers: all of them, except on a SIP
+        Toshkent kelishuv, where transport and yo'l xarajati are the hamkor's and
+        have no box.
+
+        A box stays when the yuk already HAS such a row — one entered before its
+        kelishuv was switched to SIP. Hiding it would leave a figure in the jadval
+        with nowhere on this form to see or correct it."""
+        contract = getattr(shipment, "contract", None) if shipment is not None else None
+        if contract is None or not contract.is_sip:
+            return list(cls.CATEGORIES)
+        return [(value, label) for value, label in cls.CATEGORIES
+                if value not in cls.SIP_ABSENT or value in recorded or value in others]
 
     @staticmethod
     def load_rows(shipment):
@@ -3787,8 +3889,11 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
             # picker. There is no shared payer to fall back to — the whole point of
             # this box being per turkum is that a bojxonachi and a logist can be on
             # the same yuk — so the box shows exactly what the row says.
-            if category in self.PAYER_CATEGORIES:
-                self.initial[self.payer_name(category)] = payer_value(row)
+            if category in self.payer_categories:
+                value = payer_value(row)
+                if not value and category in self.must_name_payer:
+                    value = KASSA_PAYER
+                self.initial[self.payer_name(category)] = value
 
     @staticmethod
     def field_name(category):
@@ -3824,7 +3929,7 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         refused on submit as an invalid choice, so correcting the figure beside it
         would be impossible without first reassigning money the operator never
         touched. Kept pickable, the box tells the truth and a save is a no-op."""
-        choices = payer_choices(category)
+        choices = payer_choices(category, ask=category in self.must_name_payer)
         row = self.recorded.get(category)
         current = payer_value(row) if row is not None else ""
         if current and current not in {value for value, _label in choices}:
@@ -3835,7 +3940,7 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         """The two payer columns this box is asking for, or {} for a turkum that
         never asks — which the caller must treat as "leave the row alone" rather
         than as "the kassa paid it"."""
-        if category not in self.PAYER_CATEGORIES:
+        if category not in self.payer_categories:
             return {}
         return resolve_payer(self.cleaned_data.get(self.payer_name(category)))
 
@@ -3854,8 +3959,8 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                  # None on the turkumlar the kassa always pays, so the template asks
                  # `{% if cell.payer %}` rather than repeating PAYER_CATEGORIES.
                  "payer": (self[self.payer_name(value)]
-                           if value in self.PAYER_CATEGORIES else None)}
-                for value, _ in self.CATEGORIES]
+                           if value in self.payer_categories else None)}
+                for value, _ in self.categories]
 
     def row_fee(self, category):
         """The foiz this turkum is charged: its own if one was typed, else the
@@ -3870,14 +3975,14 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
     def clean(self):
         cleaned = super().clean()
         entered = [(value, cleaned.get(self.field_name(value)))
-                   for value, _ in self.CATEGORIES]
+                   for value, _ in self.categories]
         self.entries = [(value, amount) for value, amount in entered
                         if amount is not None and amount > 0]
         # Nothing typed and no box that opened showing a row: the modal would
         # otherwise save nothing and close as if it had worked. On a grid that DID
         # open filled, an empty one is not an empty submission — it is every xarajat
         # cleared, which save() carries out.
-        showed = any(cleaned.get(self.row_name(value)) for value, _ in self.CATEGORIES)
+        showed = any(cleaned.get(self.row_name(value)) for value, _ in self.categories)
         if not self.entries and not showed:
             raise forms.ValidationError("Kamida bitta xarajat kiritilishi kerak")
         for value, amount in entered:
@@ -3893,6 +3998,11 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
                 and not cleaned.get(self.payer_name(customs))):
             self.add_error(self.payer_name(customs),
                            "Qaysi tamojni to'lagan — tanlang")
+        for category in self.must_name_payer:
+            if (dict(self.entries).get(category)
+                    and not cleaned.get(self.payer_name(category))):
+                self.add_error(self.payer_name(category),
+                               "Kim to'laganini tanlang — kassa yoki logist")
         return cleaned
 
     def row_money(self, category, typed, rate):
@@ -3944,7 +4054,7 @@ class ExpenseGridForm(FeePercentFormMixin, MoneyEntryFormMixin, forms.Form):
         note = self.cleaned_data.get("note", "")
         typed_by_category = dict(self.entries)
         created, updated, deleted = [], [], []
-        for category, _label in self.CATEGORIES:
+        for category, _label in self.categories:
             typed = typed_by_category.get(category)
             row = rewritable.get(self.cleaned_data.get(self.row_name(category)))
             if row is not None and row.category != category:

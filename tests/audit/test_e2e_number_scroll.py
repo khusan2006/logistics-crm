@@ -50,7 +50,11 @@ def world(transactional_db):
 
 def _open(browser, live_server):
     """The kelishuv form, which carries Nechta mashina — a plain number box."""
-    ctx = e2e_context(browser, viewport={"width": 1100, "height": 900})
+    # Tall enough that the whole form fits. Once the page itself can scroll the
+    # wheel scrolls it instead of reaching the dial, and Chrome then leaves focus
+    # where it was — the dial is safe either way, but this probe is about the
+    # handler. The kelishuv form grew past 900px with SIP Toshkent / Logist.
+    ctx = e2e_context(browser, viewport={"width": 1100, "height": 1200})
     page = ctx.new_page()
     page.goto(f"{live_server.url}/login/")
     page.fill("[name=username]", "e2eboss")

@@ -225,7 +225,7 @@ def test_a_som_kelishuv_narx_reaches_the_xlsx_as_som(admin_client, db):
     so'm column and the derived 0.814 in the dollar one — never the other way."""
     partner = _partner()
     resp = admin_client.post("/contracts/new/", {
-        "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+        "partner": partner.pk, "delivery": "sip", "currency": "uzs", "created": "2026-07-01",
         "note": "", "planned_trucks": "1",
         **line_data({"brand": "LLDPE", "kg": "1000", "price": "9768"}),
     })
@@ -951,7 +951,7 @@ def test_a_tiny_kurs_keeps_the_typed_som_figure_exact(admin_client, db):
     # probe is about
     with patch("crm.forms.latest_exchange_rate", return_value=Decimal("1")):
         assert admin_client.post("/contracts/new/", {
-            "partner": partner.pk, "currency": "uzs", "created": "2026-07-01",
+            "partner": partner.pk, "delivery": "sip", "currency": "uzs", "created": "2026-07-01",
             "note": "", "planned_trucks": "1",
             **line_data({"brand": "LLDPE", "kg": "1000", "price": "9768"}),
         }).status_code == 302

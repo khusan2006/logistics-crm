@@ -1600,6 +1600,55 @@
     enhance(document);
   })();
 
+  // SIP Toshkent / Logist. On the kelishuv form the logist picker shows only for
+  // Logist. On the yuk form a SIP kelishuv hides the "Logist va haydovchi avansi"
+  // box — the hamkor hauls it, so there is nobody to name and no avans — and
+  // picking a Logist kelishuv fills an empty logist picker with that kelishuv's.
+  // The server checks both rules too (ContractForm.clean, ShipmentForm.clean);
+  // this only keeps boxes that cannot apply off the screen.
+  (function () {
+    function holder(el) {
+      return el && (el.closest('fieldset') || el.closest('p') || el.parentNode);
+    }
+    function enhance(root) {
+      (root || document).querySelectorAll('select[data-delivery-source]').forEach(function (src) {
+        if (src.dataset.deliveryReady) { return; }
+        src.dataset.deliveryReady = '1';
+        var form = src.closest('form');
+        var box = holder(form && form.querySelector('select[data-delivery-logist]'));
+        function sync() { if (box) { box.hidden = src.value !== 'logist'; } }
+        src.addEventListener('change', sync);
+        sync();
+      });
+      (root || document).querySelectorAll('select[data-contract-source]').forEach(function (src) {
+        var form = src.closest('form');
+        var logist = form && form.querySelector('select[name="logist"]');
+        if (!logist || src.dataset.deliveryReady) { return; }
+        src.dataset.deliveryReady = '1';
+        var advance = form.querySelector('[name="driver_advance"]');
+        var box = holder(logist);
+        function chosen() { return src.options[src.selectedIndex] || null; }
+        function sync() {
+          var opt = chosen();
+          var sip = !!opt && opt.getAttribute('data-delivery') === 'sip';
+          // A yuk loaded before its kelishuv became SIP keeps the logist it has,
+          // and that has to stay visible rather than ride along unseen.
+          var carries = logist.value || (advance && advance.value);
+          if (box) { box.hidden = sip && !carries; }
+        }
+        src.addEventListener('change', function () {
+          var opt = chosen();
+          var want = opt && opt.getAttribute('data-logist');
+          if (want && !logist.value) { logist.value = want; }
+          sync();
+        });
+        sync();
+      });
+    }
+    document.addEventListener('modal:loaded', function (e) { enhance(e.detail || document); });
+    enhance(document);
+  })();
+
   // Hamkor to'lovi: the entered summa is what the hamkor RECEIVES, and the
   // middleman's percentage rides on top — so show what the kassa actually pays
   // before the operator saves.

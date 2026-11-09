@@ -1013,7 +1013,7 @@ def _filter_contracts(request, birja=False):
 
     # lines__shipment_lines feeds kg/shipped_kg/shipped_value off one query each,
     # instead of two per product per kelishuv as the filters walk every row.
-    contracts = (Contract.objects.select_related("partner")
+    contracts = (Contract.objects.select_related("partner", "logist")
                  .filter(partner__is_birja=birja)
                  # Mahalliy xaridlar have a list of their own.
                  .filter(partner__is_local=False)
@@ -1077,6 +1077,25 @@ def _filter_contracts(request, birja=False):
                   "short_count": short_count}
 
 
+def _attach_logist_spent(contracts):
+    """Set `logist_spent` — [(currency, amount)] — on each kelishuv: what its
+    logistlar paid across all its yuklar. One grouped query for the whole page
+    rather than `Contract.logist_spent_by_currency` once per row; the two must
+    agree, and tests/test_contract_delivery.py holds them to it."""
+    by_contract = {}
+    totals = (ShipmentExpense.objects
+              .filter(shipment__contract__in=[c.pk for c in contracts],
+                      logist__isnull=False)
+              .values("shipment__contract", "currency")
+              .annotate(usd=Sum("amount"), uzs=Sum("amount_uzs")))
+    for row in totals:
+        amount = row["uzs"] if row["currency"] == Currency.UZS else row["usd"]
+        by_contract.setdefault(row["shipment__contract"], []).append(
+            (row["currency"], amount))
+    for contract in contracts:
+        contract.logist_spent = _by_currency(by_contract.get(contract.pk, []))
+
+
 @role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
 def contract_list(request, birja=False):
     """Kelishuvlar: search plus hamkor / to'lov holati / yetkazish / muddat filters.
@@ -1112,6 +1131,8 @@ def contract_list(request, birja=False):
     # hamkor's older kelishuv was pulled up beside their newest.
     page = Paginator(rows, 20).get_page(request.GET.get("page"))
     rows = list(page.object_list)
+    if not birja:
+        _attach_logist_spent(rows)
     # The selects that used to crowd the search row. `state` defaults to "open"
     # (unfinished business is the working view), so standing there draws no chip —
     # a chip means "this list is narrower than it normally is".

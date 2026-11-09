@@ -403,7 +403,7 @@ def _post_contract_edit(client, contract, **line_overrides):
     resp = client.get(f"/contracts/{contract.pk}/edit/")
     # Nechta mashina is a column of the product rows now, so it rides along in
     # `rendered_formset_payload` rather than needing a line of its own here.
-    payload = {"partner": contract.partner_id, "currency": contract.currency,
+    payload = {"partner": contract.partner_id, "delivery": "sip", "currency": contract.currency,
                "created": "2026-07-01", "note": ""}
     formset = resp.context["lines"]
     payload.update(rendered_formset_payload(formset))

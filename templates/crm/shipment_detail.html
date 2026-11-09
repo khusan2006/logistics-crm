@@ -294,6 +294,19 @@
   <p class="muted" style="margin-top: 10px;">
     Jami: {% money_both shipment.expenses_total shipment.expenses_total_uzs %} · 1 kg ga {{ shipment.expense_per_kg|floatformat:"-4" }} $ qo'shiladi
   </p>
+  {% comment %}
+  What a logist paid on this truck — every row above whose Kim to'ladi is a
+  logist, the haydovchi avansi included (Shipment.logist_spent_by_currency). The
+  kelishuvlar list adds these up per kelishuv.
+  {% endcomment %}
+  {% with spent=shipment.logist_spent_by_currency %}
+  {% if spent %}
+  <p class="muted" style="margin-top: 6px;">
+    Logist xarajati:
+    <strong>{% for currency, amount in spent %}{% if not forloop.first %} · {% endif %}{% money_in amount currency %}{% endfor %}</strong>
+  </p>
+  {% endif %}
+  {% endwith %}
   {% else %}
   {% comment %}
   "Tan narx mahsulot narxiga teng" was only ever true of a yuk whose KELISHUV cost

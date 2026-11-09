@@ -78,7 +78,8 @@ own xarajatlar.
       {% endcomment %}
       {% if cell.others %}<small class="xcell-note">yana {{ cell.others|length }} ta yozuv — jadvaldan tahrirlanadi</small>{% endif %}
       {% comment %}
-      Only Bojxona and Transport carry this (ExpenseGridForm.PAYER_CATEGORIES) —
+      Bojxona and Transport carry this (ExpenseGridForm.payer_categories), and on a
+      Logist kelishuv's yuk Yo'l xarajati too, where it must be answered —
       those are the two a bojxonachi or a logist ever pays out of money we already
       sent them, and everything else comes from the kassa on the day.
 

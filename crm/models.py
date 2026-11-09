@@ -793,6 +793,25 @@ class Contract(models.Model):
         blank=True,
         help_text="Yuk omborga yetib kelganda shu narxda transport xarajati "
                   "o'zi yoziladi. Bo'sh — bunday kelishuv yo'q.")
+    # How an Eron kelishuv's goods reach us. SIP Toshkent: the hamkor delivers to
+    # Toshkent and the haulage is in the narx, so no logist, no haydovchi avansi
+    # and no transport or yo'l xarajati exist on its yuklar. Logist: we haul it
+    # ourselves through a logist, who is then named here — required by the form.
+    #
+    # Blank on birja and mahalliy kelishuvlar, which are not hauled from Eron at
+    # all. Required-ness is the form's: the column has to hold that blank.
+    class Delivery(models.TextChoices):
+        SIP = "sip", "SIP Toshkent"
+        LOGIST = "logist", "Logist"
+
+    delivery = models.CharField("Yetkazib berish", max_length=10, blank=True,
+                                default="", choices=Delivery.choices)
+    # The logist who hauls this kelishuv. A default for its yuklar rather than a
+    # lock: a new yuk opens on this logist, and one truck that goes with somebody
+    # else is still the operator's to record on that yuk.
+    logist = models.ForeignKey("Logist", on_delete=models.PROTECT, null=True,
+                               blank=True, related_name="contracts",
+                               verbose_name="Logist")
     note = models.TextField("Izoh", blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                                    null=True, blank=True, related_name="contracts",
@@ -815,6 +834,27 @@ class Contract(models.Model):
         """True when the kelishuv was struck in so'm. Same name the money rows carry,
         so a screen can ask the question of either without knowing which it holds."""
         return self.currency == Currency.UZS
+
+    @property
+    def is_sip(self):
+        """SIP Toshkent: the haulage is the hamkor's, so its yuklar carry no logist,
+        no haydovchi avansi and no transport or yo'l xarajati."""
+        return self.delivery == self.Delivery.SIP
+
+    def logist_spent_by_currency(self):
+        """[(currency, amount)] — everything a logist paid on this kelishuv's yuklar.
+
+        Every xarajat row marked as paid by a logist, whatever its turkum: transport,
+        the haydovchi avansi, and a bojxona if the logist happened to pay one. That
+        is "how much the logist paid" as the owner asked for it (2026-11-09).
+
+        Per currency, each row in its own money, for the reason every such figure
+        is: a so'm transport and a dollar avans added at some day's kurs is a sum
+        nobody can check against the logist's own account."""
+        rows = ShipmentExpense.objects.filter(shipment__contract=self,
+                                              logist__isnull=False)
+        return _by_currency((e.currency, own_side(e, e.amount, e.amount_uzs))
+                            for e in rows)
 
     @property
     def is_birja(self):
@@ -2134,6 +2174,14 @@ class Shipment(models.Model):
     # being stored: the to'lovlar naming this yuk, against the xarajatlar the
     # bojxonachi paid on it. Nothing new is entered to make the comparison work,
     # which is what keeps it true rather than a second set of numbers to maintain.
+
+    def logist_spent_by_currency(self):
+        """[(currency, amount)] — what a logist paid on this yuk: every xarajat row
+        marked as paid by a logist, the haydovchi avansi included. The kelishuv's
+        figure is the sum of these; see `Contract.logist_spent_by_currency`."""
+        return _by_currency(
+            (e.currency, own_side(e, e.amount, e.amount_uzs))
+            for e in self.expenses.all() if e.logist_id)
 
     def customs_sent_by_currency(self):
         """[(currency, yuborilgan)] to a bojxonachi FOR THIS LOAD.

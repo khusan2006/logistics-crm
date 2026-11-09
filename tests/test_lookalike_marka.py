@@ -115,7 +115,7 @@ class TestTheFormJoinsTheSpellingOnFile:
         make_contract(brand="7000 репак")
         partner = Partner.objects.create(name="Pars", phone="1", city="T")
         resp = admin_client.post("/contracts/new/", {
-            "partner": partner.pk, "currency": "usd", "created": "2026-09-09",
+            "partner": partner.pk, "delivery": "sip", "currency": "usd", "created": "2026-09-09",
             "note": "", "planned_trucks": "",
             "lines-TOTAL_FORMS": "1", "lines-INITIAL_FORMS": "0",
             "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000",
@@ -129,7 +129,7 @@ class TestTheFormJoinsTheSpellingOnFile:
         one new kelishuv would split its qolgan kg across two counters."""
         partner = Partner.objects.create(name="Pars", phone="1", city="T")
         resp = admin_client.post("/contracts/new/", {
-            "partner": partner.pk, "currency": "usd", "created": "2026-09-09",
+            "partner": partner.pk, "delivery": "sip", "currency": "usd", "created": "2026-09-09",
             "note": "", "planned_trucks": "",
             "lines-TOTAL_FORMS": "2", "lines-INITIAL_FORMS": "0",
             "lines-MIN_NUM_FORMS": "0", "lines-MAX_NUM_FORMS": "1000",
