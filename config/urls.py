@@ -4,9 +4,11 @@ from django.urls import path
 
 from accounts import views as accounts_views
 from crm import views as crm_views
+from monitoring import views as monitoring_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("healthz/", monitoring_views.healthz, name="healthz"),
     path("login/", accounts_views.LoginView.as_view(), name="login"),
     path("logout/", auth_views.LogoutView.as_view(), name="logout"),
     path("", crm_views.dashboard, name="dashboard"),

@@ -235,7 +235,8 @@ def _declared_roles(view):
 
 # login/logout are @login_not_required by design; the dashboard is deliberately
 # open to both roles and redirects a translator to the loads list itself.
-UNDECORATED_BY_DESIGN = {"login", "logout", "dashboard"}
+# healthz is public for the uptime pinger and says only whether the DB answers.
+UNDECORATED_BY_DESIGN = {"login", "logout", "dashboard", "healthz"}
 
 
 def test_every_routed_view_declares_its_roles():

@@ -3,6 +3,7 @@
 # service built from this repo, so the choice is made here, by the service's own
 # PROCESS variable:
 #   PROCESS=tarozi  → the scale receiver (crm/management/commands/tarozi_listen.py)
+#   PROCESS=report  → the daily monitoring report, run by a Railway cron service
 #   anything else   → the website, exactly as before
 # `exec` so Railway's stop signal reaches the process itself, not this shell.
 set -e
@@ -10,6 +11,10 @@ set -e
 if [ "$PROCESS" = "tarozi" ]; then
   # -u: unbuffered, so every connect/reject line reaches the Railway logs at once.
   exec python -u manage.py tarozi_listen --port "${TAROZI_PORT:-9000}"
+fi
+
+if [ "$PROCESS" = "report" ]; then
+  exec python manage.py monitor_report
 fi
 
 python manage.py migrate --noinput

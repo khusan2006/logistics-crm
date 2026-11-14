@@ -30,6 +30,33 @@ CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# --- Monitoring (monitoring/) ---------------------------------------------------
+# Error alerts and the daily report go to the DEVELOPER's chat — a different bot/chat
+# from the client digest above. Blank = nothing is sent.
+MONITOR_APP_NAME = os.environ.get("MONITOR_APP_NAME", "logistics-crm")
+MONITOR_TELEGRAM_BOT_TOKEN = os.environ.get("MONITOR_TELEGRAM_BOT_TOKEN", "")
+MONITOR_TELEGRAM_CHAT_ID = os.environ.get("MONITOR_TELEGRAM_CHAT_ID", "")
+MONITOR_REPORT_SECTIONS = [
+    "crm.monitoring_report.activity",
+    "crm.monitoring_report.scales",
+]
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+        "telegram": {"class": "monitoring.handler.TelegramErrorHandler", "level": "ERROR"},
+    },
+    # Every ERROR in the app — unhandled view exceptions arrive on `django.request`
+    # and propagate here — is counted and alerted.
+    "root": {"handlers": ["console", "telegram"], "level": "WARNING"},
+    "loggers": {
+        # Bots probing with a wrong Host header log at ERROR; that is noise, not a bug.
+        "django.security.DisallowedHost": {"handlers": [], "propagate": False},
+    },
+}
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -39,6 +66,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "accounts",
     "crm",
+    "monitoring",
     "axes",
 ]
 
