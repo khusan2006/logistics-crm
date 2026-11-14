@@ -1,6 +1,8 @@
 """The monitoring app: error alerts, /healthz and the daily report."""
 import logging
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from datetime import timezone as dt_timezone
+from decimal import Decimal
 
 import pytest
 from django.core.management import call_command
@@ -131,34 +133,137 @@ def test_healthz_reports_503_when_db_fails(client, db, monkeypatch):
     assert resp.status_code == 503
 
 
+def _report(now=None):
+    return "\n\n".join(build_report(now))
+
+
 def test_report_without_errors(db):
-    text = build_report()
-    assert "daily report" in text
+    text = _report()
     assert "No errors in the last 24h" in text
-    assert "Users who logged in: 0" in text
+    assert "Sales: none" in text
+    assert "Nothing unusual" in text
 
 
-def test_report_lists_errors_activity_and_scales(db):
+def test_report_lists_errors_and_scales(db):
     now = timezone.now()
     ErrorEvent.objects.create(fingerprint="a" * 40, title="ValueError: x", location="crm/views.py:1",
                               count=7, first_seen=now, last_seen=now)
     ErrorEvent.objects.create(fingerprint="b" * 40, title="Old", count=1,
                               first_seen=now - timedelta(days=3), last_seen=now - timedelta(days=3))
-    user = User.objects.create_user(username="op", password="p", role=User.Role.ADMIN)
-    AuditLog.record(user, AuditLog.Action.CREATE, "Sale", 1, "sotuv")
     Scale.objects.create(name="Tarozi 1")
 
-    text = build_report()
+    text = _report()
     assert "1 kinds, 1 new" in text
     assert "ValueError: x" in text and "7x total" in text
-    assert "Old" not in text
-    assert "Activity: 1 actions by 1 users" in text
+    assert "Old (" not in text
     assert "Tarozi 1: ⚠️ no data for 24h+" in text
 
 
 def test_broken_section_is_shown_not_hidden(db, settings):
     settings.MONITOR_REPORT_SECTIONS = ["crm.monitoring_report.does_not_exist"]
-    assert "section crm.monitoring_report.does_not_exist failed" in build_report()
+    assert "section crm.monitoring_report.does_not_exist failed" in _report()
+
+
+def test_long_report_is_split_into_several_messages(db, settings):
+    settings.MONITOR_REPORT_SECTIONS = ["tests.test_monitoring.long_section"]
+    messages = build_report()
+    assert len(messages) > 1
+    assert all(len(m) <= 3800 for m in messages)
+
+
+def long_section(start, end):
+    return ["LONG"] + [f"line {i} " + "x" * 80 for i in range(120)]
+
+
+# --- the GranulaLog sections, on a fixed "yesterday" ----------------------------
+
+NOW = datetime(2026, 9, 10, 4, 0, tzinfo=dt_timezone.utc)   # 09:00 Tashkent on the 10th
+DAY = date(2026, 9, 9)
+
+
+def _at(hour, minute=0, day=DAY):
+    tz = timezone.get_current_timezone()
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz)
+
+
+def _audit(user, action, target_type, target_id, summary, when):
+    entry = AuditLog.record(user, action, target_type, target_id, summary)
+    AuditLog.objects.filter(pk=entry.pk).update(created_at=when)
+    return entry
+
+
+@pytest.fixture
+def op(db):
+    return User.objects.create_user(username="ali", password="p", role=User.Role.ADMIN,
+                                    first_name="Ali", last_name="Valiyev")
+
+
+def test_business_counts_yesterdays_sales_and_payments(db, op):
+    from conftest import make_lot
+    from crm.models import Customer, CustomerPayment, Sale
+    customer = Customer.objects.create(name="Rise", phone="+998901112233")
+    lot = make_lot()
+    Sale.objects.create(customer=customer, line=lot, kg=Decimal("1000"), price=Decimal("1.2"),
+                        date=DAY, created_by=op)
+    Sale.objects.create(customer=customer, line=lot, kg=Decimal("500"), price=Decimal("1.2"),
+                        date=DAY - timedelta(days=3), created_by=op)
+    CustomerPayment.objects.create(customer=customer, amount=Decimal("700"), date=DAY,
+                                   created_by=op)
+
+    text = _report(NOW)
+    assert "Wednesday 09.09.2026" in text
+    assert "Sales: 1 sales, 1 000 kg" in text
+    assert "turnover $1 200" in text
+    assert "top: Rise 1 000 kg" in text
+    assert "Customer payments: 1 · $700" in text
+
+
+def test_activity_counts_users_and_busiest_hour(db, op):
+    for minute in (5, 10, 20):
+        _audit(op, AuditLog.Action.CREATE, "Sotuv", 1, "sotuv", _at(11, minute))
+    _audit(op, AuditLog.Action.PAYMENT, "Mijoz to'lovi", 1, "to'lov", _at(15))
+    _audit(op, AuditLog.Action.CREATE, "Sotuv", 1, "today, not yesterday", _at(9, day=DAY + timedelta(days=1)))
+
+    text = _report(NOW)
+    assert "4 actions by 1 users" in text
+    assert "Ali Valiyev: 4 (Sotuv 3, Mijoz to'lovi 1)" in text
+    assert "Busiest hour 11:00 (3 actions); first 11:05, last 15:00" in text
+
+
+def test_suspicious_flags_deletes_old_edits_backdating_night_and_users(db, op):
+    from conftest import make_lot
+    from crm.models import Customer, Sale
+    customer = Customer.objects.create(name="Rise", phone="+998901112233")
+    old_sale = Sale.objects.create(customer=customer, line=make_lot(), kg=Decimal("10"),
+                                   price=Decimal("1"), date=DAY - timedelta(days=20), created_by=op)
+    Sale.objects.filter(pk=old_sale.pk).update(created_at=_at(10, day=DAY - timedelta(days=20)))
+    backdated = Sale.objects.create(customer=customer, line=make_lot(), kg=Decimal("10"),
+                                    price=Decimal("1"), date=DAY - timedelta(days=6), created_by=op)
+    Sale.objects.filter(pk=backdated.pk).update(created_at=_at(12))
+
+    _audit(op, AuditLog.Action.DELETE, "Mijoz", 5, "Mijoz o'chirildi: Rise", _at(10))
+    _audit(op, AuditLog.Action.UPDATE, "Sotuv", old_sale.pk, "Sotuv tahrirlandi", _at(10, 30))
+    _audit(op, AuditLog.Action.CREATE, "Sotuv", 99, "late night", _at(23, 15))
+    _audit(op, AuditLog.Action.UPDATE, "Foydalanuvchi", op.pk, "rol o'zgardi", _at(14))
+
+    text = _report(NOW)
+    assert "Deleted (1)" in text and "Mijoz o'chirildi: Rise" in text
+    assert f"Old money records edited (1 edits):\n• Ali Valiyev — Sotuv ×1, 20 days old (#{old_sale.pk})" in text
+    assert f"Ali Valiyev — Sotuv ×1, 6 days back (#{backdated.pk})" in text
+    assert "Off-hours actions" in text and "Ali Valiyev 1" in text
+    assert "User accounts changed (1)" in text
+    assert "Nothing unusual" not in text
+
+
+def test_suspicious_flags_failed_logins(db):
+    from axes.models import AccessAttempt
+    attempt = AccessAttempt.objects.create(username="admin", ip_address="1.2.3.4",
+                                           failures_since_start=6, user_agent="x",
+                                           get_data="", post_data="", http_accept="", path_info="/login/")
+    AccessAttempt.objects.filter(pk=attempt.pk).update(attempt_time=_at(3))
+    text = _report(NOW)
+    assert "Failed logins: 6" in text
+    assert "admin from 1.2.3.4: 6x — LOCKED OUT" in text
 
 
 def test_prune_keeps_recent_errors(db):
@@ -172,7 +277,7 @@ def test_prune_keeps_recent_errors(db):
 
 def test_report_command_sends(db, sent):
     call_command("monitor_report")
-    assert len(sent) == 1 and "daily report" in sent[0]
+    assert sent and "BUSINESS" in sent[0]
 
 
 def test_report_command_fails_loudly_when_unconfigured(db, settings):

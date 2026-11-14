@@ -37,7 +37,10 @@ MONITOR_APP_NAME = os.environ.get("MONITOR_APP_NAME", "logistics-crm")
 MONITOR_TELEGRAM_BOT_TOKEN = os.environ.get("MONITOR_TELEGRAM_BOT_TOKEN", "")
 MONITOR_TELEGRAM_CHAT_ID = os.environ.get("MONITOR_TELEGRAM_CHAT_ID", "")
 MONITOR_REPORT_SECTIONS = [
+    "crm.monitoring_report.business",
     "crm.monitoring_report.activity",
+    "crm.monitoring_report.suspicious",
+    "monitoring.report.technical",
     "crm.monitoring_report.scales",
 ]
 

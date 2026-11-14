@@ -22,3 +22,13 @@ class ErrorEvent(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.count}x)"
+
+
+class DailySnapshot(models.Model):
+    """One row per reported day, so the next report can show growth."""
+
+    day = models.DateField(unique=True)
+    db_bytes = models.BigIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-day"]

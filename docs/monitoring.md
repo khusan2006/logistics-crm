@@ -55,18 +55,42 @@ project line that raised it, then stored in `monitoring.ErrorEvent`.
 
 ## Daily report
 
-The report arrives every day, errors or not. A day without a report means the cron
-or the database is broken.
+It runs at 09:00 Tashkent and covers **yesterday**, as a local calendar day. It
+arrives every day, so a missing report means the cron or the database is broken.
+A long report is split into several messages. The sections, in order, come from
+`settings.MONITOR_REPORT_SECTIONS`:
 
-Contents:
+- **📈 Business** (`crm.monitoring_report.business`). Each figure reads the row's own
+  `date`.
+  - Sales: count, kg, change against the 7-day average, turnover per currency, and
+    the top 3 customers.
+  - Customer payments, supplier payments and all expenses.
+  - Trucks sent and arrived.
+  - New contracts, customers, brons and returns.
+  - What customers owe now, and overdue trucks.
+- **👥 Activity** (`activity`). Built from `AuditLog` and the django-axes login log.
+  - Logins.
+  - Actions per user, with their top record types.
+  - Actions by type.
+  - The busiest hour, the first and last action, and an hour-by-hour bar chart.
+- **🕵️ Worth a look** (`suspicious`):
+  - every deletion
+  - money records more than 3 days old that were edited
+  - money records entered with a date more than 3 days back
+  - amounts more than 3× the 30-day average (sales and payments)
+  - actions between 22:00 and 07:00
+  - failed logins and lockouts
+  - user-account changes
 
-- errors seen in the last 24h, split into new and recurring, top 5 by count
-- database size and open connections
-- users who logged in
-- `AuditLog` activity by action
-- scale status
+  The cut-offs are constants at the top of `crm/monitoring_report.py`.
+- **⚙️ Technical** (`monitoring.report.technical`):
+  - errors in the last 24h
+  - database size and its growth since the previous report (`DailySnapshot`)
+  - open connections
+- **⚖️ Scales** (`scales`): the state of each active scale.
 
-App-specific sections are listed in `settings.MONITOR_REPORT_SECTIONS`.
+The report quotes audit summaries, so customer names and amounts appear in it. It goes
+only to the developer's private chat.
 
 Preview it without sending:
 
