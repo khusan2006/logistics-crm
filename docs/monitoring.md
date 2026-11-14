@@ -68,6 +68,23 @@ A long report is split into several messages. The sections, in order, come from
   - Trucks sent and arrived.
   - New contracts, customers, brons and returns.
   - What customers owe now, and overdue trucks.
+- **📅 Week** (`weekly`), in the Monday report only. It compares last week with the
+  week before:
+  - sales count, kg and turnover
+  - payments in
+  - new customers
+  - the best day
+  - the top 5 customers
+- **⏰ Overdue debts** (`overdue_debts`):
+  - customers past their muddat, in each sotuv's own currency, with days late
+  - who became overdue yesterday
+- **📦 Stock** (`low_stock`): markas with under 7 days of free stock (on hand minus
+  bronned) at the 30-day sales rate, or already out, plus kg still on the way.
+- **🏦 Kassa** (`kassa`):
+  - the balance now and per method
+  - yesterday's in and out
+  - a flag for any method × currency that turned negative yesterday. A balance
+    that has long been negative is normal in these books.
 - **👥 Activity** (`activity`). Built from `AuditLog` and the django-axes login log.
   - Logins.
   - Actions per user, with their top record types.
@@ -83,6 +100,10 @@ A long report is split into several messages. The sections, in order, come from
   - user-account changes
 
   The cut-offs are constants at the top of `crm/monitoring_report.py`.
+- **🧮 Data checks** (`data_checks`). The repo's read-only checks, every night:
+  - lots below zero (`fix_negative_lots`)
+  - FIFO drift and sales with no kg behind them (`check_fifo`)
+  - payments sitting on the wrong sotuv (`reconcile_allocations`)
 - **⚙️ Technical** (`monitoring.report.technical`):
   - errors in the last 24h
   - database size and its growth since the previous report (`DailySnapshot`)

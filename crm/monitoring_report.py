@@ -15,7 +15,9 @@ from django.utils import timezone
 from crm.models import (AuditLog, Contract, ContractExpense, Currency, Customer,
                         CustomerPayment, CustomsPayment, LogistPayment, OtherExpense,
                         Reservation, Return, Sale, Scale, Shipment, ShipmentExpense,
-                        SupplierPayment, customer_receivable_by_currency, own_side)
+                        ShipmentLine, SupplierPayment, arrived_lots, brand_stock_costed,
+                        customer_receivable_by_currency, kassa_cash_by_currency,
+                        kassa_cash_by_method, kassa_row_sets, own_side)
 
 COMPARE_DAYS = 7               # "vs 7-day average"
 OLD_RECORD_AFTER = timedelta(days=3)   # editing a row older than this is flagged
@@ -25,6 +27,9 @@ LARGE_FACTOR = 3               # an amount this many times the 30-day average is
 LARGE_MIN_SAMPLES = 5
 MAX_LISTED = 12                # longest list per suspicious rule
 SCALE_QUIET_AFTER = timedelta(hours=24)
+LOW_STOCK_DAYS = 7             # flag a marka with less than this many days of sales left
+STOCK_SALES_WINDOW = 30        # days of sales the daily rate is averaged over
+TOP_OVERDUE = 10
 
 # Audit target types whose rows carry money, mapped to their model: an edit of an
 # old one, or a backdated one, is what the suspicious section looks for.
@@ -54,8 +59,15 @@ def _money(pairs):
     for currency, amount in pairs:
         if not amount:
             continue
-        parts.append(f"${_num(amount)}" if currency == Currency.USD else f"{_num(amount)} so'm")
+        sign = "−" if amount < 0 else ""
+        value = _num(abs(amount))
+        parts.append(f"{sign}${value}" if currency == Currency.USD else f"{sign}{value} so'm")
     return " · ".join(parts) or "0"
+
+
+def _ordered(totals):
+    """{currency: amount} → [(currency, amount)], dollars first."""
+    return [(c, totals[c]) for c in (Currency.USD, Currency.UZS) if totals.get(c)]
 
 
 def _by_currency(rows, usd_attr="amount", uzs_attr="amount_uzs"):
@@ -357,3 +369,214 @@ def scales(start, end):
         lines.append(f"• {scale.name}: {state}")
     return lines
 
+
+
+# --- ⏰ overdue debts ---------------------------------------------------------
+
+def overdue_debts(start, end):
+    """Who is past their to'lov muddati, in each sotuv's own currency."""
+    today = timezone.localdate()
+    sales = (Sale.objects.filter(debt_deadline__lt=today)
+             .select_related("customer").prefetch_related("allocations", "returns"))
+    per_customer = defaultdict(lambda: {"owed": [], "oldest": None})
+    for sale in sales:
+        if not sale.is_overdue:
+            continue
+        entry = per_customer[sale.customer]
+        entry["owed"].append((sale.currency, sale.remaining_own))
+        if entry["oldest"] is None or sale.debt_deadline < entry["oldest"]:
+            entry["oldest"] = sale.debt_deadline
+    if not per_customer:
+        return ["⏰ OVERDUE DEBTS", "✅ Nobody is past their muddat"]
+
+    totals = defaultdict(Decimal)
+    rows = []
+    for customer, entry in per_customer.items():
+        owed = defaultdict(Decimal)
+        for currency, amount in entry["owed"]:
+            owed[currency] += amount
+            totals[currency] += amount
+        days = (today - entry["oldest"]).days
+        rows.append((days, customer.name, _ordered(owed)))
+    rows.sort(key=lambda r: -r[0])
+    newly = [name for days, name, _ in rows if days == 1]
+    lines = ["⏰ OVERDUE DEBTS",
+             f"{len(rows)} customers · {_money(_ordered(totals))}"]
+    for days, name, owed in rows[:TOP_OVERDUE]:
+        lines.append(f"• {name}: {_money(owed)} — {days} days late")
+    if len(rows) > TOP_OVERDUE:
+        lines.append(f"   … and {len(rows) - TOP_OVERDUE} more")
+    if newly:
+        lines.append(f"🆕 became overdue yesterday: {', '.join(newly)}")
+    return lines
+
+
+# --- 📦 stock ----------------------------------------------------------------
+
+def low_stock(start, end):
+    """Markas that will run out soon at the recent sales rate, or have already."""
+    day = start.date()
+    since = day - timedelta(days=STOCK_SALES_WINDOW - 1)
+    sold = defaultdict(Decimal)
+    for brand, kg in (Sale.objects.filter(date__gte=since, date__lte=day)
+                      .values_list("line__contract_line__brand", "kg")):
+        sold[brand] += kg
+    stock = {row["brand"]: row for row in brand_stock_costed()}
+    transit = defaultdict(Decimal)
+    for brand, kg in (ShipmentLine.objects.filter(shipment__arrived__isnull=True)
+                      .values_list("contract_line__brand", "kg")):
+        transit[brand] += kg
+
+    flagged = []
+    for brand, kg_sold in sold.items():
+        rate = kg_sold / STOCK_SALES_WINDOW
+        row = stock.get(brand)
+        free = (row["on_hand"] - row["reserved"]) if row else Decimal("0")
+        days_left = free / rate if rate else None
+        if days_left is not None and days_left >= LOW_STOCK_DAYS:
+            continue
+        on_way = f", {_num(transit[brand])} kg on the way" if transit.get(brand) else ""
+        if free <= 0:
+            state = "❌ out" + (f" ({_num(row['reserved'])} kg all bronned)" if row else "")
+        else:
+            left = "under 1 day" if days_left < 1 else f"{days_left:.0f} days"
+            state = f"{_num(free)} kg free ≈ {left}"
+        flagged.append((days_left or 0,
+                        f"• {brand}: {state} (sells ~{_num(rate)} kg/day){on_way}"))
+    total = sum((row["on_hand"] for row in stock.values()), Decimal("0"))
+    lines = ["📦 STOCK", f"On hand: {_num(total)} kg in {len(stock)} markas"]
+    if not flagged:
+        return lines + [f"✅ Every selling marka has {LOW_STOCK_DAYS}+ days of stock"]
+    flagged.sort(key=lambda f: f[0])
+    return lines + [f"⚠️ Running low (under {LOW_STOCK_DAYS} days at the "
+                    f"{STOCK_SALES_WINDOW}-day sales rate):", *[text for _, text in flagged]]
+
+
+# --- 🏦 kassa ----------------------------------------------------------------
+
+def _rows_on(rows, day):
+    """The kassa row sets narrowed to the rows that moved money on `day`."""
+    def on(row):
+        return (getattr(row, "paid_date", None) or row.date) == day
+    return {key: [r for r in value if on(r)] for key, value in rows.items()}
+
+
+def kassa(start, end):
+    """The till now, yesterday's movement, and a flag for any heap (method ×
+    currency) that turned negative YESTERDAY. A heap that has long been negative is
+    how these books are kept (purchases funded from outside the till); one that just
+    crossed zero usually means a to'lov went in under the wrong usul or currency."""
+    rows = kassa_row_sets()
+    balance = kassa_cash_by_currency(rows)
+    by_method = kassa_cash_by_method(rows)
+    day_rows = _rows_on(rows, start.date())
+    day_by_method = {m["code"]: dict(m["split_full"]) for m in kassa_cash_by_method(day_rows)}
+    moved_in = kassa_cash_by_currency({**day_rows, "outgoing": [], "exchange": []})
+    moved_out = kassa_cash_by_currency({**day_rows, "incoming": [], "kapital": [], "exchange": []})
+
+    lines = ["🏦 KASSA", f"Balance now: {_money(balance)}"]
+    if moved_in or moved_out:
+        lines.append(f"Yesterday: in {_money(moved_in)} · out {_money([(c, -a) for c, a in moved_out])}")
+    flags = []
+    for method in by_method:
+        if method["split"]:
+            lines.append(f"• {method['label']}: {_money(method['split'])}")
+        for currency, now in method["split_full"]:
+            before = now - day_by_method.get(method["code"], {}).get(currency, Decimal("0"))
+            if now < 0 <= before:
+                flags.append(f"‼️ {method['label']} went negative yesterday: "
+                             f"{_money([(currency, before)])} → {_money([(currency, now)])} "
+                             "— check yesterday's entries for a wrong usul or valyuta")
+    return lines + flags
+
+
+# --- 🧮 data checks ----------------------------------------------------------
+
+def data_checks(start, end):
+    """The repo's own read-only consistency checks, run every night."""
+    from crm.management.commands.check_fifo import check as fifo_check
+    from crm.management.commands.reconcile_allocations import (
+        _payments, _sales, planned_moves, unlinked_payment_money)
+
+    problems = []
+    negative = [lot for lot in arrived_lots() if lot.available_kg < 0]
+    if negative:
+        brands = sorted({lot.brand for lot in negative})
+        problems.append(f"‼️ {len(negative)} lots below zero kg ({', '.join(brands[:5])}) "
+                        "→ manage.py fix_negative_lots")
+
+    drift = short = 0
+    for _marka, moved, _undated, missing, _count in fifo_check():
+        drift += sum(1 for row in moved if row["fifo"])
+        short += len(missing)
+    if drift:
+        problems.append(f"⚠️ {drift} FIFO sales sit on the wrong lot (tannarx/foyda off) "
+                        "→ manage.py check_fifo")
+    if short:
+        problems.append(f"‼️ {short} sales need kg that never arrived → manage.py check_fifo")
+
+    customers = 0
+    for customer in Customer.objects.all():
+        sales = _sales(customer)
+        if not sales:
+            continue
+        if planned_moves(sales) or unlinked_payment_money(customer, sales, _payments(customer)):
+            customers += 1
+    if customers:
+        problems.append(f"⚠️ {customers} customers have payments on the wrong sotuv "
+                        "→ manage.py reconcile_allocations")
+    return ["🧮 DATA CHECKS", *(problems or ["✅ Stock, FIFO and payment links all add up"])]
+
+
+# --- 📅 weekly (Mondays) -----------------------------------------------------
+
+def _week_figures(first, last):
+    sales = list(Sale.objects.filter(date__gte=first, date__lte=last).select_related("customer"))
+    payments = list(CustomerPayment.objects.filter(date__gte=first, date__lte=last))
+    kg_by_day = defaultdict(Decimal)
+    by_customer = Counter()
+    for sale in sales:
+        kg_by_day[sale.date] += sale.kg
+        by_customer[sale.customer.name] += sale.kg
+    return {
+        "count": len(_sale_groups(sales)),
+        "kg": sum((s.kg for s in sales), Decimal("0")),
+        "turnover": _by_currency(sales, "total", "total_uzs"),
+        "paid": _by_currency(payments),
+        "customers": by_customer,
+        "best_day": max(kg_by_day.items(), key=lambda kv: kv[1]) if kg_by_day else None,
+        "new_customers": Customer.objects.filter(
+            created_at__date__gte=first, created_at__date__lte=last).count(),
+    }
+
+
+def _change(now, before):
+    if not before:
+        return ""
+    pct = (Decimal(now) - Decimal(before)) / Decimal(before) * 100
+    return f" ({'↑' if pct > 0 else '↓' if pct < 0 else '='} {abs(pct):.0f}%)"
+
+
+def weekly(start, end):
+    """Only in the Monday report (the day being reported is a Sunday)."""
+    last = start.date()
+    if last.weekday() != 6:
+        return []
+    first = last - timedelta(days=6)
+    this, prev = _week_figures(first, last), _week_figures(first - timedelta(days=7),
+                                                           first - timedelta(days=1))
+    lines = [f"📅 WEEK {first:%d.%m}–{last:%d.%m} vs the week before",
+             f"🛒 {this['count']} sales{_change(this['count'], prev['count'])}, "
+             f"{_num(this['kg'])} kg{_change(this['kg'], prev['kg'])}",
+             f"   turnover {_money(this['turnover'])} (before: {_money(prev['turnover'])})",
+             f"💵 Payments in {_money(this['paid'])} (before: {_money(prev['paid'])})",
+             f"🆕 {this['new_customers']} new customers (before: {prev['new_customers']})"]
+    if this["best_day"]:
+        day, kg = this["best_day"]
+        lines.append(f"📈 Best day: {day:%A} with {_num(kg)} kg")
+    if this["customers"]:
+        lines.append("🏆 Top customers:")
+        for name, kg in this["customers"].most_common(5):
+            before = prev["customers"].get(name, 0)
+            lines.append(f"• {name}: {_num(kg)} kg{_change(kg, before) if before else ' (new this week)'}")
+    return lines

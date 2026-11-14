@@ -311,3 +311,93 @@ def test_alert_survives_a_request_user_that_raises(db, sent, monkeypatch):
     except RuntimeError:
         logger.error("Internal Server Error", exc_info=True, extra={"request": Request()})
     assert len(sent) == 1 and "👤 ?" in sent[0]
+
+
+# --- overdue debts, stock, kassa, data checks, weekly ----------------------------
+
+def _sale(customer, user, kg="1000", price="1", **kw):
+    from conftest import make_lot
+    from crm.models import Sale
+    return Sale.objects.create(customer=customer, line=kw.pop("line", None) or make_lot(),
+                               kg=Decimal(kg), price=Decimal(price), created_by=user, **kw)
+
+
+@pytest.fixture
+def rise(db):
+    from crm.models import Customer
+    return Customer.objects.create(name="Rise", phone="+998901112233")
+
+
+def test_overdue_debts_lists_customers_past_their_muddat(db, op, rise):
+    today = timezone.localdate()
+    _sale(rise, op, date=today - timedelta(days=20), debt_deadline=today - timedelta(days=10))
+    _sale(rise, op, date=today, debt_deadline=today + timedelta(days=5))  # not due yet
+
+    text = _report()
+    assert "OVERDUE DEBTS\n1 customers · $1 000" in text
+    assert "• Rise: $1 000 — 10 days late" in text
+
+
+def test_overdue_debts_all_clear(db):
+    assert "Nobody is past their muddat" in _report()
+
+
+def test_low_stock_flags_a_selling_marka_that_ran_out(db, op, rise):
+    from conftest import make_lot
+    from crm.models import Shipment
+    lot = make_lot(kg="1000")
+    Shipment.objects.filter(pk=lot.shipment_id).update(arrived=timezone.localdate() - timedelta(days=5))
+    yesterday = timezone.localdate() - timedelta(days=1)
+    _sale(rise, op, kg="1000", line=lot, date=yesterday)
+
+    text = _report()
+    assert "Running low" in text
+    assert "LLDPE: ❌ out" in text
+
+
+def test_kassa_flags_a_heap_that_went_negative_yesterday(db, op, rise):
+    from crm.models import CustomerPayment, OtherExpense
+    yesterday = timezone.localdate() - timedelta(days=1)
+    CustomerPayment.objects.create(customer=rise, amount=Decimal("100"),
+                                   date=yesterday - timedelta(days=3), created_by=op)
+    OtherExpense.objects.create(amount=Decimal("300"), date=yesterday, created_by=op)
+
+    text = _report()
+    assert "Balance now: −$200" in text
+    assert "went negative yesterday: $100 → −$200" in text
+
+
+def test_kassa_does_not_flag_a_heap_that_was_already_negative(db, op):
+    from crm.models import OtherExpense
+    yesterday = timezone.localdate() - timedelta(days=1)
+    OtherExpense.objects.create(amount=Decimal("300"), date=yesterday - timedelta(days=5), created_by=op)
+    OtherExpense.objects.create(amount=Decimal("50"), date=yesterday, created_by=op)
+    assert "went negative" not in _report()
+
+
+def test_data_checks_flag_a_lot_below_zero(db, op, rise, monkeypatch):
+    from crm import monitoring_report
+
+    class Lot:
+        available_kg = Decimal("-20")
+        brand = "LLDPE"
+    monkeypatch.setattr(monitoring_report, "arrived_lots", lambda: [Lot()])
+    assert "1 lots below zero kg (LLDPE)" in _report()
+
+
+def test_data_checks_all_clear(db):
+    assert "Stock, FIFO and payment links all add up" in _report()
+
+
+def test_weekly_only_on_monday(db, op, rise):
+    monday = datetime(2026, 9, 14, 4, 0, tzinfo=dt_timezone.utc)    # reports Sunday 13th
+    tuesday = datetime(2026, 9, 15, 4, 0, tzinfo=dt_timezone.utc)
+    _sale(rise, op, kg="3000", date=date(2026, 9, 10))
+    _sale(rise, op, kg="1000", date=date(2026, 9, 3))
+
+    text = _report(monday)
+    assert "WEEK 07.09–13.09 vs the week before" in text
+    assert "1 sales (= 0%), 3 000 kg (↑ 200%)" in text
+    assert "Best day: Thursday with 3 000 kg" in text
+    assert "• Rise: 3 000 kg (↑ 200%)" in text
+    assert "WEEK" not in _report(tuesday)
