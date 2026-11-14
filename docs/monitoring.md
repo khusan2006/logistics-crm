@@ -21,8 +21,8 @@ project line that raised it, then stored in `monitoring.ErrorEvent`.
 - **Alert contents:** the app, the exception, the file and line, the method and
   path, and the username.
 - **Left out:** query strings, request bodies and form data.
-- **Caveat:** the exception *message* is sent as-is and can occasionally include a
-  value.
+- **Exception message:** only its first line is sent. A database error's `DETAIL:`
+  line, which can quote row values, is dropped.
 - **Database down:** a per-process throttle is used instead, so the alert still
   goes out.
 - **Ignored:** `DisallowedHost` noise from bots.
@@ -39,14 +39,18 @@ project line that raised it, then stored in `monitoring.ErrorEvent`.
    - Variables: `PROCESS=report`, the two `MONITOR_*` variables, and the same
      `POSTGRES_*` and `SECRET_KEY` variables as the web service.
    - Settings → Cron Schedule: `0 4 * * *` (09:00 Tashkent).
-   - It runs, sends, and exits. It is billed only while it runs.
-4. **UptimeRobot** (free tier, 5-minute checks):
+   - It runs, sends, and exits. Billing for cron runs is not confirmed yet; check
+     during setup.
+   - A failed send exits non-zero, so with `restartPolicyType: ON_FAILURE` from
+     `railway.json`, Railway retries it.
+4. **UptimeRobot**, or any pinger. Its free-tier limits are not confirmed yet;
+   check during setup.
    - An HTTP(s) monitor on `https://<domain>/healthz/`. It expects 200 and gets 503
-     when the database is unreachable.
+     when the database is unreachable. HEAD requests work too.
    - A Port monitor on `TAROZI_PUBLIC_ADDR`, the scale receiver's TCP proxy.
    - Alert contact: Telegram, using UptimeRobot's own Telegram integration.
-5. **Railway.** Turn on deploy-failed and crash notifications in the account
-   notification settings. `restartPolicyMaxRetries` means a crash-looping service
+5. **Railway.** Turn on deploy-failed and crash notifications. Where that setting
+   lives is not confirmed yet; check during setup. `restartPolicyMaxRetries` means a crash-looping service
    gives up and stays down.
 
 ## Daily report

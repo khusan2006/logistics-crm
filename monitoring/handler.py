@@ -46,7 +46,9 @@ def describe(record):
     left out on purpose: they can carry customer data."""
     if record.exc_info and record.exc_info[0]:
         exc_type, exc_value, tb = record.exc_info
-        title = f"{exc_type.__name__}: {exc_value}"
+        # First line only: a database error's DETAIL line can quote row values.
+        message = str(exc_value).strip().splitlines()[0] if str(exc_value).strip() else ""
+        title = f"{exc_type.__name__}: {message}" if message else exc_type.__name__
         location = _app_frame(tb)
         key = f"{exc_type.__module__}.{exc_type.__qualname__}|{location}"
     else:
@@ -59,9 +61,12 @@ def describe(record):
     if request is not None and hasattr(request, "path"):
         path = request.path
         method = getattr(request, "method", "")
-        u = getattr(request, "user", None)
-        if u is not None and getattr(u, "is_authenticated", False):
-            user = u.get_username()
+        try:  # request.user may hit the database, which may be what is down
+            u = getattr(request, "user", None)
+            if u is not None and getattr(u, "is_authenticated", False):
+                user = u.get_username()
+        except Exception:  # noqa: BLE001 — the alert matters more than the username
+            user = "?"
 
     return {
         "fingerprint": hashlib.sha1(key.encode("utf-8")).hexdigest(),

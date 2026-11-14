@@ -180,3 +180,29 @@ def test_report_command_fails_loudly_when_unconfigured(db, settings):
     settings.MONITOR_TELEGRAM_BOT_TOKEN = ""
     with pytest.raises(CommandError):
         call_command("monitor_report")
+
+
+def test_healthz_answers_head_for_pingers(client, db):
+    assert client.head("/healthz/", secure=True).status_code == 200
+
+
+def test_only_first_line_of_the_message_is_sent(db, sent, log):
+    _raise_and_log(log, ValueError('duplicate key\nDETAIL:  Key (phone)=(+998901234567) exists.'))
+    assert "998901234567" not in sent[0]
+    assert "ValueError: duplicate key" in sent[0]
+
+
+def test_alert_survives_a_request_user_that_raises(db, sent, monkeypatch):
+    class Request:
+        path, method = "/x/", "GET"
+
+        @property
+        def user(self):
+            raise DatabaseError("db down")
+
+    logger = logging.getLogger("django.request")
+    try:
+        raise RuntimeError("view broke")
+    except RuntimeError:
+        logger.error("Internal Server Error", exc_info=True, extra={"request": Request()})
+    assert len(sent) == 1 and "👤 ?" in sent[0]
