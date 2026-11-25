@@ -234,6 +234,15 @@ inside a view with no control left to leave it by.
         {% endif %}
         {% endwith %}
         <span class="kelishuv-meta muted">{{ g.contract.shipped_kg|floatformat:"-3" }} / {{ g.contract.kg|floatformat:"-3" }} kg</span>
+        {% comment %}
+        Several trucks leaving on one kelishuv is when their drivers get typed onto
+        each other. Counted off the rows already here, so it costs no query; the modal
+        itself lists every yuk of the kelishuv, the arrived ones included.
+        {% endcomment %}
+        {% if g.shipments|length > 1 %}
+        <a class="btn btn-ghost btn-sm kelishuv-swap" href="{% url 'contract_driver_swap' g.contract.pk %}" data-modal
+           title="Ikki yukning haydovchisi, telefoni va mashina raqamini almashtirish">&#8646; Haydovchilarni almashtirish</a>
+        {% endif %}
       </div>
     </td>
   </tr>

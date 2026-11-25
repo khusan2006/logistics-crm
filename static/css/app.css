@@ -3977,3 +3977,6 @@ form.stacked .lineset-field--fee_bearer label {
 .qoldiq-empty { margin: 4px 0 0; color: var(--text-muted); }
 .qoldiq-actions { justify-content: flex-end; padding: 18px 22px 20px; margin-top: 0; }
 .qoldiq-page .qoldiq-actions { padding: 18px 0 0; }
+/* Haydovchilarni almashtirish — right after the kg, not pushed to the far end: the
+   header spans the whole wide table, and its far end is off screen until scrolled. */
+.kelishuv-swap { padding: 2px 9px; font-size: 12px; }

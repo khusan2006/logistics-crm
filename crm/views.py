@@ -44,7 +44,8 @@ from .forms import (
     ContractExpenseForm,
     SaleCreateForm, SaleGroupEditForm, SaleLineFormSet, SaleLotForm,
     ShipmentExpenseForm,
-    ShipmentDelayForm, ShipmentDriverForm, ShipmentExtendForm, ShipmentForm,
+    ShipmentDelayForm, ShipmentDriverForm, ShipmentDriverSwapForm, ShipmentExtendForm,
+    ShipmentForm,
     ShipmentLineFormSet, BirjaTruckLineFormSet,
     ShipmentLegForm, ShipmentQrForm, ShipmentStatusForm, SupplierPaymentForm,
     SupplierPaymentFormSet, SupplierPaymentTargetForm,
@@ -3876,6 +3877,89 @@ def shipment_driver_edit(request, pk):
             # Reload in place: this modal opens from the list AND from the detail
             # page, and a redirect to the list would throw away wherever they were.
             return form_reload(request, shipment_list_url(shipment.is_birja))
+        return form_response(request, form, title, invalid=True)
+    return form_response(request, form, title)
+
+
+def _shown_leg(shipment):
+    """The bosqich whose raqam the yuklar list shows for this yuk, if it has one —
+    the same pick `Shipment.current_transport` makes. None when the yuk's own
+    `transport` is what is on screen."""
+    legs = list(shipment.legs.all())
+    if not legs:
+        return None
+    leg = next((leg for leg in legs if leg.is_current), None) or legs[-1]
+    return leg if leg.transport else None
+
+
+def _driver_details(shipment, with_container):
+    details = {"driver_name": shipment.driver_name,
+               "driver_phone": shipment.driver_phone,
+               # What the operator SEES as this yuk's mashina, which is a bosqich's
+               # raqam once the yuk has one. Swapping the yuk's own field alone
+               # would leave the plate on screen exactly where it was.
+               "transport": shipment.current_transport}
+    if with_container:
+        details["container"] = shipment.container
+    return details
+
+
+def _put_driver_details(shipment, details):
+    """Write `details` onto the yuk. The plate goes where the shown one lives — the
+    bosqich when one is on screen, the yuk's own field otherwise — so the yuk's
+    original raqam under a bosqich is not lost to the swap."""
+    details = dict(details)
+    transport = details.pop("transport")
+    leg = _shown_leg(shipment)
+    if leg is None:
+        shipment.transport = transport
+    for name, value in details.items():
+        setattr(shipment, name, value)
+    # save(), not update(): it is what hands the driver on to the other parts of a
+    # birja truck, and they carry the same driver whichever kelishuv they sit on.
+    shipment.save()
+    if leg is not None:
+        leg.transport = transport
+        leg.save(update_fields=["transport"])
+
+
+@role_required(User.Role.ADMIN, User.Role.TRANSLATOR)
+def contract_driver_swap(request, pk):
+    """Haydovchilarni almashtirish: two yuklar of one kelishuv got each other's
+    haydovchi, telefon and mashina typed onto them — the client says it happens
+    most times a kelishuv sends several trucks at once. Fixing it by hand meant
+    retyping both and holding one set in your head while doing it.
+
+    Open to a tarjimon, like `shipment_driver_edit`: these are the same fields that
+    screen lets them change, and nothing else moves. A birja kelishuv stays admin-
+    only for the same reason it does there."""
+    contract = get_object_or_404(Contract.objects.select_related("partner"), pk=pk)
+    if contract.is_birja and not request.user.is_admin_role:
+        raise PermissionDenied
+    form = ShipmentDriverSwapForm(request.POST or None, contract=contract)
+    title = f"Kelishuv {contract.code} — haydovchilarni almashtirish"
+    if request.method == "POST":
+        if form.is_valid():
+            with_container = form.cleaned_data["container"]
+            with transaction.atomic():
+                first, second = (
+                    Shipment.objects.select_for_update().prefetch_related("legs")
+                    .get(pk=form.cleaned_data[name].pk) for name in ("first", "second"))
+                first_was = _driver_details(first, with_container)
+                second_was = _driver_details(second, with_container)
+                _put_driver_details(first, second_was)
+                _put_driver_details(second, first_was)
+                for yuk, was, now in ((first, first_was, second_was),
+                                      (second, second_was, first_was)):
+                    AuditLog.record(
+                        request.user, AuditLog.Action.UPDATE, "Yuk", yuk.pk,
+                        (f"Haydovchi almashtirildi (#{first.pk} ↔ #{second.pk}): "
+                         f"{was['driver_name'] or '—'} · {was['transport'] or '—'} → "
+                         f"{now['driver_name'] or '—'} · {now['transport'] or '—'}")[:255],
+                    )
+            messages.success(
+                request, f"#{first.pk} va #{second.pk} yuklarning haydovchilari almashtirildi")
+            return form_reload(request, shipment_list_url(contract.is_birja))
         return form_response(request, form, title, invalid=True)
     return form_response(request, form, title)
 

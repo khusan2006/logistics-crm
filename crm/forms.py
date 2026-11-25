@@ -1871,6 +1871,63 @@ class ShipmentDriverForm(forms.ModelForm):
         return normalize_container(self.cleaned_data.get("container"))
 
 
+def _swap_choice_label(shipment):
+    """"#17 · 2-yuk · Akmal aka · 01 777 AAA" — the yuk named by what is on it now,
+    since the operator is picking the two whose drivers ended up the wrong way round
+    and the driver is how they tell the trucks apart."""
+    return " · ".join([
+        f"#{shipment.pk}", f"{shipment.order_in_contract}-yuk",
+        shipment.driver_name or "haydovchi yo'q",
+        shipment.current_transport or "raqam yo'q",
+    ])
+
+
+class ShipmentDriverSwapForm(forms.Form):
+    """Two yuklar of one kelishuv whose haydovchi, telefon and mashina were typed
+    onto each other — swap them in one go instead of retyping both.
+
+    Only the ShipmentDriverForm fields move, the same set a tarjimon may edit. The
+    logist, the holat, the dates and every xarajat (the haydovchi avansi included)
+    stay on the yuk they were booked on: those are facts about the load, not about
+    who happened to be typed in as its driver.
+
+    Konteyner is a choice, ticked by default: it usually rides with the truck, but a
+    swap of drivers alone is also a real mistake."""
+
+    first = forms.ModelChoiceField(queryset=Shipment.objects.none(), label="Birinchi yuk")
+    second = forms.ModelChoiceField(queryset=Shipment.objects.none(), label="Ikkinchi yuk")
+    container = forms.BooleanField(
+        label="Konteyner raqamini ham almashtirish", required=False, initial=True)
+
+    def __init__(self, *args, contract, **kwargs):
+        super().__init__(*args, **kwargs)
+        loads = list(contract.shipments.prefetch_related("legs"))
+        loads.sort(key=lambda s: (s.sent is None, s.sent, s.pk))
+        queryset = Shipment.objects.filter(pk__in=[s.pk for s in loads])
+        for name in ("first", "second"):
+            field = self.fields[name]
+            field.queryset = queryset
+            field.choices = [("", "— tanlang —")] + [
+                (s.pk, _swap_choice_label(s)) for s in loads]
+        if len(loads) == 2 and not self.is_bound:
+            self.initial.setdefault("first", loads[0].pk)
+            self.initial.setdefault("second", loads[1].pk)
+
+    def clean(self):
+        cleaned = super().clean()
+        first, second = cleaned.get("first"), cleaned.get("second")
+        if first and second:
+            if first.pk == second.pk:
+                raise forms.ValidationError("Ikki xil yukni tanlang.")
+            # Parts of one birja truck already share their driver — `Shipment.save`
+            # keeps it so — so there is nothing to swap, and saving one would copy
+            # its values straight back over the other.
+            if second.pk in {yuk.pk for yuk in first.truck_yuklar}:
+                raise forms.ValidationError(
+                    "Bu ikki yuk bitta mashinaning qismlari — haydovchisi bir xil.")
+        return cleaned
+
+
 class ShipmentLegForm(forms.ModelForm):
     class Meta:
         model = ShipmentLeg

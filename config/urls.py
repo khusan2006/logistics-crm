@@ -82,6 +82,8 @@ urlpatterns = [
          name="contract_expense_delete"),
     path("contracts/<int:pk>/transport/clear/", crm_views.contract_transport_clear,
          name="contract_transport_clear"),
+    path("contracts/<int:pk>/driver-swap/", crm_views.contract_driver_swap,
+         name="contract_driver_swap"),
     path("contracts/<int:pk>/edit/", crm_views.contract_edit, name="contract_edit"),
     path("contracts/<int:pk>/delete/", crm_views.contract_delete, name="contract_delete"),
     path("contracts/<int:pk>/close-short/", crm_views.contract_close_short,
